@@ -16,8 +16,6 @@ const HAS_NATIVE_DEFERRED_VALUE = typeof reactUseDeferredValue === 'function';
  */
 export function useDeferredValue<T>(value: T, delay = 200): T {
   if (HAS_NATIVE_DEFERRED_VALUE) {
-    // Safe: the branch is determined at module load and never changes.
-    // eslint-disable-next-line react-hooks/rules-of-hooks
     return reactUseDeferredValue(value);
   }
 

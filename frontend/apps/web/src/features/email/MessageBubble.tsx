@@ -18,7 +18,6 @@ function SanitizedHtml({ html }: { html: string }) {
   return (
     <div
       className="prose prose-sm max-w-none dark:prose-invert"
-      // eslint-disable-next-line react/no-danger
       dangerouslySetInnerHTML={{ __html: cleaned }}
     />
   );

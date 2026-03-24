@@ -51,7 +51,7 @@ export function EmailClient() {
     [activeGroup],
   );
   const emailsQuery = useEmailsQuery(queryParams);
-  const emails = emailsQuery.data?.emails ?? [];
+  const emails = useMemo(() => emailsQuery.data?.emails ?? [], [emailsQuery.data?.emails]);
 
   const selectedEmail = emails.find((e) => e.id === selectedEmailId) ?? null;
   const threadId = selectedEmail?.threadId ?? null;

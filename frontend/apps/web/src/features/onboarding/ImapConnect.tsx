@@ -4,7 +4,7 @@ import { z } from 'zod';
 import type { EmailAccount } from '@emailibrium/types';
 import { api } from '@emailibrium/api';
 
-const imapSchema = z.object({
+export const imapSchema = z.object({
   email: z.string().email('Enter a valid email address'),
   password: z.string().min(1, 'Password or app password is required'),
   imapServer: z.string().min(1, 'IMAP server is required'),

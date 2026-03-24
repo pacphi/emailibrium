@@ -38,7 +38,7 @@ export function useInboxCleaner() {
     staleTime: 60_000,
   });
 
-  const subscriptions = subscriptionsQuery.data ?? [];
+  const subscriptions = useMemo(() => subscriptionsQuery.data ?? [], [subscriptionsQuery.data]);
 
   const categorized = useMemo(() => {
     const neverOpened: SubscriptionInsight[] = [];
