@@ -23,6 +23,7 @@ pub fn routes() -> Router<AppState> {
         .route("/feedback", post(submit_feedback))
         .route("/metrics", get(get_metrics))
         .route("/consolidate", post(consolidate))
+        .route("/session", get(get_session_state))
 }
 
 // --- Request / Response types ---
@@ -146,5 +147,51 @@ async fn consolidate(
         emails_reclassified: report.emails_reclassified,
         new_clusters: report.new_clusters,
         duration_ms: report.duration_ms,
+    }))
+}
+
+// --- Session learning endpoint (SONA Tier 2) ---
+
+#[derive(Debug, Serialize)]
+pub struct SessionStateResponse {
+    pub session_id: String,
+    pub age_seconds: i64,
+    pub interaction_count: u32,
+    pub clicked_count: usize,
+    pub skipped_count: usize,
+    pub has_preference_vector: bool,
+    pub preference_vector_dims: Option<usize>,
+    /// Sample rerank boost for a zero vector (diagnostic).
+    pub sample_rerank_boost: f32,
+}
+
+/// GET /api/v1/learning/session
+///
+/// Returns the current SONA Tier 2 session state including preference vector
+/// availability and rerank boost diagnostics.
+async fn get_session_state(
+    State(state): State<AppState>,
+) -> Result<Json<SessionStateResponse>, (StatusCode, String)> {
+    let session = state.vector_service.learning_engine.get_session().await;
+
+    let session_id = session.session_id().to_string();
+    let age_seconds = session.age().num_seconds();
+    let pref = session.preference_vector();
+    let dims = state.vector_service.config.embedding.dimensions;
+
+    // Compute a diagnostic rerank boost against a zero vector.
+    let zero_vec = vec![0.0f32; dims];
+    let gamma = state.vector_service.config.learning.session_rerank_gamma;
+    let sample_boost = session.rerank_boost(&zero_vec, gamma);
+
+    Ok(Json(SessionStateResponse {
+        session_id,
+        age_seconds,
+        interaction_count: session.interaction_count,
+        clicked_count: session.clicked_embeddings.len(),
+        skipped_count: session.skipped_embeddings.len(),
+        has_preference_vector: pref.is_some(),
+        preference_vector_dims: pref.as_ref().map(|v| v.len()),
+        sample_rerank_boost: sample_boost,
     }))
 }

@@ -255,6 +255,25 @@ impl ProductQuantizer {
         PQCode { codes }
     }
 
+    /// Dequantize PQ codes back to an approximate fp32 vector.
+    ///
+    /// Reconstructs by concatenating the centroid vectors for each subvector code.
+    pub fn dequantize(&self, code: &PQCode, dims: usize) -> Vec<f32> {
+        let sub_dim = dims / self.num_subvectors;
+        let mut result = Vec::with_capacity(dims);
+
+        for (sub_idx, &c) in code.codes.iter().enumerate() {
+            if sub_idx < self.codebooks.len() && (c as usize) < self.codebooks[sub_idx].len() {
+                result.extend_from_slice(&self.codebooks[sub_idx][c as usize]);
+            } else {
+                // Fallback: zero-fill this subvector.
+                result.extend(std::iter::repeat_n(0.0f32, sub_dim));
+            }
+        }
+
+        result
+    }
+
     /// Compute approximate distance using Asymmetric Distance Computation (ADC).
     ///
     /// Precomputes a distance table for the query, then sums table lookups.
@@ -288,7 +307,7 @@ impl ProductQuantizer {
 }
 
 /// Squared Euclidean distance between two slices.
-fn euclidean_distance_sq(a: &[f32], b: &[f32]) -> f32 {
+pub fn euclidean_distance_sq(a: &[f32], b: &[f32]) -> f32 {
     a.iter()
         .zip(b.iter())
         .map(|(&x, &y)| {
@@ -298,10 +317,10 @@ fn euclidean_distance_sq(a: &[f32], b: &[f32]) -> f32 {
         .sum()
 }
 
-/// Simple K-Means clustering for PQ codebook training.
+/// Simple K-Means clustering for PQ codebook training (ADR-009 fallback).
 ///
 /// Returns `k` centroids. Uses fixed iteration count for simplicity.
-fn simple_kmeans(data: &[Vec<f32>], k: usize, max_iters: usize) -> Vec<Vec<f32>> {
+pub fn simple_kmeans(data: &[Vec<f32>], k: usize, max_iters: usize) -> Vec<Vec<f32>> {
     let actual_k = k.min(data.len());
     let dim = data[0].len();
 
@@ -406,101 +425,6 @@ impl BinaryQuantizer {
     pub fn approx_cosine_similarity(a: &BinaryVector, b: &BinaryVector) -> f32 {
         let hamming = Self::hamming_distance(a, b);
         1.0 - 2.0 * hamming as f32 / a.num_dims as f32
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Convenience dispatchers
-// ---------------------------------------------------------------------------
-
-/// Quantize an fp32 vector to a compact byte representation based on the tier.
-///
-/// - `None` → raw little-endian f32 bytes (no compression)
-/// - `Scalar` → int8 per dimension + 8 bytes (min, max) header
-/// - `Binary` → packed sign bits
-///
-/// Note: `Product` quantization requires a trained codebook and cannot be used
-/// with this stateless dispatcher. Use `ProductQuantizer::train` + `quantize` directly.
-pub fn quantize_vector(vector: &[f32], tier: QuantizationTier) -> Vec<u8> {
-    match tier {
-        QuantizationTier::None => {
-            // Raw fp32 little-endian.
-            vector.iter().flat_map(|v| v.to_le_bytes()).collect()
-        }
-        QuantizationTier::Scalar => {
-            let q = ScalarQuantizer::quantize(vector);
-            // Header: min_val (4B) + max_val (4B) + dims (4B), then data.
-            let mut bytes = Vec::with_capacity(12 + q.data.len());
-            bytes.extend_from_slice(&q.min_val.to_le_bytes());
-            bytes.extend_from_slice(&q.max_val.to_le_bytes());
-            bytes.extend_from_slice(&(q.original_dims as u32).to_le_bytes());
-            bytes.extend(q.data.iter().map(|&v| v as u8));
-            bytes
-        }
-        QuantizationTier::Binary => {
-            let bv = BinaryQuantizer::quantize(vector);
-            // Header: num_dims (4B), then packed bits.
-            let mut bytes = Vec::with_capacity(4 + bv.data.len());
-            bytes.extend_from_slice(&(bv.num_dims as u32).to_le_bytes());
-            bytes.extend_from_slice(&bv.data);
-            bytes
-        }
-        QuantizationTier::Product => {
-            // PQ requires a trained codebook; fall through to raw fp32.
-            // Callers needing PQ should use ProductQuantizer directly.
-            vector.iter().flat_map(|v| v.to_le_bytes()).collect()
-        }
-    }
-}
-
-/// Dequantize a byte representation back to fp32 based on the tier.
-///
-/// `dims` is the original vector dimensionality (required for `None` and `Product` tiers).
-pub fn dequantize_vector(bytes: &[u8], tier: QuantizationTier, dims: usize) -> Vec<f32> {
-    match tier {
-        QuantizationTier::None | QuantizationTier::Product => {
-            // Raw fp32 little-endian.
-            bytes
-                .chunks_exact(4)
-                .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
-                .collect()
-        }
-        QuantizationTier::Scalar => {
-            if bytes.len() < 12 {
-                return vec![0.0; dims];
-            }
-            let min_val = f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
-            let max_val = f32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
-            let original_dims =
-                u32::from_le_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]) as usize;
-            let data: Vec<i8> = bytes[12..].iter().map(|&b| b as i8).collect();
-            let q = QuantizedVector {
-                data,
-                min_val,
-                max_val,
-                original_dims,
-            };
-            ScalarQuantizer::dequantize(&q)
-        }
-        QuantizationTier::Binary => {
-            if bytes.len() < 4 {
-                return vec![0.0; dims];
-            }
-            let num_dims = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as usize;
-            // Binary dequantization: reconstruct sign vector (+1.0 / -1.0).
-            let packed = &bytes[4..];
-            (0..num_dims)
-                .map(|i| {
-                    let byte_idx = i / 8;
-                    let bit_idx = 7 - (i % 8);
-                    if byte_idx < packed.len() && (packed[byte_idx] >> bit_idx) & 1 == 1 {
-                        1.0
-                    } else {
-                        -1.0
-                    }
-                })
-                .collect()
-        }
     }
 }
 
@@ -678,6 +602,111 @@ impl QuantizationEngine {
         };
         // Add 128 bytes metadata overhead per vector (same as InMemoryVectorStore).
         count * (per_vector_bytes + 128)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Convenience dispatch functions
+// ---------------------------------------------------------------------------
+
+/// Quantize an fp32 vector to raw bytes using the specified tier.
+///
+/// - `None`: returns the raw little-endian f32 bytes (no compression).
+/// - `Scalar`: int8 per-dimension with min/max header (8 bytes header + N bytes data).
+/// - `Product`: not supported without a trained codebook; falls back to `Scalar`.
+/// - `Binary`: sign-bit encoding, ceil(dims/8) bytes with a 4-byte dimension header.
+///
+/// For `Product` quantization, callers should use [`ProductQuantizer`] directly
+/// since it requires trained codebooks.
+pub fn quantize_vector(vector: &[f32], tier: QuantizationTier) -> Vec<u8> {
+    match tier {
+        QuantizationTier::None => {
+            // Pack f32s as little-endian bytes.
+            vector.iter().flat_map(|v| v.to_le_bytes()).collect()
+        }
+        QuantizationTier::Scalar => {
+            let qv = ScalarQuantizer::quantize(vector);
+            // Layout: [min_val: 4 bytes LE][max_val: 4 bytes LE][data: N bytes]
+            let mut bytes = Vec::with_capacity(8 + qv.data.len());
+            bytes.extend_from_slice(&qv.min_val.to_le_bytes());
+            bytes.extend_from_slice(&qv.max_val.to_le_bytes());
+            // Safe transmute: i8 and u8 have the same size and layout.
+            bytes.extend(qv.data.iter().map(|&v| v as u8));
+            bytes
+        }
+        QuantizationTier::Product => {
+            // Product quantization requires trained codebooks that are specific to
+            // the dataset. Without a trained PQ instance we fall back to scalar
+            // quantization, which is the next-best tier.
+            quantize_vector(vector, QuantizationTier::Scalar)
+        }
+        QuantizationTier::Binary => {
+            let bv = BinaryQuantizer::quantize(vector);
+            // Layout: [num_dims: 4 bytes LE][packed_bits: ceil(dims/8) bytes]
+            let mut bytes = Vec::with_capacity(4 + bv.data.len());
+            bytes.extend_from_slice(&(bv.num_dims as u32).to_le_bytes());
+            bytes.extend_from_slice(&bv.data);
+            bytes
+        }
+    }
+}
+
+/// Dequantize raw bytes back to fp32 using the specified tier and dimensionality.
+///
+/// This is the inverse of [`quantize_vector`]. The `dims` parameter is required
+/// for `None` and `Scalar` tiers; for `Binary` it is encoded in the header.
+///
+/// Returns an empty vector on invalid input rather than panicking.
+pub fn dequantize_vector(bytes: &[u8], tier: QuantizationTier, dims: usize) -> Vec<f32> {
+    match tier {
+        QuantizationTier::None => {
+            if bytes.len() < dims * 4 {
+                return Vec::new();
+            }
+            bytes[..dims * 4]
+                .chunks_exact(4)
+                .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+                .collect()
+        }
+        QuantizationTier::Scalar => {
+            // Layout: [min_val: 4][max_val: 4][data: dims]
+            if bytes.len() < 8 + dims {
+                return Vec::new();
+            }
+            let min_val = f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+            let max_val = f32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
+            let data: Vec<i8> = bytes[8..8 + dims].iter().map(|&b| b as i8).collect();
+            let qv = QuantizedVector {
+                data,
+                min_val,
+                max_val,
+                original_dims: dims,
+            };
+            ScalarQuantizer::dequantize(&qv)
+        }
+        QuantizationTier::Product => {
+            // Encoded as Scalar (see quantize_vector).
+            dequantize_vector(bytes, QuantizationTier::Scalar, dims)
+        }
+        QuantizationTier::Binary => {
+            // Layout: [num_dims: 4][packed_bits]
+            if bytes.len() < 4 {
+                return Vec::new();
+            }
+            let num_dims = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as usize;
+            let expected_bytes = num_dims.div_ceil(8);
+            if bytes.len() < 4 + expected_bytes {
+                return Vec::new();
+            }
+            let packed = &bytes[4..4 + expected_bytes];
+            // Reconstruct: +1.0 for set bits, -1.0 for clear bits.
+            let mut result = Vec::with_capacity(num_dims);
+            for i in 0..num_dims {
+                let bit = (packed[i / 8] >> (7 - (i % 8))) & 1;
+                result.push(if bit == 1 { 1.0 } else { -1.0 });
+            }
+            result
+        }
     }
 }
 
@@ -945,6 +974,182 @@ mod tests {
         // Sanity: fp32 memory for 10k vectors of 384 dims.
         let expected_fp32 = 10_000 * (384 * 4 + 128);
         assert_eq!(mem_none, expected_fp32);
+    }
+
+    // -----------------------------------------------------------------------
+    // Tests for quantize_vector / dequantize_vector convenience functions
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_quantize_dequantize_roundtrip_none() {
+        let original = vec![0.1, -0.5, 0.9, 0.0, -1.0, 1.0, 0.33, -0.77];
+        let bytes = quantize_vector(&original, QuantizationTier::None);
+        let recovered = dequantize_vector(&bytes, QuantizationTier::None, original.len());
+
+        assert_eq!(recovered.len(), original.len());
+        for (o, r) in original.iter().zip(recovered.iter()) {
+            assert!(
+                (o - r).abs() < 1e-7,
+                "None tier should be lossless: {} vs {}",
+                o,
+                r
+            );
+        }
+    }
+
+    #[test]
+    fn test_quantize_dequantize_roundtrip_scalar() {
+        let original = vec![0.1, -0.5, 0.9, 0.0, -1.0, 1.0, 0.33, -0.77];
+        let bytes = quantize_vector(&original, QuantizationTier::Scalar);
+        let recovered = dequantize_vector(&bytes, QuantizationTier::Scalar, original.len());
+
+        assert_eq!(recovered.len(), original.len());
+        for (o, r) in original.iter().zip(recovered.iter()) {
+            assert!(
+                (o - r).abs() < 0.02,
+                "Scalar tier roundtrip error too large: {} vs {} (diff {})",
+                o,
+                r,
+                (o - r).abs()
+            );
+        }
+    }
+
+    #[test]
+    fn test_quantize_dequantize_roundtrip_product() {
+        // Product tier without a trained codebook falls back to Scalar encoding.
+        let original = vec![0.1, -0.5, 0.9, 0.0, -1.0, 1.0, 0.33, -0.77];
+        let bytes = quantize_vector(&original, QuantizationTier::Product);
+        let recovered = dequantize_vector(&bytes, QuantizationTier::Product, original.len());
+
+        assert_eq!(recovered.len(), original.len());
+        for (o, r) in original.iter().zip(recovered.iter()) {
+            assert!(
+                (o - r).abs() < 0.02,
+                "Product tier (scalar fallback) roundtrip error too large: {} vs {}",
+                o,
+                r
+            );
+        }
+    }
+
+    #[test]
+    fn test_quantize_dequantize_roundtrip_binary() {
+        // Binary quantization reduces to sign bits: positive -> +1, negative -> -1.
+        let original = vec![0.5, -0.3, 0.1, -0.9, 0.7, -0.2, 0.0, 0.4];
+        let bytes = quantize_vector(&original, QuantizationTier::Binary);
+        let recovered = dequantize_vector(&bytes, QuantizationTier::Binary, original.len());
+
+        // Binary quantization maps to +1/-1, so we check the sign is preserved.
+        assert_eq!(recovered.len(), original.len());
+        for (o, r) in original.iter().zip(recovered.iter()) {
+            if *o >= 0.0 {
+                assert_eq!(*r, 1.0, "positive value {} should map to 1.0", o);
+            } else {
+                assert_eq!(*r, -1.0, "negative value {} should map to -1.0", o);
+            }
+        }
+    }
+
+    #[test]
+    fn test_tier_detection_at_various_counts() {
+        let config = QuantizationConfig {
+            mode: "auto".to_string(),
+            scalar_threshold: 1_000,
+            product_threshold: 10_000,
+            binary_threshold: 100_000,
+            hysteresis_percent: 0.10,
+        };
+        let engine = QuantizationEngine::new(config);
+
+        assert_eq!(engine.recommended_tier(0), QuantizationTier::None);
+        assert_eq!(engine.recommended_tier(999), QuantizationTier::None);
+        assert_eq!(engine.recommended_tier(1_000), QuantizationTier::Scalar);
+        assert_eq!(engine.recommended_tier(5_000), QuantizationTier::Scalar);
+        assert_eq!(engine.recommended_tier(10_000), QuantizationTier::Product);
+        assert_eq!(engine.recommended_tier(50_000), QuantizationTier::Product);
+        assert_eq!(engine.recommended_tier(100_000), QuantizationTier::Binary);
+        assert_eq!(engine.recommended_tier(1_000_000), QuantizationTier::Binary);
+    }
+
+    #[test]
+    fn test_quantized_cosine_similarity_close_to_fp32() {
+        // Build two correlated 384-dim vectors.
+        let dims = 384;
+        let a: Vec<f32> = (0..dims).map(|i| (i as f32 * 0.01).sin()).collect();
+        let b: Vec<f32> = (0..dims).map(|i| (i as f32 * 0.01).sin() + 0.05).collect();
+
+        let exact = exact_cosine(&a, &b);
+
+        // Scalar quantized cosine similarity.
+        let qa = ScalarQuantizer::quantize(&a);
+        let qb = ScalarQuantizer::quantize(&b);
+        let approx = ScalarQuantizer::cosine_similarity_quantized(&qa, &qb);
+
+        let error = (exact - approx).abs();
+        assert!(
+            error < 0.05,
+            "quantized cosine {} too far from exact {} (error {}) for 384-dim vectors",
+            approx,
+            exact,
+            error
+        );
+
+        // Binary quantized approximate cosine.
+        let ba = BinaryQuantizer::quantize(&a);
+        let bb = BinaryQuantizer::quantize(&b);
+        let binary_approx = BinaryQuantizer::approx_cosine_similarity(&ba, &bb);
+
+        // Binary is much coarser; allow larger tolerance.
+        let binary_error = (exact - binary_approx).abs();
+        assert!(
+            binary_error < 0.5,
+            "binary cosine {} too far from exact {} (error {})",
+            binary_approx,
+            exact,
+            binary_error
+        );
+    }
+
+    #[test]
+    fn test_dequantize_invalid_input() {
+        // Too-short input should return empty.
+        let empty = dequantize_vector(&[], QuantizationTier::None, 8);
+        assert!(empty.is_empty());
+
+        let empty = dequantize_vector(&[0; 4], QuantizationTier::Scalar, 8);
+        assert!(empty.is_empty());
+
+        let empty = dequantize_vector(&[], QuantizationTier::Binary, 8);
+        assert!(empty.is_empty());
+    }
+
+    #[test]
+    fn test_pq_dequantize_roundtrip() {
+        let dims = 16;
+        let num_subvectors = 4;
+        let codebook_size = 8;
+
+        let vectors: Vec<Vec<f32>> = (0..50)
+            .map(|i| (0..dims).map(|d| ((i * d) as f32 * 0.1).sin()).collect())
+            .collect();
+
+        let pq = ProductQuantizer::train(&vectors, num_subvectors, codebook_size);
+
+        // PQ dequantize should produce a vector of the right length.
+        let code = pq.quantize(&vectors[0]);
+        let recovered = pq.dequantize(&code, dims);
+        assert_eq!(recovered.len(), dims);
+
+        // The recovered vector should be the concatenation of centroids,
+        // so self-distance should be zero (exact match to centroids).
+        let code2 = pq.quantize(&recovered);
+        let dist = pq.distance(&recovered, &code2);
+        assert!(
+            dist < 1e-6,
+            "PQ self-distance after dequantize should be ~0, got {}",
+            dist
+        );
     }
 
     /// Helper: exact cosine similarity for comparison.

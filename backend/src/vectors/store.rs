@@ -320,7 +320,7 @@ type QuantizedBlob = (QuantizationTier, Vec<u8>, usize);
 pub struct QuantizedVectorStore {
     inner: Arc<dyn VectorStoreBackend>,
     engine: Arc<QuantizationEngine>,
-    /// Quantized blob storage: vector_id → (tier, compressed bytes, original dims).
+    /// Quantized blob storage: vector_id -> (tier, compressed bytes, original dims).
     blobs: Arc<RwLock<HashMap<VectorId, QuantizedBlob>>>,
 }
 
@@ -395,6 +395,7 @@ impl QuantizedVectorStore {
 
 #[cfg(test)]
 mod tests {
+    use super::super::quantization::QuantizationConfig;
     use super::*;
     use chrono::Utc;
 
@@ -975,5 +976,149 @@ mod tests {
         // All 10 documents should have been inserted
         let count = store.count().await.unwrap();
         assert_eq!(count, 10);
+    }
+
+    // -----------------------------------------------------------------------
+    // QuantizedVectorStore integration tests
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_quantized_store_insert_and_dequantize() {
+        let inner: Arc<dyn VectorStoreBackend> = Arc::new(InMemoryVectorStore::new());
+        let engine = Arc::new(QuantizationEngine::new(QuantizationConfig::default()));
+        let qstore = QuantizedVectorStore::new(inner, engine);
+
+        let original_vec = vec![0.1, -0.5, 0.9, 0.0, -1.0, 1.0, 0.33, -0.77];
+        let doc = make_doc(
+            "q-email-1",
+            original_vec.clone(),
+            VectorCollection::EmailText,
+            empty_metadata(),
+        );
+        let id = doc.id.clone();
+
+        let returned_id = qstore.store_with_quantization(doc).await.unwrap();
+        assert_eq!(returned_id, id);
+
+        // Dequantized vector should be close to the original (None tier = lossless).
+        let recovered = qstore.get_dequantized(&id).await.unwrap().unwrap();
+        assert_eq!(recovered.len(), original_vec.len());
+        for (o, r) in original_vec.iter().zip(recovered.iter()) {
+            assert!(
+                (o - r).abs() < 0.02,
+                "dequantized value {} too far from original {}",
+                r,
+                o
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_quantized_store_tracks_count() {
+        let inner: Arc<dyn VectorStoreBackend> = Arc::new(InMemoryVectorStore::new());
+        let engine = Arc::new(QuantizationEngine::new(QuantizationConfig::default()));
+        let qstore = QuantizedVectorStore::new(inner, engine);
+
+        assert_eq!(qstore.quantized_count().await, 0);
+
+        for i in 0..3 {
+            let doc = make_doc(
+                &format!("q-email-{}", i),
+                vec![i as f32, 0.0, 1.0],
+                VectorCollection::EmailText,
+                empty_metadata(),
+            );
+            qstore.store_with_quantization(doc).await.unwrap();
+        }
+
+        assert_eq!(qstore.quantized_count().await, 3);
+    }
+
+    #[tokio::test]
+    async fn test_quantized_store_tier_starts_at_none() {
+        let inner: Arc<dyn VectorStoreBackend> = Arc::new(InMemoryVectorStore::new());
+        let config = QuantizationConfig {
+            mode: "auto".to_string(),
+            ..QuantizationConfig::default()
+        };
+        let engine = Arc::new(QuantizationEngine::new(config));
+        let qstore = QuantizedVectorStore::new(inner, engine);
+
+        // With 0 vectors, tier should be None.
+        assert_eq!(qstore.current_tier().await, QuantizationTier::None);
+    }
+
+    #[tokio::test]
+    async fn test_quantized_store_fallback_to_inner() {
+        let inner: Arc<dyn VectorStoreBackend> = Arc::new(InMemoryVectorStore::new());
+        let engine = Arc::new(QuantizationEngine::new(QuantizationConfig::default()));
+        let qstore = QuantizedVectorStore::new(inner.clone(), engine);
+
+        // Insert directly into inner store (bypassing quantization).
+        let doc = make_doc(
+            "direct-email",
+            vec![1.0, 2.0, 3.0],
+            VectorCollection::EmailText,
+            empty_metadata(),
+        );
+        let id = doc.id.clone();
+        inner.insert(doc).await.unwrap();
+
+        // get_dequantized should fall back to the inner store.
+        let recovered = qstore.get_dequantized(&id).await.unwrap().unwrap();
+        assert_eq!(recovered, vec![1.0, 2.0, 3.0]);
+    }
+
+    #[tokio::test]
+    async fn test_quantized_store_inner_access() {
+        let inner: Arc<dyn VectorStoreBackend> = Arc::new(InMemoryVectorStore::new());
+        let engine = Arc::new(QuantizationEngine::new(QuantizationConfig::default()));
+        let qstore = QuantizedVectorStore::new(inner, engine);
+
+        let doc = make_doc(
+            "q-email",
+            vec![1.0, 0.0],
+            VectorCollection::EmailText,
+            empty_metadata(),
+        );
+        qstore.store_with_quantization(doc).await.unwrap();
+
+        // The inner store should also have the document.
+        let count = qstore.inner().count().await.unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[tokio::test]
+    async fn test_quantized_store_with_scalar_tier() {
+        let inner: Arc<dyn VectorStoreBackend> = Arc::new(InMemoryVectorStore::new());
+        // Force scalar quantization.
+        let config = QuantizationConfig {
+            mode: "scalar".to_string(),
+            ..QuantizationConfig::default()
+        };
+        let engine = Arc::new(QuantizationEngine::new(config));
+        let qstore = QuantizedVectorStore::new(inner, engine);
+
+        let original_vec = vec![0.1, -0.5, 0.9, 0.0, -1.0, 1.0, 0.33, -0.77];
+        let doc = make_doc(
+            "scalar-email",
+            original_vec.clone(),
+            VectorCollection::EmailText,
+            empty_metadata(),
+        );
+        let id = doc.id.clone();
+
+        qstore.store_with_quantization(doc).await.unwrap();
+
+        let recovered = qstore.get_dequantized(&id).await.unwrap().unwrap();
+        assert_eq!(recovered.len(), original_vec.len());
+        for (o, r) in original_vec.iter().zip(recovered.iter()) {
+            assert!(
+                (o - r).abs() < 0.02,
+                "scalar dequantized {} too far from original {}",
+                r,
+                o
+            );
+        }
     }
 }

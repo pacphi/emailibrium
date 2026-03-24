@@ -68,6 +68,7 @@ pub struct FeedbackResult {
 // ---------------------------------------------------------------------------
 
 /// Per-session interaction state for Tier 2 learning.
+#[derive(Clone)]
 pub struct SessionState {
     pub session_id: String,
     pub started_at: DateTime<Utc>,
@@ -856,6 +857,11 @@ impl LearningEngine {
     /// Return the number of stored snapshots.
     pub async fn snapshot_count(&self) -> usize {
         self.snapshots.read().await.len()
+    }
+
+    /// Return a clone of the current session state.
+    pub async fn get_session(&self) -> SessionState {
+        self.session.read().await.clone()
     }
 }
 
