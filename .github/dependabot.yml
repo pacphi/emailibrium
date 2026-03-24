@@ -1,0 +1,101 @@
+version: 2
+updates:
+  # GitHub Actions dependencies
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "ci"
+      include: "scope"
+
+  # Backend Rust/Cargo dependencies
+  - package-ecosystem: "cargo"
+    directory: "/backend"
+    schedule:
+      interval: "weekly"
+      day: "tuesday"
+      time: "06:00"
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: "deps(backend)"
+      include: "scope"
+    groups:
+      tokio-ecosystem:
+        patterns:
+          - "tokio*"
+      serde-ecosystem:
+        patterns:
+          - "serde*"
+      axum-ecosystem:
+        patterns:
+          - "axum*"
+          - "tower*"
+      crypto-ecosystem:
+        patterns:
+          - "aes*"
+          - "argon2"
+          - "zeroize"
+
+  # Frontend npm dependencies
+  - package-ecosystem: "npm"
+    directory: "/frontend"
+    schedule:
+      interval: "weekly"
+      day: "wednesday"
+      time: "06:00"
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: "deps(frontend)"
+      include: "scope"
+    groups:
+      tanstack:
+        patterns:
+          - "@tanstack/*"
+      radix-ui:
+        patterns:
+          - "@radix-ui/*"
+      testing:
+        patterns:
+          - "vitest"
+          - "@testing-library/*"
+          - "playwright"
+          - "msw"
+        dependency-type: "development"
+      storybook:
+        patterns:
+          - "@storybook/*"
+          - "storybook"
+        dependency-type: "development"
+      eslint:
+        patterns:
+          - "eslint*"
+          - "@eslint/*"
+          - "typescript-eslint"
+        dependency-type: "development"
+
+  # Docker base images
+  - package-ecosystem: "docker"
+    directory: "/backend"
+    schedule:
+      interval: "weekly"
+      day: "thursday"
+      time: "06:00"
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "deps(docker)"
+      include: "scope"
+
+  - package-ecosystem: "docker"
+    directory: "/frontend"
+    schedule:
+      interval: "weekly"
+      day: "thursday"
+      time: "06:00"
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "deps(docker)"
+      include: "scope"

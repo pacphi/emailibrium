@@ -1,0 +1,37 @@
+# docker-compose.dev.yml — Development overrides
+# Usage: docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+
+services:
+  backend:
+    build:
+      target: development
+    read_only: false     # Need writable for cargo watch
+    environment:
+      APP_ENV: development
+      RUST_LOG: emailibrium=debug,tower_http=debug
+    volumes:
+      - ./backend:/app
+      - cargo_cache:/usr/local/cargo/registry
+    command: cargo watch -x run
+
+  frontend:
+    build:
+      target: development
+    read_only: false
+    ports:
+      - "3000:3000"     # Vite dev server
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    command: pnpm dev-web
+
+  postgres:
+    ports:
+      - "5432:5432"     # Exposed for local tools (DBeaver, psql)
+
+  redis:
+    ports:
+      - "6379:6379"     # Exposed for redis-cli
+
+volumes:
+  cargo_cache:

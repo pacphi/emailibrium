@@ -1,0 +1,17 @@
+# Development overrides
+host: "127.0.0.1"
+port: 8080
+database_url: "sqlite:emailibrium-dev.db?mode=rwc"
+
+embedding:
+  provider: "mock"
+
+encryption:
+  enabled: false
+
+backup:
+  enabled: false
+
+learning:
+  sona_enabled: true
+  ab_control_percentage: 0.0  # disable A/B in dev

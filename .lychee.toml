@@ -1,0 +1,46 @@
+# Lychee link checker configuration
+# See: https://lychee.cli.rs/usage/config/
+
+# Exclude paths
+exclude_path = [
+  "node_modules",
+  "target",
+  ".git",
+  ".claude",
+  ".claude-flow",
+  ".swarm",
+  ".agentic-qe",
+]
+
+# Exclude URL patterns
+exclude = [
+  "^http://localhost",
+  "^https://localhost",
+  "^http://127\\.0\\.0\\.1",
+  # Placeholder URLs in docs
+  "^https://example\\.com",
+  # GitHub rate-limits anonymous requests
+  "^https://github\\.com/.*/issues/\\d+$",
+]
+
+# Timeout per request
+timeout = 20
+
+# Accept these HTTP status codes as valid
+accept = [200, 206, 301, 302, 307, 308, 429]
+
+# Max concurrent requests (be gentle with external servers)
+max_concurrency = 8
+
+# Max retries per URL
+max_retries = 2
+
+# Include fragment checks (anchor links like #section)
+include_fragments = true
+
+# Include mail link checks (set to false to skip mailto: links)
+include_mail = false
+
+# Cache results to speed up repeated runs
+cache = true
+max_cache_age = "1d"

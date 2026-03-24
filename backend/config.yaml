@@ -1,0 +1,84 @@
+# Emailibrium Configuration
+# Loading order: config.yaml -> config.{APP_ENV}.yaml -> config.local.yaml -> env vars
+#
+# All keys can be overridden via EMAILIBRIUM_* environment variables.
+# Nested keys use underscore separators, e.g. EMAILIBRIUM_EMBEDDING_PROVIDER=ollama
+
+# Server
+host: "127.0.0.1"
+port: 8080
+database_url: "sqlite:emailibrium.db?mode=rwc"
+
+# Vector Store
+store:
+  path: "data/vectors"
+  enabled: true
+
+# Embedding Pipeline
+embedding:
+  provider: "mock"          # mock | ollama | cloud
+  model: "all-MiniLM-L6-v2"
+  dimensions: 384
+  batch_size: 64
+  cache_size: 10000
+  ollama_url: "http://localhost:11434"
+  min_query_tokens: 5
+
+# HNSW Index
+index:
+  m: 16                     # connections per node
+  ef_construction: 200      # build quality
+  ef_search: 100            # search quality
+
+# Search
+search:
+  default_limit: 20
+  max_limit: 100
+  similarity_threshold: 0.5
+
+# Encryption (ADR-008)
+encryption:
+  enabled: false
+  # master_password: set via EMAILIBRIUM_ENCRYPTION_MASTER_PASSWORD env var
+
+# Categorizer (ADR-004)
+categorizer:
+  confidence_threshold: 0.7
+  max_centroid_shift: 0.1
+  min_feedback_events: 10
+
+# Backup (ADR-003)
+backup:
+  enabled: false
+  interval_secs: 3600
+
+# Clustering (ADR-009)
+clustering:
+  min_cluster_size: 5
+  merge_threshold: 0.85
+  hysteresis_delta: 0.05
+  min_stability_runs: 3
+  max_clusters: 50
+  neighbor_count: 20
+
+# Learning / SONA (ADR-004)
+learning:
+  sona_enabled: true
+  positive_learning_rate: 0.05
+  negative_learning_rate: 0.02
+  session_rerank_gamma: 0.15
+  max_centroid_shift: 0.1
+  min_feedback_events: 10
+  low_confidence_threshold: 0.6
+  ab_control_percentage: 0.10
+  drift_alarm_threshold: 0.20
+  position_bias_threshold: 0.95
+  max_snapshots: 30
+
+# Quantization (ADR-007)
+quantization:
+  mode: "auto"              # auto | none | scalar | product | binary
+  scalar_threshold: 50000
+  product_threshold: 200000
+  binary_threshold: 1000000
+  hysteresis_percent: 0.10

@@ -1,0 +1,184 @@
+# docker-compose.yml — Full-stack Emailibrium
+# Usage: docker compose up -d
+# Secrets: place in secrets/ directory (gitignored), see secrets/dev.example/
+
+services:
+  # ─── Backend API (Rust) ───────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: runtime
+      args:
+        RUST_VERSION: "1.85"
+    container_name: emailibrium-backend
+    user: "1000:1000"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp:size=100M,mode=1777
+    ports:
+      - "${BACKEND_PORT:-8080}:8080"
+    environment:
+      # Non-secret config via env vars (12-factor)
+      APP_ENV: ${APP_ENV:-development}
+      RUST_LOG: ${RUST_LOG:-emailibrium=info,tower_http=info}
+      REDIS_URL: redis://redis:6379
+      VECTOR_STORE_PATH: /app/data/vectors
+      CONFIG_PATH: /app/config.yaml
+    volumes:
+      - ./configs/config.${APP_ENV:-development}.yaml:/app/config.yaml:ro
+      - backend_data:/app/data
+    secrets:
+      - jwt_secret
+      - oauth_encryption_key
+      - database_url
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/app/emailibrium", "--healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 45s
+    networks:
+      - db-internal
+      - cache-internal
+      - frontend-proxy
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  # ─── Frontend Web App (React SPA) ────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: runtime
+    container_name: emailibrium-frontend
+    user: "1000:1000"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp:size=50M
+      - /var/cache/nginx:size=50M
+      - /var/run:size=10M
+    ports:
+      - "${FRONTEND_PORT:-3000}:80"
+    environment:
+      VITE_API_URL: ${VITE_API_URL:-http://localhost:8080}
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:80/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    networks:
+      - frontend-proxy
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "3"
+
+  # ─── PostgreSQL ───────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: emailibrium-postgres
+    user: "999:999"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - SETUID
+      - SETGID
+      - FOWNER
+      - DAC_READ_SEARCH
+    tmpfs:
+      - /tmp:size=100M
+      - /var/run/postgresql:size=10M
+    environment:
+      POSTGRES_DB: emailibrium
+      POSTGRES_USER: emailibrium
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    secrets:
+      - db_password
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U emailibrium -d emailibrium"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    networks:
+      - db-internal
+    # NO ports exposed — only backend accesses via internal network
+
+  # ─── Redis Cache ──────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: emailibrium-redis
+    user: "999:999"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp:size=50M
+    volumes:
+      - redis_data:/data
+    command: >
+      redis-server
+      --appendonly yes
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - cache-internal
+    # NO ports exposed — only backend accesses via internal network
+
+# ─── Secrets (file-based, per OWASP recommendation) ──────────
+secrets:
+  jwt_secret:
+    file: ./secrets/${APP_ENV:-dev}/jwt_secret
+  oauth_encryption_key:
+    file: ./secrets/${APP_ENV:-dev}/oauth_encryption_key
+  database_url:
+    file: ./secrets/${APP_ENV:-dev}/database_url
+  db_password:
+    file: ./secrets/${APP_ENV:-dev}/db_password
+
+# ─── Volumes ─────────────────────────────────────────────────
+volumes:
+  postgres_data:
+  redis_data:
+  backend_data:
+
+# ─── Networks (segmented per NIST SP 800-190) ───────────────
+networks:
+  db-internal:
+    internal: true     # No external access — only backend <-> postgres
+  cache-internal:
+    internal: true     # No external access — only backend <-> redis
+  frontend-proxy:
+    driver: bridge     # Frontend <-> backend communication

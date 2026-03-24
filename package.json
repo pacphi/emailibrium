@@ -1,0 +1,15 @@
+{
+  "private": true,
+  "scripts": {
+    "prepare": "husky"
+  },
+  "devDependencies": {
+    "husky": "^9.0.0",
+    "lint-staged": "^16.0.0"
+  },
+  "lint-staged": {
+    "*.{ts,tsx,js,json,css}": "prettier --check --config frontend/apps/web/.prettierrc",
+    "*.{md,yaml,yml}": "prettier --check --config .prettierrc",
+    "frontend/**/*.{ts,tsx}": "cd frontend/apps/web && npx eslint --no-warn-ignored"
+  }
+}

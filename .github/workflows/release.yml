@@ -1,0 +1,192 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+  packages: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ── Job 1: Validate tag format ─────────────────────────────────────
+  validate-tag:
+    name: Validate Tag
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.parse.outputs.version }}
+      is_prerelease: ${{ steps.parse.outputs.is_prerelease }}
+    steps:
+      - name: Parse and validate tag
+        id: parse
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          echo "Tag: $TAG"
+
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.-]+)?$ ]]; then
+            echo "::error::Invalid tag format: $TAG (expected v<major>.<minor>.<patch>[-prerelease])"
+            exit 1
+          fi
+
+          VERSION="${TAG#v}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+          if [[ "$VERSION" == *-* ]]; then
+            echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  # ── Job 2: Full CI gate ─────────────────────────────────────────────
+  ci-gate:
+    name: CI Gate
+    needs: [validate-tag]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Backend
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: backend
+      - name: Backend format
+        working-directory: backend
+        run: cargo fmt --all -- --check
+      - name: Backend tests
+        working-directory: backend
+        run: cargo test --workspace
+
+      # Frontend
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - name: Frontend install
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile
+      - name: Frontend typecheck
+        working-directory: frontend/apps/web
+        run: npx tsc --noEmit
+      - name: Frontend format
+        working-directory: frontend/apps/web
+        run: npx prettier --check 'src/**/*.{ts,tsx}'
+
+  # ── Job 3: Generate changelog ───────────────────────────────────────
+  generate-changelog:
+    name: Generate Changelog
+    needs: [validate-tag]
+    runs-on: ubuntu-latest
+    outputs:
+      changelog_file: changelog-${{ needs.validate-tag.outputs.version }}.md
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Generate changelog
+        run: |
+          chmod +x .github/scripts/generate-changelog.sh
+          .github/scripts/generate-changelog.sh \
+            "${{ needs.validate-tag.outputs.version }}" \
+            "changelog-${{ needs.validate-tag.outputs.version }}.md"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: changelog
+          path: changelog-${{ needs.validate-tag.outputs.version }}.md
+
+  # ── Job 4: Build Docker images ──────────────────────────────────────
+  docker-images:
+    name: Docker ${{ matrix.app }}
+    needs: [validate-tag, ci-gate]
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - app: backend
+            context: ./backend
+          - app: frontend
+            context: ./frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Generate tags
+        id: tags
+        run: |
+          VERSION="${{ needs.validate-tag.outputs.version }}"
+          IS_PRE="${{ needs.validate-tag.outputs.is_prerelease }}"
+          IMAGE="ghcr.io/${{ github.repository }}/${{ matrix.app }}"
+
+          TAGS="${IMAGE}:${VERSION}"
+          if [[ "$IS_PRE" == "false" ]]; then
+            MAJOR_MINOR=$(echo "$VERSION" | cut -d. -f1,2)
+            TAGS="${TAGS},${IMAGE}:${MAJOR_MINOR},${IMAGE}:latest"
+          fi
+
+          echo "tags=$TAGS" >> "$GITHUB_OUTPUT"
+      - uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          push: true
+          tags: ${{ steps.tags.outputs.tags }}
+          cache-from: type=gha,scope=${{ matrix.app }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.app }}
+
+  # ── Job 5: Create GitHub Release + update CHANGELOG.md ─────────────
+  create-release:
+    name: Create Release
+    needs: [validate-tag, ci-gate, generate-changelog, docker-images]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: changelog
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: changelog-${{ needs.validate-tag.outputs.version }}.md
+          prerelease: ${{ needs.validate-tag.outputs.is_prerelease == 'true' }}
+          generate_release_notes: false
+      - name: Update CHANGELOG.md
+        run: |
+          VERSION="${{ needs.validate-tag.outputs.version }}"
+          CHANGELOG_FILE="changelog-${VERSION}.md"
+          MARKER="<!-- This file is auto-maintained by the release workflow on each tag. -->"
+
+          if grep -q "$MARKER" CHANGELOG.md; then
+            sed -i "/$MARKER/a\\" CHANGELOG.md
+            sed -i "/$MARKER/r $CHANGELOG_FILE" CHANGELOG.md
+          else
+            echo "" >> CHANGELOG.md
+            cat "$CHANGELOG_FILE" >> CHANGELOG.md
+          fi
+      - name: Push CHANGELOG.md update
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add CHANGELOG.md
+          git diff --cached --quiet && exit 0
+          git commit -m "docs: update CHANGELOG.md for v${{ needs.validate-tag.outputs.version }} [skip ci]"
+          git push origin HEAD:main

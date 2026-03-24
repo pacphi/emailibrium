@@ -1,0 +1,19 @@
+# Production configuration
+host: "0.0.0.0"
+port: 8080
+# database_url: set via EMAILIBRIUM_DATABASE_URL env var or /run/secrets/database_url
+
+embedding:
+  provider: "ollama"         # or "cloud" for hosted
+  cache_size: 50000
+
+encryption:
+  enabled: true
+  # master_password: set via EMAILIBRIUM_ENCRYPTION_MASTER_PASSWORD
+
+backup:
+  enabled: true
+  interval_secs: 1800        # every 30 minutes
+
+quantization:
+  mode: "auto"

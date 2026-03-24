@@ -1,0 +1,60 @@
+export { api } from './client.js';
+export { createSSEStream } from './sse.js';
+export type { SSEStream } from './sse.js';
+
+export {
+  searchEmails,
+  findSimilar,
+  classifyEmail,
+} from './searchApi.js';
+
+export {
+  getSubscriptions,
+  getRecurringSenders,
+  getInboxReport,
+} from './insightsApi.js';
+
+export {
+  startIngestion,
+  pauseIngestion,
+  resumeIngestion,
+  createIngestionStream,
+} from './ingestionApi.js';
+
+export { getHealth, getStats } from './vectorsApi.js';
+
+export {
+  connectGmail,
+  connectOutlook,
+  connectImap,
+  getAccounts,
+  disconnectAccount,
+} from './authApi.js';
+
+export {
+  getEmails,
+  getEmail,
+  getThread,
+  archiveEmail,
+  starEmail,
+  deleteEmail,
+  sendEmail,
+  replyToEmail,
+  forwardEmail,
+} from './emailApi.js';
+export type { GetEmailsParams, SendEmailDraft } from './emailApi.js';
+
+export {
+  getRules,
+  createRule,
+  updateRule,
+  deleteRule,
+  getRuleSuggestions,
+} from './rulesApi.js';
+
+export {
+  bulkArchive,
+  bulkDelete,
+  bulkLabel,
+  unsubscribe,
+} from './actionsApi.js';

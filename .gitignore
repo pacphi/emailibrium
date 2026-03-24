@@ -1,0 +1,88 @@
+# Rust
+target/
+*.rs.bk
+
+# Node/Frontend
+node_modules/
+dist/
+.turbo/
+*.tsbuildinfo
+
+# Environment & Secrets
+.env
+.env.*
+secrets/dev/
+secrets/staging/
+secrets/production/
+!secrets/*.example/
+
+# Database
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Lychee cache
+.lycheecache
+
+# Coverage
+coverage/
+*.lcov
+
+# Build
+*.log
+
+# Local config overrides
+config.local.yaml
+
+# Security - API Keys and Secrets
+*.key
+*.pem
+*.p12
+*.pfx
+*.certificate
+*.cert
+
+# Anthropic API Keys and Claude credentials
+.anthropic
+claude-credentials*
+anthropic-key*
+api-keys*
+
+# Claude Code internal state
+.claude-flow/
+.swarm/
+.agentic-qe/
+
+# Claude Code session data (contains command history, metrics, local prefs)
+.claude/memory/working-state.jsonl
+.claude/memory/metrics.json
+.claude/memory.db
+.claude/settings.local.json
+
+# Storybook
+storybook-static/
+
+# Playwright
+test-results/
+playwright-report/
+blob-report/
+
+# Docker local
+docker-compose.override.yml
+
+# Misc
+*.bak
+*.tmp
+*.orig

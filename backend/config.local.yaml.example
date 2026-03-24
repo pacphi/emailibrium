@@ -1,0 +1,5 @@
+# Local overrides (copy to config.local.yaml, which is gitignored)
+# database_url: "sqlite:my-local.db?mode=rwc"
+# embedding:
+#   provider: "ollama"
+#   ollama_url: "http://localhost:11434"

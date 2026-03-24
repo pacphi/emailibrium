@@ -1,0 +1,26 @@
+{
+  "name": "Emailibrium",
+  "short_name": "Emailibrium",
+  "description": "AI-powered email intelligence",
+  "theme_color": "#4F46E5",
+  "background_color": "#F9FAFB",
+  "display": "standalone",
+  "scope": "/",
+  "start_url": "/command-center",
+  "orientation": "any",
+  "categories": ["productivity", "utilities"],
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
