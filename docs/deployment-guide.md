@@ -85,7 +85,55 @@ export EMAILIBRIUM_DATABASE_URL="sqlite:/path/to/production.db?mode=rwc"
 # Server binding
 export EMAILIBRIUM_HOST="0.0.0.0"
 export EMAILIBRIUM_PORT=8080
+
+# OAuth credentials (see "Email Provider OAuth Setup" below)
+export EMAILIBRIUM_GOOGLE_CLIENT_ID="your-google-client-id.apps.googleusercontent.com"
+export EMAILIBRIUM_GOOGLE_CLIENT_SECRET="your-google-client-secret"
+export EMAILIBRIUM_MICROSOFT_CLIENT_ID="your-microsoft-app-client-id"
+export EMAILIBRIUM_MICROSOFT_CLIENT_SECRET="your-microsoft-app-client-secret"
 ```
+
+### Email Provider OAuth Setup
+
+Emailibrium connects to Gmail and Outlook via OAuth2. You must register your application with each provider to get client credentials. IMAP accounts use direct username/password and do not need OAuth setup.
+
+#### Gmail (Google Cloud Console)
+
+1. Go to [Google Cloud Console](https://console.cloud.google.com/)
+2. Create a new project (or select an existing one)
+3. Enable the **Gmail API**: APIs & Services > Library > search "Gmail API" > Enable
+4. Create OAuth credentials: APIs & Services > Credentials > Create Credentials > OAuth client ID
+   - Application type: **Web application**
+   - Authorized redirect URI: `http://localhost:8080/api/v1/auth/gmail/callback` (development) or `https://your-domain.com/api/v1/auth/gmail/callback` (production)
+5. Copy the **Client ID** and **Client Secret**
+6. Set them as environment variables:
+   ```bash
+   export EMAILIBRIUM_GOOGLE_CLIENT_ID="123456789-abc.apps.googleusercontent.com"
+   export EMAILIBRIUM_GOOGLE_CLIENT_SECRET="GOCSPX-your-secret"
+   ```
+   Or place them in `secrets/dev/google_client_id` and `secrets/dev/google_client_secret` for Docker.
+
+#### Outlook (Microsoft Entra / Azure AD)
+
+1. Go to [Microsoft Entra Admin Center](https://entra.microsoft.com/) > App registrations > New registration
+2. Set the **Redirect URI**: `http://localhost:8080/api/v1/auth/outlook/callback` (Web platform)
+3. Under **API permissions**, add:
+   - `Mail.ReadWrite` (Delegated)
+   - `Mail.Send` (Delegated)
+   - `offline_access` (Delegated)
+   - `User.Read` (Delegated)
+4. Under **Certificates & secrets**, create a new client secret
+5. Copy the **Application (client) ID** and **Client Secret value**
+6. Set them as environment variables:
+   ```bash
+   export EMAILIBRIUM_MICROSOFT_CLIENT_ID="your-app-client-id"
+   export EMAILIBRIUM_MICROSOFT_CLIENT_SECRET="your-client-secret-value"
+   ```
+   Or place them in `secrets/dev/microsoft_client_id` and `secrets/dev/microsoft_client_secret` for Docker.
+
+#### IMAP (No OAuth Required)
+
+IMAP accounts (Yahoo, iCloud, Fastmail, etc.) use direct credentials entered in the onboarding UI. No external setup is needed. Some providers require an "app password" instead of your main password.
 
 ## Docker Compose
 

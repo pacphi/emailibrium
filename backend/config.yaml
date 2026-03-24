@@ -86,3 +86,25 @@ quantization:
   product_threshold: 200000
   binary_threshold: 1000000
   hysteresis_percent: 0.10
+
+# OAuth (DDD-005: Account Management)
+# Client credentials are loaded from environment variables, never config files.
+# See docs/deployment-guide.md for setup instructions.
+oauth:
+  redirect_base_url: "http://localhost:8080"
+  gmail:
+    client_id_env: "EMAILIBRIUM_GOOGLE_CLIENT_ID"
+    client_secret_env: "EMAILIBRIUM_GOOGLE_CLIENT_SECRET"
+    scopes:
+      - "https://www.googleapis.com/auth/gmail.modify"
+      - "https://www.googleapis.com/auth/gmail.labels"
+      - "https://www.googleapis.com/auth/userinfo.email"
+  outlook:
+    client_id_env: "EMAILIBRIUM_MICROSOFT_CLIENT_ID"
+    client_secret_env: "EMAILIBRIUM_MICROSOFT_CLIENT_SECRET"
+    tenant: "common"         # "common" for multi-tenant, or a specific tenant UUID
+    scopes:
+      - "Mail.ReadWrite"
+      - "Mail.Send"
+      - "offline_access"
+      - "User.Read"

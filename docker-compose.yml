@@ -36,6 +36,10 @@ services:
       - jwt_secret
       - oauth_encryption_key
       - database_url
+      - google_client_id
+      - google_client_secret
+      - microsoft_client_id
+      - microsoft_client_secret
     depends_on:
       postgres:
         condition: service_healthy
@@ -167,6 +171,14 @@ secrets:
     file: ./secrets/${APP_ENV:-dev}/database_url
   db_password:
     file: ./secrets/${APP_ENV:-dev}/db_password
+  google_client_id:
+    file: ./secrets/${APP_ENV:-dev}/google_client_id
+  google_client_secret:
+    file: ./secrets/${APP_ENV:-dev}/google_client_secret
+  microsoft_client_id:
+    file: ./secrets/${APP_ENV:-dev}/microsoft_client_id
+  microsoft_client_secret:
+    file: ./secrets/${APP_ENV:-dev}/microsoft_client_secret
 
 # ─── Volumes ─────────────────────────────────────────────────
 volumes:

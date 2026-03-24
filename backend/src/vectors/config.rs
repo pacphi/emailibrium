@@ -49,6 +49,9 @@ pub struct VectorConfig {
     /// Generative AI settings (ADR-012).
     #[serde(default)]
     pub generative: GenerativeConfig,
+    /// OAuth provider settings (DDD-005).
+    #[serde(default)]
+    pub oauth: OAuthConfig,
 }
 
 impl Default for VectorConfig {
@@ -68,6 +71,7 @@ impl Default for VectorConfig {
             learning: super::learning::LearningConfig::default(),
             quantization: super::quantization::QuantizationConfig::default(),
             generative: GenerativeConfig::default(),
+            oauth: OAuthConfig::default(),
         }
     }
 }
@@ -462,6 +466,156 @@ fn default_cloud_base_url() -> String {
 }
 
 // ---------------------------------------------------------------------------
+// OAuth config (DDD-005: Account Management)
+// ---------------------------------------------------------------------------
+
+/// OAuth provider configuration for Gmail and Outlook account connections.
+///
+/// Client credentials are loaded from environment variables (never from config
+/// files) to prevent accidental secret exposure. The env var names are
+/// configurable so deployments can use their own naming conventions.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OAuthConfig {
+    /// Gmail OAuth settings.
+    #[serde(default)]
+    pub gmail: GmailOAuthConfig,
+    /// Outlook/Microsoft OAuth settings.
+    #[serde(default)]
+    pub outlook: OutlookOAuthConfig,
+    /// OAuth callback base URL (used to construct redirect URIs).
+    #[serde(default = "default_oauth_redirect_base")]
+    pub redirect_base_url: String,
+}
+
+impl Default for OAuthConfig {
+    fn default() -> Self {
+        Self {
+            gmail: GmailOAuthConfig::default(),
+            outlook: OutlookOAuthConfig::default(),
+            redirect_base_url: default_oauth_redirect_base(),
+        }
+    }
+}
+
+/// Gmail (Google) OAuth2 configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GmailOAuthConfig {
+    /// Env var holding the Google OAuth Client ID.
+    #[serde(default = "default_google_client_id_env")]
+    pub client_id_env: String,
+    /// Env var holding the Google OAuth Client Secret.
+    #[serde(default = "default_google_client_secret_env")]
+    pub client_secret_env: String,
+    /// OAuth scopes requested from Google.
+    #[serde(default = "default_gmail_scopes")]
+    pub scopes: Vec<String>,
+    /// Google OAuth authorization endpoint.
+    #[serde(default = "default_google_auth_url")]
+    pub auth_url: String,
+    /// Google OAuth token endpoint.
+    #[serde(default = "default_google_token_url")]
+    pub token_url: String,
+}
+
+impl Default for GmailOAuthConfig {
+    fn default() -> Self {
+        Self {
+            client_id_env: default_google_client_id_env(),
+            client_secret_env: default_google_client_secret_env(),
+            scopes: default_gmail_scopes(),
+            auth_url: default_google_auth_url(),
+            token_url: default_google_token_url(),
+        }
+    }
+}
+
+/// Outlook (Microsoft Entra) OAuth2 configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OutlookOAuthConfig {
+    /// Env var holding the Microsoft OAuth Client ID (Application ID).
+    #[serde(default = "default_microsoft_client_id_env")]
+    pub client_id_env: String,
+    /// Env var holding the Microsoft OAuth Client Secret.
+    #[serde(default = "default_microsoft_client_secret_env")]
+    pub client_secret_env: String,
+    /// Tenant ID: "common" for multi-tenant, or a specific tenant UUID.
+    #[serde(default = "default_microsoft_tenant")]
+    pub tenant: String,
+    /// OAuth scopes requested from Microsoft.
+    #[serde(default = "default_outlook_scopes")]
+    pub scopes: Vec<String>,
+}
+
+impl Default for OutlookOAuthConfig {
+    fn default() -> Self {
+        Self {
+            client_id_env: default_microsoft_client_id_env(),
+            client_secret_env: default_microsoft_client_secret_env(),
+            tenant: default_microsoft_tenant(),
+            scopes: default_outlook_scopes(),
+        }
+    }
+}
+
+impl OutlookOAuthConfig {
+    /// Microsoft OAuth authorization endpoint for the configured tenant.
+    pub fn auth_url(&self) -> String {
+        format!(
+            "https://login.microsoftonline.com/{}/oauth2/v2.0/authorize",
+            self.tenant
+        )
+    }
+
+    /// Microsoft OAuth token endpoint for the configured tenant.
+    pub fn token_url(&self) -> String {
+        format!(
+            "https://login.microsoftonline.com/{}/oauth2/v2.0/token",
+            self.tenant
+        )
+    }
+}
+
+fn default_oauth_redirect_base() -> String {
+    "http://localhost:8080".to_string()
+}
+fn default_google_client_id_env() -> String {
+    "EMAILIBRIUM_GOOGLE_CLIENT_ID".to_string()
+}
+fn default_google_client_secret_env() -> String {
+    "EMAILIBRIUM_GOOGLE_CLIENT_SECRET".to_string()
+}
+fn default_gmail_scopes() -> Vec<String> {
+    vec![
+        "https://www.googleapis.com/auth/gmail.modify".to_string(),
+        "https://www.googleapis.com/auth/gmail.labels".to_string(),
+        "https://www.googleapis.com/auth/userinfo.email".to_string(),
+    ]
+}
+fn default_google_auth_url() -> String {
+    "https://accounts.google.com/o/oauth2/v2/auth".to_string()
+}
+fn default_google_token_url() -> String {
+    "https://oauth2.googleapis.com/token".to_string()
+}
+fn default_microsoft_client_id_env() -> String {
+    "EMAILIBRIUM_MICROSOFT_CLIENT_ID".to_string()
+}
+fn default_microsoft_client_secret_env() -> String {
+    "EMAILIBRIUM_MICROSOFT_CLIENT_SECRET".to_string()
+}
+fn default_microsoft_tenant() -> String {
+    "common".to_string()
+}
+fn default_outlook_scopes() -> Vec<String> {
+    vec![
+        "Mail.ReadWrite".to_string(),
+        "Mail.Send".to_string(),
+        "offline_access".to_string(),
+        "User.Read".to_string(),
+    ]
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -486,6 +640,53 @@ mod tests {
     fn test_vector_config_includes_generative() {
         let config = VectorConfig::default();
         assert_eq!(config.generative.provider, "none");
+    }
+
+    #[test]
+    fn test_oauth_config_defaults() {
+        let config = OAuthConfig::default();
+        assert_eq!(config.redirect_base_url, "http://localhost:8080");
+        assert_eq!(config.gmail.client_id_env, "EMAILIBRIUM_GOOGLE_CLIENT_ID");
+        assert_eq!(
+            config.gmail.client_secret_env,
+            "EMAILIBRIUM_GOOGLE_CLIENT_SECRET"
+        );
+        assert!(!config.gmail.scopes.is_empty());
+        assert_eq!(
+            config.outlook.client_id_env,
+            "EMAILIBRIUM_MICROSOFT_CLIENT_ID"
+        );
+        assert_eq!(config.outlook.tenant, "common");
+        assert!(config
+            .outlook
+            .scopes
+            .contains(&"Mail.ReadWrite".to_string()));
+        assert!(config
+            .outlook
+            .scopes
+            .contains(&"offline_access".to_string()));
+    }
+
+    #[test]
+    fn test_outlook_auth_urls() {
+        let config = OutlookOAuthConfig::default();
+        assert!(config.auth_url().contains("common"));
+        assert!(config.token_url().contains("common"));
+
+        let tenant_config = OutlookOAuthConfig {
+            tenant: "my-tenant-id".to_string(),
+            ..Default::default()
+        };
+        assert!(tenant_config.auth_url().contains("my-tenant-id"));
+    }
+
+    #[test]
+    fn test_vector_config_includes_oauth() {
+        let config = VectorConfig::default();
+        assert_eq!(
+            config.oauth.gmail.client_id_env,
+            "EMAILIBRIUM_GOOGLE_CLIENT_ID"
+        );
     }
 
     #[test]

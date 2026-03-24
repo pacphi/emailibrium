@@ -10,6 +10,13 @@ openssl rand -base64 32 > secrets/dev/jwt_secret
 openssl rand -base64 32 > secrets/dev/oauth_encryption_key
 echo "postgres://emailibrium:devpass@postgres:5432/emailibrium" > secrets/dev/database_url
 echo "devpass" > secrets/dev/db_password
+
+# OAuth credentials (see docs/deployment-guide.md for setup instructions)
+echo "YOUR_GOOGLE_CLIENT_ID.apps.googleusercontent.com" > secrets/dev/google_client_id
+echo "YOUR_GOOGLE_CLIENT_SECRET" > secrets/dev/google_client_secret
+echo "YOUR_MICROSOFT_CLIENT_ID" > secrets/dev/microsoft_client_id
+echo "YOUR_MICROSOFT_CLIENT_SECRET" > secrets/dev/microsoft_client_secret
+
 chmod 600 secrets/dev/*
 ```
 
@@ -24,11 +31,15 @@ secrets/
 │   ├── oauth_encryption_key # openssl rand -base64 32
 │   ├── database_url         # postgres://emailibrium:devpass@postgres:5432/emailibrium
 │   └── db_password          # devpass
-├── dev.example/             # Template (committed to git)
-│   ├── jwt_secret           # REPLACE_ME_jwt_secret_32_chars_minimum
-│   ├── oauth_encryption_key # REPLACE_ME_encryption_key_32_chars
-│   ├── database_url         # postgres://emailibrium:REPLACE@postgres:5432/emailibrium
-│   └── db_password          # REPLACE_ME
+├── dev.example/                 # Template (committed to git)
+│   ├── jwt_secret               # REPLACE_ME_jwt_secret_32_chars_minimum
+│   ├── oauth_encryption_key     # REPLACE_ME_encryption_key_32_chars
+│   ├── database_url             # postgres://emailibrium:REPLACE@postgres:5432/emailibrium
+│   ├── db_password              # REPLACE_ME
+│   ├── google_client_id         # Google OAuth Client ID
+│   ├── google_client_secret     # Google OAuth Client Secret
+│   ├── microsoft_client_id      # Microsoft Entra App Registration Client ID
+│   └── microsoft_client_secret  # Microsoft Entra App Registration Client Secret
 └── .gitignore               # Ignores everything except dev.example/ and README
 ```
 
