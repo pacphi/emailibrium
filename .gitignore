@@ -66,10 +66,11 @@ api-keys*
 .agentic-qe/
 
 # Claude Code session data (contains command history, metrics, local prefs)
-.claude/memory/working-state.jsonl
-.claude/memory/metrics.json
-.claude/memory.db
-.claude/settings.local.json
+**/.claude/memory/working-state.jsonl
+**/.claude/memory/metrics.json
+**/.claude/memory.db
+**/.claude/settings.local.json
+**/.claude/*/.claude-flow/
 
 # Storybook
 storybook-static/
@@ -81,6 +82,9 @@ blob-report/
 
 # Docker local
 docker-compose.override.yml
+
+# ML model caches (large binaries, machine-specific)
+**/.fastembed_cache/
 
 # Misc
 *.bak

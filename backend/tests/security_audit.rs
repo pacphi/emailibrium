@@ -1,4 +1,4 @@
-//! Security audit (ADR-008, RESEARCH.md Section 6.4).
+//! Security audit (ADR-008, docs/research/initial.md Section 6.4).
 //! Verifies encryption at rest, embedding invertibility risk, token storage.
 //!
 //! Run with: cargo test --test security_audit

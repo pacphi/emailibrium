@@ -11,8 +11,11 @@ use std::sync::Arc;
 
 use tokio::sync::RwLock;
 
+use tracing::{debug, warn};
+
 use super::embedding::EmbeddingPipeline;
 use super::error::VectorError;
+use super::generative::{GenerativeModel, RuleBasedClassifier};
 use super::store::VectorStoreBackend;
 use super::types::*;
 
@@ -152,6 +155,81 @@ impl VectorCategorizer {
         }
     }
 
+    /// Classify an email with tiered fallback (ADR-012).
+    ///
+    /// 1. Try vector centroid classification (existing `categorize`)
+    /// 2. If below threshold and a generative model is available, use LLM
+    /// 3. If no generative model, try rule-based heuristics
+    /// 4. If all fail, return Uncategorized
+    pub async fn categorize_with_fallback(
+        &self,
+        email_text: &str,
+        from_addr: &str,
+        generative: Option<&dyn GenerativeModel>,
+    ) -> Result<CategoryResult, VectorError> {
+        // Step 1: Try vector centroid classification.
+        let result = self.categorize(email_text).await?;
+        if result.method != "below_threshold" {
+            return Ok(result);
+        }
+
+        debug!(
+            confidence = result.confidence,
+            "Below threshold, trying fallback classification"
+        );
+
+        // Step 2: If generative model available, try LLM classification.
+        if let Some(gen) = generative {
+            let categories = &[
+                "Work",
+                "Personal",
+                "Finance",
+                "Shopping",
+                "Social",
+                "Newsletter",
+                "Marketing",
+                "Notification",
+                "Alerts",
+                "Promotions",
+            ];
+            match gen.classify(email_text, categories).await {
+                Ok(cat_name) => {
+                    if let Some(category) = parse_email_category(&cat_name) {
+                        debug!(category = %cat_name, "LLM fallback classified email");
+                        return Ok(CategoryResult {
+                            category,
+                            confidence: result.confidence,
+                            method: "llm_fallback".to_string(),
+                        });
+                    }
+                    warn!(category = %cat_name, "LLM returned unparseable category");
+                }
+                Err(e) => {
+                    warn!(error = %e, "LLM classification failed, trying rules");
+                }
+            }
+        }
+
+        // Step 3: Rule-based fallback.
+        if let Some(cat_name) = RuleBasedClassifier::classify_by_rules(email_text, from_addr) {
+            if let Some(category) = parse_email_category(&cat_name) {
+                debug!(category = %cat_name, "Rule-based fallback classified email");
+                return Ok(CategoryResult {
+                    category,
+                    confidence: result.confidence,
+                    method: "rule_based".to_string(),
+                });
+            }
+        }
+
+        // Step 4: Nothing worked.
+        Ok(CategoryResult {
+            category: EmailCategory::Uncategorized,
+            confidence: result.confidence,
+            method: "uncategorized".to_string(),
+        })
+    }
+
     /// Update a category centroid using exponential moving average.
     ///
     /// - Positive `weight`: standard EMA with alpha = weight.abs() * 0.05
@@ -250,6 +328,27 @@ impl VectorCategorizer {
 }
 
 // ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/// Parse a category name string into an `EmailCategory`.
+fn parse_email_category(name: &str) -> Option<EmailCategory> {
+    match name.to_lowercase().as_str() {
+        "work" => Some(EmailCategory::Work),
+        "personal" => Some(EmailCategory::Personal),
+        "finance" => Some(EmailCategory::Finance),
+        "shopping" => Some(EmailCategory::Shopping),
+        "social" => Some(EmailCategory::Social),
+        "newsletter" => Some(EmailCategory::Newsletter),
+        "marketing" => Some(EmailCategory::Marketing),
+        "notification" => Some(EmailCategory::Notification),
+        "alerts" => Some(EmailCategory::Alerts),
+        "promotions" => Some(EmailCategory::Promotions),
+        _ => None,
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -267,7 +366,10 @@ mod tests {
         min_feedback_events: u32,
     ) -> VectorCategorizer {
         let store: Arc<dyn VectorStoreBackend> = Arc::new(InMemoryVectorStore::new());
-        let config = EmbeddingConfig::default();
+        let config = EmbeddingConfig {
+            provider: "mock".to_string(),
+            ..EmbeddingConfig::default()
+        };
         let embedding = Arc::new(EmbeddingPipeline::new(&config).unwrap());
         VectorCategorizer::with_config(
             store,
@@ -590,5 +692,69 @@ mod tests {
 
         let snapshot2 = cat.get_centroids().await;
         assert_eq!(snapshot2.len(), 2);
+    }
+
+    // -- categorize_with_fallback tests ------------------------------------
+
+    #[tokio::test]
+    async fn test_categorizer_with_rule_fallback() {
+        // High threshold so vector classification always fails.
+        let cat = make_categorizer(0.99, 0.1, 0);
+
+        // No generative model, rule-based should kick in for a GitHub email.
+        let result = cat
+            .categorize_with_fallback(
+                "New pull request opened on your repo",
+                "noreply@github.com",
+                None,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.category, EmailCategory::Notification);
+        assert_eq!(result.method, "rule_based");
+    }
+
+    #[tokio::test]
+    async fn test_categorizer_fallback_to_uncategorized() {
+        let cat = make_categorizer(0.99, 0.1, 0);
+
+        // Text and address that match no rules.
+        let result = cat
+            .categorize_with_fallback(
+                "Hello, how are you doing today?",
+                "friend@personal.com",
+                None,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.category, EmailCategory::Uncategorized);
+        assert_eq!(result.method, "uncategorized");
+    }
+
+    #[tokio::test]
+    async fn test_categorizer_fallback_finance_keyword() {
+        let cat = make_categorizer(0.99, 0.1, 0);
+
+        let result = cat
+            .categorize_with_fallback(
+                "Your invoice #12345 is attached",
+                "billing@randomco.com",
+                None,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.category, EmailCategory::Finance);
+        assert_eq!(result.method, "rule_based");
+    }
+
+    #[test]
+    fn test_parse_email_category() {
+        assert_eq!(parse_email_category("Work"), Some(EmailCategory::Work));
+        assert_eq!(parse_email_category("finance"), Some(EmailCategory::Finance));
+        assert_eq!(parse_email_category("SHOPPING"), Some(EmailCategory::Shopping));
+        assert_eq!(parse_email_category("unknown"), None);
     }
 }

@@ -243,7 +243,7 @@ pub fn euclidean_distance(a: &[f32], b: &[f32]) -> f32 {
 }
 
 // ---------------------------------------------------------------------------
-// Information Retrieval Metrics (RESEARCH.md Section 5.1)
+// Information Retrieval Metrics (docs/research/initial.md Section 5.1)
 // ---------------------------------------------------------------------------
 
 /// Recall@K: fraction of relevant documents found in the top-K results.
@@ -327,7 +327,7 @@ pub fn mrr(relevant: &[String], retrieved: &[String]) -> f32 {
 }
 
 // ---------------------------------------------------------------------------
-// Confusion Matrix for Classification Evaluation (RESEARCH.md Section 5.2)
+// Confusion Matrix for Classification Evaluation (docs/research/initial.md Section 5.2)
 // ---------------------------------------------------------------------------
 
 /// Multi-class confusion matrix that tracks (predicted, actual) counts.

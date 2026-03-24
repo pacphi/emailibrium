@@ -1,4 +1,4 @@
-//! Domain adaptation evaluation (ADR-002, RESEARCH.md gap).
+//! Domain adaptation evaluation (ADR-002, docs/research/initial.md gap).
 //! Tests embedding quality across different email domains.
 //!
 //! These integration tests verify that the embedding pipeline produces
@@ -53,7 +53,10 @@ const MARKETING_EMAILS: &[&str] = &[
 
 /// Build a default embedding pipeline backed by MockEmbeddingModel.
 fn default_pipeline() -> EmbeddingPipeline {
-    let config = EmbeddingConfig::default();
+    let config = EmbeddingConfig {
+        provider: "mock".to_string(),
+        ..EmbeddingConfig::default()
+    };
     EmbeddingPipeline::new(&config).unwrap()
 }
 
@@ -293,7 +296,10 @@ async fn test_embedding_model_consistency() {
 #[tokio::test]
 async fn test_model_switching_procedure() {
     // Create pipeline with MockEmbeddingModel via default config.
-    let config = EmbeddingConfig::default();
+    let config = EmbeddingConfig {
+        provider: "mock".to_string(),
+        ..EmbeddingConfig::default()
+    };
     let pipeline = EmbeddingPipeline::new(&config).unwrap();
 
     // Verify the pipeline is available and produces vectors of the expected dimension.

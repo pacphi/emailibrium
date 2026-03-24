@@ -1,6 +1,6 @@
 # Classification Accuracy Evaluation
 
-**RESEARCH.md Section 5.2**
+**docs/research/initial.md Section 5.2**
 
 ## Methodology
 

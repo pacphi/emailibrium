@@ -721,7 +721,10 @@ mod tests {
     /// Create a HybridSearch with in-memory store and an in-memory SQLite DB.
     async fn make_hybrid_search() -> (HybridSearch, Arc<dyn VectorStoreBackend>) {
         let store: Arc<dyn VectorStoreBackend> = Arc::new(InMemoryVectorStore::new());
-        let config = EmbeddingConfig::default();
+        let config = EmbeddingConfig {
+            provider: "mock".to_string(),
+            ..EmbeddingConfig::default()
+        };
         let embedding = Arc::new(EmbeddingPipeline::new(&config).unwrap());
 
         let db = Arc::new(

@@ -46,6 +46,9 @@ pub struct VectorConfig {
     /// Quantization settings (ADR-007).
     #[serde(default)]
     pub quantization: super::quantization::QuantizationConfig,
+    /// Generative AI settings (ADR-012).
+    #[serde(default)]
+    pub generative: GenerativeConfig,
 }
 
 impl Default for VectorConfig {
@@ -64,6 +67,7 @@ impl Default for VectorConfig {
             clustering: super::clustering::ClusterConfig::default(),
             learning: super::learning::LearningConfig::default(),
             quantization: super::quantization::QuantizationConfig::default(),
+            generative: GenerativeConfig::default(),
         }
     }
 }
@@ -129,6 +133,9 @@ pub struct EmbeddingConfig {
     /// Minimum token count before query augmentation kicks in.
     #[serde(default = "default_min_query_tokens")]
     pub min_query_tokens: usize,
+    /// ONNX / fastembed configuration (ADR-011).
+    #[serde(default)]
+    pub onnx: OnnxConfig,
 }
 
 impl Default for EmbeddingConfig {
@@ -141,6 +148,38 @@ impl Default for EmbeddingConfig {
             cache_size: default_cache_size(),
             ollama_url: default_ollama_url(),
             min_query_tokens: default_min_query_tokens(),
+            onnx: OnnxConfig::default(),
+        }
+    }
+}
+
+/// Configuration for the ONNX embedding provider (fastembed, ADR-011).
+///
+/// Downloads the specified model from Hugging Face Hub on first use and
+/// caches it locally. Runs entirely in-process via ONNX Runtime.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OnnxConfig {
+    /// Model name. Supported: all-MiniLM-L6-v2, bge-small-en-v1.5, bge-base-en-v1.5.
+    #[serde(default = "default_onnx_model")]
+    pub model: String,
+    /// Local cache directory for downloaded model files. `None` uses fastembed default.
+    #[serde(default)]
+    pub cache_dir: Option<String>,
+    /// Show download progress on first model fetch.
+    #[serde(default = "default_true")]
+    pub show_download_progress: bool,
+    /// Output embedding dimensions (must match the chosen model).
+    #[serde(default = "default_dimensions")]
+    pub dimensions: usize,
+}
+
+impl Default for OnnxConfig {
+    fn default() -> Self {
+        Self {
+            model: default_onnx_model(),
+            cache_dir: None,
+            show_download_progress: true,
+            dimensions: default_dimensions(),
         }
     }
 }
@@ -260,10 +299,13 @@ fn default_store_path() -> String {
 fn default_true() -> bool {
     true
 }
-/// Default embedding provider. Set to "mock" for development (deterministic hash-based).
-/// Production should use "ollama" or "cloud" via config.yaml or EMAILIBRIUM_EMBEDDING_PROVIDER.
+/// Default embedding provider. Set to "onnx" for zero-config local embedding via fastembed
+/// (ADR-011). Other options: "mock" (development/testing), "ollama", "cloud".
 fn default_provider() -> String {
-    "mock".to_string()
+    "onnx".to_string()
+}
+fn default_onnx_model() -> String {
+    "all-MiniLM-L6-v2".to_string()
 }
 fn default_model() -> String {
     "all-MiniLM-L6-v2".to_string()
@@ -312,4 +354,155 @@ fn default_min_feedback_events() -> u32 {
 }
 fn default_backup_interval() -> u64 {
     3600
+}
+
+// ---------------------------------------------------------------------------
+// Generative AI config (ADR-012)
+// ---------------------------------------------------------------------------
+
+/// Configuration for the generative AI subsystem.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GenerativeConfig {
+    /// Provider selection: "none" | "ollama" | "cloud".
+    #[serde(default = "default_gen_provider")]
+    pub provider: String,
+    /// Ollama-specific settings (Tier 1).
+    #[serde(default)]
+    pub ollama: OllamaGenerativeConfig,
+    /// Cloud provider settings (Tier 2).
+    #[serde(default)]
+    pub cloud: CloudGenerativeConfig,
+}
+
+impl Default for GenerativeConfig {
+    fn default() -> Self {
+        Self {
+            provider: default_gen_provider(),
+            ollama: OllamaGenerativeConfig::default(),
+            cloud: CloudGenerativeConfig::default(),
+        }
+    }
+}
+
+/// Ollama generative model settings.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OllamaGenerativeConfig {
+    /// Base URL for the Ollama API.
+    #[serde(default = "default_ollama_gen_url")]
+    pub base_url: String,
+    /// Model to use for classification prompts.
+    #[serde(default = "default_ollama_classification_model")]
+    pub classification_model: String,
+    /// Model to use for chat / free-form generation.
+    #[serde(default = "default_ollama_chat_model")]
+    pub chat_model: String,
+}
+
+impl Default for OllamaGenerativeConfig {
+    fn default() -> Self {
+        Self {
+            base_url: default_ollama_gen_url(),
+            classification_model: default_ollama_classification_model(),
+            chat_model: default_ollama_chat_model(),
+        }
+    }
+}
+
+/// Cloud generative model settings (OpenAI / Anthropic).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CloudGenerativeConfig {
+    /// Cloud provider: "openai" | "anthropic".
+    #[serde(default = "default_cloud_provider")]
+    pub provider: String,
+    /// Name of the environment variable holding the API key.
+    #[serde(default = "default_api_key_env")]
+    pub api_key_env: String,
+    /// Model identifier (e.g. "gpt-4o-mini", "claude-sonnet-4-20250514").
+    #[serde(default = "default_cloud_model")]
+    pub model: String,
+    /// Base URL for the provider API.
+    #[serde(default = "default_cloud_base_url")]
+    pub base_url: String,
+}
+
+impl Default for CloudGenerativeConfig {
+    fn default() -> Self {
+        Self {
+            provider: default_cloud_provider(),
+            api_key_env: default_api_key_env(),
+            model: default_cloud_model(),
+            base_url: default_cloud_base_url(),
+        }
+    }
+}
+
+fn default_gen_provider() -> String {
+    "none".to_string()
+}
+fn default_ollama_gen_url() -> String {
+    "http://localhost:11434".to_string()
+}
+fn default_ollama_classification_model() -> String {
+    "llama3.2:1b".to_string()
+}
+fn default_ollama_chat_model() -> String {
+    "llama3.2:3b".to_string()
+}
+fn default_cloud_provider() -> String {
+    "openai".to_string()
+}
+fn default_api_key_env() -> String {
+    "EMAILIBRIUM_CLOUD_API_KEY".to_string()
+}
+fn default_cloud_model() -> String {
+    "gpt-4o-mini".to_string()
+}
+fn default_cloud_base_url() -> String {
+    "https://api.openai.com".to_string()
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_generative_config_defaults() {
+        let config = GenerativeConfig::default();
+        assert_eq!(config.provider, "none");
+        assert_eq!(config.ollama.base_url, "http://localhost:11434");
+        assert_eq!(config.ollama.classification_model, "llama3.2:1b");
+        assert_eq!(config.ollama.chat_model, "llama3.2:3b");
+        assert_eq!(config.cloud.provider, "openai");
+        assert_eq!(config.cloud.api_key_env, "EMAILIBRIUM_CLOUD_API_KEY");
+        assert_eq!(config.cloud.model, "gpt-4o-mini");
+        assert_eq!(config.cloud.base_url, "https://api.openai.com");
+    }
+
+    #[test]
+    fn test_vector_config_includes_generative() {
+        let config = VectorConfig::default();
+        assert_eq!(config.generative.provider, "none");
+    }
+
+    #[test]
+    fn test_generative_config_deserialize_from_json() {
+        let json = r#"{
+            "provider": "ollama",
+            "ollama": {
+                "base_url": "http://my-ollama:11434",
+                "classification_model": "custom-model",
+                "chat_model": "custom-chat"
+            }
+        }"#;
+        let config: GenerativeConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(config.provider, "ollama");
+        assert_eq!(config.ollama.base_url, "http://my-ollama:11434");
+        assert_eq!(config.ollama.classification_model, "custom-model");
+        // Cloud should use defaults since not specified.
+        assert_eq!(config.cloud.provider, "openai");
+    }
 }

@@ -121,7 +121,8 @@ React TypeScript SPA ──REST + SSE──→ Axum API Gateway
 ### Research & Evaluation
 | Document | Description |
 |----------|-------------|
-| [Research Paper](docs/RESEARCH.md) | Academic evaluation with 30 citations |
+| [Research: Initial Evaluation](docs/research/initial.md) | Academic evaluation with 30 citations |
+| [Research: LLM Options](docs/research/llm-options.md) | ONNX, Ollama, cloud — tiered AI architecture |
 | [Search Quality](backend/docs/evaluation/search-quality.md) | Recall, NDCG, MRR methodology |
 | [Classification](backend/docs/evaluation/classification-accuracy.md) | Macro-F1, per-category P/R |
 | [Clustering](backend/docs/evaluation/clustering-quality.md) | Silhouette, ARI, detection metrics |

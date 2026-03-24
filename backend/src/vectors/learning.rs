@@ -811,7 +811,10 @@ mod tests {
     /// Build a test learning engine with an in-memory store and mock embeddings.
     async fn make_engine(config: LearningConfig) -> (LearningEngine, Arc<dyn VectorStoreBackend>) {
         let store: Arc<dyn VectorStoreBackend> = Arc::new(InMemoryVectorStore::new());
-        let emb_config = EmbeddingConfig::default();
+        let emb_config = EmbeddingConfig {
+            provider: "mock".to_string(),
+            ..EmbeddingConfig::default()
+        };
         let embedding = Arc::new(EmbeddingPipeline::new(&emb_config).unwrap());
         let categorizer = Arc::new(VectorCategorizer::with_config(
             store.clone(),

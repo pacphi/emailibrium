@@ -6,7 +6,7 @@ Version 2.0 | Date: 2026-03-23 | Status: Sprint-Ready
 
 ## 1. Plan Overview
 
-This plan addresses gaps identified in the RESEARCH.md academic evaluation of the original INCEPTION.md v1.4:
+This plan addresses gaps identified in the docs/research/initial.md academic evaluation of the original INCEPTION.md v1.4:
 - **Gap 1**: SONA learning model underspecified → Addressed in ADR-004, Sprint 3
 - **Gap 2**: RuVector maturity risk → Addressed in ADR-003 (VectorStore facade), Sprint 1
 - **Gap 3**: Embedding model limitations (no domain adaptation, no multilingual) → Addressed in ADR-002, Sprint 6
@@ -18,7 +18,7 @@ This plan addresses gaps identified in the RESEARCH.md academic evaluation of th
 
 Cross-references:
 - Original Plan: docs/INCEPTION.md v1.4
-- Research: docs/RESEARCH.md
+- Research: docs/research/initial.md
 - ADRs: docs/ADRs/ADR-001 through ADR-010
 - DDDs: docs/DDDs/DDD-001 through DDD-005
 
@@ -332,26 +332,26 @@ Cross-references:
 **Goal**: Formal evaluation framework, benchmarks, documentation (addresses research gap 7)
 
 **Tasks**:
-- [ ] **S7-01**: Retrieval quality evaluation (RESEARCH.md Section 5.1)
+- [ ] **S7-01**: Retrieval quality evaluation (docs/research/initial.md Section 5.1)
   - Build evaluation dataset: 500 queries with relevance labels (from Enron + synthetic)
   - Measure: Recall@5, Recall@10, Recall@20, NDCG@10, MRR
   - Ablation: FTS5 alone vs vector alone vs hybrid vs hybrid+SONA
   - Document results in docs/evaluation/search-quality.md
-- [ ] **S7-02**: Classification accuracy evaluation (RESEARCH.md Section 5.2)
+- [ ] **S7-02**: Classification accuracy evaluation (docs/research/initial.md Section 5.2)
   - Label 1000 emails across all categories
   - Measure: macro-F1, per-category precision/recall, LLM fallback rate
   - Target: >95% accuracy, LLM fallback rate <15%
-- [ ] **S7-03**: Clustering quality evaluation (RESEARCH.md Section 5.3)
+- [ ] **S7-03**: Clustering quality evaluation (docs/research/initial.md Section 5.3)
   - Measure: silhouette coefficient, ARI against human-labeled topics
   - Compare: GraphSAGE+HDBSCAN vs K-means vs HDBSCAN-only
   - Subscription detection: precision/recall (target >98% recall)
-- [ ] **S7-04**: Performance benchmarks (RESEARCH.md Section 5.5)
+- [ ] **S7-04**: Performance benchmarks (docs/research/initial.md Section 5.5)
   - Microbenchmarks: embed latency, batch throughput, HNSW search at 1K/10K/100K/500K
   - End-to-end: ingestion pipeline emails/sec (text-only and multi-asset)
   - Memory profiling: RSS at steady state for 10K/50K/100K emails
   - Hardware matrix: Apple Silicon (M1/M2/M3), Intel AVX2, AMD, ARM without AVX (research gap 6)
   - Document results in docs/evaluation/performance.md
-- [ ] **S7-05**: "10-Minute Inbox Zero" validation (RESEARCH.md Section 5.4)
+- [ ] **S7-05**: "10-Minute Inbox Zero" validation (docs/research/initial.md Section 5.4)
   - Internal dogfooding: team members test with real inboxes
   - Measure: time to zero unread, actions required, satisfaction
   - Document protocol for future formal user study
@@ -477,7 +477,7 @@ Each sprint is complete when:
 | Document | Location | Purpose |
 |----------|----------|---------|
 | Original Plan | INCEPTION.md | Full technical specification |
-| Research Evaluation | docs/RESEARCH.md | Academic analysis of plan feasibility |
+| Research Evaluation | docs/research/initial.md | Academic analysis of plan feasibility |
 | ADR-001 Hybrid Search | docs/ADRs/ADR-001.md | Search architecture decision |
 | ADR-002 Embedding Model | docs/ADRs/ADR-002.md | Model selection and pluggability |
 | ADR-003 RuVector | docs/ADRs/ADR-003.md | Vector DB selection with facade |

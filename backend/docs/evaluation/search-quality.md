@@ -1,6 +1,6 @@
 # Search Quality Evaluation
 
-**RESEARCH.md Section 5.1**
+**docs/research/initial.md Section 5.1**
 
 ## Methodology
 

@@ -7,15 +7,19 @@ pub mod backup;
 pub mod categorizer;
 pub mod clustering;
 pub mod config;
+pub mod consent;
 pub mod embedding;
 pub mod encryption;
 pub mod error;
+pub mod generative;
 pub mod ingestion;
 pub mod insights;
 pub mod interactions;
 pub mod learning;
 pub mod metrics;
+pub mod models;
 pub mod quantization;
+pub mod reindex;
 pub mod search;
 pub mod store;
 pub mod types;
@@ -43,6 +47,9 @@ pub struct VectorService {
     pub backup_service: Arc<backup::VectorBackupService>,
     pub quantization_engine: Arc<quantization::QuantizationEngine>,
     pub ingestion_pipeline: Arc<ingestion::IngestionPipeline>,
+    pub reindex_orchestrator: Arc<reindex::ReindexOrchestrator>,
+    pub generative: Option<Arc<dyn generative::GenerativeModel>>,
+    pub consent_manager: Arc<consent::ConsentManager>,
     pub config: VectorConfig,
     pub db: Arc<Database>,
 }
@@ -130,6 +137,46 @@ impl VectorService {
             db.clone(),
         ));
 
+        // Initialize generative model based on config (ADR-012)
+        let gen_model: Option<Arc<dyn generative::GenerativeModel>> =
+            match config.generative.provider.as_str() {
+                "ollama" => {
+                    tracing::info!("Generative AI: using Ollama (local)");
+                    Some(Arc::new(generative::OllamaGenerativeModel::new(
+                        &config.generative.ollama,
+                    )))
+                }
+                "cloud" => match generative::CloudGenerativeModel::new(&config.generative.cloud) {
+                    Ok(model) => {
+                        tracing::info!("Generative AI: using cloud provider");
+                        Some(Arc::new(model))
+                    }
+                    Err(e) => {
+                        tracing::warn!("Cloud generative model init failed: {e}, falling back to none");
+                        None
+                    }
+                },
+                _ => {
+                    tracing::info!("Generative AI: disabled (rule-based fallback only)");
+                    None
+                }
+            };
+
+        // Initialize consent manager
+        let consent_manager = Arc::new(consent::ConsentManager::new(db.clone()));
+
+        // Initialize re-index orchestrator and check for model changes
+        let reindex_orchestrator = Arc::new(reindex::ReindexOrchestrator::new(db.clone()));
+        if let Ok(needs_reindex) = reindex_orchestrator
+            .check_model_change(&config.embedding.model, config.embedding.dimensions)
+            .await
+        {
+            if needs_reindex {
+                let count = reindex_orchestrator.mark_all_stale().await.unwrap_or(0);
+                tracing::info!("Marked {} emails for re-indexing due to model change", count);
+            }
+        }
+
         Ok(Self {
             embedding,
             store,
@@ -142,6 +189,9 @@ impl VectorService {
             backup_service,
             quantization_engine,
             ingestion_pipeline,
+            reindex_orchestrator,
+            generative: gen_model,
+            consent_manager,
             config,
             db,
         })

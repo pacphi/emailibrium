@@ -14,7 +14,7 @@ Emailibrium is a **vector-native email intelligence platform** that transforms h
 - **Privacy by architecture.** All processing happens locally. Vectors are encrypted at rest with AES-256-GCM. There is no telemetry server, no cloud dependency (ADR-008).
 - **The 10-minute promise.** A new user should reach inbox zero within 10 minutes of first launch, driven by the Ingest-Tag-Archive pipeline (ADR-010).
 
-For the full product vision, see [INCEPTION.md](./INCEPTION.md). For the academic grounding and gap analysis, see [RESEARCH.md](./RESEARCH.md).
+For the full product vision, see [INCEPTION.md](./INCEPTION.md). For the academic grounding and gap analysis, see [Research: Initial Evaluation](./research/initial.md).
 
 ---
 
@@ -60,7 +60,7 @@ emailibrium/
     deployment-guide.md      Production deployment instructions
     user-guide.md            End-user documentation
     INCEPTION.md             Original product vision
-    RESEARCH.md              Academic evaluation and gap analysis
+    docs/research/initial.md              Academic evaluation and gap analysis
 
   docker-compose.yml         Production container orchestration
   docker-compose.dev.yml     Dev overlay (hot-reload, debug ports)

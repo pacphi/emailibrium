@@ -12,13 +12,13 @@
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use moka::future::Cache;
 use tracing::{debug, warn};
 
-use super::config::EmbeddingConfig;
+use super::config::{EmbeddingConfig, OnnxConfig};
 use super::error::VectorError;
 
 // ---------------------------------------------------------------------------
@@ -264,6 +264,105 @@ impl EmbeddingModel for OllamaEmbeddingModel {
 }
 
 // ---------------------------------------------------------------------------
+// OnnxEmbeddingModel (fastembed — ADR-011)
+// ---------------------------------------------------------------------------
+
+/// ONNX-based embedding model via fastembed (Tier 0: zero-config default).
+///
+/// Downloads the model from Hugging Face Hub on first use and caches it
+/// locally.  Runs entirely in-process via ONNX Runtime — no external
+/// services needed.
+///
+/// `fastembed::TextEmbedding::embed` requires `&mut self`, so the inner
+/// model is wrapped in a [`Mutex`] to satisfy the `Send + Sync` bound
+/// required by [`EmbeddingModel`].
+pub struct OnnxEmbeddingModel {
+    model: Mutex<fastembed::TextEmbedding>,
+    name: String,
+    dims: usize,
+}
+
+impl OnnxEmbeddingModel {
+    /// Initialise a new ONNX embedding model from [`OnnxConfig`].
+    pub fn new(config: &OnnxConfig) -> Result<Self, VectorError> {
+        use fastembed::{EmbeddingModel as FEModel, TextEmbedding, TextInitOptions};
+
+        let fe_model = match config.model.as_str() {
+            "all-MiniLM-L6-v2" => FEModel::AllMiniLML6V2,
+            "bge-small-en-v1.5" => FEModel::BGESmallENV15,
+            "bge-base-en-v1.5" => FEModel::BGEBaseENV15,
+            other => {
+                return Err(VectorError::ConfigError(format!(
+                    "Unknown ONNX model: {other}. Supported: all-MiniLM-L6-v2, \
+                     bge-small-en-v1.5, bge-base-en-v1.5"
+                )));
+            }
+        };
+
+        let mut init = TextInitOptions::new(fe_model);
+        init.show_download_progress = config.show_download_progress;
+        if let Some(ref path) = config.cache_dir {
+            init = init.with_cache_dir(std::path::PathBuf::from(path));
+        }
+
+        let model = TextEmbedding::try_new(init).map_err(|e| {
+            VectorError::EmbeddingFailed(format!("Failed to initialize ONNX model: {e}"))
+        })?;
+
+        Ok(Self {
+            model: Mutex::new(model),
+            name: config.model.clone(),
+            dims: config.dimensions,
+        })
+    }
+}
+
+#[async_trait]
+impl EmbeddingModel for OnnxEmbeddingModel {
+    async fn embed(&self, text: &str) -> Result<Vec<f32>, VectorError> {
+        let text = text.to_string();
+        // fastembed is synchronous; use block_in_place to avoid starving the
+        // tokio runtime while holding the Mutex.
+        tokio::task::block_in_place(|| {
+            let mut model = self.model.lock().map_err(|e| {
+                VectorError::EmbeddingFailed(format!("ONNX model lock poisoned: {e}"))
+            })?;
+            let results = model
+                .embed(vec![text], None)
+                .map_err(|e| VectorError::EmbeddingFailed(format!("ONNX embed failed: {e}")))?;
+            results
+                .into_iter()
+                .next()
+                .ok_or_else(|| VectorError::EmbeddingFailed("ONNX returned empty results".into()))
+        })
+    }
+
+    async fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, VectorError> {
+        let texts: Vec<String> = texts.to_vec();
+        tokio::task::block_in_place(|| {
+            let mut model = self.model.lock().map_err(|e| {
+                VectorError::EmbeddingFailed(format!("ONNX model lock poisoned: {e}"))
+            })?;
+            model
+                .embed(texts, None)
+                .map_err(|e| VectorError::EmbeddingFailed(format!("ONNX batch embed failed: {e}")))
+        })
+    }
+
+    fn dimensions(&self) -> usize {
+        self.dims
+    }
+
+    fn model_name(&self) -> &str {
+        &self.name
+    }
+
+    async fn is_available(&self) -> bool {
+        true // always available once initialised
+    }
+}
+
+// ---------------------------------------------------------------------------
 // EmbeddingPipeline
 // ---------------------------------------------------------------------------
 
@@ -279,7 +378,8 @@ impl EmbeddingPipeline {
     /// Build a new pipeline from [`EmbeddingConfig`].
     ///
     /// The `provider` field in the config determines the provider chain:
-    /// - `"mock"` -> deterministic hash-based embeddings (development only).
+    /// - `"onnx"` -> in-process ONNX via fastembed (zero-config default, ADR-011).
+    /// - `"mock"` -> deterministic hash-based embeddings (development/testing).
     /// - `"ollama"` -> Ollama HTTP API. Fails explicitly if Ollama is down.
     /// - `"cloud"` -> cloud-hosted provider (reserved for future use).
     ///
@@ -288,6 +388,16 @@ impl EmbeddingPipeline {
         let mut providers: Vec<Arc<dyn EmbeddingModel>> = Vec::new();
 
         match config.provider.as_str() {
+            "onnx" => match OnnxEmbeddingModel::new(&config.onnx) {
+                Ok(model) => providers.push(Arc::new(model)),
+                Err(e) => {
+                    warn!(
+                        "Failed to initialize ONNX embedding model: {e}. \
+                         Falling back to mock for development."
+                    );
+                    providers.push(Arc::new(MockEmbeddingModel::new(config.dimensions)));
+                }
+            },
             "mock" => {
                 providers.push(Arc::new(MockEmbeddingModel::new(config.dimensions)));
             }
@@ -492,7 +602,10 @@ mod tests {
     }
 
     fn default_pipeline() -> EmbeddingPipeline {
-        let config = EmbeddingConfig::default();
+        let config = EmbeddingConfig {
+            provider: "mock".to_string(),
+            ..EmbeddingConfig::default()
+        };
         EmbeddingPipeline::new(&config).unwrap()
     }
 
@@ -641,5 +754,58 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(v, expected);
+    }
+
+    // -- OnnxEmbeddingModel tests (require model download) ------------------
+
+    #[tokio::test]
+    #[ignore] // requires ONNX model download (~80 MB)
+    async fn test_onnx_embedding_dimensions() {
+        let config = super::super::config::OnnxConfig::default();
+        let model = OnnxEmbeddingModel::new(&config).expect("ONNX init should succeed");
+        let v = model.embed("hello world").await.unwrap();
+        assert_eq!(
+            v.len(),
+            384,
+            "all-MiniLM-L6-v2 produces 384-dim embeddings"
+        );
+        assert_eq!(model.dimensions(), 384);
+    }
+
+    #[tokio::test]
+    #[ignore] // requires ONNX model download
+    async fn test_onnx_embedding_deterministic() {
+        let config = super::super::config::OnnxConfig::default();
+        let model = OnnxEmbeddingModel::new(&config).unwrap();
+        let v1 = model.embed("determinism check").await.unwrap();
+        let v2 = model.embed("determinism check").await.unwrap();
+        assert_eq!(v1, v2, "same text must produce the same ONNX embedding");
+    }
+
+    #[tokio::test]
+    #[ignore] // requires ONNX model download
+    async fn test_onnx_embedding_semantic_similarity() {
+        let config = super::super::config::OnnxConfig::default();
+        let model = OnnxEmbeddingModel::new(&config).unwrap();
+
+        let v_cat = model.embed("The cat sat on the mat").await.unwrap();
+        let v_dog = model.embed("The dog lay on the rug").await.unwrap();
+        let v_stock = model.embed("Stock prices rose sharply today").await.unwrap();
+
+        fn cosine(a: &[f32], b: &[f32]) -> f32 {
+            let dot: f32 = a.iter().zip(b).map(|(x, y)| x * y).sum();
+            let na: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
+            let nb: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
+            dot / (na * nb)
+        }
+
+        let sim_animals = cosine(&v_cat, &v_dog);
+        let sim_unrelated = cosine(&v_cat, &v_stock);
+
+        assert!(
+            sim_animals > sim_unrelated,
+            "semantically similar sentences should be closer: \
+             animals={sim_animals:.4}, unrelated={sim_unrelated:.4}"
+        );
     }
 }

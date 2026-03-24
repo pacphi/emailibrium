@@ -1,4 +1,4 @@
-//! Classification accuracy evaluation (RESEARCH.md Section 5.2).
+//! Classification accuracy evaluation (docs/research/initial.md Section 5.2).
 //!
 //! Measures macro-F1, per-category precision/recall, and LLM fallback rate
 //! using the ConfusionMatrix and VectorCategorizer.

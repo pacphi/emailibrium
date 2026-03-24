@@ -618,7 +618,10 @@ mod tests {
         Arc<dyn VectorStoreBackend>,
         Arc<EmbeddingPipeline>,
     ) {
-        let config = EmbeddingConfig::default();
+        let config = EmbeddingConfig {
+            provider: "mock".to_string(),
+            ..EmbeddingConfig::default()
+        };
         let embedding = Arc::new(EmbeddingPipeline::new(&config).unwrap());
         let store: Arc<dyn VectorStoreBackend> = Arc::new(InMemoryVectorStore::new());
         let categorizer = Arc::new(VectorCategorizer::new(

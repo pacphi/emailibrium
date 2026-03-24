@@ -1,4 +1,4 @@
-//! Clustering quality evaluation (RESEARCH.md Section 5.3).
+//! Clustering quality evaluation (docs/research/initial.md Section 5.3).
 //! Measures silhouette coefficient, ARI, subscription detection precision/recall.
 
 use emailibrium::vectors::metrics::{

@@ -1,4 +1,4 @@
-//! Search quality evaluation (RESEARCH.md Section 5.1).
+//! Search quality evaluation (docs/research/initial.md Section 5.1).
 //!
 //! Measures Recall@K, NDCG@K, MRR, Precision@K across different search modes.
 //! These tests validate the IR metric implementations and provide a framework

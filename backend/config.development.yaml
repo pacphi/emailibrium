@@ -4,7 +4,7 @@ port: 8080
 database_url: "sqlite:emailibrium-dev.db?mode=rwc"
 
 embedding:
-  provider: "mock"
+  provider: "onnx"
 
 encryption:
   enabled: false

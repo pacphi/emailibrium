@@ -1,6 +1,6 @@
 # Domain Adaptation Evaluation
 
-Reference: ADR-002 (Pluggable Embedding Model), RESEARCH.md gap analysis.
+Reference: ADR-002 (Pluggable Embedding Model), docs/research/initial.md gap analysis.
 
 ## Overview
 

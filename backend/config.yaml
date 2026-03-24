@@ -16,13 +16,17 @@ store:
 
 # Embedding Pipeline
 embedding:
-  provider: "mock"          # mock | ollama | cloud
+  provider: "onnx"          # onnx | mock | ollama | cloud
   model: "all-MiniLM-L6-v2"
   dimensions: 384
   batch_size: 64
   cache_size: 10000
   ollama_url: "http://localhost:11434"
   min_query_tokens: 5
+  onnx:
+    model: "all-MiniLM-L6-v2"
+    show_download_progress: true
+    dimensions: 384
 
 # HNSW Index
 index:
