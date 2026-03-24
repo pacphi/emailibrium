@@ -379,7 +379,7 @@ impl HybridSearch {
         })
     }
 
-    /// Keyword search using LIKE-based fallback (FTS5 not yet provisioned).
+    /// Keyword search using LIKE-based matching (upgrade to FTS5 tracked in ADR-006).
     async fn fts_search(
         &self,
         query: &str,

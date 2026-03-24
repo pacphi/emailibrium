@@ -1,7 +1,10 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import type { EmailAccount } from '@emailibrium/types';
+import { getAccounts } from '@emailibrium/api';
 
 interface OutlookConnectProps {
   onBack: () => void;
+  onConnected: (account: EmailAccount) => void;
 }
 
 const SCOPES = [
@@ -11,8 +14,22 @@ const SCOPES = [
   { label: 'offline_access', description: 'Keep access while you are away' },
 ];
 
-export function OutlookConnect({ onBack }: OutlookConnectProps) {
+export function OutlookConnect({ onBack, onConnected }: OutlookConnectProps) {
   const [isRedirecting, setIsRedirecting] = useState(false);
+
+  // After OAuth redirect returns, the URL will contain a success query param.
+  // Poll for the newly connected account so we can pass it upstream.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('provider') === 'outlook' && params.get('status') === 'connected') {
+      getAccounts().then((accounts) => {
+        const outlook = accounts.find((a) => a.provider === 'outlook');
+        if (outlook) {
+          onConnected(outlook);
+        }
+      });
+    }
+  }, [onConnected]);
 
   function handleConnect() {
     setIsRedirecting(true);

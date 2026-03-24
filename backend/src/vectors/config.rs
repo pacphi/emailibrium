@@ -260,6 +260,8 @@ fn default_store_path() -> String {
 fn default_true() -> bool {
     true
 }
+/// Default embedding provider. Set to "mock" for development (deterministic hash-based).
+/// Production should use "ollama" or "cloud" via config.yaml or EMAILIBRIUM_EMBEDDING_PROVIDER.
 fn default_provider() -> String {
     "mock".to_string()
 }

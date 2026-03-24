@@ -1,6 +1,7 @@
 //! Vector API endpoints (S1-05, S1-07).
 //!
-//! - POST /api/v1/vectors/search/semantic — pure vector search
+//! - POST /api/v1/vectors/search/semantic — pure vector search (backward compat)
+//! - POST /api/v1/vectors/search/hybrid   — hybrid FTS + vector search with RRF
 //! - POST /api/v1/vectors/search/similar/:email_id — find similar emails
 //! - POST /api/v1/vectors/classify — classify an email
 //! - GET  /api/v1/vectors/health — health check
@@ -16,6 +17,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+use crate::vectors::search::{HybridSearchQuery, SearchMode};
 use crate::vectors::types::VectorCollection;
 use crate::AppState;
 
@@ -23,6 +25,7 @@ use crate::AppState;
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/search/semantic", post(semantic_search))
+        .route("/search/hybrid", post(hybrid_search))
         .route("/search/similar/{email_id}", post(find_similar))
         .route("/classify", post(classify_email))
         .route("/health", get(health))
@@ -38,6 +41,9 @@ pub struct SemanticSearchRequest {
     pub collection: Option<String>,
     pub filters: Option<HashMap<String, String>>,
     pub min_score: Option<f32>,
+    /// Optional mode override: "semantic" (default), "hybrid", or "keyword".
+    /// When set to "hybrid", delegates to HybridSearch with RRF fusion.
+    pub mode: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -45,6 +51,12 @@ pub struct SearchResponse {
     pub results: Vec<SearchResultItem>,
     pub total: usize,
     pub latency_ms: u64,
+    /// The search mode used ("semantic", "hybrid", or "keyword").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
+    /// Interaction ID for tracking (returned when interaction tracking is active).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub interaction_id: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -53,6 +65,24 @@ pub struct SearchResultItem {
     pub score: f32,
     pub collection: String,
     pub metadata: HashMap<String, String>,
+    /// How this result was matched (only present for hybrid search).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub match_type: Option<String>,
+    /// Rank in the vector search results (only present for hybrid search).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vector_rank: Option<usize>,
+    /// Rank in the FTS search results (only present for hybrid search).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fts_rank: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct HybridSearchRequest {
+    pub query: String,
+    /// "hybrid" (default), "semantic", or "keyword".
+    pub mode: Option<String>,
+    pub limit: Option<usize>,
+    pub filters: Option<crate::vectors::search::SearchFilters>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -71,13 +101,81 @@ pub struct ClassifyResponse {
     pub method: String,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct FindSimilarRequest {
+    pub limit: Option<usize>,
+}
+
 // --- Handlers ---
 
 /// POST /api/v1/vectors/search/semantic
+///
+/// Pure vector (semantic) search. When the `mode` field is set to "hybrid",
+/// delegates to the HybridSearch engine with RRF fusion. Records the search
+/// interaction for SONA learning.
 async fn semantic_search(
     State(state): State<AppState>,
     Json(req): Json<SemanticSearchRequest>,
 ) -> Result<Json<SearchResponse>, (StatusCode, String)> {
+    // If mode is "hybrid" or "keyword", delegate to HybridSearch.
+    if matches!(req.mode.as_deref(), Some("hybrid") | Some("keyword")) {
+        let search_mode = match req.mode.as_deref() {
+            Some("keyword") => SearchMode::Keyword,
+            _ => SearchMode::Hybrid,
+        };
+
+        let query = HybridSearchQuery {
+            text: req.query.clone(),
+            mode: search_mode,
+            filters: None,
+            limit: req.limit,
+        };
+
+        let result = state
+            .vector_service
+            .hybrid_search
+            .search(&query)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+        // Track the search interaction.
+        let interaction_id = state
+            .vector_service
+            .interaction_tracker
+            .record_search(&req.query)
+            .await
+            .ok();
+
+        let items: Vec<SearchResultItem> = result
+            .results
+            .iter()
+            .map(|r| SearchResultItem {
+                email_id: r.email_id.clone(),
+                score: r.score,
+                collection: "email_text".to_string(),
+                metadata: r.metadata.clone(),
+                match_type: Some(r.match_type.clone()),
+                vector_rank: r.vector_rank,
+                fts_rank: r.fts_rank,
+            })
+            .collect();
+
+        let mode_str = match result.mode {
+            SearchMode::Hybrid => "hybrid",
+            SearchMode::Semantic => "semantic",
+            SearchMode::Keyword => "keyword",
+        };
+
+        return Ok(Json(SearchResponse {
+            total: items.len(),
+            results: items,
+            latency_ms: result.latency_ms,
+            mode: Some(mode_str.to_string()),
+            interaction_id,
+        }));
+    }
+
+    // Default: pure semantic search path (backward compatible).
     let start = std::time::Instant::now();
 
     let collection = match req.collection.as_deref() {
@@ -124,16 +222,93 @@ async fn semantic_search(
             score: r.score,
             collection: r.document.collection.to_string(),
             metadata: r.document.metadata.clone(),
+            match_type: None,
+            vector_rank: None,
+            fts_rank: None,
         })
         .collect();
 
     let total = items.len();
     let latency_ms = start.elapsed().as_millis() as u64;
 
+    // Track the search interaction.
+    let interaction_id = state
+        .vector_service
+        .interaction_tracker
+        .record_search(&req.query)
+        .await
+        .ok();
+
     Ok(Json(SearchResponse {
         results: items,
         total,
         latency_ms,
+        mode: Some("semantic".to_string()),
+        interaction_id,
+    }))
+}
+
+/// POST /api/v1/vectors/search/hybrid
+///
+/// Dedicated hybrid search endpoint using HybridSearch with RRF fusion.
+async fn hybrid_search(
+    State(state): State<AppState>,
+    Json(req): Json<HybridSearchRequest>,
+) -> Result<Json<SearchResponse>, (StatusCode, String)> {
+    let search_mode = match req.mode.as_deref() {
+        Some("semantic") => SearchMode::Semantic,
+        Some("keyword") => SearchMode::Keyword,
+        _ => SearchMode::Hybrid,
+    };
+
+    let query = HybridSearchQuery {
+        text: req.query.clone(),
+        mode: search_mode,
+        filters: req.filters,
+        limit: req.limit,
+    };
+
+    let result = state
+        .vector_service
+        .hybrid_search
+        .search(&query)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    // Track the search interaction.
+    let interaction_id = state
+        .vector_service
+        .interaction_tracker
+        .record_search(&req.query)
+        .await
+        .ok();
+
+    let items: Vec<SearchResultItem> = result
+        .results
+        .iter()
+        .map(|r| SearchResultItem {
+            email_id: r.email_id.clone(),
+            score: r.score,
+            collection: "email_text".to_string(),
+            metadata: r.metadata.clone(),
+            match_type: Some(r.match_type.clone()),
+            vector_rank: r.vector_rank,
+            fts_rank: r.fts_rank,
+        })
+        .collect();
+
+    let mode_str = match result.mode {
+        SearchMode::Hybrid => "hybrid",
+        SearchMode::Semantic => "semantic",
+        SearchMode::Keyword => "keyword",
+    };
+
+    Ok(Json(SearchResponse {
+        total: items.len(),
+        results: items,
+        latency_ms: result.latency_ms,
+        mode: Some(mode_str.to_string()),
+        interaction_id,
     }))
 }
 
@@ -184,6 +359,9 @@ async fn find_similar(
             score: r.score,
             collection: r.document.collection.to_string(),
             metadata: r.document.metadata.clone(),
+            match_type: None,
+            vector_rank: None,
+            fts_rank: None,
         })
         .collect();
 
@@ -194,12 +372,9 @@ async fn find_similar(
         results: items,
         total,
         latency_ms,
+        mode: None,
+        interaction_id: None,
     }))
-}
-
-#[derive(Debug, Deserialize)]
-pub struct FindSimilarRequest {
-    pub limit: Option<usize>,
 }
 
 /// POST /api/v1/vectors/classify

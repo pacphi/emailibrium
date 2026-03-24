@@ -5,64 +5,6 @@ interface ClusterVisualizationProps {
   isLoading?: boolean;
 }
 
-/** Mock cluster data used when the API has not returned real data yet. */
-const MOCK_CLUSTERS: Cluster[] = [
-  {
-    id: '1',
-    name: 'Work Projects',
-    description: 'Project updates and tasks',
-    emailCount: 234,
-    stabilityScore: 0.92,
-    isPinned: true,
-    createdAt: '2026-03-01',
-  },
-  {
-    id: '2',
-    name: 'Newsletters',
-    description: 'Subscribed newsletters',
-    emailCount: 189,
-    stabilityScore: 0.88,
-    isPinned: false,
-    createdAt: '2026-03-05',
-  },
-  {
-    id: '3',
-    name: 'Finance',
-    description: 'Banking and transactions',
-    emailCount: 145,
-    stabilityScore: 0.95,
-    isPinned: true,
-    createdAt: '2026-02-20',
-  },
-  {
-    id: '4',
-    name: 'Social',
-    description: 'Social media notifications',
-    emailCount: 112,
-    stabilityScore: 0.78,
-    isPinned: false,
-    createdAt: '2026-03-10',
-  },
-  {
-    id: '5',
-    name: 'Shopping',
-    description: 'Orders and receipts',
-    emailCount: 87,
-    stabilityScore: 0.85,
-    isPinned: false,
-    createdAt: '2026-03-12',
-  },
-  {
-    id: '6',
-    name: 'Travel',
-    description: 'Bookings and itineraries',
-    emailCount: 43,
-    stabilityScore: 0.91,
-    isPinned: false,
-    createdAt: '2026-03-15',
-  },
-];
-
 function ClusterCardSkeleton() {
   return (
     <div className="animate-pulse rounded-xl border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
@@ -87,14 +29,26 @@ export function ClusterVisualization({ clusters, isLoading }: ClusterVisualizati
     );
   }
 
-  const data = clusters ?? MOCK_CLUSTERS;
-  const maxCount = Math.max(...data.map((c) => c.emailCount), 1);
+  if (!clusters || clusters.length === 0) {
+    return (
+      <section aria-label="Topic clusters">
+        <h2 className="mb-3 text-lg font-semibold text-gray-900 dark:text-white">Topic Clusters</h2>
+        <div className="rounded-xl border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
+          <p className="mt-4 text-center text-sm text-gray-500 dark:text-gray-400">
+            Clusters will appear after email analysis completes.
+          </p>
+        </div>
+      </section>
+    );
+  }
+
+  const maxCount = Math.max(...clusters.map((c) => c.emailCount), 1);
 
   return (
     <section aria-label="Topic clusters">
       <h2 className="mb-3 text-lg font-semibold text-gray-900 dark:text-white">Topic Clusters</h2>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-        {data.map((cluster) => {
+        {clusters.map((cluster) => {
           const widthPercent = Math.round((cluster.emailCount / maxCount) * 100);
           return (
             <div

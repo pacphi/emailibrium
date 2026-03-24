@@ -1,7 +1,12 @@
 //! API routes for Emailibrium.
 
+mod backup;
+mod clustering;
+mod evaluation;
 pub mod ingestion;
 mod insights;
+mod interactions;
+mod learning;
 mod vectors;
 
 use crate::AppState;
@@ -13,4 +18,9 @@ pub fn routes() -> Router<AppState> {
         .nest("/vectors", vectors::routes())
         .nest("/ingestion", ingestion::routes())
         .nest("/insights", insights::routes())
+        .nest("/clustering", clustering::routes())
+        .nest("/learning", learning::routes())
+        .nest("/interactions", interactions::routes())
+        .nest("/evaluation", evaluation::routes())
+        .nest("/backup", backup::routes())
 }

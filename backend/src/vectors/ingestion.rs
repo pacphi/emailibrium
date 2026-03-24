@@ -437,7 +437,7 @@ impl IngestionPipelineHandle {
 
         self.broadcast_progress(&job_id).await;
 
-        // Phase 4-5: Clustering + Analyzing (stubs for Sprint 3)
+        // Phase 4-5: Clustering + Analyzing (placeholder phases, see ADR-006)
         self.update_phase(IngestionPhase::Clustering).await;
         self.broadcast_progress(&job_id).await;
 

@@ -1,22 +1,11 @@
 import { useState } from 'react';
-import { ChevronDown, ChevronUp, Download, FileText } from 'lucide-react';
+import { ChevronDown, ChevronUp } from 'lucide-react';
 import { format } from 'date-fns';
 import type { Email } from '@emailibrium/types';
 
 interface MessageBubbleProps {
   email: Email;
   isLatest: boolean;
-}
-
-interface AttachmentStub {
-  name: string;
-  size: string;
-}
-
-function parseAttachmentStubs(_email: Email): AttachmentStub[] {
-  // In a real app, attachments would come from the API; this is a placeholder.
-  if (!_email.hasAttachments) return [];
-  return [{ name: 'attachment.pdf', size: '124 KB' }];
 }
 
 function SanitizedHtml({ html }: { html: string }) {
@@ -37,7 +26,6 @@ function SanitizedHtml({ html }: { html: string }) {
 
 export function MessageBubble({ email, isLatest }: MessageBubbleProps) {
   const [isExpanded, setIsExpanded] = useState(isLatest);
-  const attachments = parseAttachmentStubs(email);
   const dateStr = format(new Date(email.receivedAt), 'MMM d, yyyy h:mm a');
 
   return (
@@ -96,36 +84,11 @@ export function MessageBubble({ email, isLatest }: MessageBubbleProps) {
             </p>
           )}
 
-          {/* Attachments */}
-          {attachments.length > 0 && (
-            <div className="mt-4 space-y-2">
-              <h4 className="text-xs font-semibold uppercase text-gray-500 dark:text-gray-400">
-                Attachments
-              </h4>
-              <div className="flex flex-wrap gap-2">
-                {attachments.map((att) => (
-                  <div
-                    key={att.name}
-                    className="flex items-center gap-2 rounded-md border border-gray-200 bg-gray-50 px-3 py-2 dark:border-gray-600 dark:bg-gray-700"
-                  >
-                    <FileText className="h-4 w-4 text-gray-400" aria-hidden="true" />
-                    <div>
-                      <p className="text-sm font-medium text-gray-700 dark:text-gray-200">
-                        {att.name}
-                      </p>
-                      <p className="text-xs text-gray-400">{att.size}</p>
-                    </div>
-                    <button
-                      type="button"
-                      className="rounded p-1 text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400"
-                      aria-label={`Download ${att.name}`}
-                    >
-                      <Download className="h-4 w-4" />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            </div>
+          {/* Attachment indicator -- full attachment data is not yet available from the API */}
+          {email.hasAttachments && (
+            <p className="mt-4 text-xs text-gray-500 dark:text-gray-400">
+              This message has attachments. Attachment downloads are not yet available.
+            </p>
           )}
         </div>
       )}

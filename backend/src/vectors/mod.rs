@@ -35,6 +35,14 @@ pub struct VectorService {
     pub embedding: Arc<EmbeddingPipeline>,
     pub store: Arc<dyn VectorStoreBackend>,
     pub categorizer: Arc<categorizer::VectorCategorizer>,
+    pub hybrid_search: Arc<search::HybridSearch>,
+    pub cluster_engine: Arc<clustering::ClusterEngine>,
+    pub learning_engine: Arc<learning::LearningEngine>,
+    pub interaction_tracker: Arc<interactions::InteractionTracker>,
+    pub insight_engine: Arc<insights::InsightEngine>,
+    pub backup_service: Arc<backup::VectorBackupService>,
+    pub quantization_engine: Arc<quantization::QuantizationEngine>,
+    pub ingestion_pipeline: Arc<ingestion::IngestionPipeline>,
     pub config: VectorConfig,
     pub db: Arc<Database>,
 }
@@ -63,10 +71,77 @@ impl VectorService {
             config.categorizer.confidence_threshold,
         ));
 
+        // Initialize hybrid search
+        let hybrid_search = Arc::new(search::HybridSearch::new(
+            store.clone(),
+            embedding.clone(),
+            db.clone(),
+            config.search.clone(),
+        ));
+
+        // Initialize cluster engine
+        let cluster_engine = Arc::new(clustering::ClusterEngine::new(
+            store.clone(),
+            db.clone(),
+            config.clustering.clone(),
+        ));
+
+        // Initialize SONA learning engine
+        let learning_engine = Arc::new(learning::LearningEngine::new(
+            categorizer.clone(),
+            store.clone(),
+            db.clone(),
+            config.learning.clone(),
+        ));
+
+        // Initialize interaction tracker
+        let interaction_tracker = Arc::new(interactions::InteractionTracker::new(db.clone()));
+
+        // Initialize insight engine
+        let insight_engine = Arc::new(insights::InsightEngine::new(db.clone(), store.clone()));
+
+        // Initialize backup service (no encryption handle passed for now)
+        let backup_service = Arc::new(backup::VectorBackupService::new(
+            db.clone(),
+            store.clone(),
+            None,
+        ));
+
+        // Restore vectors from backup on startup if enabled
+        if config.backup.enabled {
+            let restored = backup_service.restore_all().await.unwrap_or_default();
+            if !restored.is_empty() {
+                let count = restored.len();
+                let _ = store.batch_insert(restored).await;
+                tracing::info!("Restored {} vectors from backup", count);
+            }
+        }
+
+        // Initialize quantization engine
+        let quantization_engine = Arc::new(quantization::QuantizationEngine::new(
+            config.quantization.clone(),
+        ));
+
+        // Initialize ingestion pipeline
+        let ingestion_pipeline = Arc::new(ingestion::IngestionPipeline::new(
+            embedding.clone(),
+            store.clone(),
+            categorizer.clone(),
+            db.clone(),
+        ));
+
         Ok(Self {
             embedding,
             store,
             categorizer,
+            hybrid_search,
+            cluster_engine,
+            learning_engine,
+            interaction_tracker,
+            insight_engine,
+            backup_service,
+            quantization_engine,
+            ingestion_pipeline,
             config,
             db,
         })

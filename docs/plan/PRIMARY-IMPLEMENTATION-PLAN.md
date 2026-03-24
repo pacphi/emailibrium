@@ -445,7 +445,7 @@ Each sprint is complete when:
 | Dependency | Required By | Notes |
 |-----------|------------|-------|
 | Rust 1.94.0 | Sprint 0 | rustup default stable |
-| Node.js 22+ | Sprint 4 | For Vite 8 |
+| Node.js 24+ | Sprint 4 | For Vite 8 |
 | pnpm 10.32+ | Sprint 4 | corepack enable |
 | Docker + Compose | Sprint 0 | For development stack |
 | Gmail API credentials | Sprint 2 | OAuth2 client ID/secret |

@@ -58,3 +58,6 @@ export {
   bulkLabel,
   unsubscribe,
 } from './actionsApi.js';
+
+export { submitFeedback } from './learningApi.js';
+export type { FeedbackPayload, FeedbackAction } from './learningApi.js';

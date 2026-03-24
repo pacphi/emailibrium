@@ -27,3 +27,4 @@
 {"ts":1774306160028,"type":"file_edit","file":"/Users/cphillipson/.claude/projects/-Users-cphillipson-Documents-development-ai-emailibrium/memory/feedback_workflow.md","tool":"Write"}
 {"ts":1774306167372,"type":"file_edit","file":"/Users/cphillipson/.claude/projects/-Users-cphillipson-Documents-development-ai-emailibrium/memory/MEMORY.md","tool":"Write"}
 {"ts":1774306240996,"type":"command","cmd":"cd /Users/cphillipson/Documents/development/ai/emailibrium/frontend/apps/web && npx tsc --noEmit 2>&1; echo \"TS exit: $?\" && npx prettier --check 'src/**/*.{ts,tsx}' 2>&1 | tail -1"}
+{"ts":1774313192970,"type":"command","cmd":"cd /Users/cphillipson/Documents/development/ai/emailibrium/frontend/apps/web && npx tsc --noEmit 2>&1 | grep \"error\" | wc -l"}

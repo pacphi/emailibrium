@@ -1,5 +1,6 @@
 import { useState, useCallback, useMemo } from 'react';
 import { Plus } from 'lucide-react';
+import { submitFeedback } from '@emailibrium/api';
 import { EmailSidebar } from './EmailSidebar';
 import type { SidebarGroup } from './EmailSidebar';
 import { EmailList } from './EmailList';
@@ -150,13 +151,29 @@ export function EmailClient() {
     }
   }, [checkedIds, selectedEmailId, bulkDeleteMutation, deleteMutation]);
 
-  const handleReclassify = useCallback((_category: string) => {
-    // Reclassify triggers learning feedback via API -- placeholder for the endpoint
-  }, []);
+  const handleReclassify = useCallback(
+    async (category: string) => {
+      if (!selectedEmailId || !selectedEmail) return;
+      await submitFeedback({
+        email_id: selectedEmailId,
+        action: { type: 'reclassify', from: selectedEmail.category, to: category },
+      });
+      await emailsQuery.refetch();
+    },
+    [selectedEmailId, selectedEmail, emailsQuery],
+  );
 
-  const handleMove = useCallback((_groupId: string) => {
-    // Move to group -- placeholder
-  }, []);
+  const handleMove = useCallback(
+    async (groupId: string) => {
+      if (!selectedEmailId) return;
+      await submitFeedback({
+        email_id: selectedEmailId,
+        action: { type: 'move_to_group', group_id: groupId },
+      });
+      await emailsQuery.refetch();
+    },
+    [selectedEmailId, emailsQuery],
+  );
 
   const handleSendReply = useCallback(
     (body: string) => {
@@ -179,9 +196,8 @@ export function EmailClient() {
     setMobilePanel('list');
   }, []);
 
-  // Stub accounts list -- would come from auth store
   const accounts = useMemo(
-    () => [{ id: 'acc-1', emailAddress: 'user@gmail.com', provider: 'gmail' }],
+    () => [] as { id: string; emailAddress: string; provider: string }[],
     [],
   );
 

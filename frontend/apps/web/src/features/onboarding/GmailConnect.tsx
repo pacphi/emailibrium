@@ -1,7 +1,10 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import type { EmailAccount } from '@emailibrium/types';
+import { getAccounts } from '@emailibrium/api';
 
 interface GmailConnectProps {
   onBack: () => void;
+  onConnected: (account: EmailAccount) => void;
 }
 
 const SCOPES = [
@@ -11,8 +14,22 @@ const SCOPES = [
   { label: 'Archive', description: 'Archive and organize messages' },
 ];
 
-export function GmailConnect({ onBack }: GmailConnectProps) {
+export function GmailConnect({ onBack, onConnected }: GmailConnectProps) {
   const [isRedirecting, setIsRedirecting] = useState(false);
+
+  // After OAuth redirect returns, the URL will contain a success query param.
+  // Poll for the newly connected account so we can pass it upstream.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('provider') === 'gmail' && params.get('status') === 'connected') {
+      getAccounts().then((accounts) => {
+        const gmail = accounts.find((a) => a.provider === 'gmail');
+        if (gmail) {
+          onConnected(gmail);
+        }
+      });
+    }
+  }, [onConnected]);
 
   function handleConnect() {
     setIsRedirecting(true);

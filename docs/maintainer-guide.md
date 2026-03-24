@@ -32,7 +32,7 @@ emailibrium/
       vectors/               Core vector engine (embedding, store, search, SONA, encryption)
     tests/                   Integration tests (search, classification, clustering, security)
     benches/                 Criterion benchmarks (vector_benchmarks)
-    Cargo.toml               Rust dependencies (edition 2021, MSRV 1.75)
+    Cargo.toml               Rust dependencies (edition 2021, MSRV 1.94)
     Makefile                 Backend-specific make targets
     Dockerfile               Multi-stage Rust build
 
@@ -80,9 +80,9 @@ emailibrium/
 
 | Tool | Version | Purpose |
 |------|---------|---------|
-| Rust | 1.75+ | Backend compilation |
-| Node.js | 20+ | Frontend toolchain |
-| pnpm | 9+ | Frontend package management |
+| Rust | 1.94+ | Backend compilation |
+| Node.js | 24+ | Frontend toolchain |
+| pnpm | 10.32+ | Frontend package management |
 | Docker | 24+ | Containerized deployment |
 | SQLite | 3.35+ | Database (usually pre-installed on macOS/Linux) |
 

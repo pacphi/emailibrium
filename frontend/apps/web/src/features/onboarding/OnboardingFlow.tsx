@@ -51,22 +51,10 @@ export function OnboardingFlow() {
     setStep('welcome');
   }, []);
 
-  const handleAccountConnected = useCallback(() => {
-    // In a real app, we would fetch the updated accounts list from the API.
-    // For now, simulate adding a connected account.
-    const mockAccount: EmailAccount = {
-      id: crypto.randomUUID(),
-      provider: (selectedProvider === 'other' ? 'imap' : selectedProvider) as Provider,
-      emailAddress: 'user@example.com',
-      archiveStrategy: 'delayed',
-      syncDepth: '30d',
-      labelPrefix: 'emailibrium/',
-      isActive: true,
-      emailCount: 0,
-    };
-    setConnectedAccounts((prev) => [...prev, mockAccount]);
+  const handleProviderConnected = useCallback((account: EmailAccount) => {
+    setConnectedAccounts((prev) => [...prev, account]);
     setStep('accounts');
-  }, [selectedProvider]);
+  }, []);
 
   const handleDisconnect = useCallback((accountId: string) => {
     setConnectedAccounts((prev) => prev.filter((a) => a.id !== accountId));
@@ -101,13 +89,13 @@ export function OnboardingFlow() {
 
         {/* Step 2: Connect */}
         {step === 'connect' && selectedProvider === 'gmail' && (
-          <GmailConnect onBack={handleBackToProviders} />
+          <GmailConnect onBack={handleBackToProviders} onConnected={handleProviderConnected} />
         )}
         {step === 'connect' && selectedProvider === 'outlook' && (
-          <OutlookConnect onBack={handleBackToProviders} />
+          <OutlookConnect onBack={handleBackToProviders} onConnected={handleProviderConnected} />
         )}
         {step === 'connect' && (selectedProvider === 'imap' || selectedProvider === 'other') && (
-          <ImapConnect onBack={handleBackToProviders} onConnected={handleAccountConnected} />
+          <ImapConnect onBack={handleBackToProviders} onConnected={handleProviderConnected} />
         )}
 
         {/* Step 3: Connected accounts */}

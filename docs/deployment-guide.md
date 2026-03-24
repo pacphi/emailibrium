@@ -4,9 +4,9 @@
 
 | Tool | Version | Install |
 |------|---------|---------|
-| Rust | 1.75+ | `rustup default stable` |
+| Rust | 1.94+ | `rustup default stable` |
 | Node.js | 20+ | [nodejs.org](https://nodejs.org/) or `nvm install 20` |
-| pnpm | 9+ | `corepack enable` (ships with Node.js 20+) |
+| pnpm | 10.32+ | `corepack enable` (ships with Node.js 24+) |
 | Docker + Compose | Latest | [docker.com](https://www.docker.com/) (optional) |
 | Make | Any | Pre-installed on macOS/Linux |
 

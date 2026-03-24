@@ -1,8 +1,9 @@
 //! Attachment text extraction and file-type detection.
 //!
 //! This module provides metadata extraction and file-type detection for
-//! email attachments. Actual text extraction from PDF/DOCX/XLSX is stubbed
-//! and will be integrated in Sprint 3+ (pdf-extract, calamine, dotext).
+//! email attachments. Text extraction from PDF/DOCX/XLSX requires the
+//! `pdf-extract`, `calamine`, and `dotext` crates (see ADR-006 for the
+//! integration roadmap).
 
 use super::types::ExtractedAttachment;
 
@@ -12,15 +13,18 @@ pub struct AttachmentExtractor;
 impl AttachmentExtractor {
     /// Extract text content from an attachment.
     ///
-    /// Currently returns metadata only; actual text extraction is stubbed.
+    /// Returns file metadata and detected type. Text extraction from document
+    /// formats (PDF, DOCX, XLSX) requires the pdf-extract/calamine/dotext
+    /// crates as described in ADR-006; until then `extracted_text` is `None`.
     pub fn extract_text(data: &[u8], filename: &str, content_type: &str) -> ExtractedAttachment {
         let file_type = Self::detect_file_type(data, filename);
-        let _ = content_type; // Will be used for content-type fallback in Sprint 3.
+        let _ = content_type; // Reserved for content-type fallback detection.
 
         ExtractedAttachment {
             filename: filename.to_string(),
             file_type,
-            extracted_text: None, // TODO(S3): Integrate pdf-extract, calamine, dotext
+            // Text extraction requires pdf-extract/calamine/dotext crates (see ADR-006).
+            extracted_text: None,
             extraction_quality: 0.0,
             size_bytes: data.len(),
         }

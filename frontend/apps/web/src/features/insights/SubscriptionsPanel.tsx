@@ -1,10 +1,12 @@
 import { useState } from 'react';
 import type { SubscriptionInsight } from '@emailibrium/types';
+import { unsubscribe } from '@emailibrium/api';
 import { FrequencyBadge } from './components/FrequencyBadge';
 
 interface SubscriptionsPanelProps {
   subscriptions: SubscriptionInsight[] | undefined;
   isLoading: boolean;
+  onRefresh?: () => void;
 }
 
 interface SectionProps {
@@ -173,7 +175,9 @@ function PanelSkeleton() {
   );
 }
 
-export function SubscriptionsPanel({ subscriptions, isLoading }: SubscriptionsPanelProps) {
+export function SubscriptionsPanel({ subscriptions, isLoading, onRefresh }: SubscriptionsPanelProps) {
+  const [isUnsubscribing, setIsUnsubscribing] = useState(false);
+
   if (isLoading) return <PanelSkeleton />;
 
   const all = subscriptions ?? [];
@@ -219,9 +223,17 @@ export function SubscriptionsPanel({ subscriptions, isLoading }: SubscriptionsPa
         tintClass="border-red-200 bg-red-50/50 dark:border-red-900/40 dark:bg-red-900/10"
         items={neverOpened}
         bulkAction={{
-          label: 'Unsubscribe All',
-          onClick: () => {
-            /* TODO: bulk unsubscribe */
+          label: isUnsubscribing ? 'Unsubscribing...' : 'Unsubscribe All',
+          onClick: async () => {
+            setIsUnsubscribing(true);
+            try {
+              for (const sub of neverOpened) {
+                await unsubscribe(sub.senderAddress);
+              }
+              onRefresh?.();
+            } finally {
+              setIsUnsubscribing(false);
+            }
           },
         }}
         defaultExpanded

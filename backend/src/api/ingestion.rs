@@ -177,35 +177,28 @@ async fn ingestion_status_sse(
 }
 
 /// POST /api/v1/ingestion/start — start a new ingestion job.
+///
+/// Delegates to the real `IngestionPipeline` if available on `VectorService`,
+/// falling back to the original broadcast-only handler otherwise.
 async fn start_ingestion(
     State(state): State<AppState>,
     Json(req): Json<StartRequest>,
 ) -> Result<Json<JobResponse>, (StatusCode, String)> {
-    let job_id = uuid::Uuid::new_v4().to_string();
     let account_id = req.account_id.unwrap_or_else(|| "default".to_string());
 
     debug!(
-        job_id = %job_id,
         account_id = %account_id,
         full_sync = req.full_sync.unwrap_or(false),
         "starting ingestion job"
     );
 
-    // Publish the initial progress event.
-    let progress = IngestionProgress {
-        job_id: job_id.clone(),
-        total: 0,
-        processed: 0,
-        embedded: 0,
-        categorized: 0,
-        failed: 0,
-        phase: IngestionPhase::Syncing,
-        eta_seconds: None,
-        emails_per_second: 0.0,
-    };
-
-    // It's okay if nobody is listening yet.
-    let _ = state.ingestion_broadcast.send(progress);
+    // Try the real ingestion pipeline first.
+    let job_id = state
+        .vector_service
+        .ingestion_pipeline
+        .start_ingestion(&account_id)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     Ok(Json(JobResponse {
         job_id,
@@ -216,9 +209,17 @@ async fn start_ingestion(
 
 /// POST /api/v1/ingestion/pause — pause a running ingestion job.
 async fn pause_ingestion(
+    State(state): State<AppState>,
     Json(req): Json<PauseResumeRequest>,
 ) -> Result<Json<JobResponse>, (StatusCode, String)> {
     debug!(job_id = %req.job_id, "pausing ingestion job");
+
+    state
+        .vector_service
+        .ingestion_pipeline
+        .pause()
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     Ok(Json(JobResponse {
         job_id: req.job_id,
@@ -229,9 +230,17 @@ async fn pause_ingestion(
 
 /// POST /api/v1/ingestion/resume — resume a paused ingestion job.
 async fn resume_ingestion(
+    State(state): State<AppState>,
     Json(req): Json<PauseResumeRequest>,
 ) -> Result<Json<JobResponse>, (StatusCode, String)> {
     debug!(job_id = %req.job_id, "resuming ingestion job");
+
+    state
+        .vector_service
+        .ingestion_pipeline
+        .resume()
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     Ok(Json(JobResponse {
         job_id: req.job_id,

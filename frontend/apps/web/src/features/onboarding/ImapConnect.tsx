@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { z } from 'zod';
+import type { EmailAccount } from '@emailibrium/types';
 import { api } from '@emailibrium/api';
 
 const imapSchema = z.object({
@@ -69,7 +70,7 @@ const PRESETS: ImapPreset[] = [
 
 interface ImapConnectProps {
   onBack: () => void;
-  onConnected: () => void;
+  onConnected: (account: EmailAccount) => void;
 }
 
 export function ImapConnect({ onBack, onConnected }: ImapConnectProps) {
@@ -115,8 +116,8 @@ export function ImapConnect({ onBack, onConnected }: ImapConnectProps) {
 
   async function onSubmit(data: ImapFormData) {
     try {
-      await api.post('auth/imap/connect', { json: data }).json();
-      onConnected();
+      const account = await api.post('auth/imap/connect', { json: data }).json<EmailAccount>();
+      onConnected(account);
     } catch (err) {
       setTestStatus('error');
       setTestError(err instanceof Error ? err.message : 'Failed to connect account');

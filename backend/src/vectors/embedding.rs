@@ -6,11 +6,9 @@
 //! # Cargo.toml dependencies used
 //! - `async-trait`
 //! - `moka` (feature = "future")
+//! - `reqwest` (features = ["json", "rustls-tls"])
 //! - `tokio`
 //! - `tracing`
-//!
-//! If you later enable the real Ollama provider you will also need:
-//! - `reqwest` (features = ["json", "rustls-tls"])
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -53,7 +51,8 @@ pub trait EmbeddingModel: Send + Sync {
 
 /// Deterministic mock embedding model that derives vectors from a text hash.
 ///
-/// Useful for tests and as the last-resort fallback provider.
+/// Intended for development and testing only. Activated by setting
+/// `embedding.provider = "mock"` in configuration.
 pub struct MockEmbeddingModel {
     dims: usize,
 }
@@ -111,45 +110,140 @@ impl EmbeddingModel for MockEmbeddingModel {
 }
 
 // ---------------------------------------------------------------------------
-// OllamaEmbeddingModel (stub)
+// OllamaEmbeddingModel
 // ---------------------------------------------------------------------------
 
-/// Ollama-backed embedding model.
+/// Ollama-backed embedding model using the `/api/embed` HTTP endpoint.
 ///
-/// TODO: Integrate with `reqwest` once the dependency is added to Cargo.toml.
-/// Currently every method returns `EmbeddingFailed` so the pipeline falls
-/// through to the next provider in the chain.
+/// Requires a running Ollama instance. Configure via `embedding.ollama_url`
+/// and `embedding.model` in config.yaml or the corresponding env vars.
 pub struct OllamaEmbeddingModel {
     base_url: String,
     model: String,
     dims: usize,
+    client: reqwest::Client,
 }
 
 impl OllamaEmbeddingModel {
     pub fn new(base_url: String, model: String, dims: usize) -> Self {
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .unwrap_or_default();
         Self {
             base_url,
             model,
             dims,
+            client,
         }
     }
 }
 
+/// JSON request body for `POST /api/embed`.
+#[derive(serde::Serialize)]
+struct OllamaEmbedRequest<'a, T: serde::Serialize> {
+    model: &'a str,
+    input: T,
+}
+
+/// JSON response from `POST /api/embed`.
+#[derive(serde::Deserialize)]
+struct OllamaEmbedResponse {
+    embeddings: Vec<Vec<f32>>,
+}
+
 #[async_trait]
 impl EmbeddingModel for OllamaEmbeddingModel {
-    async fn embed(&self, _text: &str) -> Result<Vec<f32>, VectorError> {
-        // TODO: POST to {base_url}/api/embed with {"model": model, "input": text}
-        Err(VectorError::EmbeddingFailed(format!(
-            "Ollama not yet integrated (url={}, model={})",
-            self.base_url, self.model
-        )))
+    async fn embed(&self, text: &str) -> Result<Vec<f32>, VectorError> {
+        let url = format!("{}/api/embed", self.base_url);
+        let body = OllamaEmbedRequest {
+            model: &self.model,
+            input: text,
+        };
+
+        let response = self
+            .client
+            .post(&url)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| {
+                if e.is_connect() {
+                    VectorError::EmbeddingFailed(format!(
+                        "Cannot connect to Ollama at {}",
+                        self.base_url
+                    ))
+                } else if e.is_timeout() {
+                    VectorError::EmbeddingFailed("Ollama request timed out".to_string())
+                } else {
+                    VectorError::EmbeddingFailed(format!("Ollama HTTP error: {e}"))
+                }
+            })?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body_text = response.text().await.unwrap_or_default();
+            return Err(VectorError::EmbeddingFailed(format!(
+                "Ollama returned status {status}: {body_text}"
+            )));
+        }
+
+        let parsed: OllamaEmbedResponse = response.json().await.map_err(|e| {
+            VectorError::EmbeddingFailed(format!("Failed to parse Ollama response: {e}"))
+        })?;
+
+        parsed.embeddings.into_iter().next().ok_or_else(|| {
+            VectorError::EmbeddingFailed("Ollama returned empty embeddings array".to_string())
+        })
     }
 
-    async fn embed_batch(&self, _texts: &[String]) -> Result<Vec<Vec<f32>>, VectorError> {
-        Err(VectorError::EmbeddingFailed(format!(
-            "Ollama not yet integrated (url={}, model={})",
-            self.base_url, self.model
-        )))
+    async fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, VectorError> {
+        let url = format!("{}/api/embed", self.base_url);
+        let body = OllamaEmbedRequest {
+            model: &self.model,
+            input: texts,
+        };
+
+        let response = self
+            .client
+            .post(&url)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| {
+                if e.is_connect() {
+                    VectorError::EmbeddingFailed(format!(
+                        "Cannot connect to Ollama at {}",
+                        self.base_url
+                    ))
+                } else if e.is_timeout() {
+                    VectorError::EmbeddingFailed("Ollama request timed out".to_string())
+                } else {
+                    VectorError::EmbeddingFailed(format!("Ollama HTTP error: {e}"))
+                }
+            })?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body_text = response.text().await.unwrap_or_default();
+            return Err(VectorError::EmbeddingFailed(format!(
+                "Ollama returned status {status}: {body_text}"
+            )));
+        }
+
+        let parsed: OllamaEmbedResponse = response.json().await.map_err(|e| {
+            VectorError::EmbeddingFailed(format!("Failed to parse Ollama response: {e}"))
+        })?;
+
+        if parsed.embeddings.len() != texts.len() {
+            return Err(VectorError::EmbeddingFailed(format!(
+                "Ollama returned {} embeddings for {} inputs",
+                parsed.embeddings.len(),
+                texts.len()
+            )));
+        }
+
+        Ok(parsed.embeddings)
     }
 
     fn dimensions(&self) -> usize {
@@ -161,8 +255,11 @@ impl EmbeddingModel for OllamaEmbeddingModel {
     }
 
     async fn is_available(&self) -> bool {
-        // TODO: GET {base_url}/api/tags, return true if 200.
-        false
+        let url = format!("{}/api/tags", self.base_url);
+        match self.client.get(&url).send().await {
+            Ok(resp) => resp.status().is_success(),
+            Err(_) => false,
+        }
     }
 }
 
@@ -181,24 +278,36 @@ pub struct EmbeddingPipeline {
 impl EmbeddingPipeline {
     /// Build a new pipeline from [`EmbeddingConfig`].
     ///
-    /// The `provider` field in the config determines the chain order:
-    /// - `"ollama"` -> Ollama first, mock fallback.
-    /// - anything else (including `"mock"`) -> mock only.
+    /// The `provider` field in the config determines the provider chain:
+    /// - `"mock"` -> deterministic hash-based embeddings (development only).
+    /// - `"ollama"` -> Ollama HTTP API. Fails explicitly if Ollama is down.
+    /// - `"cloud"` -> cloud-hosted provider (reserved for future use).
+    ///
+    /// Unknown providers return [`VectorError::ConfigError`].
     pub fn new(config: &EmbeddingConfig) -> Result<Self, VectorError> {
         let mut providers: Vec<Arc<dyn EmbeddingModel>> = Vec::new();
 
         match config.provider.as_str() {
+            "mock" => {
+                providers.push(Arc::new(MockEmbeddingModel::new(config.dimensions)));
+            }
             "ollama" => {
                 providers.push(Arc::new(OllamaEmbeddingModel::new(
                     config.ollama_url.clone(),
                     config.model.clone(),
                     config.dimensions,
                 )));
-                // Always append mock as last-resort fallback.
-                providers.push(Arc::new(MockEmbeddingModel::new(config.dimensions)));
             }
-            _ => {
-                providers.push(Arc::new(MockEmbeddingModel::new(config.dimensions)));
+            "cloud" => {
+                return Err(VectorError::ConfigError(
+                    "Cloud embedding provider is unsupported; use \"ollama\" or \"mock\""
+                        .to_string(),
+                ));
+            }
+            other => {
+                return Err(VectorError::ConfigError(format!(
+                    "Unknown embedding provider: {other}"
+                )));
             }
         }
 

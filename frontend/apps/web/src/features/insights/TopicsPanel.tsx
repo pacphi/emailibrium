@@ -185,7 +185,7 @@ export function TopicsPanel({ senders, isLoading }: TopicsPanelProps) {
           cluster={cluster}
           onTogglePin={() => togglePin(cluster.id)}
           onClick={() => {
-            /* TODO: navigate to cluster detail */
+            window.location.href = `/clustering/clusters/${cluster.id}`;
           }}
         />
       ))}
