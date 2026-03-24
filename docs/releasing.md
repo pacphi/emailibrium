@@ -5,7 +5,7 @@
 Emailibrium uses a tag-based release workflow. Pushing a semver tag (e.g., `v0.1.0`) triggers the automated release pipeline which:
 
 1. Validates the tag format
-2. Runs the full CI gate (backend + frontend)
+2. Runs the full CI gate (backend format + tests; frontend typecheck, format, lint, and unit tests)
 3. Generates a changelog from conventional commits
 4. Builds and pushes Docker images to GHCR
 5. Creates a GitHub Release with the changelog
@@ -78,7 +78,7 @@ Watch the Actions tab: `https://github.com/pacphi/emailibrium/actions/workflows/
 
 The workflow will:
 
-- Run CI gate (format, test, typecheck)
+- Run CI gate (backend format + test, frontend typecheck + format + lint + vitest)
 - Generate changelog from commit messages since last tag
 - Build `ghcr.io/pacphi/emailibrium/backend:<version>` and `ghcr.io/pacphi/emailibrium/frontend:<version>`
 - Create GitHub Release with changelog body

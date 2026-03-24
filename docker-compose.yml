@@ -27,6 +27,8 @@ services:
       APP_ENV: ${APP_ENV:-development}
       RUST_LOG: ${RUST_LOG:-emailibrium=info,tower_http=info}
       REDIS_URL: redis://redis:6379
+      EMAILIBRIUM_STORE_BACKEND: ${STORE_BACKEND:-ruvector}
+      EMAILIBRIUM_STORE_QDRANT_URL: ${QDRANT_URL:-http://qdrant:6334}
       VECTOR_STORE_PATH: /app/data/vectors
       CONFIG_PATH: /app/config.yaml
     volumes:
@@ -161,6 +163,31 @@ services:
       - cache-internal
     # NO ports exposed — only backend accesses via internal network
 
+  # ─── Qdrant Vector DB (optional, enable with STORE_BACKEND=qdrant) ─
+  qdrant:
+    image: qdrant/qdrant:v1.13.6
+    container_name: emailibrium-qdrant
+    profiles:
+      - qdrant # Only starts when: docker compose --profile qdrant up
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp:size=100M
+    volumes:
+      - qdrant_data:/qdrant/storage
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:6333/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    networks:
+      - db-internal
+    # NO ports exposed — only backend accesses via internal network
+
 # ─── Secrets (file-based, per OWASP recommendation) ──────────
 secrets:
   jwt_secret:
@@ -185,6 +212,7 @@ volumes:
   postgres_data:
   redis_data:
   backend_data:
+  qdrant_data:
 
 # ─── Networks (segmented per NIST SP 800-190) ───────────────
 networks:

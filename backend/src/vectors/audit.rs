@@ -485,7 +485,7 @@ mod tests {
             id: None,
             timestamp: Utc::now(),
             provider: "anthropic".to_string(),
-            model: "claude-sonnet-4-20250514".to_string(),
+            model: "claude-sonnet-4-6".to_string(),
             input_tokens: None,
             output_tokens: None,
             latency_ms: 5000,

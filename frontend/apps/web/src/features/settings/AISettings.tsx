@@ -126,7 +126,7 @@ const LLM_MODELS: Record<LlmProvider, LlmModelOption[]> = {
   ],
   anthropic: [
     {
-      value: 'claude-sonnet-4-20250514',
+      value: 'claude-sonnet-4-6',
       label: 'Claude Sonnet 4',
       description: 'Balanced speed and quality',
     },

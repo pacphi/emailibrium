@@ -227,6 +227,28 @@ To switch to PostgreSQL, set the database URL:
 export EMAILIBRIUM_DATABASE_URL="postgres://user:password@localhost:5432/emailibrium"
 ```
 
+## Vector Store Backend
+
+The vector store backend is configured via `store.backend` in `config.yaml` or the `EMAILIBRIUM_STORE_BACKEND` environment variable.
+
+| Backend    | Use Case                         | Requirements                                       |
+| ---------- | -------------------------------- | -------------------------------------------------- |
+| `ruvector` | **Default.** HNSW-indexed search | RuVector submodule (`ruvector/`)                   |
+| `memory`   | Development / testing            | None (in-process, brute-force)                     |
+| `qdrant`   | Managed vector DB at scale       | Qdrant server (REST API)                           |
+| `sqlite`   | Emergency fallback               | Existing SQLite DB (brute-force cosine similarity) |
+
+```bash
+# Switch to Qdrant
+export EMAILIBRIUM_STORE_BACKEND=qdrant
+export EMAILIBRIUM_STORE_QDRANT_URL=http://localhost:6334
+
+# Switch to SQLite emergency fallback
+export EMAILIBRIUM_STORE_BACKEND=sqlite
+```
+
+The fallback chain per ADR-003 is: RuVector (primary) → Qdrant (managed) → SQLite (emergency).
+
 The Docker Compose configuration provisions a PostgreSQL 16 instance automatically. Data is persisted via a named Docker volume.
 
 ## Production Deployment

@@ -8,7 +8,7 @@ Version 1.0 | Date: 2026-03-23 | Status: Sprint-Ready
 
 ## 1. Overview
 
-This plan supplements the PRIMARY-IMPLEMENTATION-PLAN.md to deliver the tiered AI provider architecture described in docs/research/llm-options.md. It adds ONNX Runtime as the default embedding provider, implements model lifecycle management, and establishes the consent-gated cloud provider pathway.
+This plan supplements the implementation.md to deliver the tiered AI provider architecture described in docs/research/llm-options.md. It adds ONNX Runtime as the default embedding provider, implements model lifecycle management, and establishes the consent-gated cloud provider pathway.
 
 Cross-references:
 
@@ -19,7 +19,7 @@ Cross-references:
 
 ### 1.1 Relationship to Primary Plan
 
-The PRIMARY-IMPLEMENTATION-PLAN.md Sprints 1-7 establish the embedding trait, vector store, search, classification, and learning infrastructure. This supplemental plan adds three sprints (LLM-1 through LLM-3) that can run in parallel with or after Primary Plan Sprint 2 (which delivers the ingestion pipeline and hybrid search). The only hard prerequisite is that the `EmbeddingModel` trait and `EmbeddingPipeline` from Primary Plan Sprint 1 exist before LLM-1 begins.
+The implementation.md Sprints 1-7 establish the embedding trait, vector store, search, classification, and learning infrastructure. This supplemental plan adds three sprints (LLM-1 through LLM-3) that can run in parallel with or after Primary Plan Sprint 2 (which delivers the ingestion pipeline and hybrid search). The only hard prerequisite is that the `EmbeddingModel` trait and `EmbeddingPipeline` from Primary Plan Sprint 1 exist before LLM-1 begins.
 
 ### 1.2 Tiered Architecture Summary
 
@@ -330,7 +330,7 @@ The PRIMARY-IMPLEMENTATION-PLAN.md Sprints 1-7 establish the embedding trait, ve
           api_key_env: 'ANTHROPIC_API_KEY'
           base_url: null # null = use provider default
           classification_model: 'claude-haiku-4-5-20251001'
-          chat_model: 'claude-sonnet-4-20250514'
+          chat_model: 'claude-sonnet-4-6'
           rate_limit_rpm: 60
           max_input_chars: 2000 # truncate email text before sending
       consent:

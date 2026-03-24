@@ -645,35 +645,35 @@ The original vision describes a RuVector-powered platform with HNSW indexing, SO
 
 Complete, well-documented modules built ahead of the features that will consume them.
 
-| File | Dead Items | ADR/DDD Ref | Explanation |
-|------|-----------|-------------|-------------|
-| `vectors/audit.rs` | `CloudApiAuditEntry`, `AuditSummary`, `ProviderStats`, `CloudApiAuditLogger` + 5 methods, `AuditTimer` + 3 methods | ADR-008, ADR-012, item #39 | Cloud API audit logging. Fully implemented with SQLite persistence, but no API endpoint or middleware calls `CloudApiAuditLogger::log()`. The `GenerativeRouter` (also scaffolded) would be the natural consumer. |
-| `vectors/evaluation.rs` | `TestStatus`, `VariantConfig`, `EvaluationMetrics` + `record_query`, `ABTest`, `ABTestSummary`, `EvaluationEngine` + methods, 5 metric functions (`compute_mrr`, `compute_precision_at_k`, `compute_recall_at_k`, `compute_ndcg`, `compute_dcg`) | ADR-004, item #22 | A/B testing framework for search quality. Complete with variant tracking, MRR/nDCG/precision/recall@k, and SQLite persistence. Requires future experiment management UI. |
-| `vectors/ewc.rs` | `FisherDiag`, `EwcRegularizer` + methods | ADR-004, item #21 | Elastic Weight Consolidation (EWC++) to prevent catastrophic forgetting in the SONA learning engine. `LearningEngine` is wired in but does not yet call `EwcRegularizer`. |
-| `vectors/user_learning.rs` | `UserCentroidOffset`, `UserLearningModel` + 4 methods, `UserLearningStore` + methods | DDD-004, item #27 | Per-user learning model isolation. Shared `LearningEngine` is active; multi-user isolation not yet enabled. |
-| `vectors/generative_router.rs` | `RegisteredProvider`, `GenerativeRouterService` trait, `GenerativeRouter` + 4 methods | DDD-006, item #38 | Multi-provider generative AI router with failover. `VectorService` uses a single `GenerativeModel` directly; router not yet integrated. |
-| `vectors/inference_session.rs` | `SessionStatus`, `InferenceSession` + 4 methods, `UsageStats`, `InferenceSessionManager` + methods | DDD-006, item #38 | Inference session tracking for token usage/latency. Would be consumed by `GenerativeRouter`. |
-| `vectors/model_registry.rs` | `ModelState`, `ProviderType`, `ModelEntry`, `RegistryError`, `ModelRegistryService` trait, `ModelRegistry` + 2 methods | DDD-006, item #38 | Model lifecycle management (Available → Downloading → Verified → Active → Quarantined). CLI paths use model_download/integrity directly, bypassing registry. |
+| File                           | Dead Items                                                                                                                                                                                                                                       | ADR/DDD Ref                | Explanation                                                                                                                                                                                                       |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `vectors/audit.rs`             | `CloudApiAuditEntry`, `AuditSummary`, `ProviderStats`, `CloudApiAuditLogger` + 5 methods, `AuditTimer` + 3 methods                                                                                                                               | ADR-008, ADR-012, item #39 | Cloud API audit logging. Fully implemented with SQLite persistence, but no API endpoint or middleware calls `CloudApiAuditLogger::log()`. The `GenerativeRouter` (also scaffolded) would be the natural consumer. |
+| `vectors/evaluation.rs`        | `TestStatus`, `VariantConfig`, `EvaluationMetrics` + `record_query`, `ABTest`, `ABTestSummary`, `EvaluationEngine` + methods, 5 metric functions (`compute_mrr`, `compute_precision_at_k`, `compute_recall_at_k`, `compute_ndcg`, `compute_dcg`) | ADR-004, item #22          | A/B testing framework for search quality. Complete with variant tracking, MRR/nDCG/precision/recall@k, and SQLite persistence. Requires future experiment management UI.                                          |
+| `vectors/ewc.rs`               | `FisherDiag`, `EwcRegularizer` + methods                                                                                                                                                                                                         | ADR-004, item #21          | Elastic Weight Consolidation (EWC++) to prevent catastrophic forgetting in the SONA learning engine. `LearningEngine` is wired in but does not yet call `EwcRegularizer`.                                         |
+| `vectors/user_learning.rs`     | `UserCentroidOffset`, `UserLearningModel` + 4 methods, `UserLearningStore` + methods                                                                                                                                                             | DDD-004, item #27          | Per-user learning model isolation. Shared `LearningEngine` is active; multi-user isolation not yet enabled.                                                                                                       |
+| `vectors/generative_router.rs` | `RegisteredProvider`, `GenerativeRouterService` trait, `GenerativeRouter` + 4 methods                                                                                                                                                            | DDD-006, item #38          | Multi-provider generative AI router with failover. `VectorService` uses a single `GenerativeModel` directly; router not yet integrated.                                                                           |
+| `vectors/inference_session.rs` | `SessionStatus`, `InferenceSession` + 4 methods, `UsageStats`, `InferenceSessionManager` + methods                                                                                                                                               | DDD-006, item #38          | Inference session tracking for token usage/latency. Would be consumed by `GenerativeRouter`.                                                                                                                      |
+| `vectors/model_registry.rs`    | `ModelState`, `ProviderType`, `ModelEntry`, `RegistryError`, `ModelRegistryService` trait, `ModelRegistry` + 2 methods                                                                                                                           | DDD-006, item #38          | Model lifecycle management (Available → Downloading → Verified → Active → Quarantined). CLI paths use model_download/integrity directly, bypassing registry.                                                      |
 
 ### Category 2: API Surface Not Yet Wired (9 warnings)
 
 Helper functions/fields in partially-used modules with no caller yet.
 
-| File | Dead Item | Explanation |
-|------|-----------|-------------|
-| `vectors/model_download.rs` | `model_dimensions()` | Dimension lookup; embedding config carries dimensions directly. |
-| `vectors/model_download.rs` | `DownloadResult.model` field | Written but never read after download. |
-| `vectors/model_download.rs` | `download_all_models()` | Batch download; CLI handles iteration itself. |
-| `vectors/model_download.rs` | `download_and_update_manifest()` | Combo function; CLI calls download + manifest ops separately. |
+| File                         | Dead Item                                           | Explanation                                                           |
+| ---------------------------- | --------------------------------------------------- | --------------------------------------------------------------------- |
+| `vectors/model_download.rs`  | `model_dimensions()`                                | Dimension lookup; embedding config carries dimensions directly.       |
+| `vectors/model_download.rs`  | `DownloadResult.model` field                        | Written but never read after download.                                |
+| `vectors/model_download.rs`  | `download_all_models()`                             | Batch download; CLI handles iteration itself.                         |
+| `vectors/model_download.rs`  | `download_and_update_manifest()`                    | Combo function; CLI calls download + manifest ops separately.         |
 | `vectors/model_integrity.rs` | `ModelManifest::load_from_file()`, `save_to_file()` | File I/O; CLI uses `ModelManifest::default()` with hardcoded entries. |
-| `vectors/model_integrity.rs` | `sha256_bytes()` | In-memory SHA-256 variant; only `sha256_file()` is used. |
+| `vectors/model_integrity.rs` | `sha256_bytes()`                                    | In-memory SHA-256 variant; only `sha256_file()` is used.              |
 
 ### Category 3: Structural Field Never Read (2 warnings)
 
-| File | Dead Item | Explanation |
-|------|-----------|-------------|
-| `vectors/ruvector_store.rs` | `RuVectorInner.base_path` | Stored during construction but never read. Needed for future persistence/reload. |
-| `ruvector-gnn/compress.rs` | `TensorCompress.default_level` | External submodule. Out of scope. |
+| File                        | Dead Item                      | Explanation                                                                      |
+| --------------------------- | ------------------------------ | -------------------------------------------------------------------------------- |
+| `vectors/ruvector_store.rs` | `RuVectorInner.base_path`      | Stored during construction but never read. Needed for future persistence/reload. |
+| `ruvector-gnn/compress.rs`  | `TensorCompress.default_level` | External submodule. Out of scope.                                                |
 
 ### Category 4: Library-Style Exports — ruvector-gnn (12 warnings)
 
@@ -681,13 +681,13 @@ The `ruvector-gnn` crate (git submodule) contains warnings across `compress.rs`,
 
 ### Summary
 
-| Category | Count | Action |
-|----------|-------|--------|
-| Scaffolded for future sprints | 31 | None — intentional per ADR/DDD roadmap |
-| API surface not yet wired | 9 | Low priority — convenience functions for future CLI refactor |
-| Structural field never read | 2 | Minor — `base_path` needed for future persistence |
-| Library-style exports (ruvector-gnn) | 12 | Out of scope — external submodule |
-| **Total** | **54** | |
+| Category                             | Count  | Action                                                       |
+| ------------------------------------ | ------ | ------------------------------------------------------------ |
+| Scaffolded for future sprints        | 31     | None — intentional per ADR/DDD roadmap                       |
+| API surface not yet wired            | 9      | Low priority — convenience functions for future CLI refactor |
+| Structural field never read          | 2      | Minor — `base_path` needed for future persistence            |
+| Library-style exports (ruvector-gnn) | 12     | Out of scope — external submodule                            |
+| **Total**                            | **54** |                                                              |
 
 ---
 
@@ -755,18 +755,18 @@ _Partial implementations needing completion, secondary algorithms, and architect
 
 _Documentation corrections, cosmetic fixes, and deferred capabilities._
 
-40. **Update ADR-005** — React Router v6 → TanStack Router, React 18+ → React 19, remove "actix-web or axum" ambiguity (Axum only). _(Source: ADR-005 PARTIAL)_
+40. **~~Update ADR-005~~** — ~~React Router v6 → TanStack Router, React 18+ → React 19, remove "actix-web or axum" ambiguity (Axum only).~~ _(Source: ADR-005 PARTIAL)_ **COMPLETED 2026-03-24:** ADR-005 updated: "actix-web or axum" → "Axum", "React 18+" → "React 19", "React Router v6" → "TanStack Router".
 41. **~~Add missing modules to architecture.md~~** — ~~7 undocumented API routes (`/clustering`, `/learning`, `/interactions`, `/evaluation`, `/backup`, `/ai`, `/consent`), 4+ undocumented vector modules (`generative.rs`, `consent.rs`, `models.rs`, `metrics.rs`).~~ _(Source: Architecture — Missing from Docs)_ **COMPLETED 2026-03-24:** architecture.md updated with all 8 new API handlers and 5 new vector modules.
-42. **Update DDD-000 context map** to include DDD-006 (AI Providers). _(Source: DDD-000 at 6/10)_
+42. **~~Update DDD-000 context map~~** ~~to include DDD-006 (AI Providers).~~ _(Source: DDD-000 at 6/10)_ **COMPLETED 2026-03-24:** Added AI Providers (DDD-006, Supporting) to bounded contexts table, context map diagram, 4 integration patterns, 3 ACL entries, and Event Bus publishers.
 43. **~~Add `oauth.*` and `generative.*` sections~~** ~~to configuration-reference.md.~~ _(Source: config-reference audit)_ **COMPLETED 2026-03-24:** Added oauth._, generative._, redis._, security._ sections to configuration-reference.md.
-44. **Document undocumented features** — Turborepo monorepo, Storybook, E2E tests, Chat feature, Onboarding flow, workspace packages, TanStack React Query, TanStack React Virtual, Framer Motion, MSW, PWA. _(Source: Architecture — Missing from Docs)_
+44. **~~Document undocumented features~~** — ~~Turborepo monorepo, Storybook, E2E tests, Chat feature, Onboarding flow, workspace packages, TanStack React Query, TanStack React Virtual, Framer Motion, MSW, PWA.~~ _(Source: Architecture — Missing from Docs)_ **COMPLETED 2026-03-24:** Added 11 subsections to architecture.md Frontend section covering Turborepo, workspace packages, Storybook (9 stories), Playwright E2E (6 suites), Chat, Onboarding, React Query, React Virtual, Framer Motion, MSW, and PWA.
 45. **~~Update README architecture diagram~~** — ~~Replace "REDB" with "RuVector (HNSW)". Keep Redis (real target). Update "K-means++" → "GraphSAGE + KMeans++". Update "16 vector modules" → 21. Add ONNX/fastembed.~~ _(Source: README audit)_ **COMPLETED 2026-03-24:** README updated: 22 modules with ONNX/fastembed, Vite 8, GraphSAGE-inspired clustering.
 46. **~~Update maintainer-guide~~** — ~~Module counts (vectors: 21, API: 11), branch strategy, ONNX as dependency, sprint count correction.~~ _(Source: maintainer-guide audit)_ **COMPLETED 2026-03-24:** maintainer-guide updated: vectors→22 files, API→11 handlers, Vite→8, config loading order fixed, ONNX troubleshooting.
 47. **~~Update Vite/Tailwind version references~~** ~~across architecture.md, INCEPTION.md, and all docs that mention specific versions.~~ _(Source: cross-document inconsistencies)_ **COMPLETED 2026-03-24:** architecture.md, maintainer-guide.md, README.md all updated to Vite 8.
-48. **Fix Makefile help text** — Prints `VER=x.y.z` but actual variable is `VERSION`. _(Source: releasing.md audit)_
-49. **Populate CHANGELOG.md** — Empty despite multiple conventional commits. Needed before v0.1.0 tag. _(Source: CHANGELOG audit)_
-50. **Fix model identifier mismatches** — LLM plan references `claude-haiku-4-5-20251001`, `claude-sonnet-4-20250514`. Frontend uses different identifiers. Backend defaults to `gpt-4o-mini`. Reconcile. _(Source: LLM Implementation audit)_
-51. **Add Qdrant fallback and SqliteVectorStore emergency fallback** — ADR-003 describes fallback chain behind `VectorStoreBackend` trait. Deferred until RuVector primary is stable. _(Source: ADR-003)_
-52. **Add frontend tests to release CI gate** — No frontend tests run during release workflow. _(Source: releasing.md audit)_
-53. **Implement remote wipe capability** — ADR-008 describes it. Not evidenced. _(Source: ADR-008 PARTIAL)_
-54. **Implement HDBSCAN as alternative clustering** — ADR-009 describes it alongside GraphSAGE. Deferred in favor of GraphSAGE + KMeans++ primary. _(Source: ADR-009)_
+48. **~~Fix Makefile help text~~** — ~~Prints `VER=x.y.z` but actual variable is `VERSION`.~~ _(Source: releasing.md audit)_ **COMPLETED 2026-03-24:** Changed 3 lines in Makefile help text from `VER=x.y.z` to `VERSION=x.y.z`.
+49. **~~Populate CHANGELOG.md~~** — ~~Empty despite multiple conventional commits. Needed before v0.1.0 tag.~~ _(Source: CHANGELOG audit)_ **COMPLETED 2026-03-24:** Populated with [Unreleased] section in Keep a Changelog format. 7 Added + 3 Fixed entries from git history with commit hashes.
+50. **~~Fix model identifier mismatches~~** — ~~LLM plan references `claude-haiku-4-5-20251001`, `claude-sonnet-4-20250514`. Frontend uses different identifiers. Backend defaults to `gpt-4o-mini`. Reconcile.~~ _(Source: LLM Implementation audit)_ **COMPLETED 2026-03-24:** Updated `claude-sonnet-4-20250514` → `claude-sonnet-4-6` across 5 files (AISettings.tsx, config.rs, audit.rs, llm-implementation-supplemental.md, llm-options.md). Verified with typecheck + cargo check.
+51. **~~Add Qdrant fallback and SqliteVectorStore emergency fallback~~** — ~~ADR-003 describes fallback chain behind `VectorStoreBackend` trait. Deferred until RuVector primary is stable.~~ _(Source: ADR-003)_ **COMPLETED 2026-03-24:** Created `qdrant_store.rs` (REST API via reqwest, auto-collection creation, 3 tests) and `sqlite_store.rs` (BLOB storage, brute-force cosine similarity, 12 tests). Backend now supports 4 options: `ruvector`|`memory`|`qdrant`|`sqlite`. Config fields added to `StoreConfig`. 15 tests pass.
+52. **~~Add frontend tests to release CI gate~~** — ~~No frontend tests run during release workflow.~~ _(Source: releasing.md audit)_ **COMPLETED 2026-03-24:** Added frontend lint + vitest steps to `release.yml` ci-gate job. Updated `releasing.md` to reflect expanded gate.
+53. **~~Implement remote wipe capability~~** — ~~ADR-008 describes it. Not evidenced.~~ _(Source: ADR-008 PARTIAL)_ **COMPLETED 2026-03-24:** Created `remote_wipe.rs` with `RemoteWipeService` (7 methods: user wipe, full wipe, vectors-only, schedule/cancel/list/execute pending). 5 API endpoints under `/api/v1/wipe/`. Audit logging, input validation, confirmation token for full wipe. 9 tests pass.
+54. **~~Implement HDBSCAN as alternative clustering~~** — ~~ADR-009 describes it alongside GraphSAGE. Deferred in favor of GraphSAGE + KMeans++ primary.~~ _(Source: ADR-009)_ **COMPLETED 2026-03-24:** Created `hdbscan.rs` (395 lines) — full algorithm from scratch: pairwise cosine distances, core distances, mutual reachability graph, Prim's MST, Union-Find condensed hierarchy, stability-based flat cluster selection. Integrated into `clustering.rs` via `algorithm` config field (`graphsage_kmeans`|`hdbscan`). 8 tests pass.

@@ -29,9 +29,16 @@ use super::types::VectorCollection;
 // Configuration
 // ---------------------------------------------------------------------------
 
-/// Configuration for the GraphSAGE + KMeans++ clustering engine (ADR-009).
+/// Configuration for the clustering engine (ADR-009).
+///
+/// Supports two algorithms:
+/// - `"graphsage_kmeans"` (default): GraphSAGE + KMeans++ hybrid pipeline.
+/// - `"hdbscan"`: Density-based clustering via HDBSCAN.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClusterConfig {
+    /// Clustering algorithm: "graphsage_kmeans" (default) or "hdbscan".
+    #[serde(default = "default_algorithm")]
+    pub algorithm: String,
     /// Minimum number of emails to form a cluster.
     #[serde(default = "default_min_cluster_size")]
     pub min_cluster_size: usize,
@@ -65,8 +72,14 @@ pub struct ClusterConfig {
     /// Maximum KMeans++ iterations for convergence.
     #[serde(default = "default_kmeans_max_iters")]
     pub kmeans_max_iters: usize,
+    /// HDBSCAN-specific configuration (used when algorithm = "hdbscan").
+    #[serde(default)]
+    pub hdbscan: super::hdbscan::HdbscanConfig,
 }
 
+fn default_algorithm() -> String {
+    "graphsage_kmeans".to_string()
+}
 fn default_min_cluster_size() -> usize {
     5
 }
@@ -104,6 +117,7 @@ fn default_kmeans_max_iters() -> usize {
 impl Default for ClusterConfig {
     fn default() -> Self {
         Self {
+            algorithm: default_algorithm(),
             min_cluster_size: default_min_cluster_size(),
             merge_threshold: default_merge_threshold(),
             hysteresis_delta: default_hysteresis_delta(),
@@ -115,6 +129,7 @@ impl Default for ClusterConfig {
             graphsage_attention_heads: default_graphsage_attention_heads(),
             graphsage_dropout: default_graphsage_dropout(),
             kmeans_max_iters: default_kmeans_max_iters(),
+            hdbscan: super::hdbscan::HdbscanConfig::default(),
         }
     }
 }
@@ -845,43 +860,69 @@ impl ClusterEngine {
             })
             .collect();
 
-        // Step 1: Build similarity graph via HNSW neighbors.
-        let graph = build_similarity_graph(
-            &ids,
-            &embeddings,
-            self.config.neighbor_count,
-            &sender_map,
-            &thread_map,
-        );
+        // Branch on algorithm selection.
+        let cluster_members: HashMap<usize, Vec<usize>> = if self.config.algorithm == "hdbscan"
+        {
+            // HDBSCAN: density-based clustering directly on raw embeddings.
+            tracing::info!("Clustering algorithm: HDBSCAN");
+            let hdbscan_config = super::hdbscan::HdbscanConfig {
+                min_cluster_size: self.config.hdbscan.min_cluster_size,
+                min_samples: self.config.hdbscan.min_samples,
+                cluster_selection_epsilon: self.config.hdbscan.cluster_selection_epsilon,
+            };
+            let result = super::hdbscan::hdbscan(&embeddings, &hdbscan_config);
 
-        // Step 2: GraphSAGE propagation (ruvector-gnn learned embeddings).
-        let propagated = propagate_embeddings_graphsage(&ids, &embeddings, &graph, &self.config);
-
-        // Step 3: Auto-detect K via silhouette score.
-        let max_k = self.config.max_clusters.min(ids.len());
-        let min_k = 2.min(max_k);
-
-        let mut best_k = min_k;
-        let mut best_score = f32::NEG_INFINITY;
-
-        let probe_iters = self.config.kmeans_max_iters.min(50);
-        for k in min_k..=max_k.min(10) {
-            let assignments = kmeans(&propagated, k, probe_iters, 0);
-            let score = silhouette_score(&propagated, &assignments, k);
-            if score > best_score {
-                best_score = score;
-                best_k = k;
+            let mut members: HashMap<usize, Vec<usize>> = HashMap::new();
+            for (i, &label) in result.labels.iter().enumerate() {
+                if label >= 0 {
+                    members.entry(label as usize).or_default().push(i);
+                }
             }
-        }
+            members
+        } else {
+            // Default: GraphSAGE + KMeans++ pipeline.
+            tracing::info!("Clustering algorithm: GraphSAGE + KMeans++");
 
-        // Step 4: Run KMeans++ with best K.
-        let assignments = kmeans(&propagated, best_k, self.config.kmeans_max_iters, 0);
+            // Step 1: Build similarity graph via HNSW neighbors.
+            let graph = build_similarity_graph(
+                &ids,
+                &embeddings,
+                self.config.neighbor_count,
+                &sender_map,
+                &thread_map,
+            );
 
-        // Step 5: Build new clusters.
-        let mut cluster_members: HashMap<usize, Vec<usize>> = HashMap::new();
-        for (i, &c) in assignments.iter().enumerate() {
-            cluster_members.entry(c).or_default().push(i);
-        }
+            // Step 2: GraphSAGE propagation (ruvector-gnn learned embeddings).
+            let propagated =
+                propagate_embeddings_graphsage(&ids, &embeddings, &graph, &self.config);
+
+            // Step 3: Auto-detect K via silhouette score.
+            let max_k = self.config.max_clusters.min(ids.len());
+            let min_k = 2.min(max_k);
+
+            let mut best_k = min_k;
+            let mut best_score = f32::NEG_INFINITY;
+
+            let probe_iters = self.config.kmeans_max_iters.min(50);
+            for k in min_k..=max_k.min(10) {
+                let assignments = kmeans(&propagated, k, probe_iters, 0);
+                let score = silhouette_score(&propagated, &assignments, k);
+                if score > best_score {
+                    best_score = score;
+                    best_k = k;
+                }
+            }
+
+            // Step 4: Run KMeans++ with best K.
+            let assignments = kmeans(&propagated, best_k, self.config.kmeans_max_iters, 0);
+
+            // Step 5: Build cluster members map.
+            let mut members: HashMap<usize, Vec<usize>> = HashMap::new();
+            for (i, &c) in assignments.iter().enumerate() {
+                members.entry(c).or_default().push(i);
+            }
+            members
+        };
 
         let now = Utc::now();
         let mut new_clusters: Vec<TopicCluster> = Vec::new();
@@ -894,7 +935,7 @@ impl ClusterEngine {
             }
 
             let member_embeddings: Vec<&Vec<f32>> =
-                members.iter().map(|&i| &propagated[i]).collect();
+                members.iter().map(|&i| &embeddings[i]).collect();
             let centroid = compute_centroid(&member_embeddings);
 
             let email_ids: Vec<String> = members.iter().map(|&i| ids[i].clone()).collect();

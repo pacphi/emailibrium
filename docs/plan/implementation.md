@@ -8,7 +8,7 @@ Version 2.0 | Date: 2026-03-23 | Status: Sprint-Ready
 
 ## 1. Plan Overview
 
-This plan addresses gaps identified in the docs/research/initial.md academic evaluation of the original INCEPTION.md v1.4:
+This plan addresses gaps identified in the docs/research/initial.md academic evaluation of the original inception.md v1.4:
 
 - **Gap 1**: SONA learning model underspecified → Addressed in ADR-004, Sprint 3
 - **Gap 2**: RuVector maturity risk → Addressed in ADR-003 (VectorStore facade), Sprint 1
@@ -21,7 +21,7 @@ This plan addresses gaps identified in the docs/research/initial.md academic eva
 
 Cross-references:
 
-- Original Plan: docs/INCEPTION.md v1.4
+- Original Plan: docs/plan/inception.md v1.4
 - Research: docs/research/initial.md
 - ADRs: docs/ADRs/ADR-001 through ADR-010
 - DDDs: docs/DDDs/DDD-001 through DDD-005
@@ -76,11 +76,11 @@ Cross-references:
   - Frontend: scaffold `apps/web/` with Vite 8 + React 19 + TanStack Router
   - Monorepo: verify pnpm + Turborepo setup
   - CI: GitHub Actions for Rust build + frontend build + lint
-- [ ] **S0-04**: Docker Compose setup (from INCEPTION.md Appendix B)
+- [ ] **S0-04**: Docker Compose setup (from inception.md Appendix B)
   - Backend, frontend, PostgreSQL, Redis containers
   - Secrets directory structure
   - Dev override for hot-reloading
-- [ ] **S0-05**: SQLite migration: add embedding status columns (from INCEPTION.md Section 6.1)
+- [ ] **S0-05**: SQLite migration: add embedding status columns (from inception.md Section 6.1)
 
 **Exit Criteria**: RuVector benchmark passes, embedding model validated, project compiles, Docker stack runs.
 
@@ -394,7 +394,7 @@ Cross-references:
 
 ## 4. Feature-to-Sprint Mapping
 
-Map of all features from INCEPTION.md Section 11 to sprints:
+Map of all features from inception.md Section 11 to sprints:
 
 | Feature                                      | Sprint                         | Status   |
 | -------------------------------------------- | ------------------------------ | -------- |
@@ -499,7 +499,7 @@ Each sprint is complete when:
 
 | Document                     | Location                                | Purpose                               |
 | ---------------------------- | --------------------------------------- | ------------------------------------- |
-| Original Plan                | INCEPTION.md                            | Full technical specification          |
+| Original Plan                | docs/plan/inception.md                  | Full technical specification          |
 | Research Evaluation          | docs/research/initial.md                | Academic analysis of plan feasibility |
 | ADR-001 Hybrid Search        | docs/ADRs/ADR-001.md                    | Search architecture decision          |
 | ADR-002 Embedding Model      | docs/ADRs/ADR-002.md                    | Model selection and pluggability      |

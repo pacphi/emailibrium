@@ -85,6 +85,12 @@ jobs:
       - name: Frontend format
         working-directory: frontend/apps/web
         run: npx prettier --check 'src/**/*.{ts,tsx}'
+      - name: Frontend lint
+        working-directory: frontend/apps/web
+        run: npx eslint src/
+      - name: Frontend tests
+        working-directory: frontend/apps/web
+        run: npx vitest run --passWithNoTests
 
   # ── Job 3: Generate changelog ───────────────────────────────────────
   generate-changelog:

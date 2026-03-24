@@ -8,6 +8,7 @@ pub mod backup;
 pub mod categorizer;
 pub mod clustering;
 pub mod config;
+pub mod hdbscan;
 pub mod consent;
 pub mod embedding;
 pub mod encryption;
@@ -26,10 +27,13 @@ pub mod model_download;
 pub mod model_integrity;
 pub mod model_registry;
 pub mod models;
+pub mod qdrant_store;
 pub mod quantization;
 pub mod reindex;
+pub mod remote_wipe;
 pub mod ruvector_store;
 pub mod search;
+pub mod sqlite_store;
 pub mod store;
 pub mod types;
 pub mod user_learning;
@@ -61,6 +65,7 @@ pub struct VectorService {
     pub reindex_orchestrator: Arc<reindex::ReindexOrchestrator>,
     pub generative: Option<Arc<dyn generative::GenerativeModel>>,
     pub consent_manager: Arc<consent::ConsentManager>,
+    pub remote_wipe_service: Arc<remote_wipe::RemoteWipeService>,
     pub config: VectorConfig,
     pub db: Arc<Database>,
 }
@@ -82,11 +87,59 @@ impl VectorService {
         );
 
         // Initialize vector store backend based on config (ADR-003).
-        // "ruvector" uses HNSW indexing; "memory" falls back to brute-force.
+        // Fallback chain: ruvector (default) -> qdrant -> sqlite -> memory.
         let raw_store: Arc<dyn VectorStoreBackend> = match config.store.backend.as_str() {
             "memory" => {
                 tracing::info!("Vector store: in-memory brute-force backend");
                 Arc::new(store::InMemoryVectorStore::new())
+            }
+            "qdrant" => {
+                let qdrant_cfg = qdrant_store::QdrantConfig {
+                    url: config.store.qdrant_url.clone().unwrap_or_else(|| {
+                        "http://localhost:6333".to_string()
+                    }),
+                    collection_prefix: config.store.qdrant_collection_prefix.clone().unwrap_or_else(|| {
+                        "emailibrium".to_string()
+                    }),
+                    api_key: config.store.qdrant_api_key.clone(),
+                    dimensions: config.embedding.dimensions,
+                };
+                match qdrant_store::QdrantVectorStore::new(qdrant_cfg).await {
+                    Ok(qs) => {
+                        tracing::info!("Vector store: Qdrant HNSW backend");
+                        Arc::new(qs)
+                    }
+                    Err(e) => {
+                        tracing::warn!("Qdrant init failed ({e}), falling back to in-memory");
+                        Arc::new(store::InMemoryVectorStore::new())
+                    }
+                }
+            }
+            "sqlite" => {
+                match sqlx::sqlite::SqlitePoolOptions::new()
+                    .max_connections(5)
+                    .connect(&config.database_url)
+                    .await
+                {
+                    Ok(pool) => match sqlite_store::SqliteVectorStore::new(pool).await {
+                        Ok(ss) => {
+                            tracing::info!("Vector store: SQLite brute-force emergency backend");
+                            Arc::new(ss)
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                "SQLite vector store init failed ({e}), falling back to in-memory"
+                            );
+                            Arc::new(store::InMemoryVectorStore::new())
+                        }
+                    },
+                    Err(e) => {
+                        tracing::warn!(
+                            "SQLite pool creation failed ({e}), falling back to in-memory"
+                        );
+                        Arc::new(store::InMemoryVectorStore::new())
+                    }
+                }
             }
             _ => {
                 // Default to RuVector HNSW backend.
@@ -212,6 +265,12 @@ impl VectorService {
         // Initialize consent manager
         let consent_manager = Arc::new(consent::ConsentManager::new(db.clone()));
 
+        // Initialize remote wipe service (ADR-008: device loss mitigation)
+        let remote_wipe_service = Arc::new(remote_wipe::RemoteWipeService::new(db.clone()));
+        if let Err(e) = remote_wipe_service.ensure_table().await {
+            tracing::warn!("Failed to create wipe audit table: {e}");
+        }
+
         // Initialize re-index orchestrator and check for model changes
         let reindex_orchestrator = Arc::new(reindex::ReindexOrchestrator::new(db.clone()));
         if let Ok(needs_reindex) = reindex_orchestrator
@@ -242,6 +301,7 @@ impl VectorService {
             reindex_orchestrator,
             generative: gen_model,
             consent_manager,
+            remote_wipe_service,
             config,
             db,
         })

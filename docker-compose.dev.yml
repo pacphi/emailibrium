@@ -33,5 +33,10 @@ services:
     ports:
       - "6379:6379" # Exposed for redis-cli
 
+  qdrant:
+    ports:
+      - "6333:6333" # Qdrant REST API for local dashboard/tools
+      - "6334:6334" # Qdrant gRPC
+
 volumes:
   cargo_cache:

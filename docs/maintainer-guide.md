@@ -14,7 +14,7 @@ Emailibrium is a **vector-native email intelligence platform** that transforms h
 - **Privacy by architecture.** All processing happens locally. Vectors are encrypted at rest with AES-256-GCM. There is no telemetry server, no cloud dependency (ADR-008).
 - **The 10-minute promise.** A new user should reach inbox zero within 10 minutes of first launch, driven by the Ingest-Tag-Archive pipeline (ADR-010).
 
-For the full product vision, see [INCEPTION.md](./INCEPTION.md). For the academic grounding and gap analysis, see [Research: Initial Evaluation](./research/initial.md).
+For the full product vision, see [inception.md](./plan/inception.md). For the academic grounding and gap analysis, see [Research: Initial Evaluation](./research/initial.md).
 
 ---
 
@@ -52,14 +52,14 @@ emailibrium/
   docs/
     ADRs/                    Architecture Decision Records (ADR-001 through ADR-010)
     DDDs/                    Domain-Driven Design documents (DDD-000 through DDD-005)
-    plan/                    PRIMARY-IMPLEMENTATION-PLAN.md (78 features, 7 sprints)
+    plan/                    implementation.md (78 features, 7 sprints)
     evaluation/              Evaluation framework and metrics
     api/                     API documentation
     architecture.md          System architecture overview
     configuration-reference.md  Complete config key reference
     deployment-guide.md      Production deployment instructions
     user-guide.md            End-user documentation
-    INCEPTION.md             Original product vision
+    plan/inception.md        Original product vision
     docs/research/initial.md              Academic evaluation and gap analysis
 
   docker-compose.yml         Production container orchestration
@@ -414,7 +414,7 @@ The security test suite at `backend/tests/security_audit.rs` validates:
 
 ### Feature Map
 
-The implementation plan defines **78 features across 7 sprints**. See [PRIMARY-IMPLEMENTATION-PLAN.md](./plan/PRIMARY-IMPLEMENTATION-PLAN.md) Section 4 for the complete feature list with sprint assignments and dependencies.
+The implementation plan defines **78 features across 7 sprints**. See [implementation.md](./plan/implementation.md) Section 4 for the complete feature list with sprint assignments and dependencies.
 
 ### Architecture Decisions
 

@@ -11,6 +11,7 @@ mod insights;
 mod interactions;
 mod learning;
 mod vectors;
+mod wipe;
 
 use crate::AppState;
 use axum::Router;
@@ -29,4 +30,5 @@ pub fn routes() -> Router<AppState> {
         .nest("/ai", ai::routes())
         .nest("/consent", consent::routes())
         .nest("/auth", accounts::routes())
+        .nest("/wipe", wipe::routes())
 }

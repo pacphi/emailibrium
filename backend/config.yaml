@@ -11,8 +11,13 @@ database_url: "sqlite:emailibrium.db?mode=rwc"
 
 # Vector Store
 store:
+  backend: "ruvector" # ruvector | memory | qdrant | sqlite
   path: "data/vectors"
   enabled: true
+  # Qdrant (only used when backend: "qdrant")
+  # qdrant_url: "http://localhost:6334"
+  # qdrant_collection_prefix: "emailibrium"
+  # qdrant_api_key: null
 
 # Embedding Pipeline
 embedding:

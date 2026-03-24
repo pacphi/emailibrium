@@ -4,7 +4,7 @@
 
 ## System Architecture
 
-Emailibrium is a **vector-native email intelligence platform** organized as a four-tier architecture (INCEPTION.md Section 3):
+Emailibrium is a **vector-native email intelligence platform** organized as a four-tier architecture (docs/plan/inception.md Section 3):
 
 ```
 +------------------------------------------------------------------+
@@ -77,7 +77,7 @@ Integration patterns:
 
 ## Data Flow
 
-The email ingestion pipeline processes emails through six stages (INCEPTION.md Section 3.2):
+The email ingestion pipeline processes emails through six stages (docs/plan/inception.md Section 3.2):
 
 ```
 Email arrives (via provider sync)
@@ -188,6 +188,56 @@ src/
 ### Frontend (`frontend/`)
 
 React TypeScript SPA built with Vite, TanStack Router, Zustand state management, and shadcn/ui components.
+
+#### Turborepo Monorepo
+
+The frontend is organized as a **Turborepo monorepo** (`frontend/turbo.json`) using pnpm workspaces (`frontend/pnpm-workspace.yaml`). Turborepo orchestrates `dev`, `build`, `test`, `lint`, and `typecheck` tasks across all workspace packages with dependency-aware caching and parallel execution.
+
+#### Workspace Packages
+
+| Package              | Path                      | Purpose                                            |
+| -------------------- | ------------------------- | -------------------------------------------------- |
+| `@emailibrium/api`   | `frontend/packages/api`   | HTTP client layer wrapping backend REST endpoints  |
+| `@emailibrium/core`  | `frontend/packages/core`  | Shared business logic and utilities                |
+| `@emailibrium/types` | `frontend/packages/types` | TypeScript type definitions shared across packages |
+| `@emailibrium/ui`    | `frontend/packages/ui`    | Reusable UI component library (shadcn/ui based)    |
+| `@emailibrium/web`   | `frontend/apps/web`       | Main web application (Vite + React)                |
+
+#### Storybook
+
+Component development and visual testing use **Storybook 8** (`frontend/apps/web/.storybook/`). There are currently **9 stories** covering shared components (`ErrorFallback`, `OfflineIndicator`, `SkipToContent`, `Toast`) and feature components (`ProgressBar`, `PhaseIndicator`, `SubscriptionRow`, `HealthScoreGauge`, `FrequencyBadge`). Run via `pnpm storybook` in the web app.
+
+#### E2E Testing (Playwright)
+
+End-to-end tests live in `frontend/apps/web/e2e/` and cover 6 test suites: `email`, `inbox-cleaner`, `navigation`, `onboarding`, `rules`, and `search`. Run with `pnpm test:e2e` (which invokes `playwright test`).
+
+#### Chat Feature
+
+An AI-powered chat interface resides in `frontend/apps/web/src/features/chat/`. It includes `ChatInterface.tsx` (main container), `ChatInput.tsx` (message input), `ChatMessage.tsx` (message rendering), and a `useChat` hook for managing conversation state against the backend `/api/ai/chat` endpoint (ADR-012).
+
+#### Onboarding Flow
+
+A guided onboarding wizard at `frontend/apps/web/src/features/onboarding/` walks users through initial setup. Components include `OnboardingFlow.tsx` (step orchestrator), `ProviderSelector.tsx` (email provider choice), `GmailConnect.tsx` / `OutlookConnect.tsx` / `ImapConnect.tsx` (OAuth and credential flows per DDD-005), `ConnectedAccounts.tsx` (account summary), `ArchiveStrategyPicker.tsx` (inbox strategy selection per ADR-010), `AISetup.tsx` (AI tier configuration), and `SetupComplete.tsx` (completion confirmation).
+
+#### TanStack React Query
+
+Data fetching and server-state management use **TanStack React Query v5** (`@tanstack/react-query`). This provides automatic caching, background refetching, and optimistic updates for all backend API interactions.
+
+#### TanStack React Virtual
+
+Large email lists are rendered efficiently using **TanStack React Virtual v3** (`@tanstack/react-virtual`), which virtualizes DOM nodes so only visible rows are mounted. This is critical for inboxes with thousands of messages.
+
+#### Framer Motion
+
+UI animations and transitions use **Framer Motion v11** (`framer-motion`). Used for page transitions, component mount/unmount animations, and interactive feedback throughout the application.
+
+#### MSW (Mock Service Worker)
+
+API mocking in tests uses **MSW v2** (`msw`). Request handlers intercept `fetch` calls during Vitest runs, enabling isolated component and integration tests without a running backend.
+
+#### PWA Support
+
+The app ships as a **Progressive Web App**. A custom service worker (`frontend/apps/web/src/pwa/sw.ts`) pre-caches static assets under the `emailibrium-v1` cache name and serves them offline. Registration logic in `frontend/apps/web/src/pwa/register.ts` handles install and update lifecycle events.
 
 ## Security Architecture
 

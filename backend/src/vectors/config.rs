@@ -111,9 +111,18 @@ pub struct StoreConfig {
     /// Whether vectors are enabled.
     #[serde(default = "default_true")]
     pub enabled: bool,
-    /// Backend selection: "ruvector" (HNSW, default) or "memory" (brute-force fallback).
+    /// Backend selection: "ruvector" (HNSW, default), "qdrant", "sqlite", or "memory".
     #[serde(default = "default_store_backend")]
     pub backend: String,
+    /// Qdrant REST API URL (used when backend = "qdrant").
+    #[serde(default)]
+    pub qdrant_url: Option<String>,
+    /// Qdrant collection name prefix (used when backend = "qdrant").
+    #[serde(default)]
+    pub qdrant_collection_prefix: Option<String>,
+    /// Qdrant API key for authenticated deployments (used when backend = "qdrant").
+    #[serde(default)]
+    pub qdrant_api_key: Option<String>,
 }
 
 impl Default for StoreConfig {
@@ -122,6 +131,9 @@ impl Default for StoreConfig {
             path: default_store_path(),
             enabled: true,
             backend: default_store_backend(),
+            qdrant_url: None,
+            qdrant_collection_prefix: None,
+            qdrant_api_key: None,
         }
     }
 }
@@ -604,7 +616,7 @@ pub struct CloudGenerativeConfig {
     /// Name of the environment variable holding the API key.
     #[serde(default = "default_api_key_env")]
     pub api_key_env: String,
-    /// Model identifier (e.g. "gpt-4o-mini", "claude-sonnet-4-20250514", "gemini-2.0-flash").
+    /// Model identifier (e.g. "gpt-4o-mini", "claude-sonnet-4-6", "gemini-2.0-flash").
     #[serde(default = "default_cloud_model")]
     pub model: String,
     /// Base URL for the provider API.

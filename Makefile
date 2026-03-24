@@ -105,9 +105,9 @@ help:
 	@echo ""
 	@echo "$(BOLD)$(BLUE)═══ Release ════════════════════════════════════════════════════════$(RESET)"
 	@echo "  release-check          - Pre-release CI validation"
-	@echo "  release-tag VER=x.y.z  - Create annotated tag"
-	@echo "  release VER=x.y.z      - Full release (check + tag + push)"
-	@echo "  changelog VER=x.y.z    - Preview changelog"
+	@echo "  release-tag VERSION=x.y.z - Create annotated tag"
+	@echo "  release VERSION=x.y.z    - Full release (check + tag + push)"
+	@echo "  changelog VERSION=x.y.z  - Preview changelog"
 	@echo ""
 	@echo "  Run '$(BOLD)make -C backend$(RESET)' or '$(BOLD)make -C frontend$(RESET)' for layer-specific targets."
 

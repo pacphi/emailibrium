@@ -19,6 +19,7 @@ This document defines the bounded context map for Emailibrium, a vector-native e
 | **Ingestion**          | Supporting | DDD-003  | Email sync, multi-asset extraction, pipeline orchestration     |
 | **Learning**           | Supporting | DDD-004  | SONA adaptive learning, centroid updates, feedback processing  |
 | **Account Management** | Supporting | DDD-005  | Provider connections, OAuth, sync state, archive strategy      |
+| **AI Providers**       | Supporting | DDD-006  | Model registry, provider routing, inference sessions, consent  |
 
 ## Context Map Diagram
 
@@ -46,6 +47,21 @@ This document defines the bounded context map for Emailibrium, a vector-native e
                      Customer / Supplier
                     (ContentExtracted,
                      IngestionCompleted)
+                               │
+                               ▼
+                  ┌─────────────────────────┐
+                  │     AI Providers        │
+                  │      (Supporting)       │
+                  │                         │
+                  │  ProviderConfig,        │
+                  │  ModelRegistry,         │
+                  │  InferenceSession       │
+                  └────────────┬────────────┘
+                               │
+                     Published Language
+                    (ProviderChanged,
+                     ReindexTriggered,
+                     SessionDegraded)
                                │
                                ▼
                   ┌─────────────────────────┐
@@ -121,6 +137,34 @@ This document defines the bounded context map for Emailibrium, a vector-native e
 - **Events**: `CentroidUpdated`, `LongTermConsolidated`
 - **Rationale**: Updated centroids from SONA learning flow back into the classification engine, creating a closed feedback loop. This is the key adaptive behavior of the system.
 
+### 7. AI Providers --> Email Intelligence: Published Language
+
+- **Pattern**: Published Language
+- **Direction**: AI Providers publishes model and session events; Email Intelligence consumes them
+- **Events**: `ProviderChanged`, `ReindexTriggered`, `ReindexCompleted`, `SessionDegraded`
+- **Rationale**: Email Intelligence depends on AI Providers for embeddings and classifications. Model changes may require re-embedding all emails; session degradation triggers provider fallback.
+
+### 8. Email Intelligence --> AI Providers: Customer / Supplier
+
+- **Pattern**: Customer / Supplier
+- **Direction**: Email Intelligence (customer) defines `EmbeddingModel` and `GenerativeModel` traits; AI Providers (supplier) implements them via adapters
+- **Events**: N/A (synchronous trait-based integration)
+- **Rationale**: Email Intelligence is the core domain and dictates the inference contract. AI Providers conforms by implementing adapters (ONNX, Ollama, Cloud).
+
+### 9. AI Providers --> Learning: Published Language
+
+- **Pattern**: Published Language
+- **Direction**: AI Providers publishes inference metrics; Learning consumes them
+- **Events**: `InferenceCompleted`
+- **Rationale**: Learning tracks provider performance data for optimization and routing decisions.
+
+### 10. Account Management --> AI Providers: Published Language
+
+- **Pattern**: Published Language
+- **Direction**: Account Management publishes consent events; AI Providers consumes them
+- **Events**: `ConsentStatusChanged`
+- **Rationale**: Cloud provider usage requires explicit user consent managed at the account level. Consent revocation forces AI Providers to downgrade from cloud to local providers.
+
 ## Anti-Corruption Layers
 
 | ACL                      | Location           | Purpose                                                                                       |
@@ -128,6 +172,9 @@ This document defines the bounded context map for Emailibrium, a vector-native e
 | **VectorStore facade**   | Email Intelligence | Wraps RuVector SDK, isolating the core domain from vector DB implementation details (ADR-003) |
 | **EmbeddingModel trait** | Email Intelligence | Abstracts over RuvLLM, Ollama, and cloud embedding providers (ADR-002)                        |
 | **EmailProvider trait**  | Account Management | Wraps Gmail API, Microsoft Graph API, and IMAP/POP3 behind a unified interface                |
+| **OnnxEmbeddingAdapter** | AI Providers       | Wraps fastembed crate behind the EmbeddingModel trait (ADR-002)                               |
+| **OllamaAdapter**        | AI Providers       | Wraps Ollama HTTP API behind EmbeddingModel and GenerativeModel traits                        |
+| **CloudAdapter**         | AI Providers       | Wraps cloud provider SDKs (OpenAI, Cohere, Anthropic) with consent gate and audit logging     |
 
 ## Shared Kernel
 
@@ -153,7 +200,8 @@ All cross-context communication uses asynchronous domain events via an in-proces
 │                                                     │
 │  Publishers:                                        │
 │    Account Management, Ingestion,                   │
-│    Email Intelligence, Search, Learning             │
+│    Email Intelligence, Search, Learning,            │
+│    AI Providers                                     │
 │                                                     │
 │  Delivery: At-least-once with idempotent consumers  │
 │  Ordering: Per-aggregate ordering guaranteed         │

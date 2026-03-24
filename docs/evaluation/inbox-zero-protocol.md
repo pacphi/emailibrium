@@ -2,7 +2,7 @@
 
 ## Objective
 
-Validate the claim that users can achieve inbox zero for 10,000+ emails within 10 minutes using Emailibrium (INCEPTION.md Section 2.2, docs/research/initial.md Section 6.4).
+Validate the claim that users can achieve inbox zero for 10,000+ emails within 10 minutes using Emailibrium (docs/plan/inception.md Section 2.2, docs/research/initial.md Section 6.4).
 
 ## Study Design
 

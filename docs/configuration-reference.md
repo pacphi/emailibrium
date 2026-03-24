@@ -46,10 +46,14 @@ EMAILIBRIUM_QUANTIZATION_MODE=scalar
 
 ### Store (`store.*`)
 
-| Key             | Type   | Default        | Env Override                | Description                         |
-| --------------- | ------ | -------------- | --------------------------- | ----------------------------------- |
-| `store.path`    | String | `data/vectors` | `EMAILIBRIUM_STORE_PATH`    | Path for vector data persistence    |
-| `store.enabled` | bool   | `true`         | `EMAILIBRIUM_STORE_ENABLED` | Whether the vector store is enabled |
+| Key                              | Type   | Default                 | Env Override                                 | Description                                                          |
+| -------------------------------- | ------ | ----------------------- | -------------------------------------------- | -------------------------------------------------------------------- |
+| `store.backend`                  | String | `ruvector`              | `EMAILIBRIUM_STORE_BACKEND`                  | Vector store backend: `ruvector` \| `memory` \| `qdrant` \| `sqlite` |
+| `store.path`                     | String | `data/vectors`          | `EMAILIBRIUM_STORE_PATH`                     | Path for vector data persistence                                     |
+| `store.enabled`                  | bool   | `true`                  | `EMAILIBRIUM_STORE_ENABLED`                  | Whether the vector store is enabled                                  |
+| `store.qdrant_url`               | String | `http://localhost:6334` | `EMAILIBRIUM_STORE_QDRANT_URL`               | Qdrant REST API endpoint (only when backend=qdrant)                  |
+| `store.qdrant_collection_prefix` | String | `emailibrium`           | `EMAILIBRIUM_STORE_QDRANT_COLLECTION_PREFIX` | Qdrant collection name prefix                                        |
+| `store.qdrant_api_key`           | String | _(none)_                | `EMAILIBRIUM_STORE_QDRANT_API_KEY`           | Qdrant API key (optional)                                            |
 
 ### Embedding (`embedding.*`)
 

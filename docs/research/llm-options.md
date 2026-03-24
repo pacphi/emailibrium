@@ -573,7 +573,7 @@ ai:
       provider: 'anthropic'
       api_key_env: 'ANTHROPIC_API_KEY'
       classification_model: 'claude-haiku-4-5-20251001'
-      chat_model: 'claude-sonnet-4-20250514'
+      chat_model: 'claude-sonnet-4-6'
       # Maximum requests per minute
       rate_limit_rpm: 60
 

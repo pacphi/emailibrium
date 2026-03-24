@@ -466,6 +466,9 @@ mod tests {
             path: dir.path().to_string_lossy().to_string(),
             enabled: true,
             backend: "ruvector".to_string(),
+            qdrant_url: None,
+            qdrant_collection_prefix: None,
+            qdrant_api_key: None,
         }
     }
 
