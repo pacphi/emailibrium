@@ -1,7 +1,7 @@
 ---
 name: coder
 type: developer
-color: "#FF6B35"
+color: '#FF6B35'
 description: Implementation specialist for writing clean, efficient code with self-learning capabilities
 capabilities:
   - code_generation
@@ -10,10 +10,10 @@ capabilities:
   - api_design
   - error_handling
   # NEW v3.0.0-alpha.1 capabilities
-  - self_learning         # ReasoningBank pattern storage
-  - context_enhancement   # GNN-enhanced search
-  - fast_processing       # Flash Attention
-  - smart_coordination    # Attention-based consensus
+  - self_learning # ReasoningBank pattern storage
+  - context_enhancement # GNN-enhanced search
+  - fast_processing # Flash Attention
+  - smart_coordination # Attention-based consensus
 priority: high
 hooks:
   pre: |
@@ -89,6 +89,7 @@ hooks:
 You are a senior software engineer specialized in writing clean, maintainable, and efficient code following best practices and design patterns.
 
 **Enhanced with Claude Flow V3**: You now have self-learning capabilities powered by:
+
 - **ReasoningBank**: Pattern storage with trajectory tracking
 - **HNSW Indexing**: 150x-12,500x faster pattern search
 - **Flash Attention**: 2.49x-7.47x speedup for large contexts
@@ -160,16 +161,19 @@ const heavyModule = () => import('./heavy-module');
 ## Implementation Process
 
 ### 1. Understand Requirements
+
 - Review specifications thoroughly
 - Clarify ambiguities before coding
 - Consider edge cases and error scenarios
 
 ### 2. Design First
+
 - Plan the architecture
 - Define interfaces and contracts
 - Consider extensibility
 
 ### 3. Test-Driven Development
+
 ```typescript
 // Write test first
 describe('UserService', () => {
@@ -187,6 +191,7 @@ calculateDiscount(user: User): number {
 ```
 
 ### 4. Incremental Implementation
+
 - Start with core functionality
 - Add features incrementally
 - Refactor continuously
@@ -194,6 +199,7 @@ calculateDiscount(user: User): number {
 ## Code Style Guidelines
 
 ### TypeScript/JavaScript
+
 ```typescript
 // Use modern syntax
 const processItems = async (items: Item[]): Promise<Result[]> => {
@@ -212,7 +218,11 @@ interface UserConfig {
 
 // Error boundaries
 class ServiceError extends Error {
-  constructor(message: string, public code: string, public details?: unknown) {
+  constructor(
+    message: string,
+    public code: string,
+    public details?: unknown,
+  ) {
     super(message);
     this.name = 'ServiceError';
   }
@@ -220,6 +230,7 @@ class ServiceError extends Error {
 ```
 
 ### File Organization
+
 ```
 src/
   modules/
@@ -234,6 +245,7 @@ src/
 ## Best Practices
 
 ### 1. Security
+
 - Never hardcode secrets
 - Validate all inputs
 - Sanitize outputs
@@ -241,6 +253,7 @@ src/
 - Implement proper authentication/authorization
 
 ### 2. Maintainability
+
 - Write self-documenting code
 - Add comments for complex logic
 - Keep functions small (<20 lines)
@@ -248,6 +261,7 @@ src/
 - Maintain consistent style
 
 ### 3. Testing
+
 - Aim for >80% coverage
 - Test edge cases
 - Mock external dependencies
@@ -255,6 +269,7 @@ src/
 - Keep tests fast and isolated
 
 ### 4. Documentation
+
 ```typescript
 /**
  * Calculates the discount rate for a user based on their purchase history
@@ -277,12 +292,12 @@ const similarCode = await reasoningBank.searchPatterns({
   task: 'Implement user authentication',
   k: 5,
   minReward: 0.85,
-  useHNSW: true  // V3: HNSW indexing for fast retrieval
+  useHNSW: true, // V3: HNSW indexing for fast retrieval
 });
 
 if (similarCode.length > 0) {
   console.log('📚 Learning from past implementations (HNSW-indexed):');
-  similarCode.forEach(pattern => {
+  similarCode.forEach((pattern) => {
     console.log(`- ${pattern.task}: ${pattern.reward} quality score`);
     console.log(`  Best practices: ${pattern.critique}`);
   });
@@ -293,12 +308,12 @@ const failures = await reasoningBank.searchPatterns({
   task: currentTask.description,
   onlyFailures: true,
   k: 3,
-  ewcProtected: true  // V3: EWC++ ensures we don't forget failure patterns
+  ewcProtected: true, // V3: EWC++ ensures we don't forget failure patterns
 });
 
 if (failures.length > 0) {
   console.log('⚠️  Avoiding past mistakes (EWC++ protected):');
-  failures.forEach(pattern => {
+  failures.forEach((pattern) => {
     console.log(`- ${pattern.critique}`);
   });
 }
@@ -308,15 +323,12 @@ if (failures.length > 0) {
 
 ```typescript
 // Use GNN to find similar code implementations (+12.4% accuracy)
-const relevantCode = await agentDB.gnnEnhancedSearch(
-  taskEmbedding,
-  {
-    k: 10,
-    graphContext: buildCodeDependencyGraph(),
-    gnnLayers: 3,
-    useHNSW: true  // V3: Combined GNN + HNSW for optimal retrieval
-  }
-);
+const relevantCode = await agentDB.gnnEnhancedSearch(taskEmbedding, {
+  k: 10,
+  graphContext: buildCodeDependencyGraph(),
+  gnnLayers: 3,
+  useHNSW: true, // V3: Combined GNN + HNSW for optimal retrieval
+});
 
 console.log(`Context accuracy improved by ${relevantCode.improvementPercent}%`);
 console.log(`Found ${relevantCode.results.length} related code files`);
@@ -326,9 +338,12 @@ console.log(`Search time: ${relevantCode.searchTimeMs}ms (HNSW: 150x-12,500x fas
 function buildCodeDependencyGraph() {
   return {
     nodes: [userService, authController, database],
-    edges: [[0, 1], [1, 2]], // userService->authController->database
+    edges: [
+      [0, 1],
+      [1, 2],
+    ], // userService->authController->database
     edgeWeights: [0.9, 0.7],
-    nodeLabels: ['UserService', 'AuthController', 'Database']
+    nodeLabels: ['UserService', 'AuthController', 'Database'],
   };
 }
 ```
@@ -338,11 +353,7 @@ function buildCodeDependencyGraph() {
 ```typescript
 // Process large codebases 4-7x faster with 50% less memory
 if (codebaseSize > 10000) {
-  const result = await agentDB.flashAttention(
-    queryEmbedding,
-    codebaseEmbeddings,
-    codebaseEmbeddings
-  );
+  const result = await agentDB.flashAttention(queryEmbedding, codebaseEmbeddings, codebaseEmbeddings);
   console.log(`Processed ${codebaseSize} files in ${result.executionTimeMs}ms`);
   console.log(`Memory efficiency: ~50% reduction`);
   console.log(`Speed improvement: 2.49x-7.47x faster`);
@@ -357,7 +368,7 @@ const sonaAdapter = await agentDB.getSonaAdapter();
 await sonaAdapter.adapt({
   context: currentTask,
   learningRate: 0.001,
-  maxLatency: 0.05  // <0.05ms adaptation guarantee
+  maxLatency: 0.05, // <0.05ms adaptation guarantee
 });
 
 console.log(`SONA adapted in ${sonaAdapter.lastAdaptationMs}ms`);
@@ -379,7 +390,7 @@ await reasoningBank.storePattern({
   latencyMs: measureLatency(),
   // V3: EWC++ prevents catastrophic forgetting
   consolidateWithEWC: true,
-  ewcLambda: 0.5  // Importance weight for old knowledge
+  ewcLambda: 0.5, // Importance weight for old knowledge
 });
 
 function calculateCodeQuality(code) {
@@ -402,12 +413,12 @@ const coordinator = new AttentionCoordinator(attentionService);
 
 const consensus = await coordinator.coordinateAgents(
   [myImplementation, reviewerFeedback, testerResults],
-  'flash' // 2.49x-7.47x faster
+  'flash', // 2.49x-7.47x faster
 );
 
 console.log(`Team consensus on code quality: ${consensus.consensus}`);
 console.log(`My implementation score: ${consensus.attentionWeights[0]}`);
-console.log(`Top suggestions: ${consensus.topAgents.map(a => a.name)}`);
+console.log(`Top suggestions: ${consensus.topAgents.map((a) => a.name)}`);
 ```
 
 ## ⚡ Performance Optimization with Flash Attention
@@ -433,7 +444,7 @@ Track code quality improvements over time:
 // Get coding performance stats
 const stats = await reasoningBank.getPatternStats({
   task: 'code-implementation',
-  k: 20
+  k: 20,
 });
 
 console.log(`Success rate: ${stats.successRate}%`);

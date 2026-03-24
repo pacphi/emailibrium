@@ -58,7 +58,7 @@ Reciprocal Rank Fusion (RRF) (Cormack et al., 2009) is a rank aggregation method
 
 $$\text{RRF}(d) = \sum_{i=1}^{n} \frac{1}{k + r_i(d)}$$
 
-where *k* is a constant (typically 60), *r_i(d)* is the rank of document *d* in the *i*-th result list, and the sum is over all contributing rankers. RRF has been shown to be robust, parameter-insensitive, and competitive with learned fusion methods (Cormack et al., 2009). Its use for combining BM25/FTS results with dense vector results has become standard practice, employed by Elasticsearch, Vespa, and other production systems.
+where _k_ is a constant (typically 60), _r_i(d)_ is the rank of document _d_ in the _i_-th result list, and the sum is over all contributing rankers. RRF has been shown to be robust, parameter-insensitive, and competitive with learned fusion methods (Cormack et al., 2009). Its use for combining BM25/FTS results with dense vector results has become standard practice, employed by Elasticsearch, Vespa, and other production systems.
 
 ### 2.4 Graph Neural Networks for Email Analysis
 
@@ -104,16 +104,16 @@ Emailibrium employs a layered architecture with four principal tiers:
 
 ### 3.2 Data Flow Formalization
 
-The ingestion pipeline processes each email *e* through six sequential stages:
+The ingestion pipeline processes each email _e_ through six sequential stages:
 
-1. **Parse**: Extract structured metadata *M(e)* = {subject, sender, recipients, date, headers, labels}
-2. **Embed**: Generate dense vector *v(e)* = *f*(concat(*M(e)*, body(*e*))) where *f* is the all-MiniLM-L6-v2 encoder
+1. **Parse**: Extract structured metadata _M(e)_ = {subject, sender, recipients, date, headers, labels}
+2. **Embed**: Generate dense vector _v(e)_ = _f_(concat(_M(e)_, body(_e_))) where _f_ is the all-MiniLM-L6-v2 encoder
 3. **Extract Assets**: Process HTML body, inline images (OCR + CLIP), attachments (PDF/DOCX/XLSX text extraction), and URLs
-4. **Classify**: Assign category *c(e)* = argmax_c cos(*v(e)*, *mu_c*) where *mu_c* is the centroid of category *c*, with LLM fallback when max similarity falls below threshold *tau*
+4. **Classify**: Assign category _c(e)_ = argmax*c cos(\_v(e)*, _mu_c_) where _mu_c_ is the centroid of category _c_, with LLM fallback when max similarity falls below threshold _tau_
 5. **Detect Patterns**: Identify subscriptions via header analysis (List-Unsubscribe), sender frequency modeling, and template similarity clustering
 6. **Apply Rules**: Execute user-defined and system-generated rules against the enriched email representation
 
-The pipeline supports two execution modes: *fast mode* (text embedding only, ~5ms per email) for interactive responsiveness during initial sync, and *deep mode* (full multi-asset extraction, ~20ms per email excluding heavy attachments) for background enrichment.
+The pipeline supports two execution modes: _fast mode_ (text embedding only, ~5ms per email) for interactive responsiveness during initial sync, and _deep mode_ (full multi-asset extraction, ~20ms per email excluding heavy attachments) for background enrichment.
 
 ---
 
@@ -125,16 +125,16 @@ The choice of all-MiniLM-L6-v2 for text embeddings reflects an explicit optimiza
 
 For image embeddings, the plan selects CLIP ViT-B-32 (Radford et al., 2021), which projects images into a 512-dimensional space shared with text. This enables cross-modal search queries such as finding emails containing images similar to a text description. The architectural decision to maintain separate vector collections for text, image-text (OCR), image-visual (CLIP), and attachment-text reflects a pragmatic recognition that heterogeneous embedding spaces require collection-level separation to avoid dimensionality mismatches.
 
-The email text template concatenates subject, sender, recipients, date, labels, and truncated body (400 characters). This design choice prioritizes metadata-enriched representations over body-only embeddings, which is well-motivated: in email search, knowing *who* sent a message and *when* is often as informative as the message content itself.
+The email text template concatenates subject, sender, recipients, date, labels, and truncated body (400 characters). This design choice prioritizes metadata-enriched representations over body-only embeddings, which is well-motivated: in email search, knowing _who_ sent a message and _when_ is often as informative as the message content itself.
 
 ### 4.2 HNSW Indexing: Complexity Analysis
 
-For a corpus of *N* emails, the HNSW index provides:
+For a corpus of _N_ emails, the HNSW index provides:
 
-- **Construction**: O(*N* log *N*) time, O(*N* * *M*) space, where *M* is the number of links per node
-- **Query**: O(log *N*) time for a single nearest-neighbor search with beam width *ef*
-- **Insertion**: O(log *N*) amortized for adding a single vector
-- **Memory**: For 100,000 emails at 384 dimensions with fp32 precision: 100,000 * 384 * 4 bytes = ~147 MB for vectors alone, plus graph structure overhead
+- **Construction**: O(_N_ log _N_) time, O(_N_ \* _M_) space, where _M_ is the number of links per node
+- **Query**: O(log _N_) time for a single nearest-neighbor search with beam width _ef_
+- **Insertion**: O(log _N_) amortized for adding a single vector
+- **Memory**: For 100,000 emails at 384 dimensions with fp32 precision: 100,000 _ 384 _ 4 bytes = ~147 MB for vectors alone, plus graph structure overhead
 
 With scalar quantization (fp32 to int8), vector storage reduces to ~37 MB, validating the plan's claim of ~100 MB for 100K emails (including graph structure and metadata). The 4x compression ratio is consistent with published quantization results (Guo et al., 2020).
 
@@ -142,16 +142,16 @@ With scalar quantization (fp32 to int8), vector storage reduces to ~37 MB, valid
 
 The hybrid search procedure combines lexical and semantic retrieval:
 
-Let *Q* be a query string. The algorithm proceeds as:
+Let _Q_ be a query string. The algorithm proceeds as:
 
-1. Compute query embedding: *v_q* = *f*(*Q*), cost O(*d*) where *d* = 384
-2. Vector search: retrieve top-*k_v* results *R_v* = HNSW.search(*v_q*, *k_v*, *ef*), cost O(log *N*)
-3. Full-text search: retrieve top-*k_t* results *R_t* = FTS5.search(*Q*, *k_t*), cost O(log *N*) with inverted index
-4. Rank fusion: for each document *d* in *R_v* union *R_t*:
+1. Compute query embedding: _v_q_ = _f_(_Q_), cost O(_d_) where _d_ = 384
+2. Vector search: retrieve top-_k_v_ results _R_v_ = HNSW.search(_v_q_, _k_v_, _ef_), cost O(log _N_)
+3. Full-text search: retrieve top-_k_t_ results _R_t_ = FTS5.search(_Q_, _k_t_), cost O(log _N_) with inverted index
+4. Rank fusion: for each document _d_ in _R_v_ union _R_t_:
 
 $$\text{score}(d) = \sum_{i \in \{v, t\}} \frac{1}{k + r_i(d)}$$
 
-where *k* = 60 and *r_i(d)* is the rank of *d* in result set *i* (or infinity if absent).
+where _k_ = 60 and _r_i(d)_ is the rank of _d_ in result set _i_ (or infinity if absent).
 
 5. Filter: apply structured predicates (date range, sender, labels)
 6. Re-rank: apply SONA learned weights
@@ -160,13 +160,13 @@ The claimed total latency of ~20ms is plausible given that embedding inference (
 
 ### 4.4 GNN-Based Clustering
 
-The plan proposes constructing an email graph *G* = (*V*, *E*) where vertices represent emails and edges connect HNSW neighbors (i.e., emails with high vector similarity). GraphSAGE (Hamilton et al., 2017) is then applied to learn node embeddings that capture both content similarity and structural patterns in the communication graph.
+The plan proposes constructing an email graph _G_ = (_V_, _E_) where vertices represent emails and edges connect HNSW neighbors (i.e., emails with high vector similarity). GraphSAGE (Hamilton et al., 2017) is then applied to learn node embeddings that capture both content similarity and structural patterns in the communication graph.
 
-The GraphSAGE aggregation for node *v* at layer *l* is:
+The GraphSAGE aggregation for node _v_ at layer _l_ is:
 
 $$h_v^{(l)} = \sigma\left(W^{(l)} \cdot \text{CONCAT}\left(h_v^{(l-1)}, \text{AGG}(\{h_u^{(l-1)} : u \in \mathcal{N}(v)\})\right)\right)$$
 
-where AGG is a permutation-invariant aggregation function (mean, LSTM, or max-pool), *W* is a learnable weight matrix, and sigma is a non-linearity.
+where AGG is a permutation-invariant aggregation function (mean, LSTM, or max-pool), _W_ is a learnable weight matrix, and sigma is a non-linearity.
 
 This approach has the advantage of operating on the already-constructed HNSW graph, avoiding the need for a separate graph construction step. However, HNSW neighbor graphs are optimized for navigability rather than semantic coherence, and the relationship between HNSW connectivity and meaningful email clusters requires empirical validation.
 
@@ -186,12 +186,12 @@ The multi-timescale design is principled, but the plan lacks formal specificatio
 
 The plan proposes adaptive quantization based on corpus size:
 
-| Corpus Size | Quantization | Precision | Memory per 384D Vector |
-|-------------|-------------|-----------|----------------------|
-| < 10K emails | None (fp32) | Full | 1,536 bytes |
-| 10K--50K | Scalar (int8) | ~99% recall | 384 bytes |
-| 50K--200K | Product (PQ) | ~97% recall | ~96 bytes |
-| > 200K | Binary | ~90% recall | 48 bytes |
+| Corpus Size  | Quantization  | Precision   | Memory per 384D Vector |
+| ------------ | ------------- | ----------- | ---------------------- |
+| < 10K emails | None (fp32)   | Full        | 1,536 bytes            |
+| 10K--50K     | Scalar (int8) | ~99% recall | 384 bytes              |
+| 50K--200K    | Product (PQ)  | ~97% recall | ~96 bytes              |
+| > 200K       | Binary        | ~90% recall | 48 bytes               |
 
 The recall degradation estimates are consistent with published benchmarks (Jegou et al., 2011; Guo et al., 2020). The automatic scaling strategy is pragmatic, though transitions between quantization levels require index reconstruction, which should be performed as a background operation to avoid service disruption.
 
@@ -203,7 +203,7 @@ The recall degradation estimates are consistent with published benchmarks (Jegou
 
 The hybrid search system should be evaluated using standard information retrieval metrics:
 
-- **Recall@k**: The fraction of relevant documents appearing in the top-*k* results. For email search, k values of 5, 10, and 20 are most relevant to user experience.
+- **Recall@k**: The fraction of relevant documents appearing in the top-_k_ results. For email search, k values of 5, 10, and 20 are most relevant to user experience.
 - **NDCG@k** (Normalized Discounted Cumulative Gain): Measures ranking quality, penalizing relevant documents that appear lower in the results.
 - **MRR** (Mean Reciprocal Rank): The average of the reciprocal of the rank of the first relevant result, particularly appropriate for navigational queries.
 - **Latency at p50, p95, p99**: End-to-end query latency percentiles.
@@ -278,14 +278,14 @@ Performance claims should be validated through:
 
 ### 6.3 Comparison with Existing Systems
 
-| System | Semantic Search | Local Processing | Adaptive Learning | Multi-Modal |
-|--------|:-:|:-:|:-:|:-:|
-| Gmail (Google) | Yes (cloud) | No | Yes (cloud ML) | Partial |
-| Outlook (Microsoft) | Yes (cloud) | No | Yes (cloud ML) | Partial |
-| Apple Mail | No | Yes | No | No |
-| Thunderbird | No | Yes | No | No |
-| Superhuman | Limited | No | Limited | No |
-| **Emailibrium** | **Yes (local)** | **Yes** | **Yes (SONA)** | **Yes** |
+| System              | Semantic Search | Local Processing | Adaptive Learning | Multi-Modal |
+| ------------------- | :-------------: | :--------------: | :---------------: | :---------: |
+| Gmail (Google)      |   Yes (cloud)   |        No        |  Yes (cloud ML)   |   Partial   |
+| Outlook (Microsoft) |   Yes (cloud)   |        No        |  Yes (cloud ML)   |   Partial   |
+| Apple Mail          |       No        |       Yes        |        No         |     No      |
+| Thunderbird         |       No        |       Yes        |        No         |     No      |
+| Superhuman          |     Limited     |        No        |      Limited      |     No      |
+| **Emailibrium**     | **Yes (local)** |     **Yes**      |  **Yes (SONA)**   |   **Yes**   |
 
 Emailibrium occupies a unique position as the only system proposing full semantic search with local-only processing. However, it must be noted that Google and Microsoft have vastly larger training datasets and compute budgets for their ML models, and their cloud-based approach enables capabilities (such as cross-user learning and real-time model updates) that a local-first system cannot replicate.
 
@@ -333,66 +333,66 @@ If the implementation achieves the stated performance targets --- particularly s
 
 ## References
 
-Blondel, V. D., Guillaume, J.-L., Lambiotte, R., & Lefebvre, E. (2008). Fast unfolding of communities in large networks. *Journal of Statistical Mechanics: Theory and Experiment*, 2008(10), P10008.
+Blondel, V. D., Guillaume, J.-L., Lambiotte, R., & Lefebvre, E. (2008). Fast unfolding of communities in large networks. _Journal of Statistical Mechanics: Theory and Experiment_, 2008(10), P10008.
 
-Cormack, G. V., Clarke, C. L. A., & Buettcher, S. (2009). Reciprocal rank fusion outperforms condorcet and individual rank learning methods. *Proceedings of the 32nd International ACM SIGIR Conference on Research and Development in Information Retrieval*, 758--759.
+Cormack, G. V., Clarke, C. L. A., & Buettcher, S. (2009). Reciprocal rank fusion outperforms condorcet and individual rank learning methods. _Proceedings of the 32nd International ACM SIGIR Conference on Research and Development in Information Retrieval_, 758--759.
 
-Dredze, M., Lau, T., & Kushmerick, N. (2008). Automatically classifying emails into activities. *Proceedings of the 13th International Conference on Intelligent User Interfaces*, 70--79.
+Dredze, M., Lau, T., & Kushmerick, N. (2008). Automatically classifying emails into activities. _Proceedings of the 13th International Conference on Intelligent User Interfaces_, 70--79.
 
 Gerganov, G. (2023). llama.cpp: Port of Facebook's LLaMA model in C/C++. GitHub repository. https://github.com/ggerganov/llama.cpp
 
-Grover, A., & Leskovec, J. (2016). Node2vec: Scalable feature learning for networks. *Proceedings of the 22nd ACM SIGKDD International Conference on Knowledge Discovery and Data Mining*, 855--864.
+Grover, A., & Leskovec, J. (2016). Node2vec: Scalable feature learning for networks. _Proceedings of the 22nd ACM SIGKDD International Conference on Knowledge Discovery and Data Mining_, 855--864.
 
-Guo, R., Sun, P., Lindgren, E., Geng, Q., Simcha, D., Chern, F., & Kumar, S. (2020). Accelerating large-scale inference with anisotropic vector quantization. *Proceedings of the 37th International Conference on Machine Learning*, 3887--3896.
+Guo, R., Sun, P., Lindgren, E., Geng, Q., Simcha, D., Chern, F., & Kumar, S. (2020). Accelerating large-scale inference with anisotropic vector quantization. _Proceedings of the 37th International Conference on Machine Learning_, 3887--3896.
 
-Hamilton, W. L., Ying, R., & Leskovec, J. (2017). Inductive representation learning on large graphs. *Advances in Neural Information Processing Systems*, 30.
+Hamilton, W. L., Ying, R., & Leskovec, J. (2017). Inductive representation learning on large graphs. _Advances in Neural Information Processing Systems_, 30.
 
-Hidasi, B., Quadrana, M., Karatzoglou, A., & Tikk, D. (2016). Parallel recurrent neural network architectures for feature-rich session-based recommendations. *Proceedings of the 10th ACM Conference on Recommender Systems*, 241--248.
+Hidasi, B., Quadrana, M., Karatzoglou, A., & Tikk, D. (2016). Parallel recurrent neural network architectures for feature-rich session-based recommendations. _Proceedings of the 10th ACM Conference on Recommender Systems_, 241--248.
 
-Jacob, B., Kligys, S., Chen, B., Zhu, M., Tang, M., Howard, A., Adam, H., & Kalenichenko, D. (2018). Quantization and training of neural networks for efficient integer-arithmetic-only inference. *Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition*, 2704--2713.
+Jacob, B., Kligys, S., Chen, B., Zhu, M., Tang, M., Howard, A., Adam, H., & Kalenichenko, D. (2018). Quantization and training of neural networks for efficient integer-arithmetic-only inference. _Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition_, 2704--2713.
 
-Jegou, H., Douze, M., & Schmid, C. (2011). Product quantization for nearest neighbor search. *IEEE Transactions on Pattern Analysis and Machine Intelligence*, 33(1), 117--128.
+Jegou, H., Douze, M., & Schmid, C. (2011). Product quantization for nearest neighbor search. _IEEE Transactions on Pattern Analysis and Machine Intelligence_, 33(1), 117--128.
 
-Joachims, T. (2002). Optimizing search engines using clickthrough data. *Proceedings of the 8th ACM SIGKDD International Conference on Knowledge Discovery and Data Mining*, 133--142.
+Joachims, T. (2002). Optimizing search engines using clickthrough data. _Proceedings of the 8th ACM SIGKDD International Conference on Knowledge Discovery and Data Mining_, 133--142.
 
-Johnson, J., Douze, M., & Jegou, H. (2019). Billion-scale similarity search with GPUs. *IEEE Transactions on Big Data*, 7(3), 535--547.
+Johnson, J., Douze, M., & Jegou, H. (2019). Billion-scale similarity search with GPUs. _IEEE Transactions on Big Data_, 7(3), 535--547.
 
-Karpukhin, V., Oguz, B., Min, S., Lewis, P., Wu, L., Edunov, S., Chen, D., & Yih, W.-t. (2020). Dense passage retrieval for open-domain question answering. *Proceedings of the 2020 Conference on Empirical Methods in Natural Language Processing*, 6769--6781.
+Karpukhin, V., Oguz, B., Min, S., Lewis, P., Wu, L., Edunov, S., Chen, D., & Yih, W.-t. (2020). Dense passage retrieval for open-domain question answering. _Proceedings of the 2020 Conference on Empirical Methods in Natural Language Processing_, 6769--6781.
 
-Kleppmann, M., Wiggins, A., van Hardenberg, P., & McGranaghan, M. (2019). Local-first software: You own your data, in spite of the cloud. *Proceedings of the 2019 ACM SIGPLAN International Symposium on New Ideas, New Paradigms, and Reflections on Programming and Software*, 154--178.
+Kleppmann, M., Wiggins, A., van Hardenberg, P., & McGranaghan, M. (2019). Local-first software: You own your data, in spite of the cloud. _Proceedings of the 2019 ACM SIGPLAN International Symposium on New Ideas, New Paradigms, and Reflections on Programming and Software_, 154--178.
 
-Klimt, B., & Yang, Y. (2004). The Enron corpus: A new dataset for email classification research. *European Conference on Machine Learning*, 217--226.
+Klimt, B., & Yang, Y. (2004). The Enron corpus: A new dataset for email classification research. _European Conference on Machine Learning_, 217--226.
 
-Li, L., Chu, W., Langford, J., & Schapire, R. E. (2010). A contextual-bandit approach to personalized news article recommendation. *Proceedings of the 19th International Conference on World Wide Web*, 661--670.
+Li, L., Chu, W., Langford, J., & Schapire, R. E. (2010). A contextual-bandit approach to personalized news article recommendation. _Proceedings of the 19th International Conference on World Wide Web_, 661--670.
 
-Malkov, Y. A., & Yashunin, D. A. (2020). Efficient and robust approximate nearest neighbor search using hierarchical navigable small world graphs. *IEEE Transactions on Pattern Analysis and Machine Intelligence*, 42(4), 824--836.
+Malkov, Y. A., & Yashunin, D. A. (2020). Efficient and robust approximate nearest neighbor search using hierarchical navigable small world graphs. _IEEE Transactions on Pattern Analysis and Machine Intelligence_, 42(4), 824--836.
 
 Mann, M. (2006). Inbox Zero. 43 Folders. https://www.43folders.com/izero
 
-McMahan, B., Moore, E., Ramage, D., Hampson, S., & Arcas, B. A. (2017). Communication-efficient learning of deep networks from decentralized data. *Proceedings of the 20th International Conference on Artificial Intelligence and Statistics*, 1273--1282.
+McMahan, B., Moore, E., Ramage, D., Hampson, S., & Arcas, B. A. (2017). Communication-efficient learning of deep networks from decentralized data. _Proceedings of the 20th International Conference on Artificial Intelligence and Statistics_, 1273--1282.
 
-Morris, J. X., Kuleshov, V., Shmatikov, V., & Rush, A. M. (2023). Text embeddings reveal (almost) as much as text. *Proceedings of the 2023 Conference on Empirical Methods in Natural Language Processing*.
+Morris, J. X., Kuleshov, V., Shmatikov, V., & Rush, A. M. (2023). Text embeddings reveal (almost) as much as text. _Proceedings of the 2023 Conference on Empirical Methods in Natural Language Processing_.
 
-Perozzi, B., Al-Rfou, R., & Skiena, S. (2014). DeepWalk: Online learning of social representations. *Proceedings of the 20th ACM SIGKDD International Conference on Knowledge Discovery and Data Mining*, 701--710.
+Perozzi, B., Al-Rfou, R., & Skiena, S. (2014). DeepWalk: Online learning of social representations. _Proceedings of the 20th ACM SIGKDD International Conference on Knowledge Discovery and Data Mining_, 701--710.
 
 Radicati Group. (2023). Email Statistics Report, 2023-2027. The Radicati Group, Inc.
 
-Radford, A., Kim, J. W., Hallacy, C., Ramesh, A., Goh, G., Agarwal, S., Sastry, G., Askell, A., Mishkin, P., Clark, J., Krueger, G., & Sutskever, I. (2021). Learning transferable visual models from natural language supervision. *Proceedings of the 38th International Conference on Machine Learning*, 8748--8763.
+Radford, A., Kim, J. W., Hallacy, C., Ramesh, A., Goh, G., Agarwal, S., Sastry, G., Askell, A., Mishkin, P., Clark, J., Krueger, G., & Sutskever, I. (2021). Learning transferable visual models from natural language supervision. _Proceedings of the 38th International Conference on Machine Learning_, 8748--8763.
 
-Reimers, N., & Gurevych, I. (2019). Sentence-BERT: Sentence embeddings using siamese BERT-networks. *Proceedings of the 2019 Conference on Empirical Methods in Natural Language Processing*, 3982--3992.
+Reimers, N., & Gurevych, I. (2019). Sentence-BERT: Sentence embeddings using siamese BERT-networks. _Proceedings of the 2019 Conference on Empirical Methods in Natural Language Processing_, 3982--3992.
 
-Rendle, S. (2010). Factorization machines. *Proceedings of the 2010 IEEE International Conference on Data Mining*, 995--1000.
+Rendle, S. (2010). Factorization machines. _Proceedings of the 2010 IEEE International Conference on Data Mining_, 995--1000.
 
-Rossi, E., Chamberlain, B., Frasca, F., Eynard, D., Monti, F., & Bronstein, M. (2020). Temporal graph networks for deep learning on dynamic graphs. *ICML 2020 Workshop on Graph Representation Learning*.
+Rossi, E., Chamberlain, B., Frasca, F., Eynard, D., Monti, F., & Bronstein, M. (2020). Temporal graph networks for deep learning on dynamic graphs. _ICML 2020 Workshop on Graph Representation Learning_.
 
-Thakur, N., Reimers, N., Ruckle, A., Srivastava, A., & Gurevych, I. (2021). BEIR: A heterogeneous benchmark for zero-shot evaluation of information retrieval models. *Proceedings of the Neural Information Processing Systems Track on Datasets and Benchmarks*.
+Thakur, N., Reimers, N., Ruckle, A., Srivastava, A., & Gurevych, I. (2021). BEIR: A heterogeneous benchmark for zero-shot evaluation of information retrieval models. _Proceedings of the Neural Information Processing Systems Track on Datasets and Benchmarks_.
 
-Tulving, E. (1972). Episodic and semantic memory. In E. Tulving & W. Donaldson (Eds.), *Organization of Memory* (pp. 381--403). Academic Press.
+Tulving, E. (1972). Episodic and semantic memory. In E. Tulving & W. Donaldson (Eds.), _Organization of Memory_ (pp. 381--403). Academic Press.
 
-Wang, W., Wei, F., Dong, L., Bao, H., Yang, N., & Zhou, M. (2020). MiniLM: Deep self-attention distillation for task-agnostic compression of pre-trained transformers. *Advances in Neural Information Processing Systems*, 33.
+Wang, W., Wei, F., Dong, L., Bao, H., Yang, N., & Zhou, M. (2020). MiniLM: Deep self-attention distillation for task-agnostic compression of pre-trained transformers. _Advances in Neural Information Processing Systems_, 33.
 
-Whittaker, S., & Sidner, C. (1996). Email overload: Exploring personal information management of email. *Proceedings of the SIGCHI Conference on Human Factors in Computing Systems*, 276--283.
+Whittaker, S., & Sidner, C. (1996). Email overload: Exploring personal information management of email. _Proceedings of the SIGCHI Conference on Human Factors in Computing Systems_, 276--283.
 
-Whittaker, S., Bellotti, V., & Gwizdka, J. (2011). Email in personal information management. *Communications of the ACM*, 49(1), 68--73.
+Whittaker, S., Bellotti, V., & Gwizdka, J. (2011). Email in personal information management. _Communications of the ACM_, 49(1), 68--73.
 
-Zuboff, S. (2019). *The Age of Surveillance Capitalism: The Fight for a Human Future at the New Frontier of Power*. PublicAffairs.
+Zuboff, S. (2019). _The Age of Surveillance Capitalism: The Fight for a Human Future at the New Frontier of Power_. PublicAffairs.

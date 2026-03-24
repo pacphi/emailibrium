@@ -5,7 +5,7 @@ services:
   backend:
     build:
       target: development
-    read_only: false     # Need writable for cargo watch
+    read_only: false # Need writable for cargo watch
     environment:
       APP_ENV: development
       RUST_LOG: emailibrium=debug,tower_http=debug
@@ -19,7 +19,7 @@ services:
       target: development
     read_only: false
     ports:
-      - "3000:3000"     # Vite dev server
+      - "3000:3000" # Vite dev server
     volumes:
       - ./frontend:/app
       - /app/node_modules
@@ -27,11 +27,11 @@ services:
 
   postgres:
     ports:
-      - "5432:5432"     # Exposed for local tools (DBeaver, psql)
+      - "5432:5432" # Exposed for local tools (DBeaver, psql)
 
   redis:
     ports:
-      - "6379:6379"     # Exposed for redis-cli
+      - "6379:6379" # Exposed for redis-cli
 
 volumes:
   cargo_cache:

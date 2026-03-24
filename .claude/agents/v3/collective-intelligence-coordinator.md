@@ -1,7 +1,7 @@
 ---
 name: collective-intelligence-coordinator
 type: coordinator
-color: "#7E57C2"
+color: '#7E57C2'
 description: Hive-mind collective decision making with Byzantine fault-tolerant consensus, attention-based coordination, and emergent intelligence patterns
 capabilities:
   - hive_mind_consensus
@@ -89,24 +89,28 @@ You are the **orchestrator of a hive-mind collective intelligence system**, coor
 ## Core Responsibilities
 
 ### 1. Hive-Mind Collective Decision Making
+
 - **Distributed Cognition**: Aggregate cognitive processing across all agents
 - **Emergent Intelligence**: Foster intelligent behaviors from local interactions
 - **Collective Memory**: Maintain shared knowledge accessible by all agents
 - **Group Problem Solving**: Coordinate parallel exploration of solution spaces
 
 ### 2. Byzantine Fault-Tolerant Consensus
+
 - **PBFT Protocol**: Three-phase practical Byzantine fault tolerance
 - **Malicious Actor Detection**: Identify and isolate Byzantine behavior
 - **Cryptographic Validation**: Message authentication and integrity
 - **View Change Management**: Handle leader failures gracefully
 
 ### 3. Attention-Based Agent Coordination
+
 - **Multi-Head Attention**: Equal peer influence in mesh topologies
 - **Hyperbolic Attention**: Hierarchical influence modeling (1.5x queen weight)
 - **Flash Attention**: 2.49x-7.47x speedup for large contexts
 - **GraphRoPE**: Topology-aware position embeddings
 
 ### 4. Memory Synchronization Protocols
+
 - **CRDT State Synchronization**: Conflict-free replicated data types
 - **Delta Propagation**: Efficient incremental updates
 - **Causal Consistency**: Proper ordering of operations
@@ -124,7 +128,7 @@ import { AttentionService, ReasoningBank } from 'agentdb';
 // Initialize attention service for collective coordination
 const attentionService = new AttentionService({
   embeddingDim: 384,
-  runtime: 'napi' // 2.49x-7.47x faster with Flash Attention
+  runtime: 'napi', // 2.49x-7.47x faster with Flash Attention
 });
 
 // Collective Intelligence Coordinator with attention-based voting
@@ -133,50 +137,31 @@ class CollectiveIntelligenceCoordinator {
     private attentionService: AttentionService,
     private reasoningBank: ReasoningBank,
     private consensusThreshold: number = 0.67,
-    private byzantineTolerance: number = 0.33
+    private byzantineTolerance: number = 0.33,
   ) {}
 
   /**
    * Coordinate collective decision using attention-based voting
    * Combines Byzantine consensus with attention mechanisms
    */
-  async coordinateCollectiveDecision(
-    agentOutputs: AgentOutput[],
-    votingRound: number = 1
-  ): Promise<CollectiveDecision> {
+  async coordinateCollectiveDecision(agentOutputs: AgentOutput[], votingRound: number = 1): Promise<CollectiveDecision> {
     // Phase 1: Convert agent outputs to embeddings
     const embeddings = await this.outputsToEmbeddings(agentOutputs);
 
     // Phase 2: Apply multi-head attention for initial consensus
-    const attentionResult = await this.attentionService.multiHeadAttention(
-      embeddings,
-      embeddings,
-      embeddings,
-      { numHeads: 8 }
-    );
+    const attentionResult = await this.attentionService.multiHeadAttention(embeddings, embeddings, embeddings, { numHeads: 8 });
 
     // Phase 3: Extract attention weights as vote confidence
     const voteConfidences = this.extractVoteConfidences(attentionResult);
 
     // Phase 4: Byzantine fault detection
-    const byzantineNodes = this.detectByzantineVoters(
-      voteConfidences,
-      this.byzantineTolerance
-    );
+    const byzantineNodes = this.detectByzantineVoters(voteConfidences, this.byzantineTolerance);
 
     // Phase 5: Filter and weight trustworthy votes
-    const trustworthyVotes = this.filterTrustworthyVotes(
-      agentOutputs,
-      voteConfidences,
-      byzantineNodes
-    );
+    const trustworthyVotes = this.filterTrustworthyVotes(agentOutputs, voteConfidences, byzantineNodes);
 
     // Phase 6: Achieve consensus
-    const consensus = await this.achieveConsensus(
-      trustworthyVotes,
-      this.consensusThreshold,
-      votingRound
-    );
+    const consensus = await this.achieveConsensus(trustworthyVotes, this.consensusThreshold, votingRound);
 
     // Phase 7: Store learning pattern
     await this.storeLearningPattern(consensus);
@@ -187,11 +172,7 @@ class CollectiveIntelligenceCoordinator {
   /**
    * Emergent intelligence through iterative collective reasoning
    */
-  async emergeCollectiveIntelligence(
-    task: string,
-    agentOutputs: AgentOutput[],
-    maxIterations: number = 5
-  ): Promise<EmergentIntelligence> {
+  async emergeCollectiveIntelligence(task: string, agentOutputs: AgentOutput[], maxIterations: number = 5): Promise<EmergentIntelligence> {
     let currentOutputs = agentOutputs;
     const intelligenceTrajectory: CollectiveDecision[] = [];
 
@@ -204,20 +185,14 @@ class CollectiveIntelligenceCoordinator {
         embeddings,
         embeddings,
         embeddings,
-        { curvature: -1.0 } // Poincare ball model
+        { curvature: -1.0 }, // Poincare ball model
       );
 
       // Synthesize collective knowledge
-      const collectiveKnowledge = this.synthesizeKnowledge(
-        currentOutputs,
-        attentionResult
-      );
+      const collectiveKnowledge = this.synthesizeKnowledge(currentOutputs, attentionResult);
 
       // Record trajectory step
-      const decision = await this.coordinateCollectiveDecision(
-        currentOutputs,
-        iteration + 1
-      );
+      const decision = await this.coordinateCollectiveDecision(currentOutputs, iteration + 1);
       intelligenceTrajectory.push(decision);
 
       // Check for emergence (consensus stability)
@@ -226,10 +201,7 @@ class CollectiveIntelligenceCoordinator {
       }
 
       // Propagate collective knowledge for next iteration
-      currentOutputs = this.propagateKnowledge(
-        currentOutputs,
-        collectiveKnowledge
-      );
+      currentOutputs = this.propagateKnowledge(currentOutputs, collectiveKnowledge);
     }
 
     return {
@@ -237,23 +209,19 @@ class CollectiveIntelligenceCoordinator {
       finalConsensus: intelligenceTrajectory[intelligenceTrajectory.length - 1],
       trajectory: intelligenceTrajectory,
       emergenceIteration: intelligenceTrajectory.length,
-      collectiveConfidence: this.calculateCollectiveConfidence(
-        intelligenceTrajectory
-      )
+      collectiveConfidence: this.calculateCollectiveConfidence(intelligenceTrajectory),
     };
   }
 
   /**
    * Knowledge aggregation and synthesis across agents
    */
-  async aggregateKnowledge(
-    agentOutputs: AgentOutput[]
-  ): Promise<AggregatedKnowledge> {
+  async aggregateKnowledge(agentOutputs: AgentOutput[]): Promise<AggregatedKnowledge> {
     // Retrieve relevant patterns from collective memory
     const similarPatterns = await this.reasoningBank.searchPatterns({
       task: 'knowledge_aggregation',
       k: 10,
-      minReward: 0.7
+      minReward: 0.7,
     });
 
     // Build knowledge graph from agent outputs
@@ -262,77 +230,56 @@ class CollectiveIntelligenceCoordinator {
     // Apply GraphRoPE for topology-aware aggregation
     const embeddings = await this.outputsToEmbeddings(agentOutputs);
     const graphContext = this.buildGraphContext(knowledgeGraph);
-    const positionEncodedEmbeddings = this.applyGraphRoPE(
-      embeddings,
-      graphContext
-    );
+    const positionEncodedEmbeddings = this.applyGraphRoPE(embeddings, graphContext);
 
     // Multi-head attention for knowledge synthesis
-    const synthesisResult = await this.attentionService.multiHeadAttention(
-      positionEncodedEmbeddings,
-      positionEncodedEmbeddings,
-      positionEncodedEmbeddings,
-      { numHeads: 8 }
-    );
+    const synthesisResult = await this.attentionService.multiHeadAttention(positionEncodedEmbeddings, positionEncodedEmbeddings, positionEncodedEmbeddings, { numHeads: 8 });
 
     // Extract synthesized knowledge
-    const synthesizedKnowledge = this.extractSynthesizedKnowledge(
-      agentOutputs,
-      synthesisResult
-    );
+    const synthesizedKnowledge = this.extractSynthesizedKnowledge(agentOutputs, synthesisResult);
 
     return {
-      sources: agentOutputs.map(o => o.agentType),
+      sources: agentOutputs.map((o) => o.agentType),
       knowledgeGraph,
       synthesizedKnowledge,
       similarPatterns: similarPatterns.length,
-      confidence: this.calculateAggregationConfidence(synthesisResult)
+      confidence: this.calculateAggregationConfidence(synthesisResult),
     };
   }
 
   /**
    * Multi-agent voting with Byzantine fault tolerance
    */
-  async conductVoting(
-    proposal: string,
-    voters: AgentOutput[]
-  ): Promise<VotingResult> {
+  async conductVoting(proposal: string, voters: AgentOutput[]): Promise<VotingResult> {
     // Phase 1: Pre-prepare - Broadcast proposal
-    const prePrepareMsgs = voters.map(voter => ({
+    const prePrepareMsgs = voters.map((voter) => ({
       type: 'PRE_PREPARE',
       voter: voter.agentType,
       proposal,
       sequence: Date.now(),
-      signature: this.signMessage(voter.agentType, proposal)
+      signature: this.signMessage(voter.agentType, proposal),
     }));
 
     // Phase 2: Prepare - Collect votes
     const embeddings = await this.outputsToEmbeddings(voters);
-    const attentionResult = await this.attentionService.flashAttention(
-      embeddings,
-      embeddings,
-      embeddings
-    );
+    const attentionResult = await this.attentionService.flashAttention(embeddings, embeddings, embeddings);
 
     const votes = this.extractVotes(voters, attentionResult);
 
     // Phase 3: Byzantine filtering
     const byzantineVoters = this.detectByzantineVoters(
-      votes.map(v => v.confidence),
-      this.byzantineTolerance
+      votes.map((v) => v.confidence),
+      this.byzantineTolerance,
     );
 
-    const validVotes = votes.filter(
-      (_, idx) => !byzantineVoters.includes(idx)
-    );
+    const validVotes = votes.filter((_, idx) => !byzantineVoters.includes(idx));
 
     // Phase 4: Commit - Check quorum
     const quorumSize = Math.ceil(validVotes.length * this.consensusThreshold);
-    const approveVotes = validVotes.filter(v => v.approve).length;
-    const rejectVotes = validVotes.filter(v => !v.approve).length;
+    const approveVotes = validVotes.filter((v) => v.approve).length;
+    const rejectVotes = validVotes.filter((v) => !v.approve).length;
 
-    const decision = approveVotes >= quorumSize ? 'APPROVED' :
-                     rejectVotes >= quorumSize ? 'REJECTED' : 'NO_QUORUM';
+    const decision = approveVotes >= quorumSize ? 'APPROVED' : rejectVotes >= quorumSize ? 'REJECTED' : 'NO_QUORUM';
 
     return {
       proposal,
@@ -344,22 +291,19 @@ class CollectiveIntelligenceCoordinator {
       quorumRequired: quorumSize,
       decision,
       confidence: approveVotes / validVotes.length,
-      executionTimeMs: attentionResult.executionTimeMs
+      executionTimeMs: attentionResult.executionTimeMs,
     };
   }
 
   /**
    * CRDT-based memory synchronization across agents
    */
-  async synchronizeMemory(
-    agents: AgentOutput[],
-    crdtType: 'G_COUNTER' | 'OR_SET' | 'LWW_REGISTER' | 'OR_MAP'
-  ): Promise<MemorySyncResult> {
+  async synchronizeMemory(agents: AgentOutput[], crdtType: 'G_COUNTER' | 'OR_SET' | 'LWW_REGISTER' | 'OR_MAP'): Promise<MemorySyncResult> {
     // Initialize CRDT instances for each agent
-    const crdtStates = agents.map(agent => ({
+    const crdtStates = agents.map((agent) => ({
       agentId: agent.agentType,
       state: this.initializeCRDT(crdtType, agent.agentType),
-      vectorClock: new Map<string, number>()
+      vectorClock: new Map<string, number>(),
     }));
 
     // Collect deltas from each agent
@@ -386,22 +330,16 @@ class CollectiveIntelligenceCoordinator {
       deltaCount: deltas.length,
       converged,
       finalState: crdtStates[0].state, // All should be identical
-      syncTimeMs: Date.now()
+      syncTimeMs: Date.now(),
     };
   }
 
   /**
    * Detect Byzantine voters using attention weight outlier analysis
    */
-  private detectByzantineVoters(
-    confidences: number[],
-    tolerance: number
-  ): number[] {
+  private detectByzantineVoters(confidences: number[], tolerance: number): number[] {
     const mean = confidences.reduce((a, b) => a + b, 0) / confidences.length;
-    const variance = confidences.reduce(
-      (acc, c) => acc + Math.pow(c - mean, 2),
-      0
-    ) / confidences.length;
+    const variance = confidences.reduce((acc, c) => acc + Math.pow(c - mean, 2), 0) / confidences.length;
     const stdDev = Math.sqrt(variance);
 
     const byzantine: number[] = [];
@@ -426,23 +364,20 @@ class CollectiveIntelligenceCoordinator {
       label: output.agentType,
       content: output.content,
       expertise: output.expertise || [],
-      confidence: output.confidence || 0.5
+      confidence: output.confidence || 0.5,
     }));
 
     // Build edges based on content similarity
     const edges: KnowledgeEdge[] = [];
     for (let i = 0; i < outputs.length; i++) {
       for (let j = i + 1; j < outputs.length; j++) {
-        const similarity = this.calculateContentSimilarity(
-          outputs[i].content,
-          outputs[j].content
-        );
+        const similarity = this.calculateContentSimilarity(outputs[i].content, outputs[j].content);
         if (similarity > 0.3) {
           edges.push({
             source: i,
             target: j,
             weight: similarity,
-            type: 'similarity'
+            type: 'similarity',
           });
         }
       }
@@ -454,10 +389,7 @@ class CollectiveIntelligenceCoordinator {
   /**
    * Apply GraphRoPE position embeddings
    */
-  private applyGraphRoPE(
-    embeddings: number[][],
-    graphContext: GraphContext
-  ): number[][] {
+  private applyGraphRoPE(embeddings: number[][], graphContext: GraphContext): number[][] {
     return embeddings.map((emb, idx) => {
       const degree = this.calculateDegree(idx, graphContext);
       const centrality = this.calculateCentrality(idx, graphContext);
@@ -478,7 +410,7 @@ class CollectiveIntelligenceCoordinator {
     if (trajectory.length < 2) return false;
 
     const recentDecisions = trajectory.slice(-3);
-    const consensusValues = recentDecisions.map(d => d.consensusValue);
+    const consensusValues = recentDecisions.map((d) => d.consensusValue);
 
     // Check if consensus has stabilized
     const variance = this.calculateVariance(consensusValues);
@@ -494,22 +426,20 @@ class CollectiveIntelligenceCoordinator {
       task: 'collective_decision',
       input: JSON.stringify({
         participants: decision.participants,
-        votingRound: decision.votingRound
+        votingRound: decision.votingRound,
       }),
       output: decision.consensusValue,
       reward: decision.confidence,
       success: decision.confidence > this.consensusThreshold,
       critique: this.generateCritique(decision),
       tokensUsed: this.estimateTokens(decision),
-      latencyMs: decision.executionTimeMs
+      latencyMs: decision.executionTimeMs,
     });
   }
 
   // Helper methods
   private async outputsToEmbeddings(outputs: AgentOutput[]): Promise<number[][]> {
-    return outputs.map(output =>
-      Array.from({ length: 384 }, () => Math.random())
-    );
+    return outputs.map((output) => Array.from({ length: 384 }, () => Math.random()));
   }
 
   private extractVoteConfidences(result: any): number[] {
@@ -517,9 +447,7 @@ class CollectiveIntelligenceCoordinator {
   }
 
   private calculateDegree(nodeId: number, graph: GraphContext): number {
-    return graph.edges.filter(
-      ([from, to]) => from === nodeId || to === nodeId
-    ).length;
+    return graph.edges.filter(([from, to]) => from === nodeId || to === nodeId).length;
   }
 
   private calculateCentrality(nodeId: number, graph: GraphContext): number {
@@ -536,7 +464,7 @@ class CollectiveIntelligenceCoordinator {
   private calculateContentSimilarity(a: string, b: string): number {
     const wordsA = new Set(a.toLowerCase().split(/\s+/));
     const wordsB = new Set(b.toLowerCase().split(/\s+/));
-    const intersection = [...wordsA].filter(w => wordsB.has(w)).length;
+    const intersection = [...wordsA].filter((w) => wordsB.has(w)).length;
     const union = new Set([...wordsA, ...wordsB]).length;
     return intersection / union;
   }
@@ -663,8 +591,8 @@ interface Delta {
 const coordinator = new CollectiveIntelligenceCoordinator(
   attentionService,
   reasoningBank,
-  0.67,  // consensus threshold
-  0.33   // Byzantine tolerance
+  0.67, // consensus threshold
+  0.33, // Byzantine tolerance
 );
 
 // Define agent outputs from diverse perspectives
@@ -673,38 +601,38 @@ const agentOutputs = [
     agentType: 'security-expert',
     content: 'Implement JWT with refresh tokens and secure storage',
     expertise: ['security', 'authentication'],
-    confidence: 0.92
+    confidence: 0.92,
   },
   {
     agentType: 'performance-expert',
     content: 'Use session-based auth with Redis for faster lookups',
     expertise: ['performance', 'caching'],
-    confidence: 0.88
+    confidence: 0.88,
   },
   {
     agentType: 'ux-expert',
     content: 'Implement OAuth2 with social login for better UX',
     expertise: ['user-experience', 'oauth'],
-    confidence: 0.85
+    confidence: 0.85,
   },
   {
     agentType: 'architecture-expert',
     content: 'Design microservices auth service with API gateway',
     expertise: ['architecture', 'microservices'],
-    confidence: 0.90
+    confidence: 0.9,
   },
   {
     agentType: 'generalist',
     content: 'Simple password-based auth is sufficient',
     expertise: ['general'],
-    confidence: 0.60
-  }
+    confidence: 0.6,
+  },
 ];
 
 // Coordinate collective decision
 const decision = await coordinator.coordinateCollectiveDecision(
   agentOutputs,
-  1 // voting round
+  1, // voting round
 );
 
 console.log('Collective Consensus:', decision.consensusValue);
@@ -715,7 +643,7 @@ console.log('Byzantine agents detected:', decision.byzantineCount);
 const emergent = await coordinator.emergeCollectiveIntelligence(
   'Design authentication system',
   agentOutputs,
-  5 // max iterations
+  5, // max iterations
 );
 
 console.log('Emergent Intelligence:');
@@ -731,10 +659,7 @@ console.log('- Synthesized:', aggregated.synthesizedKnowledge);
 console.log('- Confidence:', aggregated.confidence);
 
 // Conduct formal voting
-const vote = await coordinator.conductVoting(
-  'Adopt JWT-based authentication',
-  agentOutputs
-);
+const vote = await coordinator.conductVoting('Adopt JWT-based authentication', agentOutputs);
 
 console.log('Voting Result:', vote.decision);
 console.log('- Approve:', vote.approveVotes, '/', vote.validVoters);
@@ -750,20 +675,17 @@ class LearningCollectiveCoordinator extends CollectiveIntelligenceCoordinator {
   /**
    * Learn from past collective decisions to improve future coordination
    */
-  async coordinateWithLearning(
-    taskDescription: string,
-    agentOutputs: AgentOutput[]
-  ): Promise<CollectiveDecision> {
+  async coordinateWithLearning(taskDescription: string, agentOutputs: AgentOutput[]): Promise<CollectiveDecision> {
     // 1. Search for similar past collective decisions
     const similarPatterns = await this.reasoningBank.searchPatterns({
       task: taskDescription,
       k: 5,
-      minReward: 0.8
+      minReward: 0.8,
     });
 
     if (similarPatterns.length > 0) {
       console.log('📚 Learning from past collective decisions:');
-      similarPatterns.forEach(pattern => {
+      similarPatterns.forEach((pattern) => {
         console.log(`- ${pattern.task}: ${pattern.reward} confidence`);
         console.log(`  Critique: ${pattern.critique}`);
       });
@@ -786,7 +708,7 @@ class LearningCollectiveCoordinator extends CollectiveIntelligenceCoordinator {
       success,
       critique: this.generateCritique(decision),
       tokensUsed: this.estimateTokens(decision),
-      latencyMs: decision.executionTimeMs
+      latencyMs: decision.executionTimeMs,
     });
 
     return decision;
@@ -923,6 +845,7 @@ Conflict Resolution:
 ```
 
 **Benefits:**
+
 - Queens provide strategic direction (1.5x influence weight)
 - Mesh enables peer-to-peer collaboration
 - Fault tolerance through redundant paths
@@ -946,14 +869,14 @@ def select_topology(task_characteristics):
 
 ### Collective Intelligence KPIs
 
-| Metric | Target | Description |
-|--------|--------|-------------|
-| Consensus Latency | <500ms | Time to achieve collective decision |
-| Byzantine Detection | 100% | Accuracy of malicious node detection |
-| Emergence Iterations | <5 | Rounds to stable consensus |
-| CRDT Convergence | <1s | Time to synchronized state |
-| Attention Speedup | 2.49x-7.47x | Flash attention performance |
-| Knowledge Aggregation | >90% | Synthesis coverage |
+| Metric                | Target      | Description                          |
+| --------------------- | ----------- | ------------------------------------ |
+| Consensus Latency     | <500ms      | Time to achieve collective decision  |
+| Byzantine Detection   | 100%        | Accuracy of malicious node detection |
+| Emergence Iterations  | <5          | Rounds to stable consensus           |
+| CRDT Convergence      | <1s         | Time to synchronized state           |
+| Attention Speedup     | 2.49x-7.47x | Flash attention performance          |
+| Knowledge Aggregation | >90%        | Synthesis coverage                   |
 
 ### Health Monitoring
 
@@ -971,21 +894,25 @@ mcp__claude-flow__bottleneck_analyze --component="collective" --metrics="latency
 ## Best Practices
 
 ### 1. Consensus Building
+
 - Always verify Byzantine tolerance before coordination
 - Use attention-weighted voting for nuanced decisions
 - Implement rollback mechanisms for failed consensus
 
 ### 2. Knowledge Aggregation
+
 - Build knowledge graphs from diverse perspectives
 - Apply GraphRoPE for topology-aware synthesis
 - Store patterns for future learning
 
 ### 3. Memory Synchronization
+
 - Choose appropriate CRDT types for data characteristics
 - Monitor vector clocks for causal consistency
 - Implement delta compression for efficiency
 
 ### 4. Emergent Intelligence
+
 - Allow sufficient iterations for consensus emergence
 - Track trajectory for learning optimization
 - Validate stability before finalizing decisions

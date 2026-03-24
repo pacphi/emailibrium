@@ -65,13 +65,13 @@ Validate the claim that users can achieve inbox zero for 10,000+ emails within 1
 
 ### Custom Survey Questions
 
-| # | Question | Scale |
-|---|----------|-------|
-| Q1 | I felt confident in the system's email categorization | 1-5 Likert |
-| Q2 | The batch actions saved me significant time | 1-5 Likert |
-| Q3 | I would trust this system with my daily email management | 1-5 Likert |
-| Q4 | The semantic search found emails I could not find before | 1-5 Likert |
-| Q5 | I would recommend this tool to a colleague | 1-5 Likert |
+| #   | Question                                                 | Scale      |
+| --- | -------------------------------------------------------- | ---------- |
+| Q1  | I felt confident in the system's email categorization    | 1-5 Likert |
+| Q2  | The batch actions saved me significant time              | 1-5 Likert |
+| Q3  | I would trust this system with my daily email management | 1-5 Likert |
+| Q4  | The semantic search found emails I could not find before | 1-5 Likert |
+| Q5  | I would recommend this tool to a colleague               | 1-5 Likert |
 
 ### Follow-Up (1 week)
 
@@ -81,16 +81,16 @@ Validate the claim that users can achieve inbox zero for 10,000+ emails within 1
 
 ## Metrics
 
-| Metric | Target | How Measured |
-|--------|--------|--------------|
-| Time to inbox zero | < 10 min | Stopwatch from "Start Analysis" to last action |
-| User actions required | < 50 | Click/tap count via event tracking |
-| Ingestion throughput | > 500 emails/sec | Server metrics (emails processed / elapsed time) |
-| User satisfaction | SUS > 70 | Post-task questionnaire |
-| 1-week inbox rebound | < 100 emails | Follow-up measurement |
-| Categorization accuracy | > 95% | Manual spot-check of 20 random emails per participant |
-| Search latency (p95) | < 50ms | Server-side instrumentation |
-| Error rate | < 1% | Count of failed actions / total actions |
+| Metric                  | Target           | How Measured                                          |
+| ----------------------- | ---------------- | ----------------------------------------------------- |
+| Time to inbox zero      | < 10 min         | Stopwatch from "Start Analysis" to last action        |
+| User actions required   | < 50             | Click/tap count via event tracking                    |
+| Ingestion throughput    | > 500 emails/sec | Server metrics (emails processed / elapsed time)      |
+| User satisfaction       | SUS > 70         | Post-task questionnaire                               |
+| 1-week inbox rebound    | < 100 emails     | Follow-up measurement                                 |
+| Categorization accuracy | > 95%            | Manual spot-check of 20 random emails per participant |
+| Search latency (p95)    | < 50ms           | Server-side instrumentation                           |
+| Error rate              | < 1%             | Count of failed actions / total actions               |
 
 ## Control Conditions
 
@@ -121,7 +121,7 @@ Validate the claim that users can achieve inbox zero for 10,000+ emails within 1
 - Effect size: Cohen's d
 - Minimum detectable effect: 5 minutes (half the target)
 - Alpha: 0.05, Power: 0.80
-- Required sample size: N >= 27 (computed via G*Power for paired t-test with d=0.5); N=30 accounts for dropout
+- Required sample size: N >= 27 (computed via G\*Power for paired t-test with d=0.5); N=30 accounts for dropout
 
 ### Secondary Analyses
 

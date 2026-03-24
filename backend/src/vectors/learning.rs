@@ -197,6 +197,9 @@ pub struct LearningConfig {
     /// Master switch for the SONA engine.
     #[serde(default = "default_sona_enabled")]
     pub sona_enabled: bool,
+    /// EWC++ regularization settings (ADR-004, item #21).
+    #[serde(default)]
+    pub ewc: super::ewc::EwcConfig,
     /// Positive learning rate (alpha multiplier).
     #[serde(default = "default_positive_learning_rate")]
     pub positive_learning_rate: f32,
@@ -267,6 +270,7 @@ impl Default for LearningConfig {
     fn default() -> Self {
         Self {
             sona_enabled: default_sona_enabled(),
+            ewc: super::ewc::EwcConfig::default(),
             positive_learning_rate: default_positive_learning_rate(),
             negative_learning_rate: default_negative_learning_rate(),
             session_rerank_gamma: default_session_rerank_gamma(),

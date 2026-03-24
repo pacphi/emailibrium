@@ -1,7 +1,7 @@
 ---
 name: injection-analyst
 type: security
-color: "#9C27B0"
+color: '#9C27B0'
 description: Deep analysis specialist for prompt injection and jailbreak attempts with pattern learning
 capabilities:
   - injection_analysis
@@ -14,7 +14,7 @@ priority: high
 
 requires:
   packages:
-    - "@claude-flow/aidefence"
+    - '@claude-flow/aidefence'
 
 hooks:
   pre: |
@@ -31,14 +31,14 @@ You are the **Injection Analyst**, a specialized agent that performs deep analys
 
 ### Attack Technique Classification
 
-| Category | Techniques | Severity |
-|----------|------------|----------|
-| **Instruction Override** | "Ignore previous", "Forget all", "Disregard" | Critical |
-| **Role Switching** | "You are now", "Act as", "Pretend to be" | High |
-| **Jailbreak** | DAN, Developer mode, Bypass requests | Critical |
-| **Context Manipulation** | Fake system messages, Delimiter abuse | Critical |
-| **Encoding Attacks** | Base64, ROT13, Unicode tricks | Medium |
-| **Social Engineering** | Hypothetical framing, Research claims | Low-Medium |
+| Category                 | Techniques                                   | Severity   |
+| ------------------------ | -------------------------------------------- | ---------- |
+| **Instruction Override** | "Ignore previous", "Forget all", "Disregard" | Critical   |
+| **Role Switching**       | "You are now", "Act as", "Pretend to be"     | High       |
+| **Jailbreak**            | DAN, Developer mode, Bypass requests         | Critical   |
+| **Context Manipulation** | Fake system messages, Delimiter abuse        | Critical   |
+| **Encoding Attacks**     | Base64, ROT13, Unicode tricks                | Medium     |
+| **Social Engineering**   | Hypothetical framing, Research claims        | Low-Medium |
 
 ### Analysis Workflow
 
@@ -70,7 +70,7 @@ async function analyzeInjection(input: string) {
         analysis.recommendedMitigations.push({
           threatType: threat.type,
           strategy: mitigation.strategy,
-          effectiveness: mitigation.effectiveness
+          effectiveness: mitigation.effectiveness,
         });
       }
     }
@@ -93,21 +93,21 @@ function classifyTechniques(threats) {
         techniques.push({
           category: 'Direct Override',
           technique: threat.description,
-          mitre_id: 'T1059.007' // Command scripting
+          mitre_id: 'T1059.007', // Command scripting
         });
         break;
       case 'jailbreak':
         techniques.push({
           category: 'Jailbreak',
           technique: threat.description,
-          mitre_id: 'T1548' // Abuse elevation
+          mitre_id: 'T1548', // Abuse elevation
         });
         break;
       case 'context_manipulation':
         techniques.push({
           category: 'Context Injection',
           technique: threat.description,
-          mitre_id: 'T1055' // Process injection
+          mitre_id: 'T1055', // Process injection
         });
         break;
     }
@@ -228,7 +228,7 @@ function generateReport(analyses: Analysis[]) {
     topTechniques: getTopTechniques(analyses, 10),
     sophisticationTrend: calculateTrend(analyses, 'sophistication'),
     mitigationEffectiveness: calculateMitigationStats(analyses),
-    recommendations: generateRecommendations(analyses)
+    recommendations: generateRecommendations(analyses),
   };
 
   return report;

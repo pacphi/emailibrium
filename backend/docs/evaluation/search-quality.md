@@ -21,18 +21,19 @@ across four search modes:
 ### Evaluation Protocol
 
 For each query:
+
 1. Run the query in all four search modes
 2. Collect the top-K results (K = 5, 10, 20)
 3. Compute metrics against the ground-truth relevant set
 
 ## Metric Definitions
 
-| Metric | Formula | Description |
-|--------|---------|-------------|
-| **Recall@K** | `\|relevant ∩ top-K\| / \|relevant\|` | Fraction of relevant documents found in top-K |
-| **Precision@K** | `\|relevant ∩ top-K\| / K` | Fraction of top-K that are relevant |
-| **NDCG@K** | `DCG@K / IDCG@K` | Normalized Discounted Cumulative Gain (rank-aware) |
-| **MRR** | `1 / rank(first relevant)` | Mean Reciprocal Rank of first relevant result |
+| Metric          | Formula                               | Description                                        |
+| --------------- | ------------------------------------- | -------------------------------------------------- |
+| **Recall@K**    | `\|relevant ∩ top-K\| / \|relevant\|` | Fraction of relevant documents found in top-K      |
+| **Precision@K** | `\|relevant ∩ top-K\| / K`            | Fraction of top-K that are relevant                |
+| **NDCG@K**      | `DCG@K / IDCG@K`                      | Normalized Discounted Cumulative Gain (rank-aware) |
+| **MRR**         | `1 / rank(first relevant)`            | Mean Reciprocal Rank of first relevant result      |
 
 ### DCG / IDCG Calculation
 
@@ -42,12 +43,12 @@ For each query:
 
 ## Expected Results
 
-| Mode | Recall@5 | Recall@10 | NDCG@5 | MRR | P@5 |
-|------|----------|-----------|--------|-----|-----|
-| FTS5-only | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
-| Vector-only | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
-| Hybrid (RRF) | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
-| Hybrid+SONA | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
+| Mode         | Recall@5 | Recall@10 | NDCG@5 | MRR   | P@5   |
+| ------------ | -------- | --------- | ------ | ----- | ----- |
+| FTS5-only    | _TBD_    | _TBD_     | _TBD_  | _TBD_ | _TBD_ |
+| Vector-only  | _TBD_    | _TBD_     | _TBD_  | _TBD_ | _TBD_ |
+| Hybrid (RRF) | _TBD_    | _TBD_     | _TBD_  | _TBD_ | _TBD_ |
+| Hybrid+SONA  | _TBD_    | _TBD_     | _TBD_  | _TBD_ | _TBD_ |
 
 > Fill in after running: `cargo test --test search_evaluation -- --nocapture`
 

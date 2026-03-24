@@ -23,13 +23,25 @@ export default defineConfig({
   },
   build: {
     sourcemap: true,
-    rollupOptions: {
+    rolldownOptions: {
       output: {
-        manualChunks: {
-          vendor: ['react', 'react-dom'],
-          router: ['@tanstack/react-router'],
-          query: ['@tanstack/react-query'],
-          ui: ['cmdk', 'framer-motion', 'recharts'],
+        manualChunks(id: string) {
+          if (id.includes('node_modules/react-dom') || id.includes('node_modules/react/')) {
+            return 'vendor';
+          }
+          if (id.includes('node_modules/@tanstack/react-router')) {
+            return 'router';
+          }
+          if (id.includes('node_modules/@tanstack/react-query')) {
+            return 'query';
+          }
+          if (
+            id.includes('node_modules/cmdk') ||
+            id.includes('node_modules/framer-motion') ||
+            id.includes('node_modules/recharts')
+          ) {
+            return 'ui';
+          }
         },
       },
     },

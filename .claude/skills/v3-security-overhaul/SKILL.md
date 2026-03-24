@@ -1,6 +1,6 @@
 ---
-name: "V3 Security Overhaul"
-description: "Complete security architecture overhaul for claude-flow v3. Addresses critical CVEs (CVE-1, CVE-2, CVE-3) and implements secure-by-default patterns. Use for security-first v3 implementation."
+name: 'V3 Security Overhaul'
+description: 'Complete security architecture overhaul for claude-flow v3. Addresses critical CVEs (CVE-1, CVE-2, CVE-3) and implements secure-by-default patterns. Use for security-first v3 implementation.'
 ---
 
 # V3 Security Overhaul
@@ -21,15 +21,20 @@ Task("Security testing", "Implement TDD London School security framework", "test
 ## Critical Security Fixes
 
 ### CVE-1: Vulnerable Dependencies
+
 ```bash
 npm update @anthropic-ai/claude-code@^2.0.31
 npm audit --audit-level high
 ```
 
 ### CVE-2: Weak Password Hashing
+
 ```typescript
 // ❌ Old: SHA-256 with hardcoded salt
-const hash = crypto.createHash('sha256').update(password + salt).digest('hex');
+const hash = crypto
+  .createHash('sha256')
+  .update(password + salt)
+  .digest('hex');
 
 // ✅ New: bcrypt with 12 rounds
 import bcrypt from 'bcrypt';
@@ -37,6 +42,7 @@ const hash = await bcrypt.hash(password, 12);
 ```
 
 ### CVE-3: Hardcoded Credentials
+
 ```typescript
 // ✅ Generate secure random credentials
 const apiKey = crypto.randomBytes(32).toString('hex');
@@ -45,17 +51,19 @@ const apiKey = crypto.randomBytes(32).toString('hex');
 ## Security Patterns
 
 ### Input Validation (Zod)
+
 ```typescript
 import { z } from 'zod';
 
 const TaskSchema = z.object({
   taskId: z.string().uuid(),
   content: z.string().max(10000),
-  agentType: z.enum(['security', 'core', 'integration'])
+  agentType: z.enum(['security', 'core', 'integration']),
 });
 ```
 
 ### Path Sanitization
+
 ```typescript
 function securePath(userPath: string, allowedPrefix: string): string {
   const resolved = path.resolve(allowedPrefix, userPath);
@@ -67,6 +75,7 @@ function securePath(userPath: string, allowedPrefix: string): string {
 ```
 
 ### Safe Command Execution
+
 ```typescript
 import { execFile } from 'child_process';
 

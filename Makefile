@@ -46,11 +46,20 @@ help:
 	@echo "$(BOLD)$(BLUE)╚════════════════════════════════════════════════════════════════════╝$(RESET)"
 	@echo ""
 	@echo "$(BOLD)Quick Start:$(RESET)"
+	@echo "  make setup             - Guided first-time setup wizard"
 	@echo "  make install           - Install all dependencies"
 	@echo "  make dev               - Start backend + frontend (native)"
 	@echo "  make docker-up-dev     - Start full stack (Docker)"
 	@echo "  make ci                - Run full CI pipeline"
 	@echo "  make test              - Run all tests"
+	@echo ""
+	@echo "$(BOLD)$(BLUE)═══ Setup & Onboarding ═════════════════════════════════════════════$(RESET)"
+	@echo "  setup                  - Guided first-time setup wizard"
+	@echo "  setup-prereqs          - Check all prerequisites"
+	@echo "  setup-secrets          - Generate/configure secrets"
+	@echo "  setup-ai               - Configure AI providers"
+	@echo "  setup-docker           - Set up Docker environment"
+	@echo "  setup-validate         - Validate entire setup"
 	@echo ""
 	@echo "$(BOLD)$(BLUE)═══ Install & Build ═════════════════════════════════════════════════$(RESET)"
 	@echo "  install                - Install all dependencies (backend + frontend)"
@@ -101,6 +110,34 @@ help:
 	@echo "  changelog VER=x.y.z    - Preview changelog"
 	@echo ""
 	@echo "  Run '$(BOLD)make -C backend$(RESET)' or '$(BOLD)make -C frontend$(RESET)' for layer-specific targets."
+
+# ============================================================================
+# Setup & Onboarding
+# ============================================================================
+
+.PHONY: setup
+setup: ## Guided first-time setup wizard
+	@bash scripts/setup.sh
+
+.PHONY: setup-prereqs
+setup-prereqs: ## Check all prerequisites
+	@bash scripts/setup-prereqs.sh
+
+.PHONY: setup-secrets
+setup-secrets: ## Generate/configure secrets
+	@bash scripts/setup-secrets.sh
+
+.PHONY: setup-ai
+setup-ai: ## Configure AI providers
+	@bash scripts/setup-ai.sh
+
+.PHONY: setup-docker
+setup-docker: ## Set up Docker environment
+	@bash scripts/setup-docker.sh
+
+.PHONY: setup-validate
+setup-validate: ## Validate entire setup
+	@bash scripts/setup-validate.sh
 
 # ============================================================================
 # Install & Build

@@ -16,7 +16,7 @@ version: 1.0.0
 # Routing configuration
 routing:
   complexity: medium
-  model: sonnet  # Good at visual reasoning and DOM interpretation
+  model: sonnet # Good at visual reasoning and DOM interpretation
   priority: normal
   keywords:
     - browser
@@ -127,22 +127,22 @@ memory:
 # Swarm integration
 swarm:
   roles:
-    - navigator      # Handles authentication and navigation
-    - scraper        # Extracts data using snapshots
-    - validator      # Verifies extracted data
-    - tester         # Runs automated tests
-    - monitor        # Watches for errors and network issues
-  topology: hierarchical  # Coordinator manages browser agents
+    - navigator # Handles authentication and navigation
+    - scraper # Extracts data using snapshots
+    - validator # Verifies extracted data
+    - tester # Runs automated tests
+    - monitor # Watches for errors and network issues
+  topology: hierarchical # Coordinator manages browser agents
   max_sessions: 5
 
 # Hooks integration
 hooks:
   pre_task:
-    - route         # Get optimal routing
+    - route # Get optimal routing
     - memory_search # Check for similar patterns
   post_task:
-    - memory_store  # Save successful patterns
-    - post_edit     # Train on outcomes
+    - memory_store # Save successful patterns
+    - post_edit # Train on outcomes
 
 # Default configuration
 defaults:

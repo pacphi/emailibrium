@@ -15,10 +15,10 @@
 2. [Vision & Goals](#2-vision--goals)
 3. [Architecture Overview](#3-architecture-overview)
 4. [RuVector Integration Deep Dive](#4-ruvector-integration-deep-dive)
-5. [Tech Stack](#5-tech-stack)
-6. [Data Model & Schema](#6-data-model--schema)
+5. [Tech Stack](#5-tech-stack-current--reimagined)
+6. [Data Model & Schema](#6-data-model--schema-evolution)
 7. [Backend Implementation Plan](#7-backend-implementation-plan)
-8. [Frontend: React TypeScript Web](#8-frontend-react-typescript-web)
+8. [Frontend: React TypeScript Web](#8-frontend-tauri-desktop--react-typescript-web)
 9. [User Journeys](#9-user-journeys)
 10. [Wireframes](#10-wireframes)
 11. [Feature Mapping (Current + Planned)](#11-feature-mapping-current--planned)
@@ -26,6 +26,7 @@
 13. [Implementation Phases](#13-implementation-phases)
 14. [Makefile Targets & Developer Workflow](#14-makefile-targets--developer-workflow)
 15. [Risk Assessment](#15-risk-assessment)
+
 - [Appendix A: Dependency Version Audit](#appendix-a-dependency-version-audit-2026-03-23)
 - [Appendix B: Docker Compose Full-Stack Setup](#appendix-b-docker-compose-full-stack-setup)
 - [Appendix C: Externalized Configuration](#appendix-c-externalized-configuration)
@@ -38,6 +39,7 @@
 Emailibrium is being reimagined as a **vector-native email intelligence platform**. By integrating [RuVector](https://github.com/ruvnet/ruvector) — a Rust-native vector database with HNSW indexing, SIMD-optimized distance calculations, quantization, self-learning (SONA), graph neural networks, and local LLM inference — we transform from keyword search + rule-based automation into a **semantic-first, sub-second intelligent email engine**.
 
 **Key outcomes:**
+
 - **10-minute inbox zero** for 10,000+ emails via semantic clustering + batch actions
 - **Instant semantic search** across any attribute, any text, any pattern
 - **Subscription & recurring mail intelligence** surfaced automatically
@@ -54,16 +56,16 @@ Emailibrium is being reimagined as a **vector-native email intelligence platform
 
 ### 2.2 Measurable Goals
 
-| Goal | Target | Mechanism |
-|------|--------|-----------|
-| Inbox zero (10K emails) | < 10 minutes | Semantic clustering → batch actions |
-| Email ingestion rate | > 500 emails/sec | RuVector batch insert + parallel embedding |
-| Search latency (semantic) | < 50ms p95 | HNSW index, SIMD distance, quantization |
-| Search latency (hybrid) | < 100ms p95 | FTS5 + HNSW fusion with reciprocal rank |
-| Categorization accuracy | > 95% | Vector similarity + SONA adaptive learning |
-| Subscription detection | > 98% recall | Pattern clustering + header analysis |
-| Memory footprint (100K emails) | < 500MB | Scalar quantization (4x compression) |
-| Cold start to usable | < 30 seconds | Streaming embed pipeline |
+| Goal                           | Target           | Mechanism                                  |
+| ------------------------------ | ---------------- | ------------------------------------------ |
+| Inbox zero (10K emails)        | < 10 minutes     | Semantic clustering → batch actions        |
+| Email ingestion rate           | > 500 emails/sec | RuVector batch insert + parallel embedding |
+| Search latency (semantic)      | < 50ms p95       | HNSW index, SIMD distance, quantization    |
+| Search latency (hybrid)        | < 100ms p95      | FTS5 + HNSW fusion with reciprocal rank    |
+| Categorization accuracy        | > 95%            | Vector similarity + SONA adaptive learning |
+| Subscription detection         | > 98% recall     | Pattern clustering + header analysis       |
+| Memory footprint (100K emails) | < 500MB          | Scalar quantization (4x compression)       |
+| Cold start to usable           | < 30 seconds     | Streaming embed pipeline                   |
 
 ### 2.3 Design Principles
 
@@ -171,6 +173,7 @@ Email arrives (via provider sync)
 ```
 
 **Throughput targets**:
+
 - Text-only emails: 500+ emails/sec (batch embedding amortizes to ~2ms/email)
 - Full multi-asset extraction: ~50 emails/sec (images, attachments are the bottleneck)
 - Configurable: fast mode (text-only) for initial sync, deep mode (all assets) for background processing
@@ -183,16 +186,16 @@ Email arrives (via provider sync)
 
 RuVector is a **Rust-native vector database** — same language as our backend, zero FFI overhead, zero serialization cost. Key capabilities we leverage:
 
-| RuVector Feature | Emailibrium Use |
-|-----------------|----------------|
-| **HNSW Index** (O(log n) search) | Sub-millisecond similarity search across 100K+ emails |
-| **SIMD Distance** (16M ops/sec) | Cosine similarity for email matching at hardware speed |
-| **Scalar Quantization** (4x compression) | 100K emails in ~100MB instead of 400MB |
-| **SONA Self-Learning** | Search quality improves with every query — recall@10 gains +12% over time |
-| **GNN Clustering** | Automatic email topic discovery (GraphSAGE on HNSW neighbor graph) |
-| **RuvLLM** (local inference) | Replace Ollama dependency with integrated Rust-native LLM |
-| **REDB Persistence** | Crash-safe vector storage, no external database needed |
-| **Batch Operations** | Insert hundreds of vectors in single call |
+| RuVector Feature                         | Emailibrium Use                                                           |
+| ---------------------------------------- | ------------------------------------------------------------------------- |
+| **HNSW Index** (O(log n) search)         | Sub-millisecond similarity search across 100K+ emails                     |
+| **SIMD Distance** (16M ops/sec)          | Cosine similarity for email matching at hardware speed                    |
+| **Scalar Quantization** (4x compression) | 100K emails in ~100MB instead of 400MB                                    |
+| **SONA Self-Learning**                   | Search quality improves with every query — recall@10 gains +12% over time |
+| **GNN Clustering**                       | Automatic email topic discovery (GraphSAGE on HNSW neighbor graph)        |
+| **RuvLLM** (local inference)             | Replace Ollama dependency with integrated Rust-native LLM                 |
+| **REDB Persistence**                     | Crash-safe vector storage, no external database needed                    |
+| **Batch Operations**                     | Insert hundreds of vectors in single call                                 |
 
 ### 4.2 RuVector Module Structure
 
@@ -237,19 +240,21 @@ backend/src/vectors/
 ### 4.3 Embedding Strategy
 
 **Model**: `all-MiniLM-L6-v2` (384 dimensions, 22M params)
+
 - Runs via RuvLLM (Metal/CUDA/CPU SIMD) — no Python, no external process
 - Fallback chain: RuvLLM → Ollama → Cloud API
 
 **What gets embedded** — multiple vectors per email across separate collections:
 
-| Collection | Content | Model | Dimensions |
-|-----------|---------|-------|------------|
-| `email_text` | subject + from + clean body text (max 512 tokens) | all-MiniLM-L6-v2 | 384 |
-| `image_text` | OCR'd text from inline images + image attachments | all-MiniLM-L6-v2 | 384 |
-| `image_visual` | Raw image pixels → visual embedding | CLIP ViT-B-32 | 512 |
-| `attachment_text` | Extracted text from PDF/DOCX/XLSX attachments | all-MiniLM-L6-v2 | 384 |
+| Collection        | Content                                           | Model            | Dimensions |
+| ----------------- | ------------------------------------------------- | ---------------- | ---------- |
+| `email_text`      | subject + from + clean body text (max 512 tokens) | all-MiniLM-L6-v2 | 384        |
+| `image_text`      | OCR'd text from inline images + image attachments | all-MiniLM-L6-v2 | 384        |
+| `image_visual`    | Raw image pixels → visual embedding               | CLIP ViT-B-32    | 512        |
+| `attachment_text` | Extracted text from PDF/DOCX/XLSX attachments     | all-MiniLM-L6-v2 | 384        |
 
 **Primary text embedding** (always generated):
+
 ```
 {subject}\n
 From: {from_name} <{from_addr}>\n
@@ -260,11 +265,13 @@ Labels: {labels}\n
 ```
 
 **URL metadata** (stored as filterable fields on the email vector, not separate collection):
+
 - Extracted URLs with resolved destinations
 - Link categories: `tracking`, `unsubscribe`, `shopping`, `news`, `social`, `internal`
 - Tracking pixel presence: boolean flag
 
 **Embedding lifecycle**:
+
 1. **On sync (fast mode)**: Text embedding generated immediately (~5ms) — emails are searchable within seconds
 2. **On sync (deep mode, background)**: Images, attachments, URLs processed via Apalis job queue
 3. **On search**: Query text embedded on-the-fly (~5ms), searched across all collections
@@ -285,9 +292,11 @@ HybridSearch(query_text, filters) → Vec<ScoredEmail>
 ```
 
 **Reciprocal Rank Fusion (RRF)**:
+
 ```
 score(doc) = Σ 1 / (k + rank_i(doc))
 ```
+
 Where `k=60`, and `rank_i` is the document's rank in result set `i`. This balances semantic relevance (vector) with exact-match precision (FTS5).
 
 ### 4.5 Subscription & Recurring Mail Detection
@@ -321,6 +330,7 @@ pub enum RecurrencePattern {
 ```
 
 **Detection pipeline**:
+
 1. **Header scan**: `List-Unsubscribe`, `Precedence: bulk`, `X-Mailer` headers
 2. **Sender frequency**: Group by `from_domain`, compute inter-arrival times
 3. **Content similarity**: RuVector cluster emails from same sender → detect templates
@@ -333,21 +343,21 @@ pub enum RecurrencePattern {
 
 ### 5.1 Backend
 
-| Component | Current | Reimagined | Rationale |
-|-----------|---------|------------|-----------|
-| **Vector Store** | — (none) | **RuVector** (ruvector-core) | Native Rust, HNSW, SIMD, zero FFI |
-| **Embeddings** | — (none) | **RuvLLM** (local inference) | Replace Ollama for embedding; keep Ollama as fallback |
-| **Text Search** | SQLite FTS5 | SQLite FTS5 + RuVector hybrid | FTS5 stays for exact match; vectors add semantics |
-| **Categorization** | Ollama / Cloud LLM | Vector centroids + LLM fallback | 10x faster: cosine distance vs LLM call |
-| **Clustering** | — (none) | RuVector GNN (GraphSAGE) | Topic discovery, subscription detection |
-| **Self-Learning** | Adaptive categorizer (basic) | **SONA** (3-tier adaptive) | Instant + session + long-term learning |
-| **Web Framework** | Axum 0.8 | Axum 0.8 (unchanged) | Already excellent |
-| **Database** | SQLite + SQLx | SQLite + SQLx (unchanged) | Structured data stays in SQL |
-| **Auth** | OAuth2 + JWT | OAuth2 + JWT (unchanged) | Mature, working |
-| **Caching** | Moka + Redis | Moka + Redis (unchanged) | Add vector embedding cache to Moka |
-| **Background Jobs** | Apalis | Apalis (unchanged) | Add embedding batch jobs |
-| **Rules Engine** | evalexpr-based | evalexpr + vector-enhanced | "Emails similar to X" as rule condition |
-| **LLM (generative)** | Ollama + Cloud | Ollama + Cloud (unchanged) | Generative stays LLM; classification moves to vectors |
+| Component            | Current                      | Reimagined                      | Rationale                                             |
+| -------------------- | ---------------------------- | ------------------------------- | ----------------------------------------------------- |
+| **Vector Store**     | — (none)                     | **RuVector** (ruvector-core)    | Native Rust, HNSW, SIMD, zero FFI                     |
+| **Embeddings**       | — (none)                     | **RuvLLM** (local inference)    | Replace Ollama for embedding; keep Ollama as fallback |
+| **Text Search**      | SQLite FTS5                  | SQLite FTS5 + RuVector hybrid   | FTS5 stays for exact match; vectors add semantics     |
+| **Categorization**   | Ollama / Cloud LLM           | Vector centroids + LLM fallback | 10x faster: cosine distance vs LLM call               |
+| **Clustering**       | — (none)                     | RuVector GNN (GraphSAGE)        | Topic discovery, subscription detection               |
+| **Self-Learning**    | Adaptive categorizer (basic) | **SONA** (3-tier adaptive)      | Instant + session + long-term learning                |
+| **Web Framework**    | Axum 0.8                     | Axum 0.8 (unchanged)            | Already excellent                                     |
+| **Database**         | SQLite + SQLx                | SQLite + SQLx (unchanged)       | Structured data stays in SQL                          |
+| **Auth**             | OAuth2 + JWT                 | OAuth2 + JWT (unchanged)        | Mature, working                                       |
+| **Caching**          | Moka + Redis                 | Moka + Redis (unchanged)        | Add vector embedding cache to Moka                    |
+| **Background Jobs**  | Apalis                       | Apalis (unchanged)              | Add embedding batch jobs                              |
+| **Rules Engine**     | evalexpr-based               | evalexpr + vector-enhanced      | "Emails similar to X" as rule condition               |
+| **LLM (generative)** | Ollama + Cloud               | Ollama + Cloud (unchanged)      | Generative stays LLM; classification moves to vectors |
 
 ### 5.2 Frontend: Tauri Desktop → React TypeScript Web
 
@@ -357,40 +367,40 @@ pub enum RecurrencePattern {
 
 #### Why Drop Tauri
 
-| Concern | Tauri (Current) | Web-First (Reimagined) |
-|---------|----------------|----------------------|
-| **Distribution** | Desktop install required | URL — instant access, zero install |
-| **Cross-platform** | macOS/Windows/Linux only | Any browser + mobile + tablet |
-| **Updates** | App store / auto-updater | Deploy once, everyone gets it |
-| **Development speed** | Tauri CLI + Rust build + Vite | Vite only — 10x faster HMR cycle |
-| **Team skills** | Requires Rust + TypeScript | Pure TypeScript team |
-| **Testing** | Tauri-specific E2E needed | Standard Playwright/Cypress |
-| **Mobile support** | Tauri Mobile (beta) | Responsive web — works today |
-| **Offline** | Native (Tauri store) | Service Worker + IndexedDB |
-| **Native features** | System tray, global shortcuts | PWA install prompt, notifications API |
+| Concern               | Tauri (Current)               | Web-First (Reimagined)                |
+| --------------------- | ----------------------------- | ------------------------------------- |
+| **Distribution**      | Desktop install required      | URL — instant access, zero install    |
+| **Cross-platform**    | macOS/Windows/Linux only      | Any browser + mobile + tablet         |
+| **Updates**           | App store / auto-updater      | Deploy once, everyone gets it         |
+| **Development speed** | Tauri CLI + Rust build + Vite | Vite only — 10x faster HMR cycle      |
+| **Team skills**       | Requires Rust + TypeScript    | Pure TypeScript team                  |
+| **Testing**           | Tauri-specific E2E needed     | Standard Playwright/Cypress           |
+| **Mobile support**    | Tauri Mobile (beta)           | Responsive web — works today          |
+| **Offline**           | Native (Tauri store)          | Service Worker + IndexedDB            |
+| **Native features**   | System tray, global shortcuts | PWA install prompt, notifications API |
 
 #### Technology Choices
 
-| Layer | Technology | Rationale |
-|-------|-----------|-----------|
-| **Shell** | **None — pure SPA** | No native wrapper; browser-native, zero-install |
-| **Framework** | **React 19** (standalone SPA) | Mature, massive ecosystem, concurrent rendering |
-| **Build** | **Vite 8** | Sub-second HMR, optimized production builds |
-| **Router** | **TanStack Router** | Type-safe routing, search params as state |
-| **Server State** | **TanStack Query 5** | Caching, background refetch, optimistic updates |
-| **Client State** | **Zustand 5** | Minimal, focused, no boilerplate |
-| **Local storage** | **IndexedDB** via `idb-keyval` | Browser-native, no framework dependency |
-| **Secure storage** | **Web Crypto API** + IndexedDB | AES-GCM encryption, no external dependency |
-| **Backend comms** | **REST API** + **SSE** | Standard HTTP, streaming via EventSource |
-| **Styling** | **Tailwind CSS 4** | Utility-first, small bundles, design system ready |
-| **Components** | **shadcn/ui** + Radix + Lucide | Accessible, customizable, copy-paste components |
-| **Animations** | **Framer Motion 12** | Declarative, layout animations, gestures |
-| **Forms** | **React Hook Form + Zod 4** | Performant forms with runtime validation |
-| **Charts** | **Recharts 3** | React-native charting for insights |
-| **Command palette** | **cmdk** | Primary search interaction (⌘K) |
-| **Virtual scroll** | **@tanstack/react-virtual** | Handle 10K+ email lists without DOM pressure |
-| **Monorepo** | **Turborepo + pnpm** | Parallel builds, smart caching, workspace isolation |
-| **Desktop (optional)** | **PWA** | Install prompt, standalone window, service worker offline |
+| Layer                  | Technology                     | Rationale                                                 |
+| ---------------------- | ------------------------------ | --------------------------------------------------------- |
+| **Shell**              | **None — pure SPA**            | No native wrapper; browser-native, zero-install           |
+| **Framework**          | **React 19** (standalone SPA)  | Mature, massive ecosystem, concurrent rendering           |
+| **Build**              | **Vite 8**                     | Sub-second HMR, optimized production builds               |
+| **Router**             | **TanStack Router**            | Type-safe routing, search params as state                 |
+| **Server State**       | **TanStack Query 5**           | Caching, background refetch, optimistic updates           |
+| **Client State**       | **Zustand 5**                  | Minimal, focused, no boilerplate                          |
+| **Local storage**      | **IndexedDB** via `idb-keyval` | Browser-native, no framework dependency                   |
+| **Secure storage**     | **Web Crypto API** + IndexedDB | AES-GCM encryption, no external dependency                |
+| **Backend comms**      | **REST API** + **SSE**         | Standard HTTP, streaming via EventSource                  |
+| **Styling**            | **Tailwind CSS 4**             | Utility-first, small bundles, design system ready         |
+| **Components**         | **shadcn/ui** + Radix + Lucide | Accessible, customizable, copy-paste components           |
+| **Animations**         | **Framer Motion 12**           | Declarative, layout animations, gestures                  |
+| **Forms**              | **React Hook Form + Zod 4**    | Performant forms with runtime validation                  |
+| **Charts**             | **Recharts 3**                 | React-native charting for insights                        |
+| **Command palette**    | **cmdk**                       | Primary search interaction (⌘K)                           |
+| **Virtual scroll**     | **@tanstack/react-virtual**    | Handle 10K+ email lists without DOM pressure              |
+| **Monorepo**           | **Turborepo + pnpm**           | Parallel builds, smart caching, workspace isolation       |
+| **Desktop (optional)** | **PWA**                        | Install prompt, standalone window, service worker offline |
 
 #### Best-in-Class React TypeScript Stack
 
@@ -529,7 +539,8 @@ frontend/
 
 ### 5.3 New Dependencies
 
-**Backend (Cargo.toml additions)** — *verified against crates.io 2026-03-23*:
+**Backend (Cargo.toml additions)** — _verified against crates.io 2026-03-23_:
+
 ```toml
 [dependencies]
 # RuVector ecosystem (all at 2.x, MSRV 1.77, MIT licensed)
@@ -558,7 +569,8 @@ calamine = "0.33"        # XLSX/XLS/ODS reading (pure Rust)
 dotext = "0.2"           # DOCX text extraction
 ```
 
-**Backend (core crate versions)** — *verified against crates.io 2026-03-23*:
+**Backend (core crate versions)** — _verified against crates.io 2026-03-23_:
+
 ```toml
 # Rust 1.94.0 (latest stable, 2026-03-02)
 # All crates pinned to latest stable versions:
@@ -584,7 +596,8 @@ thiserror = "2.0"         # Latest: 2.0.18
 serde_yml = "0.0.12"      # YAML support (replaces deprecated serde_yaml)
 ```
 
-**Frontend (package.json — web app)** — *verified via npm registry 2026-03-23*:
+**Frontend (package.json — web app)** — _verified via npm registry 2026-03-23_:
+
 ```json
 {
   "dependencies": {
@@ -723,6 +736,7 @@ CREATE TABLE ingestion_jobs (
 ### 6.2 RuVector Storage
 
 RuVector manages its own persistence via REDB (embedded key-value store). Stored at:
+
 ```
 ~/.emailibrium/vectors/
 ├── hnsw.redb          # HNSW index + vectors
@@ -731,6 +745,7 @@ RuVector manages its own persistence via REDB (embedded key-value store). Stored
 ```
 
 **Vector document schema** (stored in RuVector):
+
 ```rust
 pub struct EmailVector {
     pub id: VectorId,           // UUID
@@ -1007,17 +1022,17 @@ pub struct MultiAssetSearchResult {
 
 **Performance budget** (per email during ingestion):
 
-| Step | Latency | Local? |
-|------|---------|--------|
-| HTML extraction (scraper + html2text) | < 1ms | Yes |
-| URL extraction (linkify + scraper) | < 1ms | Yes |
-| Text embedding (fastembed MiniLM) | ~5ms | Yes |
-| Image OCR (ocrs) | ~200ms per image | Yes |
-| Image CLIP embedding (fastembed) | ~50ms per image | Yes |
-| PDF text extraction | ~100ms per page | Yes |
-| XLSX reading (calamine) | ~50ms per file | Yes |
-| URL redirect resolution | ~200ms per URL (network) | Network |
-| Multimodal LLM description | ~500ms local, ~1s cloud | Configurable |
+| Step                                  | Latency                  | Local?       |
+| ------------------------------------- | ------------------------ | ------------ |
+| HTML extraction (scraper + html2text) | < 1ms                    | Yes          |
+| URL extraction (linkify + scraper)    | < 1ms                    | Yes          |
+| Text embedding (fastembed MiniLM)     | ~5ms                     | Yes          |
+| Image OCR (ocrs)                      | ~200ms per image         | Yes          |
+| Image CLIP embedding (fastembed)      | ~50ms per image          | Yes          |
+| PDF text extraction                   | ~100ms per page          | Yes          |
+| XLSX reading (calamine)               | ~50ms per file           | Yes          |
+| URL redirect resolution               | ~200ms per URL (network) | Network      |
+| Multimodal LLM description            | ~500ms local, ~1s cloud  | Configurable |
 
 For a typical email (no attachments, 2 inline images, 5 URLs): **~520ms total**.
 For a heavy email (3 PDF attachments, 5 images): **~2s total**.
@@ -1054,11 +1069,13 @@ New email arrives in Gmail INBOX
 ```
 
 **Archive timing options** (user-configurable):
+
 - **Instant** (power users): Archive within 2 seconds of ingestion. True zero inbox.
 - **Delayed** (default): Archive after 60 seconds. Allows mobile Gmail notification to be actionable.
 - **Manual** (conservative): Don't auto-archive. User explicitly marks "Done" in Emailibrium.
 
 **Batch archive on first sync**:
+
 ```rust
 // Archive 10,000 emails in ~5 seconds
 pub async fn batch_archive(&self, message_ids: &[String]) -> Result<()> {
@@ -1248,6 +1265,7 @@ The frontend is a **pure React TypeScript web application** — no native deskto
 ### 8.2 Implementation Approach
 
 **Phase 1: Foundation** — Build the web app shell
+
 - Create `apps/web/` with Vite 8 + React 19 + TanStack Router
 - Set up shadcn/ui component library (Radix-based, accessible)
 - Implement REST API client in `packages/api/`
@@ -1256,6 +1274,7 @@ The frontend is a **pure React TypeScript web application** — no native deskto
 - Set up cmdk command palette as primary search interaction
 
 **Phase 2: Core Screens** — Build RuVector-powered UI
+
 - Command Center (search hub)
 - Inbox Cleaner (guided cleanup wizard)
 - Insights Explorer (subscription analytics)
@@ -1264,6 +1283,7 @@ The frontend is a **pure React TypeScript web application** — no native deskto
 - Dashboard (overview stats)
 
 **Phase 3: Polish** — Quality and distribution
+
 - Responsive design (mobile-friendly)
 - Accessibility (ARIA, keyboard nav, focus management)
 - PWA support (service worker, manifest, install prompt)
@@ -1338,7 +1358,7 @@ const routes = [
 // packages/api/src/sse.ts
 export function createSSEStream<T>(
   url: string,
-  options?: { onError?: (e: Event) => void }
+  options?: { onError?: (e: Event) => void },
 ): {
   subscribe: (handler: (data: T) => void) => () => void;
   close: () => void;
@@ -1358,11 +1378,12 @@ export function createSSEStream<T>(
 function useIngestionProgress(jobId: string) {
   const [progress, setProgress] = useState<IngestionProgress | null>(null);
   useEffect(() => {
-    const stream = createSSEStream<IngestionProgress>(
-      `/api/v1/ingestion/status?jobId=${jobId}`
-    );
+    const stream = createSSEStream<IngestionProgress>(`/api/v1/ingestion/status?jobId=${jobId}`);
     const unsub = stream.subscribe(setProgress);
-    return () => { unsub(); stream.close(); };
+    return () => {
+      unsub();
+      stream.close();
+    };
   }, [jobId]);
   return progress;
 }
@@ -1381,8 +1402,8 @@ async function getOrCreateKey(): Promise<CryptoKey> {
   if (stored) return stored;
   const key = await crypto.subtle.generateKey(
     { name: 'AES-GCM', length: 256 },
-    false,  // not extractable
-    ['encrypt', 'decrypt']
+    false, // not extractable
+    ['encrypt', 'decrypt'],
   );
   await set(ENCRYPTION_KEY_NAME, key);
   return key;
@@ -1392,25 +1413,19 @@ export const secureStorage = {
   async setItem(key: string, value: string): Promise<void> {
     const cryptoKey = await getOrCreateKey();
     const iv = crypto.getRandomValues(new Uint8Array(12));
-    const encrypted = await crypto.subtle.encrypt(
-      { name: 'AES-GCM', iv },
-      cryptoKey,
-      new TextEncoder().encode(value)
-    );
+    const encrypted = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, cryptoKey, new TextEncoder().encode(value));
     await set(`secure:${key}`, { iv, data: encrypted });
   },
   async getItem(key: string): Promise<string | null> {
     const cryptoKey = await getOrCreateKey();
     const stored = await get(`secure:${key}`);
     if (!stored) return null;
-    const decrypted = await crypto.subtle.decrypt(
-      { name: 'AES-GCM', iv: stored.iv },
-      cryptoKey,
-      stored.data
-    );
+    const decrypted = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: stored.iv }, cryptoKey, stored.data);
     return new TextDecoder().decode(decrypted);
   },
-  async removeItem(key: string): Promise<void> { await del(`secure:${key}`); },
+  async removeItem(key: string): Promise<void> {
+    await del(`secure:${key}`);
+  },
 };
 ```
 
@@ -1577,14 +1592,14 @@ export default defineConfig({
           { src: '/icon-192.png', sizes: '192x192', type: 'image/png' },
           { src: '/icon-512.png', sizes: '512x512', type: 'image/png' },
         ],
-        display: 'standalone',        // Feels like native app
+        display: 'standalone', // Feels like native app
         start_url: '/command-center',
       },
       workbox: {
         runtimeCaching: [
           {
             urlPattern: /^\/api\//,
-            handler: 'NetworkFirst',   // API calls: network first, cache fallback
+            handler: 'NetworkFirst', // API calls: network first, cache fallback
             options: { cacheName: 'api-cache', expiration: { maxEntries: 100 } },
           },
         ],
@@ -1595,6 +1610,7 @@ export default defineConfig({
 ```
 
 This gives users:
+
 - Install prompt in browser ("Add to Home Screen")
 - Standalone window (no browser chrome)
 - Offline capability via Service Worker
@@ -1643,6 +1659,7 @@ This gives users:
 #### Provider-Specific Flows
 
 **Gmail (OAuth 2.0 + PKCE):**
+
 ```
 User clicks [Gmail] →
   Browser opens Google OAuth consent screen
@@ -1658,6 +1675,7 @@ User clicks [Gmail] →
 ```
 
 **Outlook (OAuth 2.0 + PKCE via Microsoft Identity Platform):**
+
 ```
 User clicks [Outlook] →
   Browser opens Microsoft login
@@ -1673,6 +1691,7 @@ User clicks [Outlook] →
 ```
 
 **IMAP/Other (Manual Configuration):**
+
 ```
 User clicks [IMAP] or [Other] →
   ┌─────────────────────────────────────────────────────────────┐
@@ -1701,6 +1720,7 @@ User clicks [IMAP] or [Other] →
 ```
 
 **Connecting Multiple Accounts:**
+
 ```
 After first account connected:
 
@@ -2055,7 +2075,7 @@ User navigates to Insights → Subscriptions tab
 
 ### 9.4 Journey: Conversational Rule Building (Existing, Enhanced)
 
-```
+````
 User opens Chat from Command Center
 
   User: "I keep getting pull request notifications from archived repos.
@@ -2090,7 +2110,7 @@ User opens Chat from Command Center
              This would catch 67 existing emails. Apply it?"
 
   User: [Apply Rule] [Edit First] [Find Similar Patterns]
-```
+````
 
 ---
 
@@ -2506,77 +2526,77 @@ User opens Chat from Command Center
 
 ### 11.1 Existing Features → Reimagined
 
-| Feature ID | Feature | Current Status | Reimagined Enhancement |
-|-----------|---------|---------------|----------------------|
-| FEAT-001 | Local Processing Architecture | ✅ Complete | + RuVector local vector store |
-| FEAT-002 | Rule Definition & Validation | ✅ Complete | + Semantic rule conditions |
-| FEAT-003 | Email Attribute Extraction | ✅ Complete | + Vector embedding extraction |
-| FEAT-004 | Rule Processing Engine | ✅ Complete | + Vector-enhanced matching |
-| FEAT-005 | Gmail Integration | ✅ Complete | + Batch embedding on sync |
-| FEAT-006 | Outlook Integration | ✅ Complete | + Batch embedding on sync |
-| FEAT-007 | IMAP/POP3 Support | ✅ Complete | + Batch embedding on sync |
-| FEAT-008 | Rule Management UI | ✅ Complete | → Rules Studio with AI suggestions |
-| FEAT-009 | Email Dashboard | ✅ Complete | → Command Center + Insights Explorer |
-| FEAT-010 | Local LLM Rule Generation | ✅ Complete | + RuvLLM as additional local engine |
-| FEAT-011 | Conversational Rule Building | ✅ Complete | + Semantic context (clusters, similar) |
-| FEAT-012 | Cloud LLM Integration | 🔄 In Progress | + Cloud embedding fallback |
-| FEAT-013 | Intelligent Bulk Unsubscribe | 🔄 In Progress | → Subscription Intelligence |
-| FEAT-014 | Historical Email Processing | 🔄 In Progress | → Ingestion Pipeline |
-| FEAT-015 | Smart Categorization | 🔄 In Progress | → Vector centroid categorization |
-| FEAT-016 | Time-Based Rules | 📋 Planned | Unchanged |
-| FEAT-017 | Rule Templates | 📋 Planned | + AI-generated templates from patterns |
-| FEAT-030 | OAuth Infrastructure | ✅ Complete | Unchanged |
+| Feature ID | Feature                       | Current Status | Reimagined Enhancement                 |
+| ---------- | ----------------------------- | -------------- | -------------------------------------- |
+| FEAT-001   | Local Processing Architecture | ✅ Complete    | + RuVector local vector store          |
+| FEAT-002   | Rule Definition & Validation  | ✅ Complete    | + Semantic rule conditions             |
+| FEAT-003   | Email Attribute Extraction    | ✅ Complete    | + Vector embedding extraction          |
+| FEAT-004   | Rule Processing Engine        | ✅ Complete    | + Vector-enhanced matching             |
+| FEAT-005   | Gmail Integration             | ✅ Complete    | + Batch embedding on sync              |
+| FEAT-006   | Outlook Integration           | ✅ Complete    | + Batch embedding on sync              |
+| FEAT-007   | IMAP/POP3 Support             | ✅ Complete    | + Batch embedding on sync              |
+| FEAT-008   | Rule Management UI            | ✅ Complete    | → Rules Studio with AI suggestions     |
+| FEAT-009   | Email Dashboard               | ✅ Complete    | → Command Center + Insights Explorer   |
+| FEAT-010   | Local LLM Rule Generation     | ✅ Complete    | + RuvLLM as additional local engine    |
+| FEAT-011   | Conversational Rule Building  | ✅ Complete    | + Semantic context (clusters, similar) |
+| FEAT-012   | Cloud LLM Integration         | 🔄 In Progress | + Cloud embedding fallback             |
+| FEAT-013   | Intelligent Bulk Unsubscribe  | 🔄 In Progress | → Subscription Intelligence            |
+| FEAT-014   | Historical Email Processing   | 🔄 In Progress | → Ingestion Pipeline                   |
+| FEAT-015   | Smart Categorization          | 🔄 In Progress | → Vector centroid categorization       |
+| FEAT-016   | Time-Based Rules              | 📋 Planned     | Unchanged                              |
+| FEAT-017   | Rule Templates                | 📋 Planned     | + AI-generated templates from patterns |
+| FEAT-030   | OAuth Infrastructure          | ✅ Complete    | Unchanged                              |
 
 ### 11.2 New Features (RuVector-Powered)
 
-| Feature ID | Feature | Priority | Description |
-|-----------|---------|----------|-------------|
-| FEAT-050 | Semantic Hybrid Search | P0 | FTS5 + vector fusion search |
-| FEAT-051 | Vector Embedding Pipeline | P0 | Batch + streaming email embedding |
-| FEAT-052 | Inbox Cleaner Wizard | P0 | Guided 10-min cleanup flow |
-| FEAT-053 | Subscription Intelligence | P0 | Auto-detect & manage subscriptions |
-| FEAT-054 | Topic Clustering | P0 | GNN-based email topic discovery |
-| FEAT-055 | Ingestion Pipeline (SSE) | P0 | Real-time progress streaming |
-| FEAT-056 | Command Center | P1 | Unified search + action hub |
-| FEAT-057 | Insights Explorer | P1 | Analytics & pattern visualization |
-| FEAT-058 | SONA Self-Learning | P1 | Search & categorization improvement |
-| FEAT-059 | Semantic Rule Conditions | P1 | "Emails similar to X" rules |
-| FEAT-060 | AI Rule Suggestions | P2 | Pattern-based rule recommendations |
-| FEAT-061 | Inbox Health Score | P2 | Gamified inbox quality metric |
-| FEAT-062 | Conversation Threading | P2 | Vector proximity thread detection |
-| FEAT-063 | Smart Digest Creation | P3 | Auto-bundle similar emails |
-| FEAT-064 | Image & Visual Content Analysis | P1 | OCR + multimodal LLM on inline images and image attachments; CLIP embeddings for visual semantic search |
-| FEAT-065 | Hyperlink Extraction & Intelligence | P1 | Extract all URLs from HTML bodies; resolve redirects; detect tracking pixels; classify link destinations; unsubscribe link discovery |
-| FEAT-066 | Attachment Content Extraction | P1 | Magic-byte file type detection; extract text from PDF/DOCX/XLSX/PPTX; vectorize attachment content for search |
-| FEAT-067 | Deep HTML Body Extraction | P2 | Structured content extraction from newsletters/marketing; clean text from templated HTML; strip tracking/styling noise |
-| FEAT-068 | Multi-Asset Semantic Search | P1 | Separate vector collections per asset type (body, image, attachment, URL); cross-collection search: "find receipts" matches image OCR + PDF text + subject line |
-| FEAT-069 | Full Email Client UI | P0 | View, read, reply, forward, compose — complete Gmail/Outlook replacement in React. Thread view, rich text editor, attachment viewer |
-| FEAT-070 | Ingest → Tag → Archive Pipeline | P0 | On sync: classify → apply Gmail labels → archive (remove INBOX). Instant zero inbox. Configurable: auto vs manual "Done" |
-| FEAT-071 | Dynamic Auto-Grouping | P0 | Auto-group emails by topic/project using GNN clustering. Groups evolve as emails arrive. Stability guardrails (hysteresis, pinning, minimum age) |
-| FEAT-072 | Continuous Learning System | P0 | 3-tier SONA learning: instant (per-interaction), session (per-session patterns), long-term (hourly consolidation). Learns from explicit reclassification + implicit signals (opens, replies, stars) |
-| FEAT-073 | Periodic Re-Classification | P1 | Background jobs (hourly + daily) re-evaluate classifications with updated models. Low-confidence emails re-classified. Category centroids recomputed from cumulative feedback |
-| FEAT-074 | Gmail Push Notifications | P1 | Gmail `watch()` + Pub/Sub for near-real-time new email notification. Incremental sync via `history.list()`. Eliminates polling |
-| FEAT-075 | Email Compose & Reply | P0 | Send, reply, reply-all, forward via Gmail API `messages.send`. RFC 2822 MIME builder. Thread-aware with proper `In-Reply-To`/`References` headers |
-| FEAT-076 | Multi-Account Onboarding | P0 | Connect 1+ accounts (Gmail OAuth, Outlook OAuth, IMAP manual). Per-provider setup flows with presets. Unified inbox architecture. |
-| FEAT-077 | Account Management | P1 | Per-account settings (archive strategy, sync frequency, sync depth, label prefix). Add/remove accounts post-onboarding. Default compose account. Danger zone (disconnect, unarchive, remove labels). |
-| FEAT-078 | Unified Inbox | P0 | All accounts merged into single searchable stream. Account badge on each email. Cross-account topic groups. Per-account filtering. Reply routes to correct provider automatically. |
+| Feature ID | Feature                             | Priority | Description                                                                                                                                                                                          |
+| ---------- | ----------------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| FEAT-050   | Semantic Hybrid Search              | P0       | FTS5 + vector fusion search                                                                                                                                                                          |
+| FEAT-051   | Vector Embedding Pipeline           | P0       | Batch + streaming email embedding                                                                                                                                                                    |
+| FEAT-052   | Inbox Cleaner Wizard                | P0       | Guided 10-min cleanup flow                                                                                                                                                                           |
+| FEAT-053   | Subscription Intelligence           | P0       | Auto-detect & manage subscriptions                                                                                                                                                                   |
+| FEAT-054   | Topic Clustering                    | P0       | GNN-based email topic discovery                                                                                                                                                                      |
+| FEAT-055   | Ingestion Pipeline (SSE)            | P0       | Real-time progress streaming                                                                                                                                                                         |
+| FEAT-056   | Command Center                      | P1       | Unified search + action hub                                                                                                                                                                          |
+| FEAT-057   | Insights Explorer                   | P1       | Analytics & pattern visualization                                                                                                                                                                    |
+| FEAT-058   | SONA Self-Learning                  | P1       | Search & categorization improvement                                                                                                                                                                  |
+| FEAT-059   | Semantic Rule Conditions            | P1       | "Emails similar to X" rules                                                                                                                                                                          |
+| FEAT-060   | AI Rule Suggestions                 | P2       | Pattern-based rule recommendations                                                                                                                                                                   |
+| FEAT-061   | Inbox Health Score                  | P2       | Gamified inbox quality metric                                                                                                                                                                        |
+| FEAT-062   | Conversation Threading              | P2       | Vector proximity thread detection                                                                                                                                                                    |
+| FEAT-063   | Smart Digest Creation               | P3       | Auto-bundle similar emails                                                                                                                                                                           |
+| FEAT-064   | Image & Visual Content Analysis     | P1       | OCR + multimodal LLM on inline images and image attachments; CLIP embeddings for visual semantic search                                                                                              |
+| FEAT-065   | Hyperlink Extraction & Intelligence | P1       | Extract all URLs from HTML bodies; resolve redirects; detect tracking pixels; classify link destinations; unsubscribe link discovery                                                                 |
+| FEAT-066   | Attachment Content Extraction       | P1       | Magic-byte file type detection; extract text from PDF/DOCX/XLSX/PPTX; vectorize attachment content for search                                                                                        |
+| FEAT-067   | Deep HTML Body Extraction           | P2       | Structured content extraction from newsletters/marketing; clean text from templated HTML; strip tracking/styling noise                                                                               |
+| FEAT-068   | Multi-Asset Semantic Search         | P1       | Separate vector collections per asset type (body, image, attachment, URL); cross-collection search: "find receipts" matches image OCR + PDF text + subject line                                      |
+| FEAT-069   | Full Email Client UI                | P0       | View, read, reply, forward, compose — complete Gmail/Outlook replacement in React. Thread view, rich text editor, attachment viewer                                                                  |
+| FEAT-070   | Ingest → Tag → Archive Pipeline     | P0       | On sync: classify → apply Gmail labels → archive (remove INBOX). Instant zero inbox. Configurable: auto vs manual "Done"                                                                             |
+| FEAT-071   | Dynamic Auto-Grouping               | P0       | Auto-group emails by topic/project using GNN clustering. Groups evolve as emails arrive. Stability guardrails (hysteresis, pinning, minimum age)                                                     |
+| FEAT-072   | Continuous Learning System          | P0       | 3-tier SONA learning: instant (per-interaction), session (per-session patterns), long-term (hourly consolidation). Learns from explicit reclassification + implicit signals (opens, replies, stars)  |
+| FEAT-073   | Periodic Re-Classification          | P1       | Background jobs (hourly + daily) re-evaluate classifications with updated models. Low-confidence emails re-classified. Category centroids recomputed from cumulative feedback                        |
+| FEAT-074   | Gmail Push Notifications            | P1       | Gmail `watch()` + Pub/Sub for near-real-time new email notification. Incremental sync via `history.list()`. Eliminates polling                                                                       |
+| FEAT-075   | Email Compose & Reply               | P0       | Send, reply, reply-all, forward via Gmail API `messages.send`. RFC 2822 MIME builder. Thread-aware with proper `In-Reply-To`/`References` headers                                                    |
+| FEAT-076   | Multi-Account Onboarding            | P0       | Connect 1+ accounts (Gmail OAuth, Outlook OAuth, IMAP manual). Per-provider setup flows with presets. Unified inbox architecture.                                                                    |
+| FEAT-077   | Account Management                  | P1       | Per-account settings (archive strategy, sync frequency, sync depth, label prefix). Add/remove accounts post-onboarding. Default compose account. Danger zone (disconnect, unarchive, remove labels). |
+| FEAT-078   | Unified Inbox                       | P0       | All accounts merged into single searchable stream. Account badge on each email. Cross-account topic groups. Per-account filtering. Reply routes to correct provider automatically.                   |
 
 ### 11.3 Planned Features (Phase 3-4) — Updated
 
-| Feature ID | Feature | Impact from RuVector |
-|-----------|---------|---------------------|
-| FEAT-018 | Multi-Account Management | Vector store is per-account, unified search across all |
-| FEAT-019 | Cross-Account Sync | Vector IDs enable cross-account similarity |
-| FEAT-020 | Email Pattern Analytics | Replaced by Insights Explorer (FEAT-057) |
-| FEAT-021 | Automated Rule Optimization | Enhanced by SONA learning |
-| FEAT-022 | Calendar Integration | Semantic matching: "emails about meetings" |
-| FEAT-023 | API Integration | Vector search exposed via REST API |
-| FEAT-024 | iOS Mobile App | React components shared via web build |
-| FEAT-025 | Android Mobile App | React components shared via web build |
-| FEAT-026 | End-to-End Encryption | Vector embeddings encrypted at rest |
-| FEAT-027 | Compliance Features | Audit trail for all vector operations |
-| FEAT-028 | Email Content Understanding | Core RuVector capability |
-| FEAT-029 | Predictive Email Management | SONA + GNN enables prediction |
+| Feature ID | Feature                     | Impact from RuVector                                   |
+| ---------- | --------------------------- | ------------------------------------------------------ |
+| FEAT-018   | Multi-Account Management    | Vector store is per-account, unified search across all |
+| FEAT-019   | Cross-Account Sync          | Vector IDs enable cross-account similarity             |
+| FEAT-020   | Email Pattern Analytics     | Replaced by Insights Explorer (FEAT-057)               |
+| FEAT-021   | Automated Rule Optimization | Enhanced by SONA learning                              |
+| FEAT-022   | Calendar Integration        | Semantic matching: "emails about meetings"             |
+| FEAT-023   | API Integration             | Vector search exposed via REST API                     |
+| FEAT-024   | iOS Mobile App              | React components shared via web build                  |
+| FEAT-025   | Android Mobile App          | React components shared via web build                  |
+| FEAT-026   | End-to-End Encryption       | Vector embeddings encrypted at rest                    |
+| FEAT-027   | Compliance Features         | Audit trail for all vector operations                  |
+| FEAT-028   | Email Content Understanding | Core RuVector capability                               |
+| FEAT-029   | Predictive Email Management | SONA + GNN enables prediction                          |
 
 ---
 
@@ -2584,37 +2604,37 @@ User opens Chat from Command Center
 
 ### 12.1 Benchmarks
 
-| Operation | Target | Mechanism |
-|-----------|--------|-----------|
-| Single email embed | < 5ms | RuvLLM local inference (384D MiniLM) |
-| Batch embed (500) | < 1s | Parallel batch with RuvLLM |
-| Vector search (100K) | < 10ms | HNSW index, ef_search=200 |
-| Hybrid search | < 50ms | Parallel FTS5 + HNSW, RRF merge |
-| Full inbox ingest (10K) | < 3 min | 500 emails/sec pipeline |
-| Full inbox ingest (50K) | < 10 min | With streaming progress |
-| Categorization (cached) | < 1ms | Vector centroid cosine distance |
-| Categorization (uncached) | < 10ms | Embed + centroid lookup |
-| Clustering (10K) | < 5s | GNN on HNSW neighbor subgraph |
-| Subscription detection | < 2s | SQL aggregation + header scan |
+| Operation                 | Target   | Mechanism                            |
+| ------------------------- | -------- | ------------------------------------ |
+| Single email embed        | < 5ms    | RuvLLM local inference (384D MiniLM) |
+| Batch embed (500)         | < 1s     | Parallel batch with RuvLLM           |
+| Vector search (100K)      | < 10ms   | HNSW index, ef_search=200            |
+| Hybrid search             | < 50ms   | Parallel FTS5 + HNSW, RRF merge      |
+| Full inbox ingest (10K)   | < 3 min  | 500 emails/sec pipeline              |
+| Full inbox ingest (50K)   | < 10 min | With streaming progress              |
+| Categorization (cached)   | < 1ms    | Vector centroid cosine distance      |
+| Categorization (uncached) | < 10ms   | Embed + centroid lookup              |
+| Clustering (10K)          | < 5s     | GNN on HNSW neighbor subgraph        |
+| Subscription detection    | < 2s     | SQL aggregation + header scan        |
 
 ### 12.2 Memory Budget
 
-| Component | 10K Emails | 100K Emails | 1M Emails |
-|-----------|-----------|-------------|-----------|
-| SQLite DB | ~50MB | ~500MB | ~5GB |
-| Vector Store (384D, scalar quantized) | ~10MB | ~100MB | ~1GB |
-| HNSW Index | ~5MB | ~50MB | ~500MB |
-| Moka Cache | ~50MB | ~50MB | ~50MB |
-| **Total** | **~115MB** | **~700MB** | **~6.5GB** |
+| Component                             | 10K Emails | 100K Emails | 1M Emails  |
+| ------------------------------------- | ---------- | ----------- | ---------- |
+| SQLite DB                             | ~50MB      | ~500MB      | ~5GB       |
+| Vector Store (384D, scalar quantized) | ~10MB      | ~100MB      | ~1GB       |
+| HNSW Index                            | ~5MB       | ~50MB       | ~500MB     |
+| Moka Cache                            | ~50MB      | ~50MB       | ~50MB      |
+| **Total**                             | **~115MB** | **~700MB**  | **~6.5GB** |
 
 ### 12.3 Quantization Strategy
 
-| Email Count | Quantization | Memory | Search Quality |
-|------------|-------------|--------|---------------|
-| < 50K | None (fp32) | ~75MB | Best (baseline) |
-| 50K - 200K | Scalar (int8) | ~75MB | 99.5% recall |
-| 200K - 1M | Product (PQ) | ~75MB | 98% recall |
-| > 1M | Binary + rerank | ~50MB | 97% recall (top-100 reranked) |
+| Email Count | Quantization    | Memory | Search Quality                |
+| ----------- | --------------- | ------ | ----------------------------- |
+| < 50K       | None (fp32)     | ~75MB  | Best (baseline)               |
+| 50K - 200K  | Scalar (int8)   | ~75MB  | 99.5% recall                  |
+| 200K - 1M   | Product (PQ)    | ~75MB  | 98% recall                    |
+| > 1M        | Binary + rerank | ~50MB  | 97% recall (top-100 reranked) |
 
 ---
 
@@ -2623,6 +2643,7 @@ User opens Chat from Command Center
 ### Phase 2.5: RuVector Foundation (Weeks 1-3)
 
 **Week 1: Core Integration**
+
 - [ ] Add ruvector-core to Cargo.toml
 - [ ] Create `backend/src/vectors/` module structure
 - [ ] Implement `VectorStore` wrapper (CRUD, persistence)
@@ -2631,6 +2652,7 @@ User opens Chat from Command Center
 - [ ] Basic unit tests for vector operations
 
 **Week 2: Search & Ingestion**
+
 - [ ] Implement `HybridSearch` (FTS5 + HNSW + RRF)
 - [ ] Implement `IngestionPipeline` with batch embedding
 - [ ] SSE endpoint for ingestion progress
@@ -2638,6 +2660,7 @@ User opens Chat from Command Center
 - [ ] Integration tests with real email data
 
 **Week 3: Intelligence**
+
 - [ ] Implement `InsightEngine` (subscription detection, patterns)
 - [ ] Implement `ClusterEngine` (GNN topic discovery)
 - [ ] Implement `VectorCategorizer` (centroid-based classification)
@@ -2647,6 +2670,7 @@ User opens Chat from Command Center
 ### Phase 2.6: React TypeScript Web UI (Weeks 4-6)
 
 **Week 4: App Shell + Command Center**
+
 - [ ] Scaffold `apps/web/` with Vite 8 + React 19 + TanStack Router
 - [ ] Set up shadcn/ui + Radix primitives component library
 - [ ] Implement REST API client + SSE EventSource streaming
@@ -2657,6 +2681,7 @@ User opens Chat from Command Center
 - [ ] Create types packages: search, vectors, insights, ingestion
 
 **Week 5: Inbox Cleaner & Insights**
+
 - [ ] Inbox Cleaner wizard (4-step flow with streaming progress)
 - [ ] Subscription management UI (never-opened, rarely-opened, active)
 - [ ] Insights Explorer with Recharts (category pie, volume line, sender bar)
@@ -2665,6 +2690,7 @@ User opens Chat from Command Center
 - [ ] Add PWA support (vite-plugin-pwa, manifest, service worker)
 
 **Week 6: Rules Enhancement & Polish**
+
 - [ ] Rules Studio with AI suggestions from vector patterns
 - [ ] Semantic rule conditions UI ("emails similar to X")
 - [ ] Enhanced chat with cluster/similarity context
@@ -2676,6 +2702,7 @@ User opens Chat from Command Center
 ### Phase 2.7: Learning & Optimization (Weeks 7-8)
 
 **Week 7: SONA & Feedback**
+
 - [ ] SONA self-learning integration
 - [ ] Search interaction tracking
 - [ ] User feedback loop (relevant/irrelevant)
@@ -2683,6 +2710,7 @@ User opens Chat from Command Center
 - [ ] Quantization auto-selection based on email count
 
 **Week 8: Testing & Hardening**
+
 - [ ] End-to-end tests (ingestion → search → action)
 - [ ] Performance benchmarks (criterion)
 - [ ] Memory profiling under load
@@ -2704,6 +2732,7 @@ Makefile              # Root orchestrator — delegates to backend/ and frontend
 ```
 
 **Key existing targets** (all preserved):
+
 - `make dev` / `make build` / `make test` — Full-stack orchestration
 - `make ci` / `make lint` / `make fmt` — Quality gates
 - `make test-backend` / `make test-frontend` — Component testing
@@ -2715,6 +2744,7 @@ Makefile              # Root orchestrator — delegates to backend/ and frontend
 ### 14.2 New Makefile Targets (Added)
 
 **Root Makefile additions:**
+
 ```makefile
 # RuVector Development
 dev-vectors:
@@ -2745,6 +2775,7 @@ verify-deps:
 ```
 
 **Backend Makefile additions:**
+
 ```makefile
 # RuVector-specific targets
 dev-vectors:
@@ -2771,6 +2802,7 @@ db-migrate-vectors:
 ```
 
 **Frontend Makefile additions:**
+
 ```makefile
 # Web app targets (primary — replaces desktop)
 dev-web:
@@ -2835,19 +2867,19 @@ cd backend && make embed-existing      # Batch embed historical emails
 
 ## 15. Risk Assessment
 
-| Risk | Likelihood | Impact | Mitigation |
-|------|-----------|--------|------------|
-| RuVector API instability (pre-1.0) | Medium | High | Pin exact version; wrap in facade; integration tests |
-| Embedding model size (MiniLM = 80MB) | Low | Medium | Ship pre-downloaded; lazy-load on first use |
-| Memory pressure on large inboxes | Medium | Medium | Quantization auto-scaling; configurable limits |
-| RuvLLM hardware compatibility | Medium | Low | Fallback chain: RuvLLM → Ollama → Cloud |
-| Slow initial ingestion (>10 min) | Low | High | Streaming progress; resume capability; user expectations set |
-| Vector storage corruption | Low | High | REDB WAL; periodic backup; rebuild from SQL if needed |
-| Search quality regression | Low | Medium | A/B test vector vs FTS5; user feedback loop; SONA learning |
-| Privacy concerns (embeddings = derived data) | Medium | High | Local-only default; clear consent UX; encryption at rest |
-| Browser secure storage limitations | Medium | Medium | Web Crypto API (AES-GCM) + IndexedDB; tokens encrypted at rest; non-extractable keys |
-| Offline capability in web app | Low | Medium | PWA Service Worker + IndexedDB; background sync for queued operations |
-| Breaking changes in existing features | Medium | High | Feature flags for gradual rollout; existing tests as guardrails |
+| Risk                                         | Likelihood | Impact | Mitigation                                                                           |
+| -------------------------------------------- | ---------- | ------ | ------------------------------------------------------------------------------------ |
+| RuVector API instability (pre-1.0)           | Medium     | High   | Pin exact version; wrap in facade; integration tests                                 |
+| Embedding model size (MiniLM = 80MB)         | Low        | Medium | Ship pre-downloaded; lazy-load on first use                                          |
+| Memory pressure on large inboxes             | Medium     | Medium | Quantization auto-scaling; configurable limits                                       |
+| RuvLLM hardware compatibility                | Medium     | Low    | Fallback chain: RuvLLM → Ollama → Cloud                                              |
+| Slow initial ingestion (>10 min)             | Low        | High   | Streaming progress; resume capability; user expectations set                         |
+| Vector storage corruption                    | Low        | High   | REDB WAL; periodic backup; rebuild from SQL if needed                                |
+| Search quality regression                    | Low        | Medium | A/B test vector vs FTS5; user feedback loop; SONA learning                           |
+| Privacy concerns (embeddings = derived data) | Medium     | High   | Local-only default; clear consent UX; encryption at rest                             |
+| Browser secure storage limitations           | Medium     | Medium | Web Crypto API (AES-GCM) + IndexedDB; tokens encrypted at rest; non-extractable keys |
+| Offline capability in web app                | Low        | Medium | PWA Service Worker + IndexedDB; background sync for queued operations                |
+| Breaking changes in existing features        | Medium     | High   | Feature flags for gradual rollout; existing tests as guardrails                      |
 
 ---
 
@@ -2857,64 +2889,64 @@ All versions verified against live registries. Issues flagged with warnings.
 
 ### Backend (Rust) — crates.io
 
-| Crate | In Plan | Latest on crates.io | Status |
-|-------|---------|-------------------|--------|
-| **ruvector-core** | 2.0 | **2.0.6** | Valid. Default features: simd, storage, hnsw, api-embeddings, parallel. MSRV 1.77. |
-| **ruvector-gnn** | 2.0 | **2.0.5** | Valid. MIT. MSRV 1.77. |
-| **ruvllm** | 2.0 | **2.0.6** | Valid. Local LLM inference. MIT. MSRV 1.77. |
-| **sona** (self-learning) | git dep | **0.0.0** (different crate!) | The `sona` on crates.io is an ELF binary tool, NOT RuVector's SONA. Must use git dependency from ruvector monorepo. |
-| **fastembed** | 5.13 | **5.13.0** | Valid. Alternative ONNX embedding engine. |
-| **redb** (used by ruvector) | — | **3.1.1** | Transitive dependency via ruvector-core. |
-| axum | 0.8 | **0.8.8** | Current. |
-| tokio | 1.50 | **1.50.0** | Current. |
-| sqlx | 0.8 | 0.8.x stable / **0.9.0-alpha.1** | Stay on 0.8.x — 0.9 is alpha. |
-| oauth2 | 5.0 | **5.0.0** | Current. |
-| jsonwebtoken | 10.3 | **10.3.0** | Current. |
-| moka | 0.12 | **0.12.15** | Current. |
-| redis | 1.1 | **1.1.0** | Latest stable. |
-| apalis | 0.7 | 0.7.x / **1.0.0-rc.6** | Stay on 0.7.x — 1.0 is RC. |
-| genai | 0.4 | 0.4.x / **0.6.0-beta.10** | Stay on 0.4.x — 0.6 is beta. |
-| ollama-rs | 0.3 | **0.3.4** | Current. |
-| mail-parser | 0.11 | **0.11.2** | Current. |
-| lettre | 0.11 | **0.11.19** | Current. |
-| evalexpr | 13.1 | **13.1.0** | Bump from current 12.0 — minor breaking changes possible. |
-| serde | 1.0 | **1.0.228** | Current. |
-| chrono | 0.4 | **0.4.44** | Current. |
-| uuid | 1.22 | **1.22.0** | Current. |
-| thiserror | 2.0 | **2.0.18** | Major bump from 1.x — derive macro changes. |
-| ring | 0.17 | **0.17.14** | Current. |
-| secrecy | 0.10 | **0.10.3** | Current. |
-| **serde_yml** | 0.0.12 | **0.0.12** | YAML support. Replaces EOL serde_yaml. |
+| Crate                       | In Plan | Latest on crates.io              | Status                                                                                                              |
+| --------------------------- | ------- | -------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| **ruvector-core**           | 2.0     | **2.0.6**                        | Valid. Default features: simd, storage, hnsw, api-embeddings, parallel. MSRV 1.77.                                  |
+| **ruvector-gnn**            | 2.0     | **2.0.5**                        | Valid. MIT. MSRV 1.77.                                                                                              |
+| **ruvllm**                  | 2.0     | **2.0.6**                        | Valid. Local LLM inference. MIT. MSRV 1.77.                                                                         |
+| **sona** (self-learning)    | git dep | **0.0.0** (different crate!)     | The `sona` on crates.io is an ELF binary tool, NOT RuVector's SONA. Must use git dependency from ruvector monorepo. |
+| **fastembed**               | 5.13    | **5.13.0**                       | Valid. Alternative ONNX embedding engine.                                                                           |
+| **redb** (used by ruvector) | —       | **3.1.1**                        | Transitive dependency via ruvector-core.                                                                            |
+| axum                        | 0.8     | **0.8.8**                        | Current.                                                                                                            |
+| tokio                       | 1.50    | **1.50.0**                       | Current.                                                                                                            |
+| sqlx                        | 0.8     | 0.8.x stable / **0.9.0-alpha.1** | Stay on 0.8.x — 0.9 is alpha.                                                                                       |
+| oauth2                      | 5.0     | **5.0.0**                        | Current.                                                                                                            |
+| jsonwebtoken                | 10.3    | **10.3.0**                       | Current.                                                                                                            |
+| moka                        | 0.12    | **0.12.15**                      | Current.                                                                                                            |
+| redis                       | 1.1     | **1.1.0**                        | Latest stable.                                                                                                      |
+| apalis                      | 0.7     | 0.7.x / **1.0.0-rc.6**           | Stay on 0.7.x — 1.0 is RC.                                                                                          |
+| genai                       | 0.4     | 0.4.x / **0.6.0-beta.10**        | Stay on 0.4.x — 0.6 is beta.                                                                                        |
+| ollama-rs                   | 0.3     | **0.3.4**                        | Current.                                                                                                            |
+| mail-parser                 | 0.11    | **0.11.2**                       | Current.                                                                                                            |
+| lettre                      | 0.11    | **0.11.19**                      | Current.                                                                                                            |
+| evalexpr                    | 13.1    | **13.1.0**                       | Bump from current 12.0 — minor breaking changes possible.                                                           |
+| serde                       | 1.0     | **1.0.228**                      | Current.                                                                                                            |
+| chrono                      | 0.4     | **0.4.44**                       | Current.                                                                                                            |
+| uuid                        | 1.22    | **1.22.0**                       | Current.                                                                                                            |
+| thiserror                   | 2.0     | **2.0.18**                       | Major bump from 1.x — derive macro changes.                                                                         |
+| ring                        | 0.17    | **0.17.14**                      | Current.                                                                                                            |
+| secrecy                     | 0.10    | **0.10.3**                       | Current.                                                                                                            |
+| **serde_yml**               | 0.0.12  | **0.0.12**                       | YAML support. Replaces EOL serde_yaml.                                                                              |
 
 ### Frontend (npm) — npm registry
 
-| Package | In Plan | Latest on npm | Status |
-|---------|---------|--------------|--------|
-| react | ^19.2.4 | **19.2.4** | Current. |
-| react-dom | ^19.2.4 | **19.2.4** | Current. |
-| typescript | ^6.0.2 | **6.0.2** | Current. Latest stable. |
-| vite | ^8.0.2 | **8.0.2** | Current. Latest stable. |
-| @tanstack/react-router | ^1.168.3 | **1.168.3** | Current. |
-| @tanstack/react-query | ^5.95.2 | **5.95.2** | Current. |
-| @tanstack/react-virtual | ^3.13.23 | **3.13.23** | Current. |
-| zustand | ^5.0.12 | **5.0.12** | Current. Latest stable. |
-| react-hook-form | ^7.72.0 | **7.72.0** | Current. |
-| zod | ^4.3.6 | **4.3.6** | Latest stable. New schema API. |
-| ky | ^1.14.3 | **1.14.3** | Current. |
-| cmdk | ^1.1.1 | **1.1.1** | Current. New dependency. |
-| recharts | ^3.8.0 | **3.8.0** | Latest stable. |
-| framer-motion | ^12.38.0 | **12.38.0** | Current. |
-| lucide-react | ^1.0.1 | **1.0.1** | Latest stable. |
-| date-fns | ^4.1.0 | **4.1.0** | Current. |
-| idb-keyval | ^6.2.2 | **6.2.2** | IndexedDB key-value store. |
-| tailwindcss | ^4.2.2 | **4.2.2** | Current. |
-| vitest | ^4.1.1 | **4.1.1** | Latest stable. |
-| playwright | ^1.58.2 | **1.58.2** | Current. |
-| eslint | ^10.1.0 | **10.1.0** | Latest stable. |
-| storybook | ^10.3.3 | **10.3.3** | Latest stable. |
-| turbo | ^2.8.20 | **2.8.20** | Current. |
-| pnpm | — | **10.32.1** | Package manager. |
-| vite-plugin-pwa | ^1.2.0 | **1.2.0** | New dependency for PWA support. |
+| Package                 | In Plan  | Latest on npm | Status                          |
+| ----------------------- | -------- | ------------- | ------------------------------- |
+| react                   | ^19.2.4  | **19.2.4**    | Current.                        |
+| react-dom               | ^19.2.4  | **19.2.4**    | Current.                        |
+| typescript              | ^6.0.2   | **6.0.2**     | Current. Latest stable.         |
+| vite                    | ^8.0.2   | **8.0.2**     | Current. Latest stable.         |
+| @tanstack/react-router  | ^1.168.3 | **1.168.3**   | Current.                        |
+| @tanstack/react-query   | ^5.95.2  | **5.95.2**    | Current.                        |
+| @tanstack/react-virtual | ^3.13.23 | **3.13.23**   | Current.                        |
+| zustand                 | ^5.0.12  | **5.0.12**    | Current. Latest stable.         |
+| react-hook-form         | ^7.72.0  | **7.72.0**    | Current.                        |
+| zod                     | ^4.3.6   | **4.3.6**     | Latest stable. New schema API.  |
+| ky                      | ^1.14.3  | **1.14.3**    | Current.                        |
+| cmdk                    | ^1.1.1   | **1.1.1**     | Current. New dependency.        |
+| recharts                | ^3.8.0   | **3.8.0**     | Latest stable.                  |
+| framer-motion           | ^12.38.0 | **12.38.0**   | Current.                        |
+| lucide-react            | ^1.0.1   | **1.0.1**     | Latest stable.                  |
+| date-fns                | ^4.1.0   | **4.1.0**     | Current.                        |
+| idb-keyval              | ^6.2.2   | **6.2.2**     | IndexedDB key-value store.      |
+| tailwindcss             | ^4.2.2   | **4.2.2**     | Current.                        |
+| vitest                  | ^4.1.1   | **4.1.1**     | Latest stable.                  |
+| playwright              | ^1.58.2  | **1.58.2**    | Current.                        |
+| eslint                  | ^10.1.0  | **10.1.0**    | Latest stable.                  |
+| storybook               | ^10.3.3  | **10.3.3**    | Latest stable.                  |
+| turbo                   | ^2.8.20  | **2.8.20**    | Current.                        |
+| pnpm                    | —        | **10.32.1**   | Package manager.                |
+| vite-plugin-pwa         | ^1.2.0   | **1.2.0**     | New dependency for PWA support. |
 
 ### Implementation Notes
 
@@ -2943,9 +2975,9 @@ services:
       dockerfile: Dockerfile
       target: runtime
       args:
-        RUST_VERSION: "1.94"
+        RUST_VERSION: '1.94'
     container_name: emailibrium-backend
-    user: "1000:1000"
+    user: '1000:1000'
     read_only: true
     security_opt:
       - no-new-privileges:true
@@ -2954,7 +2986,7 @@ services:
     tmpfs:
       - /tmp:size=100M,mode=1777
     ports:
-      - "${BACKEND_PORT:-8080}:8080"
+      - '${BACKEND_PORT:-8080}:8080'
     environment:
       # Non-secret config via env vars (12-factor)
       APP_ENV: ${APP_ENV:-development}
@@ -2975,7 +3007,7 @@ services:
       redis:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "/app/healthcheck"]
+      test: ['CMD', '/app/healthcheck']
       interval: 30s
       timeout: 10s
       retries: 3
@@ -2985,10 +3017,10 @@ services:
       - cache-internal
       - frontend-proxy
     logging:
-      driver: "json-file"
+      driver: 'json-file'
       options:
-        max-size: "10m"
-        max-file: "5"
+        max-size: '10m'
+        max-file: '5'
 
   # ─── Frontend Web App (React SPA) ────────────────────────
   frontend:
@@ -2997,7 +3029,7 @@ services:
       dockerfile: Dockerfile
       target: runtime
     container_name: emailibrium-frontend
-    user: "1000:1000"
+    user: '1000:1000'
     read_only: true
     security_opt:
       - no-new-privileges:true
@@ -3008,11 +3040,11 @@ services:
       - /var/cache/nginx:size=50M
       - /var/run:size=10M
     ports:
-      - "${FRONTEND_PORT:-3000}:80"
+      - '${FRONTEND_PORT:-3000}:80'
     environment:
       VITE_API_URL: ${VITE_API_URL:-http://localhost:8080}
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:80/"]
+      test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:80/']
       interval: 30s
       timeout: 5s
       retries: 3
@@ -3020,16 +3052,16 @@ services:
     networks:
       - frontend-proxy
     logging:
-      driver: "json-file"
+      driver: 'json-file'
       options:
-        max-size: "5m"
-        max-file: "3"
+        max-size: '5m'
+        max-file: '3'
 
   # ─── PostgreSQL ───────────────────────────────────────────
   postgres:
     image: postgres:16-alpine
     container_name: emailibrium-postgres
-    user: "999:999"
+    user: '999:999'
     read_only: true
     security_opt:
       - no-new-privileges:true
@@ -3052,7 +3084,7 @@ services:
     secrets:
       - db_password
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U emailibrium -d emailibrium"]
+      test: ['CMD-SHELL', 'pg_isready -U emailibrium -d emailibrium']
       interval: 30s
       timeout: 5s
       retries: 3
@@ -3065,7 +3097,7 @@ services:
   redis:
     image: redis:7-alpine
     container_name: emailibrium-redis
-    user: "999:999"
+    user: '999:999'
     read_only: true
     security_opt:
       - no-new-privileges:true
@@ -3081,7 +3113,7 @@ services:
       --maxmemory 256mb
       --maxmemory-policy allkeys-lru
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ['CMD', 'redis-cli', 'ping']
       interval: 30s
       timeout: 5s
       retries: 3
@@ -3110,11 +3142,11 @@ volumes:
 # ─── Networks (segmented per NIST SP 800-190) ───────────────
 networks:
   db-internal:
-    internal: true     # No external access — only backend ↔ postgres
+    internal: true # No external access — only backend ↔ postgres
   cache-internal:
-    internal: true     # No external access — only backend ↔ redis
+    internal: true # No external access — only backend ↔ redis
   frontend-proxy:
-    driver: bridge     # Frontend ↔ backend communication
+    driver: bridge # Frontend ↔ backend communication
 ```
 
 ### Development Override
@@ -3127,7 +3159,7 @@ services:
   backend:
     build:
       target: development
-    read_only: false     # Need writable for cargo watch
+    read_only: false # Need writable for cargo watch
     environment:
       APP_ENV: development
       RUST_LOG: emailibrium=debug,tower_http=debug
@@ -3141,7 +3173,7 @@ services:
       target: development
     read_only: false
     ports:
-      - "3000:3000"     # Vite dev server
+      - '3000:3000' # Vite dev server
     volumes:
       - ./frontend:/app
       - /app/node_modules
@@ -3149,11 +3181,11 @@ services:
 
   postgres:
     ports:
-      - "5432:5432"     # Exposed for local tools (DBeaver, psql)
+      - '5432:5432' # Exposed for local tools (DBeaver, psql)
 
   redis:
     ports:
-      - "6379:6379"     # Exposed for redis-cli
+      - '6379:6379' # Exposed for redis-cli
 
 volumes:
   cargo_cache:
@@ -3177,6 +3209,7 @@ secrets/
 ```
 
 Generate dev secrets:
+
 ```bash
 mkdir -p secrets/dev
 openssl rand -base64 32 > secrets/dev/jwt_secret
@@ -3235,6 +3268,7 @@ configs/
 ```
 
 **Loading order** (later overrides earlier, via `figment`):
+
 ```
 config.yaml → config.{APP_ENV}.yaml → config.local.yaml → env vars → /run/secrets/
 ```
@@ -3244,45 +3278,45 @@ config.yaml → config.{APP_ENV}.yaml → config.local.yaml → env vars → /ru
 ```yaml
 vectors:
   enabled: true
-  store_path: "~/.emailibrium/vectors"
+  store_path: '~/.emailibrium/vectors'
 
   embedding:
-    provider: "ruvllm"          # ruvllm | ollama | cloud
-    model: "all-MiniLM-L6-v2"  # Sentence transformer model
+    provider: 'ruvllm' # ruvllm | ollama | cloud
+    model: 'all-MiniLM-L6-v2' # Sentence transformer model
     dimensions: 384
-    batch_size: 64              # Texts per batch call
-    cache_size: 10000           # Moka cache entries
+    batch_size: 64 # Texts per batch call
+    cache_size: 10000 # Moka cache entries
 
   index:
-    type: "hnsw"
-    m: 16                       # HNSW connections per node
-    ef_construction: 200        # Build quality (higher = better, slower)
-    ef_search: 100              # Search quality (higher = better, slower)
+    type: 'hnsw'
+    m: 16 # HNSW connections per node
+    ef_construction: 200 # Build quality (higher = better, slower)
+    ef_search: 100 # Search quality (higher = better, slower)
 
   quantization:
-    mode: "auto"                # auto | none | scalar | product | binary
+    mode: 'auto' # auto | none | scalar | product | binary
     auto_thresholds:
-      scalar: 50000             # Switch to scalar above this count
+      scalar: 50000 # Switch to scalar above this count
       product: 200000
       binary: 1000000
 
   search:
-    hybrid_weight_semantic: 0.6  # 60% semantic, 40% keyword
+    hybrid_weight_semantic: 0.6 # 60% semantic, 40% keyword
     hybrid_weight_keyword: 0.4
-    rrf_k: 60                    # Reciprocal rank fusion constant
+    rrf_k: 60 # Reciprocal rank fusion constant
     default_limit: 20
     max_limit: 100
-    similarity_threshold: 0.5    # Min cosine similarity to include
+    similarity_threshold: 0.5 # Min cosine similarity to include
 
   clustering:
     enabled: true
-    algorithm: "graphsage"       # graphsage | gcn | gat
+    algorithm: 'graphsage' # graphsage | gcn | gat
     min_cluster_size: 5
     refresh_interval_hours: 24
 
   learning:
     sona_enabled: true
-    feedback_weight: 0.1         # How much each feedback shifts centroids
+    feedback_weight: 0.1 # How much each feedback shifts centroids
     session_memory: true
 
   ingestion:
@@ -3378,4 +3412,4 @@ data: {"jobId":"ing_001","report":{"totalEmails":12847,"clusters":6,"subscriptio
 
 ---
 
-*This document serves as the technical implementation plan for the reimagined Emailibrium platform. It should be updated as implementation progresses and architectural decisions evolve.*
+_This document serves as the technical implementation plan for the reimagined Emailibrium platform. It should be updated as implementation progresses and architectural decisions evolve._

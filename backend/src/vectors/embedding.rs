@@ -18,9 +18,12 @@ use async_trait::async_trait;
 use moka::future::Cache;
 use tracing::{debug, warn};
 
-use super::config::{EmbeddingConfig, OnnxConfig};
+use super::config::{CloudEmbeddingConfig, CohereEmbeddingConfig, EmbeddingConfig, OnnxConfig};
 use super::error::VectorError;
 use super::models;
+use crate::cache::RedisCache;
+
+use tracing::info;
 
 // ---------------------------------------------------------------------------
 // Trait
@@ -364,15 +367,393 @@ impl EmbeddingModel for OnnxEmbeddingModel {
 }
 
 // ---------------------------------------------------------------------------
+// CloudEmbeddingModel (OpenAI — audit item #14)
+// ---------------------------------------------------------------------------
+
+/// Cloud-hosted embedding model via the OpenAI embeddings API.
+///
+/// Uses `text-embedding-3-small` by default (1 536 dimensions). The API key
+/// is read from the environment variable configured in [`CloudEmbeddingConfig`].
+#[derive(Debug)]
+pub struct CloudEmbeddingModel {
+    client: reqwest::Client,
+    api_key: String,
+    model: String,
+    base_url: String,
+    dims: usize,
+}
+
+impl CloudEmbeddingModel {
+    /// Create a new cloud embedding model.
+    ///
+    /// Reads the API key from the environment variable named in `config.api_key_env`.
+    pub fn new(config: &CloudEmbeddingConfig) -> Result<Self, VectorError> {
+        let api_key = std::env::var(&config.api_key_env).map_err(|_| {
+            VectorError::ConfigError(format!(
+                "Cloud embedding API key env var '{}' not set",
+                config.api_key_env
+            ))
+        })?;
+
+        if api_key.is_empty() {
+            return Err(VectorError::ConfigError(format!(
+                "Cloud embedding API key env var '{}' is empty",
+                config.api_key_env
+            )));
+        }
+
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .unwrap_or_default();
+
+        Ok(Self {
+            client,
+            api_key,
+            model: config.model.clone(),
+            base_url: config.base_url.clone(),
+            dims: config.dimensions,
+        })
+    }
+}
+
+/// OpenAI embedding request body.
+#[derive(serde::Serialize)]
+struct OpenAiEmbedRequest<'a> {
+    model: &'a str,
+    input: Vec<&'a str>,
+}
+
+/// OpenAI embedding response.
+#[derive(serde::Deserialize)]
+struct OpenAiEmbedResponse {
+    data: Vec<OpenAiEmbedData>,
+}
+
+#[derive(serde::Deserialize)]
+struct OpenAiEmbedData {
+    embedding: Vec<f32>,
+}
+
+#[async_trait]
+impl EmbeddingModel for CloudEmbeddingModel {
+    async fn embed(&self, text: &str) -> Result<Vec<f32>, VectorError> {
+        let url = format!("{}/v1/embeddings", self.base_url);
+        let body = OpenAiEmbedRequest {
+            model: &self.model,
+            input: vec![text],
+        };
+
+        let resp = self
+            .client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| {
+                if e.is_connect() {
+                    VectorError::EmbeddingFailed(format!(
+                        "Cannot connect to OpenAI at {}",
+                        self.base_url
+                    ))
+                } else if e.is_timeout() {
+                    VectorError::EmbeddingFailed("OpenAI embedding request timed out".to_string())
+                } else {
+                    VectorError::EmbeddingFailed(format!("OpenAI embedding HTTP error: {e}"))
+                }
+            })?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body_text = resp.text().await.unwrap_or_default();
+            return Err(VectorError::EmbeddingFailed(format!(
+                "OpenAI embeddings returned {status}: {body_text}"
+            )));
+        }
+
+        let parsed: OpenAiEmbedResponse = resp.json().await.map_err(|e| {
+            VectorError::EmbeddingFailed(format!("Failed to parse OpenAI embedding response: {e}"))
+        })?;
+
+        parsed
+            .data
+            .into_iter()
+            .next()
+            .map(|d| d.embedding)
+            .ok_or_else(|| {
+                VectorError::EmbeddingFailed("OpenAI returned empty embeddings array".to_string())
+            })
+    }
+
+    async fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, VectorError> {
+        let url = format!("{}/v1/embeddings", self.base_url);
+        let input: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
+        let body = OpenAiEmbedRequest {
+            model: &self.model,
+            input,
+        };
+
+        let resp = self
+            .client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| {
+                VectorError::EmbeddingFailed(format!("OpenAI embedding batch HTTP error: {e}"))
+            })?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body_text = resp.text().await.unwrap_or_default();
+            return Err(VectorError::EmbeddingFailed(format!(
+                "OpenAI embeddings batch returned {status}: {body_text}"
+            )));
+        }
+
+        let parsed: OpenAiEmbedResponse = resp.json().await.map_err(|e| {
+            VectorError::EmbeddingFailed(format!(
+                "Failed to parse OpenAI batch embedding response: {e}"
+            ))
+        })?;
+
+        if parsed.data.len() != texts.len() {
+            return Err(VectorError::EmbeddingFailed(format!(
+                "OpenAI returned {} embeddings for {} inputs",
+                parsed.data.len(),
+                texts.len()
+            )));
+        }
+
+        Ok(parsed.data.into_iter().map(|d| d.embedding).collect())
+    }
+
+    fn dimensions(&self) -> usize {
+        self.dims
+    }
+
+    fn model_name(&self) -> &str {
+        &self.model
+    }
+
+    async fn is_available(&self) -> bool {
+        !self.api_key.is_empty()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// CohereEmbeddingModel (audit item #30)
+// ---------------------------------------------------------------------------
+
+/// Cohere-hosted embedding model via the embed API v2.
+///
+/// Uses `embed-english-v3.0` by default (1 024 dimensions). The API key is
+/// read from the environment variable configured in [`CohereEmbeddingConfig`].
+#[derive(Debug)]
+pub struct CohereEmbeddingModel {
+    client: reqwest::Client,
+    api_key: String,
+    model: String,
+    base_url: String,
+    dims: usize,
+    input_type: String,
+}
+
+impl CohereEmbeddingModel {
+    /// Create a new Cohere embedding model.
+    ///
+    /// Reads the API key from the environment variable named in `config.api_key_env`.
+    pub fn new(config: &CohereEmbeddingConfig) -> Result<Self, VectorError> {
+        let api_key = std::env::var(&config.api_key_env).map_err(|_| {
+            VectorError::ConfigError(format!(
+                "Cohere embedding API key env var '{}' not set",
+                config.api_key_env
+            ))
+        })?;
+
+        if api_key.is_empty() {
+            return Err(VectorError::ConfigError(format!(
+                "Cohere embedding API key env var '{}' is empty",
+                config.api_key_env
+            )));
+        }
+
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .unwrap_or_default();
+
+        Ok(Self {
+            client,
+            api_key,
+            model: config.model.clone(),
+            base_url: config.base_url.clone(),
+            dims: config.dimensions,
+            input_type: config.input_type.clone(),
+        })
+    }
+}
+
+/// Cohere embed request body (v2 API).
+#[derive(serde::Serialize)]
+struct CohereEmbedRequest<'a> {
+    model: &'a str,
+    texts: Vec<&'a str>,
+    input_type: &'a str,
+    embedding_types: Vec<&'a str>,
+}
+
+/// Cohere embed response.
+#[derive(serde::Deserialize)]
+struct CohereEmbedResponse {
+    embeddings: CohereEmbeddings,
+}
+
+#[derive(serde::Deserialize)]
+struct CohereEmbeddings {
+    float: Vec<Vec<f32>>,
+}
+
+#[async_trait]
+impl EmbeddingModel for CohereEmbeddingModel {
+    async fn embed(&self, text: &str) -> Result<Vec<f32>, VectorError> {
+        let url = format!("{}/v1/embed", self.base_url);
+        let body = CohereEmbedRequest {
+            model: &self.model,
+            texts: vec![text],
+            input_type: &self.input_type,
+            embedding_types: vec!["float"],
+        };
+
+        let resp = self
+            .client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| {
+                if e.is_connect() {
+                    VectorError::EmbeddingFailed(format!(
+                        "Cannot connect to Cohere at {}",
+                        self.base_url
+                    ))
+                } else if e.is_timeout() {
+                    VectorError::EmbeddingFailed("Cohere embedding request timed out".to_string())
+                } else {
+                    VectorError::EmbeddingFailed(format!("Cohere embedding HTTP error: {e}"))
+                }
+            })?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body_text = resp.text().await.unwrap_or_default();
+            return Err(VectorError::EmbeddingFailed(format!(
+                "Cohere embed returned {status}: {body_text}"
+            )));
+        }
+
+        let parsed: CohereEmbedResponse = resp.json().await.map_err(|e| {
+            VectorError::EmbeddingFailed(format!("Failed to parse Cohere embed response: {e}"))
+        })?;
+
+        parsed.embeddings.float.into_iter().next().ok_or_else(|| {
+            VectorError::EmbeddingFailed("Cohere returned empty embeddings array".to_string())
+        })
+    }
+
+    async fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, VectorError> {
+        let url = format!("{}/v1/embed", self.base_url);
+        let input: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
+        let body = CohereEmbedRequest {
+            model: &self.model,
+            texts: input,
+            input_type: &self.input_type,
+            embedding_types: vec!["float"],
+        };
+
+        let resp = self
+            .client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| {
+                VectorError::EmbeddingFailed(format!("Cohere embedding batch HTTP error: {e}"))
+            })?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body_text = resp.text().await.unwrap_or_default();
+            return Err(VectorError::EmbeddingFailed(format!(
+                "Cohere embed batch returned {status}: {body_text}"
+            )));
+        }
+
+        let parsed: CohereEmbedResponse = resp.json().await.map_err(|e| {
+            VectorError::EmbeddingFailed(format!(
+                "Failed to parse Cohere batch embed response: {e}"
+            ))
+        })?;
+
+        if parsed.embeddings.float.len() != texts.len() {
+            return Err(VectorError::EmbeddingFailed(format!(
+                "Cohere returned {} embeddings for {} inputs",
+                parsed.embeddings.float.len(),
+                texts.len()
+            )));
+        }
+
+        Ok(parsed.embeddings.float)
+    }
+
+    fn dimensions(&self) -> usize {
+        self.dims
+    }
+
+    fn model_name(&self) -> &str {
+        &self.model
+    }
+
+    async fn is_available(&self) -> bool {
+        !self.api_key.is_empty()
+    }
+}
+
+// ---------------------------------------------------------------------------
 // EmbeddingPipeline
 // ---------------------------------------------------------------------------
 
 /// Orchestrates embedding generation with caching, query augmentation, and
 /// provider fallback (ADR-002).
+///
+/// Supports two cache tiers:
+/// - **L1** (moka): in-process, fast, volatile.
+/// - **L2** (Redis, optional): survives restarts, shared across instances.
 pub struct EmbeddingPipeline {
     providers: Vec<Arc<dyn EmbeddingModel>>,
     cache: Cache<u64, Vec<f32>>,
+    redis: Option<Arc<RedisCache>>,
+    redis_ttl_secs: u64,
     min_query_tokens: usize,
+}
+
+impl std::fmt::Debug for EmbeddingPipeline {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EmbeddingPipeline")
+            .field(
+                "providers",
+                &format!("[{} provider(s)]", self.providers.len()),
+            )
+            .field("redis_ttl_secs", &self.redis_ttl_secs)
+            .field("min_query_tokens", &self.min_query_tokens)
+            .finish()
+    }
 }
 
 impl EmbeddingPipeline {
@@ -382,7 +763,8 @@ impl EmbeddingPipeline {
     /// - `"onnx"` -> in-process ONNX via fastembed (zero-config default, ADR-011).
     /// - `"mock"` -> deterministic hash-based embeddings (development/testing).
     /// - `"ollama"` -> Ollama HTTP API. Fails explicitly if Ollama is down.
-    /// - `"cloud"` -> cloud-hosted provider (reserved for future use).
+    /// - `"cloud"` -> OpenAI embedding API (text-embedding-3-small, audit #14).
+    /// - `"cohere"` -> Cohere embed API v2 (embed-english-v3.0, audit #30).
     ///
     /// Unknown providers return [`VectorError::ConfigError`].
     pub fn new(config: &EmbeddingConfig) -> Result<Self, VectorError> {
@@ -420,12 +802,34 @@ impl EmbeddingPipeline {
                     config.dimensions,
                 )));
             }
-            "cloud" => {
-                return Err(VectorError::ConfigError(
-                    "Cloud embedding provider is unsupported; use \"ollama\" or \"mock\""
-                        .to_string(),
-                ));
-            }
+            "cloud" => match CloudEmbeddingModel::new(&config.cloud) {
+                Ok(model) => {
+                    info!(
+                        model = %config.cloud.model,
+                        "Using cloud (OpenAI) embedding provider"
+                    );
+                    providers.push(Arc::new(model));
+                }
+                Err(e) => {
+                    return Err(VectorError::ConfigError(format!(
+                        "Cloud embedding provider init failed: {e}"
+                    )));
+                }
+            },
+            "cohere" => match CohereEmbeddingModel::new(&config.cohere) {
+                Ok(model) => {
+                    info!(
+                        model = %config.cohere.model,
+                        "Using Cohere embedding provider"
+                    );
+                    providers.push(Arc::new(model));
+                }
+                Err(e) => {
+                    return Err(VectorError::ConfigError(format!(
+                        "Cohere embedding provider init failed: {e}"
+                    )));
+                }
+            },
             other => {
                 return Err(VectorError::ConfigError(format!(
                     "Unknown embedding provider: {other}"
@@ -438,6 +842,8 @@ impl EmbeddingPipeline {
         Ok(Self {
             providers,
             cache,
+            redis: None,
+            redis_ttl_secs: 3600,
             min_query_tokens: config.min_query_tokens,
         })
     }
@@ -451,8 +857,17 @@ impl EmbeddingPipeline {
         Self {
             providers,
             cache: Cache::new(cache_size),
+            redis: None,
+            redis_ttl_secs: 3600,
             min_query_tokens,
         }
+    }
+
+    /// Attach an optional Redis L2 cache to the pipeline.
+    pub fn with_redis(mut self, redis: Option<Arc<RedisCache>>, ttl_secs: u64) -> Self {
+        self.redis = redis;
+        self.redis_ttl_secs = ttl_secs;
+        self
     }
 
     // -- public API ----------------------------------------------------------
@@ -473,25 +888,51 @@ impl EmbeddingPipeline {
     }
 
     /// Embed a single piece of text with caching and fallback.
+    ///
+    /// Cache hierarchy: L1 (moka in-process) -> L2 (Redis, optional) -> compute.
     pub async fn embed(&self, text: &str) -> Result<Vec<f32>, VectorError> {
         let cache_key = Self::hash_text(text);
 
-        // 1. Cache check.
+        // 1. L1 cache check (moka, in-process).
         if let Some(cached) = self.cache.get(&cache_key).await {
-            debug!("embedding cache hit for key={cache_key}");
+            debug!("embedding L1 cache hit for key={cache_key}");
             return Ok(cached);
         }
 
-        // 2. Query augmentation for short texts.
+        // 2. L2 cache check (Redis, optional).
+        let redis_key = format!("emb:{cache_key}");
+        if let Some(ref redis) = self.redis {
+            match redis.get::<Vec<f32>>(&redis_key).await {
+                Ok(Some(cached)) => {
+                    debug!("embedding L2 (Redis) cache hit for key={cache_key}");
+                    // Promote to L1.
+                    self.cache.insert(cache_key, cached.clone()).await;
+                    return Ok(cached);
+                }
+                Ok(None) => {} // miss
+                Err(e) => {
+                    warn!("Redis L2 cache read failed (non-fatal): {e}");
+                }
+            }
+        }
+
+        // 3. Query augmentation for short texts.
         let augmented = self.maybe_augment(text);
         let input = augmented.as_deref().unwrap_or(text);
 
-        // 3. Walk the provider chain.
+        // 4. Walk the provider chain.
         let mut last_err = String::new();
         for provider in &self.providers {
             match provider.embed(input).await {
                 Ok(vec) => {
+                    // Store in L1.
                     self.cache.insert(cache_key, vec.clone()).await;
+                    // Store in L2 (best-effort, non-blocking error).
+                    if let Some(ref redis) = self.redis {
+                        if let Err(e) = redis.set(&redis_key, &vec, self.redis_ttl_secs).await {
+                            warn!("Redis L2 cache write failed (non-fatal): {e}");
+                        }
+                    }
                     return Ok(vec);
                 }
                 Err(e) => {
@@ -507,31 +948,68 @@ impl EmbeddingPipeline {
         Err(VectorError::AllProvidersUnavailable(last_err))
     }
 
-    /// Batch embed with per-text caching and fallback.
+    /// Batch embed with per-text caching (L1 + L2) and fallback.
     pub async fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, VectorError> {
         let mut results: Vec<Option<Vec<f32>>> = vec![None; texts.len()];
         let mut miss_indices: Vec<usize> = Vec::new();
         let mut miss_texts: Vec<String> = Vec::new();
 
-        // 1. Collect cache hits and misses.
+        // 1. Collect L1 cache hits.
         for (i, text) in texts.iter().enumerate() {
             let key = Self::hash_text(text);
             if let Some(cached) = self.cache.get(&key).await {
                 results[i] = Some(cached);
             } else {
                 miss_indices.push(i);
-                let augmented = self.maybe_augment(text);
-                miss_texts.push(augmented.unwrap_or_else(|| text.clone()));
             }
         }
 
-        // 2. Batch-embed the misses.
+        // 2. Check L2 (Redis) for remaining misses.
+        if let Some(ref redis) = self.redis {
+            let mut still_missing = Vec::new();
+            for &idx in &miss_indices {
+                let key = Self::hash_text(&texts[idx]);
+                let redis_key = format!("emb:{key}");
+                match redis.get::<Vec<f32>>(&redis_key).await {
+                    Ok(Some(cached)) => {
+                        // Promote to L1.
+                        self.cache.insert(key, cached.clone()).await;
+                        results[idx] = Some(cached);
+                    }
+                    Ok(None) => still_missing.push(idx),
+                    Err(e) => {
+                        warn!("Redis L2 batch read failed (non-fatal): {e}");
+                        still_missing.push(idx);
+                    }
+                }
+            }
+            miss_indices = still_missing;
+        }
+
+        // 3. Prepare texts for embedding (with augmentation).
+        for &idx in &miss_indices {
+            let augmented = self.maybe_augment(&texts[idx]);
+            miss_texts.push(augmented.unwrap_or_else(|| texts[idx].clone()));
+        }
+
+        // 4. Batch-embed the remaining misses.
         if !miss_texts.is_empty() {
             let new_vecs = self.batch_with_fallback(&miss_texts).await?;
 
             for (j, idx) in miss_indices.iter().enumerate() {
                 let key = Self::hash_text(&texts[*idx]);
+                // Store in L1.
                 self.cache.insert(key, new_vecs[j].clone()).await;
+                // Store in L2 (best-effort).
+                if let Some(ref redis) = self.redis {
+                    let redis_key = format!("emb:{key}");
+                    if let Err(e) = redis
+                        .set(&redis_key, &new_vecs[j], self.redis_ttl_secs)
+                        .await
+                    {
+                        warn!("Redis L2 batch write failed (non-fatal): {e}");
+                    }
+                }
                 results[*idx] = Some(new_vecs[j].clone());
             }
         }
@@ -833,5 +1311,156 @@ mod tests {
             "semantically similar sentences should be closer: \
              animals={sim_animals:.4}, unrelated={sim_unrelated:.4}"
         );
+    }
+
+    // -- CloudEmbeddingModel tests (audit item #14) -------------------------
+
+    #[test]
+    fn test_cloud_embedding_rejects_missing_api_key() {
+        // Ensure the env var is not set.
+        std::env::remove_var("EMAILIBRIUM_OPENAI_API_KEY");
+        let config = super::super::config::CloudEmbeddingConfig::default();
+        let result = CloudEmbeddingModel::new(&config);
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("not set"),
+            "expected 'not set' in error, got: {err_msg}"
+        );
+    }
+
+    #[test]
+    fn test_cloud_embedding_rejects_empty_api_key() {
+        std::env::set_var("__TEST_CLOUD_EMB_EMPTY", "");
+        let config = super::super::config::CloudEmbeddingConfig {
+            api_key_env: "__TEST_CLOUD_EMB_EMPTY".to_string(),
+            ..Default::default()
+        };
+        let result = CloudEmbeddingModel::new(&config);
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("empty"),
+            "expected 'empty' in error, got: {err_msg}"
+        );
+        std::env::remove_var("__TEST_CLOUD_EMB_EMPTY");
+    }
+
+    #[test]
+    fn test_cloud_embedding_creates_with_valid_key() {
+        std::env::set_var("__TEST_CLOUD_EMB_KEY", "sk-test-key-12345");
+        let config = super::super::config::CloudEmbeddingConfig {
+            api_key_env: "__TEST_CLOUD_EMB_KEY".to_string(),
+            ..Default::default()
+        };
+        let model = CloudEmbeddingModel::new(&config).unwrap();
+        assert_eq!(model.model_name(), "text-embedding-3-small");
+        assert_eq!(model.dimensions(), 1536);
+        std::env::remove_var("__TEST_CLOUD_EMB_KEY");
+    }
+
+    #[tokio::test]
+    async fn test_cloud_embedding_is_available() {
+        std::env::set_var("__TEST_CLOUD_EMB_AVAIL", "sk-test");
+        let config = super::super::config::CloudEmbeddingConfig {
+            api_key_env: "__TEST_CLOUD_EMB_AVAIL".to_string(),
+            ..Default::default()
+        };
+        let model = CloudEmbeddingModel::new(&config).unwrap();
+        assert!(model.is_available().await);
+        std::env::remove_var("__TEST_CLOUD_EMB_AVAIL");
+    }
+
+    // -- CohereEmbeddingModel tests (audit item #30) ------------------------
+
+    #[test]
+    fn test_cohere_embedding_rejects_missing_api_key() {
+        std::env::remove_var("EMAILIBRIUM_COHERE_API_KEY");
+        let config = super::super::config::CohereEmbeddingConfig::default();
+        let result = CohereEmbeddingModel::new(&config);
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("not set"),
+            "expected 'not set' in error, got: {err_msg}"
+        );
+    }
+
+    #[test]
+    fn test_cohere_embedding_rejects_empty_api_key() {
+        std::env::set_var("__TEST_COHERE_EMPTY", "");
+        let config = super::super::config::CohereEmbeddingConfig {
+            api_key_env: "__TEST_COHERE_EMPTY".to_string(),
+            ..Default::default()
+        };
+        let result = CohereEmbeddingModel::new(&config);
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("empty"),
+            "expected 'empty' in error, got: {err_msg}"
+        );
+        std::env::remove_var("__TEST_COHERE_EMPTY");
+    }
+
+    #[test]
+    fn test_cohere_embedding_creates_with_valid_key() {
+        std::env::set_var("__TEST_COHERE_KEY", "co-test-key-12345");
+        let config = super::super::config::CohereEmbeddingConfig {
+            api_key_env: "__TEST_COHERE_KEY".to_string(),
+            ..Default::default()
+        };
+        let model = CohereEmbeddingModel::new(&config).unwrap();
+        assert_eq!(model.model_name(), "embed-english-v3.0");
+        assert_eq!(model.dimensions(), 1024);
+        std::env::remove_var("__TEST_COHERE_KEY");
+    }
+
+    #[tokio::test]
+    async fn test_cohere_embedding_is_available() {
+        std::env::set_var("__TEST_COHERE_AVAIL", "co-test");
+        let config = super::super::config::CohereEmbeddingConfig {
+            api_key_env: "__TEST_COHERE_AVAIL".to_string(),
+            ..Default::default()
+        };
+        let model = CohereEmbeddingModel::new(&config).unwrap();
+        assert!(model.is_available().await);
+        std::env::remove_var("__TEST_COHERE_AVAIL");
+    }
+
+    // -- Pipeline provider selection tests ----------------------------------
+
+    #[test]
+    fn test_pipeline_cloud_provider_requires_api_key() {
+        std::env::remove_var("EMAILIBRIUM_OPENAI_API_KEY");
+        let config = EmbeddingConfig {
+            provider: "cloud".to_string(),
+            ..EmbeddingConfig::default()
+        };
+        let result = EmbeddingPipeline::new(&config);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_pipeline_cohere_provider_requires_api_key() {
+        std::env::remove_var("EMAILIBRIUM_COHERE_API_KEY");
+        let config = EmbeddingConfig {
+            provider: "cohere".to_string(),
+            ..EmbeddingConfig::default()
+        };
+        let result = EmbeddingPipeline::new(&config);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_pipeline_unknown_provider_rejected() {
+        let config = EmbeddingConfig {
+            provider: "nonexistent".to_string(),
+            ..EmbeddingConfig::default()
+        };
+        let result = EmbeddingPipeline::new(&config);
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("Unknown embedding provider"));
     }
 }

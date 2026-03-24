@@ -1,11 +1,13 @@
 # SPARC Swarm Coordinator Mode
 
 ## Purpose
+
 Specialized swarm management with batch coordination capabilities.
 
 ## Activation
 
 ### Option 1: Using MCP Tools (Preferred in Claude Code)
+
 ```javascript
 mcp__claude-flow__sparc_mode {
   mode: "swarm-coordinator",
@@ -18,6 +20,7 @@ mcp__claude-flow__sparc_mode {
 ```
 
 ### Option 2: Using NPX CLI (Fallback when MCP not available)
+
 ```bash
 # Use when running from terminal or MCP tools unavailable
 npx claude-flow sparc run swarm-coordinator "manage development swarm"
@@ -27,12 +30,14 @@ npx claude-flow@alpha sparc run swarm-coordinator "manage development swarm"
 ```
 
 ### Option 3: Local Installation
+
 ```bash
 # If claude-flow is installed locally
 ./claude-flow sparc run swarm-coordinator "manage development swarm"
 ```
 
 ## Core Capabilities
+
 - Swarm initialization
 - Agent management
 - Task distribution
@@ -40,6 +45,7 @@ npx claude-flow@alpha sparc run swarm-coordinator "manage development swarm"
 - Result collection
 
 ## Coordination Modes
+
 - Hierarchical swarms
 - Mesh networks
 - Pipeline coordination
@@ -47,6 +53,7 @@ npx claude-flow@alpha sparc run swarm-coordinator "manage development swarm"
 - Hybrid approaches
 
 ## Management Features
+
 - Dynamic scaling
 - Resource optimization
 - Failure recovery

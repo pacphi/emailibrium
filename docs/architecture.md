@@ -9,7 +9,7 @@ Emailibrium is a **vector-native email intelligence platform** organized as a fo
 ```
 +------------------------------------------------------------------+
 |                    PRESENTATION TIER                               |
-|  React TypeScript SPA (Vite 7 + TanStack Router + shadcn/ui)     |
+|  React TypeScript SPA (Vite 8 + TanStack Router + shadcn/ui)     |
 |  Components: Command Center, Inbox Cleaner, Insights Explorer,    |
 |              Email Client, Rules Studio, Settings                 |
 +-------------------------------+----------------------------------+
@@ -23,7 +23,7 @@ Emailibrium is a **vector-native email intelligence platform** organized as a fo
                                 |
 +-------------------------------+----------------------------------+
 |                    INTELLIGENCE TIER                               |
-|  Embedding Pipeline (ADR-002): mock -> Ollama -> cloud fallback  |
+|  Embedding Pipeline (ADR-002): ONNX (default) -> Ollama -> cloud |
 |  Vector Store (ADR-003): InMemoryVectorStore / EncryptedStore    |
 |  Categorizer (ADR-004): centroid classification + LLM fallback   |
 |  Clustering (ADR-009): GraphSAGE on HNSW neighbor graph          |
@@ -44,13 +44,13 @@ Emailibrium is a **vector-native email intelligence platform** organized as a fo
 
 Emailibrium follows Domain-Driven Design with five bounded contexts (DDD-000 through DDD-005):
 
-| Context | Type | Document | Responsibility |
-|---------|------|----------|----------------|
-| **Email Intelligence** | Core | DDD-001 | Embedding generation, vector storage, classification, clustering |
-| **Search** | Core | DDD-002 | Query execution, result fusion (FTS5 + HNSW), SONA re-ranking |
-| **Ingestion** | Supporting | DDD-003 | Email sync from providers, multi-asset extraction, pipeline orchestration |
-| **Learning** | Supporting | DDD-004 | SONA adaptive learning, centroid updates, feedback processing |
-| **Account Management** | Supporting | DDD-005 | Provider connections (OAuth), sync state, archive strategy |
+| Context                | Type       | Document | Responsibility                                                            |
+| ---------------------- | ---------- | -------- | ------------------------------------------------------------------------- |
+| **Email Intelligence** | Core       | DDD-001  | Embedding generation, vector storage, classification, clustering          |
+| **Search**             | Core       | DDD-002  | Query execution, result fusion (FTS5 + HNSW), SONA re-ranking             |
+| **Ingestion**          | Supporting | DDD-003  | Email sync from providers, multi-asset extraction, pipeline orchestration |
+| **Learning**           | Supporting | DDD-004  | SONA adaptive learning, centroid updates, feedback processing             |
+| **Account Management** | Supporting | DDD-005  | Provider connections (OAuth), sync state, archive strategy                |
 
 ### Context Map
 
@@ -69,6 +69,7 @@ Account Management --[Published Language]--> Ingestion
 ```
 
 Integration patterns:
+
 - **Published Language**: Account Management emits `AccountConnected` and `SyncCompleted` events consumed by Ingestion
 - **Customer/Supplier**: Ingestion produces `ContentExtracted` events consumed by Email Intelligence
 - **Open Host Service**: Email Intelligence exposes embedding and classification APIs consumed by Search
@@ -108,24 +109,25 @@ Email arrives (via provider sync)
 ```
 
 Throughput targets:
+
 - Text-only emails: 500+ emails/sec
 - Full multi-asset extraction: ~50 emails/sec
 - Configurable: fast mode (text-only) for initial sync, deep mode (all assets) for background processing
 
 ## Key Decisions
 
-| ADR | Title | Decision | Key Trade-off |
-|-----|-------|----------|---------------|
-| ADR-001 | Hybrid Search Architecture | FTS5 + HNSW + Reciprocal Rank Fusion | Complexity vs. search quality across exact and semantic queries |
-| ADR-002 | Embedding Model Selection | Pluggable pipeline with fallback chain (local -> Ollama -> cloud) | Latency vs. quality; mock fallback ensures the system always works |
-| ADR-003 | Vector Database | RuVector as primary store; SQLite backup for persistence | Rust-native performance vs. ecosystem maturity |
-| ADR-004 | Adaptive Learning | SONA self-learning with centroid-based classification + LLM fallback | Continuous improvement vs. classification stability |
-| ADR-005 | Frontend Architecture | Pure React TypeScript SPA replacing Tauri 2.0 desktop app | Web accessibility vs. native desktop integration |
-| ADR-006 | Content Extraction | Multi-asset pipeline (HTML, images, attachments, links) | Extraction breadth vs. reliability across input types |
-| ADR-007 | Quantization | Adaptive scalar quantization based on corpus size | 4x memory reduction vs. slight recall degradation |
-| ADR-008 | Privacy & Security | AES-256-GCM encryption at rest, Argon2id key derivation, embedding noise | ~5-10% performance overhead vs. data protection |
-| ADR-009 | Clustering | GraphSAGE on HNSW neighbor graph for topic discovery | Novel approach (needs empirical validation) vs. proven methods |
-| ADR-010 | Inbox Strategy | Ingest-Tag-Archive pipeline ("Gmail is dumb store, Emailibrium is smart interface") | Aggressive automation vs. user safety and undo capability |
+| ADR     | Title                      | Decision                                                                            | Key Trade-off                                                      |
+| ------- | -------------------------- | ----------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| ADR-001 | Hybrid Search Architecture | FTS5 + HNSW + Reciprocal Rank Fusion                                                | Complexity vs. search quality across exact and semantic queries    |
+| ADR-002 | Embedding Model Selection  | Pluggable pipeline with fallback chain (local -> Ollama -> cloud)                   | Latency vs. quality; mock fallback ensures the system always works |
+| ADR-003 | Vector Database            | RuVector as primary store; SQLite backup for persistence                            | Rust-native performance vs. ecosystem maturity                     |
+| ADR-004 | Adaptive Learning          | SONA self-learning with centroid-based classification + LLM fallback                | Continuous improvement vs. classification stability                |
+| ADR-005 | Frontend Architecture      | Pure React TypeScript SPA replacing Tauri 2.0 desktop app                           | Web accessibility vs. native desktop integration                   |
+| ADR-006 | Content Extraction         | Multi-asset pipeline (HTML, images, attachments, links)                             | Extraction breadth vs. reliability across input types              |
+| ADR-007 | Quantization               | Adaptive scalar quantization based on corpus size                                   | 4x memory reduction vs. slight recall degradation                  |
+| ADR-008 | Privacy & Security         | AES-256-GCM encryption at rest, Argon2id key derivation, embedding noise            | ~5-10% performance overhead vs. data protection                    |
+| ADR-009 | Clustering                 | GraphSAGE on HNSW neighbor graph for topic discovery                                | Novel approach (needs empirical validation) vs. proven methods     |
+| ADR-010 | Inbox Strategy             | Ingest-Tag-Archive pipeline ("Gmail is dumb store, Emailibrium is smart interface") | Aggressive automation vs. user safety and undo capability          |
 
 ## Module Structure
 
@@ -140,6 +142,14 @@ src/
     vectors.rs         # Search, classify, health, stats endpoints
     ingestion.rs       # SSE streaming, start/pause/resume jobs
     insights.rs        # Subscription, recurring sender, report endpoints
+    accounts.rs        # OAuth account management (DDD-005)
+    ai.rs              # Chat and generative AI endpoints (ADR-012)
+    backup.rs          # Backup management endpoints
+    clustering.rs      # Cluster discovery endpoints
+    consent.rs         # Privacy consent management
+    evaluation.rs      # Search quality evaluation endpoints
+    interactions.rs    # Search interaction tracking (SONA)
+    learning.rs        # SONA learning engine endpoints
   db/
     mod.rs             # SQLite connection pool (sqlx)
   content/
@@ -154,9 +164,11 @@ src/
     mod.rs             # VectorService facade
     embedding.rs       # EmbeddingPipeline with provider fallback (ADR-002)
     store.rs           # VectorStoreBackend trait + InMemoryVectorStore
+    ruvector_store.rs  # RuVector HNSW backend (ADR-003)
     encryption.rs      # AES-256-GCM encryption at rest (ADR-008)
     config.rs          # Layered configuration (figment)
     types.rs           # Core value objects (VectorDocument, etc.)
+    models.rs          # Data model types
     error.rs           # Error types (thiserror)
     search.rs          # Search execution logic
     categorizer.rs     # Centroid-based classification (ADR-004)
@@ -167,6 +179,10 @@ src/
     interactions.rs    # Search interaction tracking (SONA)
     learning.rs        # SONA adaptive learning engine (ADR-004)
     quantization.rs    # Scalar quantization (ADR-007)
+    generative.rs      # Generative AI integration (ADR-012)
+    consent.rs         # Privacy consent management
+    metrics.rs         # Vector service metrics and telemetry
+    reindex.rs         # Reindex operations
 ```
 
 ### Frontend (`frontend/`)

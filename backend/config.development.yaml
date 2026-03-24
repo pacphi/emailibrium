@@ -14,4 +14,4 @@ backup:
 
 learning:
   sona_enabled: true
-  ab_control_percentage: 0.0  # disable A/B in dev
+  ab_control_percentage: 0.0 # disable A/B in dev

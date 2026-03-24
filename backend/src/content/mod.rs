@@ -7,6 +7,7 @@
 pub mod attachment_extractor;
 pub mod html_extractor;
 pub mod image_analyzer;
+pub mod jobs;
 pub mod link_analyzer;
 pub mod tracking_detector;
 pub mod types;
@@ -18,12 +19,23 @@ use tracking_detector::TrackingDetector;
 use types::{ContentExtractionResult, ExtractedUrl, ExtractionQuality, RawEmail};
 
 /// Top-level facade that runs all extraction stages on a raw email.
-pub struct ContentPipeline;
+pub struct ContentPipeline {
+    image_analyzer: ImageAnalyzer,
+}
 
 impl ContentPipeline {
-    /// Create a new pipeline instance.
+    /// Create a new pipeline instance with default (disabled) CLIP.
     pub fn new() -> Self {
-        Self
+        Self {
+            image_analyzer: ImageAnalyzer::disabled(),
+        }
+    }
+
+    /// Create a pipeline with CLIP image embedding enabled.
+    pub fn with_clip(config: &image_analyzer::ClipConfig) -> Self {
+        Self {
+            image_analyzer: ImageAnalyzer::new(config),
+        }
     }
 
     /// Run every extraction stage and return an aggregated result.
@@ -79,8 +91,10 @@ impl ContentPipeline {
         // Analyse inline image attachments.
         for attachment in &email.attachments {
             if attachment.is_inline && attachment.content_type.starts_with("image/") {
-                let mut img =
-                    ImageAnalyzer::analyze(&attachment.data, &attachment.content_type).await;
+                let mut img = self
+                    .image_analyzer
+                    .analyze(&attachment.data, &attachment.content_type)
+                    .await;
                 img.content_id = attachment.content_id.clone();
                 images.push(img);
             }
@@ -93,6 +107,7 @@ impl ContentPipeline {
                 ocr_text: None,
                 ocr_confidence: 0.0,
                 description: alt.clone(),
+                clip_embedding: None,
             });
         }
 

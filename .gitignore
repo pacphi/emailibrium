@@ -45,6 +45,7 @@ coverage/
 
 # Local config overrides
 config.local.yaml
+.env.local
 
 # Security - API Keys and Secrets
 *.key

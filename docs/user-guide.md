@@ -76,12 +76,12 @@ Emailibrium uses vector similarity to understand the meaning of your search, not
 
 **Collections:**
 
-| Collection | Content |
-|-----------|---------|
-| Email Text | Subject + sender + body text |
-| Image Text | OCR text extracted from inline images and image attachments |
-| Image Visual | Visual similarity (CLIP embeddings) for image content |
-| Attachment Text | Text extracted from PDF, DOCX, and XLSX attachments |
+| Collection      | Content                                                     |
+| --------------- | ----------------------------------------------------------- |
+| Email Text      | Subject + sender + body text                                |
+| Image Text      | OCR text extracted from inline images and image attachments |
+| Image Visual    | Visual similarity (CLIP embeddings) for image content       |
+| Attachment Text | Text extracted from PDF, DOCX, and XLSX attachments         |
 
 ### Insights Explorer
 
@@ -170,34 +170,64 @@ Rules are evaluated during ingestion and can also be applied retroactively to ex
 - Sidebar layout preferences
 - Notification preferences
 
+**AI Settings:**
+
+- Embedding provider selection: ONNX (default, runs locally with no external service), Ollama, cloud (OpenAI, Cohere)
+- Generative AI provider: none (default), Ollama, or cloud (OpenAI, Anthropic, Gemini)
+- Provider-aware model selection with per-provider API key configuration
+
 **Advanced:**
 
-- Embedding provider selection (mock, Ollama, cloud)
 - Vector store configuration
 - Quantization settings
 - Export/import configuration
 
 ## Keyboard Shortcuts
 
-| Shortcut | Action |
-|----------|--------|
-| `Cmd+K` | Open command palette |
-| `Escape` | Close modal / palette / panel |
-| `/` | Focus search |
-| `C` | Compose new email |
-| `R` | Reply to current email |
-| `F` | Forward current email |
-| `E` | Archive current email |
-| `#` | Delete current email |
-| `J` | Next email in list |
-| `K` | Previous email in list |
-| `Enter` | Open selected email |
-| `Cmd+Enter` | Send email (in compose) |
-| `Cmd+Shift+A` | Select all in current view |
-| `Cmd+,` | Open settings |
-| `?` | Show keyboard shortcut help |
+| Shortcut      | Action                        |
+| ------------- | ----------------------------- |
+| `Cmd+K`       | Open command palette          |
+| `Escape`      | Close modal / palette / panel |
+| `/`           | Focus search                  |
+| `C`           | Compose new email             |
+| `R`           | Reply to current email        |
+| `F`           | Forward current email         |
+| `E`           | Archive current email         |
+| `#`           | Delete current email          |
+| `J`           | Next email in list            |
+| `K`           | Previous email in list        |
+| `Enter`       | Open selected email           |
+| `Cmd+Enter`   | Send email (in compose)       |
+| `Cmd+Shift+A` | Select all in current view    |
+| `Cmd+,`       | Open settings                 |
+| `?`           | Show keyboard shortcut help   |
 
 ## Tips and Best Practices
+
+### Onboarding
+
+When you launch Emailibrium for the first time, a guided onboarding flow walks you through six steps:
+
+1. **Welcome** -- introduces the application, shows server health status, and lets you choose an email provider (Gmail, Outlook, IMAP). You can also skip email setup to explore the app first.
+2. **Connect** -- authenticates with your chosen email provider via OAuth (Gmail/Outlook) or direct credentials (IMAP).
+3. **Connected Accounts** -- shows your connected accounts with the option to add more providers.
+4. **AI Setup** -- shows available AI tiers. Local AI (ONNX) is ready by default with no setup needed. Optionally configure Ollama for enhanced local LLM features, or add cloud API keys (OpenAI, Anthropic, Gemini) for advanced capabilities.
+5. **Archive Strategy** -- choose how Emailibrium handles archiving: immediate, delayed, or manual.
+6. **Setup Complete** -- summary of your configuration with green/amber status indicators for each component. Launch the app or go to Settings to adjust.
+
+You can return to onboarding settings at any time via Settings.
+
+> **Developer setup:** Run `make setup` on the command line for a guided wizard that configures prerequisites, secrets, OAuth apps, and AI providers before launching the app. See the [Setup Guide](setup-guide.md).
+
+### Chat
+
+The Chat feature provides a conversational interface for interacting with your email:
+
+- Ask questions about your email in natural language (e.g., "What meetings do I have this week?")
+- Results are powered by semantic search and, when configured, generative AI
+- The chat panel is accessible from the sidebar
+
+Chat requires a generative AI provider (Ollama or cloud). Without one, the chat interface is available but responses are limited to search results without synthesis.
 
 ### Achieving Inbox Zero Quickly
 

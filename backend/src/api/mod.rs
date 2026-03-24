@@ -1,5 +1,6 @@
 //! API routes for Emailibrium.
 
+pub mod accounts;
 mod ai;
 mod backup;
 mod clustering;
@@ -27,4 +28,5 @@ pub fn routes() -> Router<AppState> {
         .nest("/backup", backup::routes())
         .nest("/ai", ai::routes())
         .nest("/consent", consent::routes())
+        .nest("/auth", accounts::routes())
 }

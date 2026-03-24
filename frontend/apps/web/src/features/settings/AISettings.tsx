@@ -125,8 +125,16 @@ const LLM_MODELS: Record<LlmProvider, LlmModelOption[]> = {
     { value: 'gpt-4o', label: 'GPT-4o', description: 'Highest quality' },
   ],
   anthropic: [
-    { value: 'claude-sonnet-4-20250514', label: 'Claude Sonnet 4', description: 'Balanced speed and quality' },
-    { value: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5', description: 'Fast and cost-effective' },
+    {
+      value: 'claude-sonnet-4-20250514',
+      label: 'Claude Sonnet 4',
+      description: 'Balanced speed and quality',
+    },
+    {
+      value: 'claude-haiku-4-5-20251001',
+      label: 'Claude Haiku 4.5',
+      description: 'Fast and cost-effective',
+    },
   ],
 };
 
@@ -174,9 +182,7 @@ export function AISettings() {
   } = useSettings();
 
   const [isResetting, setIsResetting] = useState(false);
-  const [llmModel, setLlmModel] = useState(
-    () => LLM_MODELS[llmProvider]?.[0]?.value ?? '',
-  );
+  const [llmModel, setLlmModel] = useState(() => LLM_MODELS[llmProvider]?.[0]?.value ?? '');
 
   // Derive the current embedding provider from the selected model
   const embeddingProvider = useMemo(() => {
@@ -559,9 +565,7 @@ function ApiKeyInput({ id, label, value, onChange, placeholder, helpText }: ApiK
         </button>
       </div>
       <p className="text-xs text-gray-500 dark:text-gray-400">{helpText}</p>
-      {value && (
-        <p className="text-xs text-green-600 dark:text-green-400">Key saved.</p>
-      )}
+      {value && <p className="text-xs text-green-600 dark:text-green-400">Key saved.</p>}
     </div>
   );
 }

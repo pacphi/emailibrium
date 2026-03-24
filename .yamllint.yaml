@@ -1,6 +1,12 @@
 # yamllint configuration
 extends: default
 
+ignore: |
+  pnpm-lock.yaml
+  node_modules/
+  target/
+  ruvector/
+
 rules:
   line-length:
     max: 200

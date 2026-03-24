@@ -32,7 +32,10 @@ const PROVIDERS: ProviderOption[] = [
         {/* Envelope flap */}
         <path d="M24 7.1L18.35 11.6 14.5 8.6V3l9.5 4.1z" fill="#28A8EA" />
         {/* Left panel with O */}
-        <path d="M14.5 3H1.25C.56 3 0 3.56 0 4.25v15.5C0 20.44.56 21 1.25 21H14.5V3z" fill="#0364B8" />
+        <path
+          d="M14.5 3H1.25C.56 3 0 3.56 0 4.25v15.5C0 20.44.56 21 1.25 21H14.5V3z"
+          fill="#0364B8"
+        />
         <ellipse cx="7.25" cy="12" rx="3.75" ry="4" fill="#0078D4" />
         <ellipse cx="7.25" cy="12" rx="2.25" ry="2.5" fill="white" />
       </svg>

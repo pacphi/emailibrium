@@ -1,6 +1,6 @@
 ---
-name: "V3 MCP Optimization"
-description: "MCP server optimization and transport layer enhancement for claude-flow v3. Implements connection pooling, load balancing, tool registry optimization, and performance monitoring for sub-100ms response times."
+name: 'V3 MCP Optimization'
+description: 'MCP server optimization and transport layer enhancement for claude-flow v3. Implements connection pooling, load balancing, tool registry optimization, and performance monitoring for sub-100ms response times.'
 ---
 
 # V3 MCP Optimization
@@ -24,6 +24,7 @@ Task("Transport optimization", "Optimize transport layer performance", "mcp-spec
 ## MCP Performance Architecture
 
 ### Current State Analysis
+
 ```
 Current MCP Issues:
 ├── Cold Start Latency: ~1.8s MCP server init
@@ -41,6 +42,7 @@ Target Performance:
 ```
 
 ### MCP Server Architecture
+
 ```typescript
 // src/core/mcp/mcp-server.ts
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
@@ -74,16 +76,19 @@ export class OptimizedMCPServer {
   private metrics: MCPMetrics;
 
   constructor(config: OptimizedMCPConfig) {
-    this.server = new Server({
-      name: 'claude-flow-v3',
-      version: '3.0.0'
-    }, {
-      capabilities: {
-        tools: { listChanged: true },
-        resources: { subscribe: true, listChanged: true },
-        prompts: { listChanged: true }
-      }
-    });
+    this.server = new Server(
+      {
+        name: 'claude-flow-v3',
+        version: '3.0.0',
+      },
+      {
+        capabilities: {
+          tools: { listChanged: true },
+          resources: { subscribe: true, listChanged: true },
+          prompts: { listChanged: true },
+        },
+      },
+    );
 
     this.connectionPool = new ConnectionPool(config);
     this.toolRegistry = new FastToolRegistry(config.toolIndexType);
@@ -116,6 +121,7 @@ export class OptimizedMCPServer {
 ## Connection Pool Implementation
 
 ### Advanced Connection Pooling
+
 ```typescript
 // src/core/mcp/connection-pool.ts
 interface PooledConnection {
@@ -138,7 +144,7 @@ export class ConnectionPool {
       idleTimeoutMs: 300000, // 5 minutes
       maxUsageCount: 1000,
       healthCheckIntervalMs: 30000,
-      ...config
+      ...config,
     };
 
     this.healthChecker = new HealthChecker(this.config.healthCheckIntervalMs);
@@ -169,7 +175,7 @@ export class ConnectionPool {
       connection,
       lastUsed: Date.now(),
       usageCount: 1,
-      isHealthy: true
+      isHealthy: true,
     };
 
     this.pool.set(pooledConn.id, pooledConn);
@@ -217,9 +223,7 @@ export class ConnectionPool {
 
   private findAvailableConnection(endpoint: string): PooledConnection | null {
     for (const conn of this.pool.values()) {
-      if (conn.isHealthy &&
-          conn.connection.endpoint === endpoint &&
-          Date.now() - conn.lastUsed < this.config.idleTimeoutMs) {
+      if (conn.isHealthy && conn.connection.endpoint === endpoint && Date.now() - conn.lastUsed < this.config.idleTimeoutMs) {
         return conn;
       }
     }
@@ -231,6 +235,7 @@ export class ConnectionPool {
 ## Fast Tool Registry
 
 ### O(1) Tool Lookup Implementation
+
 ```typescript
 // src/core/mcp/fast-tool-registry.ts
 interface ToolIndexEntry {
@@ -265,7 +270,7 @@ export class FastToolRegistry {
         handler: tool.handler,
         metadata: tool.metadata,
         usageCount: 0,
-        avgLatencyMs: 0
+        avgLatencyMs: 0,
       };
 
       this.toolIndex.set(tool.name, entry);
@@ -279,7 +284,7 @@ export class FastToolRegistry {
     }
 
     // Build fuzzy search index
-    await this.fuzzyMatcher.buildIndex(tools.map(t => t.name));
+    await this.fuzzyMatcher.buildIndex(tools.map((t) => t.name));
 
     console.log(`Tool index built in ${(performance.now() - start).toFixed(2)}ms for ${tools.length} tools`);
   }
@@ -311,9 +316,7 @@ export class FastToolRegistry {
 
   findToolsByCategory(category: string): ToolIndexEntry[] {
     const toolNames = this.categoryIndex.get(category) || [];
-    return toolNames
-      .map(name => this.toolIndex.get(name))
-      .filter(entry => entry !== undefined) as ToolIndexEntry[];
+    return toolNames.map((name) => this.toolIndex.get(name)).filter((entry) => entry !== undefined) as ToolIndexEntry[];
   }
 
   getMostUsedTools(limit: number = 10): ToolIndexEntry[] {
@@ -336,6 +339,7 @@ export class FastToolRegistry {
 ## Load Balancing & Request Distribution
 
 ### Intelligent Load Balancer
+
 ```typescript
 // src/core/mcp/load-balancer.ts
 interface ServerInstance {
@@ -357,8 +361,7 @@ export class MCPLoadBalancer {
   }
 
   selectServer(toolCategory?: string): ServerInstance | null {
-    const healthyServers = Array.from(this.servers.values())
-      .filter(server => server.isHealthy);
+    const healthyServers = Array.from(this.servers.values()).filter((server) => server.isHealthy);
 
     if (healthyServers.length === 0) return null;
 
@@ -381,22 +384,18 @@ export class MCPLoadBalancer {
   }
 
   private leastConnectionsSelection(servers: ServerInstance[]): ServerInstance {
-    return servers.reduce((least, current) =>
-      current.currentConnections < least.currentConnections ? current : least
-    );
+    return servers.reduce((least, current) => (current.currentConnections < least.currentConnections ? current : least));
   }
 
   private responseTimeSelection(servers: ServerInstance[]): ServerInstance {
-    return servers.reduce((fastest, current) =>
-      current.responseTime < fastest.responseTime ? current : fastest
-    );
+    return servers.reduce((fastest, current) => (current.responseTime < fastest.responseTime ? current : fastest));
   }
 
   private weightedSelection(servers: ServerInstance[], category?: string): ServerInstance {
     // Prefer servers with lower load and better response time
-    const scored = servers.map(server => ({
+    const scored = servers.map((server) => ({
       server,
-      score: this.calculateServerScore(server, category)
+      score: this.calculateServerScore(server, category),
     }));
 
     scored.sort((a, b) => b.score - a.score);
@@ -404,7 +403,7 @@ export class MCPLoadBalancer {
   }
 
   private calculateServerScore(server: ServerInstance, category?: string): number {
-    const loadFactor = 1 - (server.currentConnections / server.maxConnections);
+    const loadFactor = 1 - server.currentConnections / server.maxConnections;
     const responseFactor = 1 / (server.responseTime + 1);
     const categoryBonus = this.getCategoryBonus(server, category);
 
@@ -423,6 +422,7 @@ export class MCPLoadBalancer {
 ## Transport Layer Optimization
 
 ### High-Performance Transport
+
 ```typescript
 // src/core/mcp/optimized-transport.ts
 export class OptimizedTransport {
@@ -446,9 +446,7 @@ export class OptimizedTransport {
     const start = performance.now();
 
     // Compress if enabled
-    const payload = this.compression
-      ? await this.compress(message)
-      : message;
+    const payload = this.compression ? await this.compress(message) : message;
 
     // Send through transport
     await this.transport.send(payload);
@@ -462,10 +460,7 @@ export class OptimizedTransport {
 
     // Start batch timeout if not already running
     if (!this.batchTimeout) {
-      this.batchTimeout = setTimeout(
-        () => this.flushBatch(),
-        this.config.batchTimeoutMs || 10
-      );
+      this.batchTimeout = setTimeout(() => this.flushBatch(), this.config.batchTimeoutMs || 10);
     }
 
     // Flush if batch is full
@@ -483,15 +478,13 @@ export class OptimizedTransport {
     // Send as single batched message
     await this.sendImmediate({
       type: 'batch',
-      messages: batch
+      messages: batch,
     });
   }
 
   private canBatch(message: MCPMessage): boolean {
     // Don't batch urgent messages or responses
-    return message.type !== 'response' &&
-           message.priority !== 'high' &&
-           message.type !== 'error';
+    return message.type !== 'response' && message.priority !== 'high' && message.type !== 'error';
   }
 
   private async compress(data: any): Promise<Buffer> {
@@ -504,6 +497,7 @@ export class OptimizedTransport {
 ## Performance Monitoring
 
 ### Real-time MCP Metrics
+
 ```typescript
 // src/core/mcp/metrics.ts
 interface MCPMetrics {
@@ -544,10 +538,7 @@ export class MCPMetricsCollector {
   }
 
   recordToolLookup(latencyMs: number): void {
-    this.metrics.toolLookupTime = this.updateMovingAverage(
-      this.metrics.toolLookupTime,
-      latencyMs
-    );
+    this.metrics.toolLookupTime = this.updateMovingAverage(this.metrics.toolLookupTime, latencyMs);
   }
 
   recordStartup(latencyMs: number): void {
@@ -560,15 +551,14 @@ export class MCPMetricsCollector {
 
   getHealthStatus(): HealthStatus {
     const errorRate = this.metrics.errorCount / this.metrics.requestCount;
-    const poolHitRate = this.metrics.connectionPoolHits /
-      (this.metrics.connectionPoolHits + this.metrics.connectionPoolMisses);
+    const poolHitRate = this.metrics.connectionPoolHits / (this.metrics.connectionPoolHits + this.metrics.connectionPoolMisses);
 
     return {
       status: this.determineHealthStatus(errorRate, poolHitRate),
       errorRate,
       poolHitRate,
       avgResponseTime: this.metrics.avgResponseTime,
-      p95ResponseTime: this.metrics.p95ResponseTime
+      p95ResponseTime: this.metrics.p95ResponseTime,
     };
   }
 
@@ -600,6 +590,7 @@ export class MCPMetricsCollector {
 ## Tool Registry Optimization
 
 ### Pre-compiled Tool Index
+
 ```typescript
 // src/core/mcp/tool-precompiler.ts
 export class ToolPrecompiler {
@@ -637,7 +628,7 @@ export class ToolPrecompiler {
       categoryIndex,
       fuzzyIndex,
       totalTools: tools.length,
-      compiledAt: new Date()
+      compiledAt: new Date(),
     };
   }
 
@@ -659,6 +650,7 @@ export class ToolPrecompiler {
 ## Advanced Caching Strategy
 
 ### Multi-Level Caching
+
 ```typescript
 // src/core/mcp/multi-level-cache.ts
 export class MultiLevelCache {
@@ -669,7 +661,7 @@ export class MultiLevelCache {
   constructor(config: CacheConfig) {
     this.l2Cache = new LRUCache<string, any>({
       max: config.l2MaxEntries || 10000,
-      ttl: config.l2TTL || 300000 // 5 minutes
+      ttl: config.l2TTL || 300000, // 5 minutes
     });
 
     this.l3Cache = new DiskCache(config.l3Path || './.cache/mcp');
@@ -722,6 +714,7 @@ export class MultiLevelCache {
 ## Success Metrics
 
 ### Performance Targets
+
 - [ ] **Startup Time**: <400ms MCP server initialization (4.5x improvement)
 - [ ] **Response Time**: <100ms p95 for tool execution
 - [ ] **Tool Lookup**: <5ms average lookup time
@@ -731,23 +724,12 @@ export class MultiLevelCache {
 - [ ] **Throughput**: >1000 requests/second
 
 ### Monitoring Dashboards
+
 ```typescript
 const mcpDashboard = {
-  metrics: [
-    'Request latency (p50, p95, p99)',
-    'Error rate by tool category',
-    'Connection pool utilization',
-    'Tool lookup performance',
-    'Memory usage trends',
-    'Cache hit rates (L1, L2, L3)'
-  ],
+  metrics: ['Request latency (p50, p95, p99)', 'Error rate by tool category', 'Connection pool utilization', 'Tool lookup performance', 'Memory usage trends', 'Cache hit rates (L1, L2, L3)'],
 
-  alerts: [
-    'Response time >200ms for 5 minutes',
-    'Error rate >5% for 1 minute',
-    'Pool hit rate <70% for 10 minutes',
-    'Memory usage >500MB for 5 minutes'
-  ]
+  alerts: ['Response time >200ms for 5 minutes', 'Error rate >5% for 1 minute', 'Pool hit rate <70% for 10 minutes', 'Memory usage >500MB for 5 minutes'],
 };
 ```
 
@@ -761,6 +743,7 @@ const mcpDashboard = {
 ## Usage Examples
 
 ### Complete MCP Optimization
+
 ```bash
 # Full MCP server optimization
 Task("MCP optimization implementation",
@@ -769,6 +752,7 @@ Task("MCP optimization implementation",
 ```
 
 ### Specific Optimization
+
 ```bash
 # Connection pool optimization
 Task("MCP connection pooling",

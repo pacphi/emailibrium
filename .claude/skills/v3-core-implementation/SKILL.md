@@ -1,6 +1,6 @@
 ---
-name: "V3 Core Implementation"
-description: "Core module implementation for claude-flow v3. Implements DDD domains, clean architecture patterns, dependency injection, and modular TypeScript codebase with comprehensive testing."
+name: 'V3 Core Implementation'
+description: 'Core module implementation for claude-flow v3. Implements DDD domains, clean architecture patterns, dependency injection, and modular TypeScript codebase with comprehensive testing.'
 ---
 
 # V3 Core Implementation
@@ -24,6 +24,7 @@ Task("Health domain", "Implement health monitoring domain", "core-implementer")
 ## Core Implementation Architecture
 
 ### Domain Structure
+
 ```
 src/
 ├── core/
@@ -72,6 +73,7 @@ src/
 ## Base Domain Classes
 
 ### Entity Base Class
+
 ```typescript
 // src/core/shared/domain/entity.ts
 export abstract class Entity<T> {
@@ -117,6 +119,7 @@ export abstract class Entity<T> {
 ```
 
 ### Value Object Base Class
+
 ```typescript
 // src/core/shared/domain/value-object.ts
 export abstract class ValueObject<T> {
@@ -145,6 +148,7 @@ export abstract class ValueObject<T> {
 ```
 
 ### Aggregate Root
+
 ```typescript
 // src/core/shared/domain/aggregate-root.ts
 export abstract class AggregateRoot<T> extends Entity<T> {
@@ -168,6 +172,7 @@ export abstract class AggregateRoot<T> extends Entity<T> {
 ## Task Management Domain Implementation
 
 ### Task Entity
+
 ```typescript
 // src/core/domains/task-management/entities/task.entity.ts
 import { AggregateRoot } from '../../../shared/domain/aggregate-root';
@@ -201,7 +206,7 @@ export class Task extends AggregateRoot<TaskId> {
       priority,
       status: TaskStatus.pending(),
       createdAt: new Date(),
-      updatedAt: new Date()
+      updatedAt: new Date(),
     });
 
     return task;
@@ -220,11 +225,7 @@ export class Task extends AggregateRoot<TaskId> {
     this.props.status = TaskStatus.assigned();
     this.props.updatedAt = new Date();
 
-    this.applyEvent(new TaskAssignedEvent(
-      this.id.value,
-      agentId,
-      this.props.priority
-    ));
+    this.applyEvent(new TaskAssignedEvent(this.id.value, agentId, this.props.priority));
   }
 
   public complete(result: TaskResult): void {
@@ -235,20 +236,28 @@ export class Task extends AggregateRoot<TaskId> {
     this.props.status = TaskStatus.completed();
     this.props.updatedAt = new Date();
 
-    this.applyEvent(new TaskCompletedEvent(
-      this.id.value,
-      result,
-      this.calculateDuration()
-    ));
+    this.applyEvent(new TaskCompletedEvent(this.id.value, result, this.calculateDuration()));
   }
 
   // Getters
-  get description(): string { return this.props.description; }
-  get priority(): Priority { return this.props.priority; }
-  get status(): TaskStatus { return this.props.status; }
-  get assignedAgentId(): string | undefined { return this.props.assignedAgentId; }
-  get createdAt(): Date { return this.props.createdAt; }
-  get updatedAt(): Date { return this.props.updatedAt; }
+  get description(): string {
+    return this.props.description;
+  }
+  get priority(): Priority {
+    return this.props.priority;
+  }
+  get status(): TaskStatus {
+    return this.props.status;
+  }
+  get assignedAgentId(): string | undefined {
+    return this.props.assignedAgentId;
+  }
+  get createdAt(): Date {
+    return this.props.createdAt;
+  }
+  get updatedAt(): Date {
+    return this.props.updatedAt;
+  }
 
   private calculateDuration(): number {
     return this.props.updatedAt.getTime() - this.props.createdAt.getTime();
@@ -257,6 +266,7 @@ export class Task extends AggregateRoot<TaskId> {
 ```
 
 ### Task Value Objects
+
 ```typescript
 // src/core/domains/task-management/value-objects/task-id.vo.ts
 export class TaskId extends ValueObject<string> {
@@ -288,21 +298,41 @@ export class TaskStatus extends ValueObject<TaskStatusType> {
     super({ value: status });
   }
 
-  static pending(): TaskStatus { return new TaskStatus('pending'); }
-  static assigned(): TaskStatus { return new TaskStatus('assigned'); }
-  static inProgress(): TaskStatus { return new TaskStatus('in_progress'); }
-  static completed(): TaskStatus { return new TaskStatus('completed'); }
-  static failed(): TaskStatus { return new TaskStatus('failed'); }
+  static pending(): TaskStatus {
+    return new TaskStatus('pending');
+  }
+  static assigned(): TaskStatus {
+    return new TaskStatus('assigned');
+  }
+  static inProgress(): TaskStatus {
+    return new TaskStatus('in_progress');
+  }
+  static completed(): TaskStatus {
+    return new TaskStatus('completed');
+  }
+  static failed(): TaskStatus {
+    return new TaskStatus('failed');
+  }
 
   get value(): TaskStatusType {
     return this.props.value;
   }
 
-  public isPending(): boolean { return this.value === 'pending'; }
-  public isAssigned(): boolean { return this.value === 'assigned'; }
-  public isInProgress(): boolean { return this.value === 'in_progress'; }
-  public isCompleted(): boolean { return this.value === 'completed'; }
-  public isFailed(): boolean { return this.value === 'failed'; }
+  public isPending(): boolean {
+    return this.value === 'pending';
+  }
+  public isAssigned(): boolean {
+    return this.value === 'assigned';
+  }
+  public isInProgress(): boolean {
+    return this.value === 'in_progress';
+  }
+  public isCompleted(): boolean {
+    return this.value === 'completed';
+  }
+  public isFailed(): boolean {
+    return this.value === 'failed';
+  }
 }
 
 // src/core/domains/task-management/value-objects/priority.vo.ts
@@ -313,10 +343,18 @@ export class Priority extends ValueObject<PriorityLevel> {
     super({ value: level });
   }
 
-  static low(): Priority { return new Priority('low'); }
-  static medium(): Priority { return new Priority('medium'); }
-  static high(): Priority { return new Priority('high'); }
-  static critical(): Priority { return new Priority('critical'); }
+  static low(): Priority {
+    return new Priority('low');
+  }
+  static medium(): Priority {
+    return new Priority('medium');
+  }
+  static high(): Priority {
+    return new Priority('high');
+  }
+  static critical(): Priority {
+    return new Priority('critical');
+  }
 
   get value(): PriorityLevel {
     return this.props.value;
@@ -332,6 +370,7 @@ export class Priority extends ValueObject<PriorityLevel> {
 ## Domain Services
 
 ### Task Scheduling Service
+
 ```typescript
 // src/core/domains/task-management/services/task-scheduling.service.ts
 import { Injectable } from '../../../shared/infrastructure/dependency-container';
@@ -341,9 +380,7 @@ import { Priority } from '../value-objects/priority.vo';
 @Injectable()
 export class TaskSchedulingService {
   public prioritizeTasks(tasks: Task[]): Task[] {
-    return tasks.sort((a, b) =>
-      b.priority.getNumericValue() - a.priority.getNumericValue()
-    );
+    return tasks.sort((a, b) => b.priority.getNumericValue() - a.priority.getNumericValue());
   }
 
   public canSchedule(task: Task, agentCapacity: number): boolean {
@@ -363,7 +400,7 @@ export class TaskSchedulingService {
       low: 0.5,
       medium: 1.0,
       high: 1.5,
-      critical: 2.0
+      critical: 2.0,
     };
 
     return baseTime * priorityMultiplier[task.priority.value];
@@ -374,6 +411,7 @@ export class TaskSchedulingService {
 ## Repository Interfaces & Implementations
 
 ### Task Repository Interface
+
 ```typescript
 // src/core/domains/task-management/repositories/task.repository.ts
 export interface ITaskRepository {
@@ -387,13 +425,14 @@ export interface ITaskRepository {
 ```
 
 ### SQLite Implementation
+
 ```typescript
 // src/core/domains/task-management/repositories/sqlite-task.repository.ts
 @Injectable()
 export class SqliteTaskRepository implements ITaskRepository {
   constructor(
     @Inject('Database') private db: Database,
-    @Inject('Logger') private logger: ILogger
+    @Inject('Logger') private logger: ILogger,
   ) {}
 
   async save(task: Task): Promise<void> {
@@ -403,15 +442,7 @@ export class SqliteTaskRepository implements ITaskRepository {
       ) VALUES (?, ?, ?, ?, ?, ?, ?)
     `;
 
-    await this.db.run(sql, [
-      task.id.value,
-      task.description,
-      task.priority.value,
-      task.status.value,
-      task.assignedAgentId,
-      task.createdAt.toISOString(),
-      task.updatedAt.toISOString()
-    ]);
+    await this.db.run(sql, [task.id.value, task.description, task.priority.value, task.status.value, task.assignedAgentId, task.createdAt.toISOString(), task.updatedAt.toISOString()]);
 
     this.logger.debug(`Task saved: ${task.id.value}`);
   }
@@ -427,7 +458,7 @@ export class SqliteTaskRepository implements ITaskRepository {
     const sql = 'SELECT * FROM tasks WHERE status = ? ORDER BY priority DESC, created_at ASC';
     const rows = await this.db.all(sql, ['pending']);
 
-    return rows.map(row => this.mapRowToTask(row));
+    return rows.map((row) => this.mapRowToTask(row));
   }
 
   private mapRowToTask(row: any): Task {
@@ -438,7 +469,7 @@ export class SqliteTaskRepository implements ITaskRepository {
       status: TaskStatus.fromString(row.status),
       assignedAgentId: row.assigned_agent_id,
       createdAt: new Date(row.created_at),
-      updatedAt: new Date(row.updated_at)
+      updatedAt: new Date(row.updated_at),
     });
   }
 }
@@ -447,6 +478,7 @@ export class SqliteTaskRepository implements ITaskRepository {
 ## Application Layer
 
 ### Use Case Implementation
+
 ```typescript
 // src/core/application/use-cases/assign-task.use-case.ts
 @Injectable()
@@ -455,7 +487,7 @@ export class AssignTaskUseCase {
     @Inject('TaskRepository') private taskRepository: ITaskRepository,
     @Inject('AgentRepository') private agentRepository: IAgentRepository,
     @Inject('DomainEventBus') private eventBus: DomainEventBus,
-    @Inject('Logger') private logger: ILogger
+    @Inject('Logger') private logger: ILogger,
   ) {}
 
   async execute(command: AssignTaskCommand): Promise<AssignTaskResult> {
@@ -483,16 +515,10 @@ export class AssignTaskUseCase {
       agent.acceptTask(task.id);
 
       // 4. Persist changes
-      await Promise.all([
-        this.taskRepository.save(task),
-        this.agentRepository.save(agent)
-      ]);
+      await Promise.all([this.taskRepository.save(task), this.agentRepository.save(agent)]);
 
       // 5. Publish domain events
-      const events = [
-        ...task.getUncommittedEvents(),
-        ...agent.getUncommittedEvents()
-      ];
+      const events = [...task.getUncommittedEvents(), ...agent.getUncommittedEvents()];
 
       for (const event of events) {
         await this.eventBus.publish(event);
@@ -507,9 +533,8 @@ export class AssignTaskUseCase {
       return AssignTaskResult.success({
         taskId: task.id,
         agentId: command.agentId,
-        assignedAt: new Date()
+        assignedAt: new Date(),
       });
-
     } catch (error) {
       this.logger.error(`Failed to assign task ${command.taskId.value}:`, error);
       return AssignTaskResult.failure(error);
@@ -530,6 +555,7 @@ export class AssignTaskUseCase {
 ## Dependency Injection Setup
 
 ### Container Configuration
+
 ```typescript
 // src/core/shared/infrastructure/dependency-container.ts
 import { Container } from 'inversify';
@@ -545,32 +571,20 @@ export class DependencyContainer {
 
   private setupBindings(): void {
     // Repositories
-    this.container.bind<ITaskRepository>(TYPES.TaskRepository)
-      .to(SqliteTaskRepository)
-      .inSingletonScope();
+    this.container.bind<ITaskRepository>(TYPES.TaskRepository).to(SqliteTaskRepository).inSingletonScope();
 
-    this.container.bind<IAgentRepository>(TYPES.AgentRepository)
-      .to(SqliteAgentRepository)
-      .inSingletonScope();
+    this.container.bind<IAgentRepository>(TYPES.AgentRepository).to(SqliteAgentRepository).inSingletonScope();
 
     // Services
-    this.container.bind<TaskSchedulingService>(TYPES.TaskSchedulingService)
-      .to(TaskSchedulingService)
-      .inSingletonScope();
+    this.container.bind<TaskSchedulingService>(TYPES.TaskSchedulingService).to(TaskSchedulingService).inSingletonScope();
 
     // Use Cases
-    this.container.bind<AssignTaskUseCase>(TYPES.AssignTaskUseCase)
-      .to(AssignTaskUseCase)
-      .inSingletonScope();
+    this.container.bind<AssignTaskUseCase>(TYPES.AssignTaskUseCase).to(AssignTaskUseCase).inSingletonScope();
 
     // Infrastructure
-    this.container.bind<ILogger>(TYPES.Logger)
-      .to(ConsoleLogger)
-      .inSingletonScope();
+    this.container.bind<ILogger>(TYPES.Logger).to(ConsoleLogger).inSingletonScope();
 
-    this.container.bind<DomainEventBus>(TYPES.DomainEventBus)
-      .to(InMemoryDomainEventBus)
-      .inSingletonScope();
+    this.container.bind<DomainEventBus>(TYPES.DomainEventBus).to(InMemoryDomainEventBus).inSingletonScope();
   }
 
   get<T>(serviceIdentifier: symbol): T {
@@ -586,6 +600,7 @@ export class DependencyContainer {
 ## Modern TypeScript Configuration
 
 ### Strict TypeScript Setup
+
 ```json
 // tsconfig.json
 {
@@ -625,6 +640,7 @@ export class DependencyContainer {
 ## Testing Implementation
 
 ### Domain Unit Tests
+
 ```typescript
 // src/core/domains/task-management/__tests__/entities/task.entity.test.ts
 describe('Task Entity', () => {
@@ -673,14 +689,14 @@ describe('Task Entity', () => {
       task.assignTo('agent-123');
       task.complete(TaskResult.success('done'));
 
-      expect(() => task.assignTo('agent-456'))
-        .toThrow('Cannot assign completed task');
+      expect(() => task.assignTo('agent-456')).toThrow('Cannot assign completed task');
     });
   });
 });
 ```
 
 ### Integration Tests
+
 ```typescript
 // src/core/domains/task-management/__tests__/integration/task-repository.integration.test.ts
 describe('TaskRepository Integration', () => {
@@ -728,6 +744,7 @@ describe('TaskRepository Integration', () => {
 ## Performance Optimizations
 
 ### Entity Caching
+
 ```typescript
 // src/core/shared/infrastructure/entity-cache.ts
 @Injectable()
@@ -781,6 +798,7 @@ export class EntityCache<T extends Entity<any>> {
 ## Usage Examples
 
 ### Complete Core Implementation
+
 ```bash
 # Full core module implementation
 Task("Core implementation",
@@ -789,6 +807,7 @@ Task("Core implementation",
 ```
 
 ### Domain-Specific Implementation
+
 ```bash
 # Single domain implementation
 Task("Task domain implementation",

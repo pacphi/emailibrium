@@ -16,7 +16,7 @@ test-vectors = ["vectors"]
 axum = { version = "0.8", features = ["json", "query", "macros"] }
 tokio = { version = "1", features = ["full"] }
 tower = "0.5"
-tower-http = { version = "0.6", features = ["cors", "trace"] }
+tower-http = { version = "0.6", features = ["cors", "set-header", "trace"] }
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
@@ -27,10 +27,12 @@ sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "chrono", "uuid
 
 # Caching
 moka = { version = "0.12", features = ["future"] }
+redis = { version = "0.27", features = ["tokio-comp", "connection-manager"] }
 
 # Auth & Security
 argon2 = "0.5"
 aes-gcm = "0.10"
+sha2 = "0.10"
 zeroize = { version = "1", features = ["derive"] }
 rand = "0.8"
 base64 = "0.22"
@@ -47,8 +49,21 @@ tokio-stream = { version = "0.1", features = ["sync"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 
-# Content extraction
+# URL encoding for OAuth
+urlencoding = "2"
+
+# Content extraction (ADR-006)
 regex = "1"
+ammonia = "4"
+scraper = "0.26"
+pdf-extract = "0.10"
+
+# Background jobs (ADR-006)
+apalis = { version = "1.0.0-rc.6" }
+apalis-sql = "1.0.0-rc.6"
+
+# Image processing
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif"] }
 
 # Error handling
 thiserror = "2.0"
@@ -61,6 +76,11 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 # Config
 figment = { version = "0.10", features = ["yaml", "env", "toml"] }
 fastembed = "5.13.0"
+
+# Vector database (ADR-003: RuVector as primary)
+ruvector-core = { path = "../ruvector/crates/ruvector-core", default-features = false, features = ["hnsw", "storage", "simd", "parallel"] }
+ruvector-collections = { path = "../ruvector/crates/ruvector-collections" }
+ruvector-gnn = { path = "../ruvector/crates/ruvector-gnn", default-features = false }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["async_tokio"] }

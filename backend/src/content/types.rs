@@ -110,6 +110,10 @@ pub struct ExtractedImage {
     pub ocr_confidence: f32,
     /// Human-readable description (from CLIP or alt text).
     pub description: Option<String>,
+    /// CLIP embedding vector for semantic image search (ADR-006, item #23).
+    /// Populated asynchronously by the background CLIP embedding job.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub clip_embedding: Option<Vec<f32>>,
 }
 
 /// Metadata and extracted text from a non-image attachment.

@@ -1,0 +1,37 @@
+# Development configuration for Docker Compose
+# Mounted at /app/config.yaml in the backend container
+#
+# Overrides backend/config.yaml defaults for containerized development.
+# Secrets are injected via Docker secrets, not config files.
+
+host: "0.0.0.0"
+port: 8080
+database_url: "sqlite:/app/data/emailibrium-dev.db?mode=rwc"
+
+store:
+  path: "/app/data/vectors"
+  enabled: true
+
+embedding:
+  provider: "onnx"
+  model: "all-MiniLM-L6-v2"
+  dimensions: 384
+  batch_size: 64
+  cache_size: 10000
+  onnx:
+    model: "all-MiniLM-L6-v2"
+    show_download_progress: true
+    dimensions: 384
+
+encryption:
+  enabled: false
+
+backup:
+  enabled: false
+
+learning:
+  sona_enabled: true
+  ab_control_percentage: 0.0
+
+logging:
+  level: "debug"

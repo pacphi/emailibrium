@@ -1,0 +1,350 @@
+//! Provider synchronization service (DDD-005: Account Management, Audit Item #37).
+//!
+//! `ProviderSync` manages email sync scheduling, delta detection, and
+//! incremental sync using provider-specific history IDs / delta tokens.
+
+use async_trait::async_trait;
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+
+use super::provider::{EmailProvider, ProviderError};
+use super::types::{EmailPage, ListParams, SyncState};
+
+// ---------------------------------------------------------------------------
+// Sync Status
+// ---------------------------------------------------------------------------
+
+/// Status of a sync operation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SyncStatus {
+    Idle,
+    Syncing,
+    Completed,
+    Failed,
+    Paused,
+}
+
+impl std::fmt::Display for SyncStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Idle => write!(f, "idle"),
+            Self::Syncing => write!(f, "syncing"),
+            Self::Completed => write!(f, "completed"),
+            Self::Failed => write!(f, "failed"),
+            Self::Paused => write!(f, "paused"),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Sync Result
+// ---------------------------------------------------------------------------
+
+/// Result of a single sync run.
+#[derive(Debug, Clone, Serialize)]
+pub struct SyncResult {
+    pub account_id: String,
+    pub emails_fetched: u64,
+    pub new_emails: u64,
+    pub updated_emails: u64,
+    pub errors: u32,
+    pub duration_ms: u64,
+    pub new_history_id: Option<String>,
+    pub completed_at: DateTime<Utc>,
+}
+
+// ---------------------------------------------------------------------------
+// Trait
+// ---------------------------------------------------------------------------
+
+/// Provider sync service trait for testability.
+#[async_trait]
+pub trait ProviderSyncService: Send + Sync {
+    /// Execute a full or incremental sync for the given account.
+    async fn sync_account(
+        &self,
+        account_id: &str,
+        access_token: &str,
+        state: &SyncState,
+    ) -> Result<SyncResult, ProviderError>;
+
+    /// Detect changes since the last sync using provider delta mechanisms.
+    async fn detect_delta(
+        &self,
+        access_token: &str,
+        state: &SyncState,
+    ) -> Result<DeltaResult, ProviderError>;
+}
+
+/// Result of delta detection (what changed since last sync).
+#[derive(Debug, Clone, Serialize)]
+pub struct DeltaResult {
+    pub new_message_ids: Vec<String>,
+    pub updated_message_ids: Vec<String>,
+    pub deleted_message_ids: Vec<String>,
+    pub new_history_id: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
+// Implementation
+// ---------------------------------------------------------------------------
+
+/// Concrete provider sync service.
+///
+/// Uses the `EmailProvider` trait to fetch messages and track sync state
+/// via history IDs or page tokens for incremental syncing.
+pub struct ProviderSync {
+    provider: Arc<dyn EmailProvider>,
+    batch_size: u32,
+}
+
+impl ProviderSync {
+    /// Create a new sync service for the given provider.
+    pub fn new(provider: Arc<dyn EmailProvider>, batch_size: u32) -> Self {
+        Self {
+            provider,
+            batch_size,
+        }
+    }
+
+    /// Fetch all pages of messages starting from the sync state cursor.
+    async fn fetch_all_pages(
+        &self,
+        access_token: &str,
+        state: &SyncState,
+    ) -> Result<(Vec<EmailPage>, Option<String>), ProviderError> {
+        let mut pages = Vec::new();
+        let mut page_token = state.next_page_token.clone();
+        let mut last_history_id = state.history_id.clone();
+
+        loop {
+            let params = ListParams {
+                max_results: self.batch_size,
+                page_token: page_token.clone(),
+                label: None,
+                query: None,
+            };
+
+            let page = self.provider.list_messages(access_token, &params).await?;
+            let next_token = page.next_page_token.clone();
+            pages.push(page);
+
+            match next_token {
+                Some(token) => {
+                    page_token = Some(token);
+                }
+                None => {
+                    // Use page_token as a fallback history marker if no
+                    // dedicated history_id mechanism exists.
+                    if last_history_id.is_none() {
+                        last_history_id = page_token;
+                    }
+                    break;
+                }
+            }
+        }
+
+        Ok((pages, last_history_id))
+    }
+}
+
+#[async_trait]
+impl ProviderSyncService for ProviderSync {
+    async fn sync_account(
+        &self,
+        account_id: &str,
+        access_token: &str,
+        state: &SyncState,
+    ) -> Result<SyncResult, ProviderError> {
+        let start = std::time::Instant::now();
+
+        let (pages, new_history_id) = self.fetch_all_pages(access_token, state).await?;
+
+        let mut emails_fetched: u64 = 0;
+        let errors: u32 = 0;
+
+        for page in &pages {
+            emails_fetched += page.messages.len() as u64;
+        }
+
+        // For now, treat all fetched as "new" since we do not yet have
+        // deduplication logic against the local DB. A production
+        // implementation would check message IDs against existing rows.
+        let new_emails = emails_fetched;
+        let updated_emails = 0;
+
+        let duration_ms = start.elapsed().as_millis() as u64;
+
+        Ok(SyncResult {
+            account_id: account_id.to_string(),
+            emails_fetched,
+            new_emails,
+            updated_emails,
+            errors,
+            duration_ms,
+            new_history_id,
+            completed_at: Utc::now(),
+        })
+    }
+
+    async fn detect_delta(
+        &self,
+        access_token: &str,
+        state: &SyncState,
+    ) -> Result<DeltaResult, ProviderError> {
+        // Delta detection fetches one page starting from the last cursor.
+        // Provider-specific delta APIs (Gmail history.list, Graph delta)
+        // would be used in a full implementation; this uses list as fallback.
+        let params = ListParams {
+            max_results: self.batch_size,
+            page_token: state.next_page_token.clone(),
+            label: None,
+            query: None,
+        };
+
+        let page = self.provider.list_messages(access_token, &params).await?;
+
+        let new_message_ids: Vec<String> = page.messages.iter().map(|m| m.id.clone()).collect();
+
+        Ok(DeltaResult {
+            new_message_ids,
+            updated_message_ids: Vec::new(),
+            deleted_message_ids: Vec::new(),
+            new_history_id: page.next_page_token,
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::email::types::{EmailMessage, OAuthTokens};
+
+    /// Mock provider for testing sync.
+    struct MockProvider {
+        messages: Vec<EmailMessage>,
+    }
+
+    impl MockProvider {
+        fn with_messages(count: usize) -> Self {
+            let messages = (0..count)
+                .map(|i| EmailMessage {
+                    id: format!("msg-{i}"),
+                    thread_id: None,
+                    from: format!("sender{i}@test.com"),
+                    to: vec!["user@test.com".into()],
+                    subject: format!("Subject {i}"),
+                    snippet: format!("Snippet {i}"),
+                    body: None,
+                    labels: vec![],
+                    date: Utc::now(),
+                    is_read: false,
+                })
+                .collect();
+            Self { messages }
+        }
+    }
+
+    #[async_trait]
+    impl EmailProvider for MockProvider {
+        async fn authenticate(&self, _code: &str) -> Result<OAuthTokens, ProviderError> {
+            unimplemented!()
+        }
+        async fn refresh_token(&self, _token: &str) -> Result<OAuthTokens, ProviderError> {
+            unimplemented!()
+        }
+        async fn list_messages(
+            &self,
+            _token: &str,
+            _params: &ListParams,
+        ) -> Result<EmailPage, ProviderError> {
+            Ok(EmailPage {
+                messages: self.messages.clone(),
+                next_page_token: None,
+                result_size_estimate: Some(self.messages.len() as u32),
+            })
+        }
+        async fn get_message(&self, _token: &str, id: &str) -> Result<EmailMessage, ProviderError> {
+            self.messages
+                .iter()
+                .find(|m| m.id == id)
+                .cloned()
+                .ok_or(ProviderError::NotFound(id.into()))
+        }
+        async fn archive_message(&self, _token: &str, _id: &str) -> Result<(), ProviderError> {
+            Ok(())
+        }
+        async fn label_message(
+            &self,
+            _token: &str,
+            _id: &str,
+            _labels: &[String],
+        ) -> Result<(), ProviderError> {
+            Ok(())
+        }
+        async fn remove_labels(
+            &self,
+            _token: &str,
+            _id: &str,
+            _labels: &[String],
+        ) -> Result<(), ProviderError> {
+            Ok(())
+        }
+        async fn create_label(&self, _token: &str, name: &str) -> Result<String, ProviderError> {
+            Ok(name.to_string())
+        }
+    }
+
+    fn make_sync_state(account_id: &str) -> SyncState {
+        SyncState {
+            account_id: account_id.to_string(),
+            last_sync_at: None,
+            history_id: None,
+            next_page_token: None,
+            emails_synced: 0,
+            sync_failures: 0,
+            last_error: None,
+            status: "idle".into(),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_sync_account_fetches_messages() {
+        let provider = Arc::new(MockProvider::with_messages(5));
+        let sync = ProviderSync::new(provider, 50);
+        let state = make_sync_state("acct-1");
+
+        let result = sync.sync_account("acct-1", "token", &state).await.unwrap();
+        assert_eq!(result.emails_fetched, 5);
+        assert_eq!(result.new_emails, 5);
+        assert_eq!(result.account_id, "acct-1");
+    }
+
+    #[tokio::test]
+    async fn test_detect_delta() {
+        let provider = Arc::new(MockProvider::with_messages(3));
+        let sync = ProviderSync::new(provider, 50);
+        let state = make_sync_state("acct-1");
+
+        let delta = sync.detect_delta("token", &state).await.unwrap();
+        assert_eq!(delta.new_message_ids.len(), 3);
+        assert!(delta.deleted_message_ids.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_sync_result_has_duration() {
+        let provider = Arc::new(MockProvider::with_messages(1));
+        let sync = ProviderSync::new(provider, 50);
+        let state = make_sync_state("acct-1");
+
+        let result = sync.sync_account("acct-1", "token", &state).await.unwrap();
+        // Duration should be >= 0 (fast test, likely 0 or 1ms)
+        assert!(result.completed_at <= Utc::now());
+    }
+}

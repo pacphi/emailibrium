@@ -1,5 +1,7 @@
 # LLM Implementation Supplemental Plan
+
 ## Emailibrium: Tiered AI Provider Architecture
+
 Version 1.0 | Date: 2026-03-23 | Status: Sprint-Ready
 
 ---
@@ -9,6 +11,7 @@ Version 1.0 | Date: 2026-03-23 | Status: Sprint-Ready
 This plan supplements the PRIMARY-IMPLEMENTATION-PLAN.md to deliver the tiered AI provider architecture described in docs/research/llm-options.md. It adds ONNX Runtime as the default embedding provider, implements model lifecycle management, and establishes the consent-gated cloud provider pathway.
 
 Cross-references:
+
 - Research: docs/research/llm-options.md
 - ADRs: ADR-011 (ONNX Default), ADR-002 (Pluggable Embedding Model), ADR-008 (Privacy & Embedding Security)
 - DDDs: DDD-001 (Email Intelligence bounded context)
@@ -20,11 +23,11 @@ The PRIMARY-IMPLEMENTATION-PLAN.md Sprints 1-7 establish the embedding trait, ve
 
 ### 1.2 Tiered Architecture Summary
 
-| Tier | Name | Embedding | Generative | External Deps | Network Calls |
-|------|------|-----------|------------|---------------|---------------|
-| 0 | Default (zero-config) | fastembed ONNX (all-MiniLM-L6-v2) | None (rule-based fallback) | None | None |
-| 1 | Local Enhanced | fastembed ONNX (same) | Ollama (llama3.2:3b) | Ollama daemon | Zero (localhost only) |
-| 2 | Cloud Opt-in | Cloud API (OpenAI/Cohere) | Cloud LLM (Claude/GPT) | API key | Per-inference |
+| Tier | Name                  | Embedding                         | Generative                 | External Deps | Network Calls         |
+| ---- | --------------------- | --------------------------------- | -------------------------- | ------------- | --------------------- |
+| 0    | Default (zero-config) | fastembed ONNX (all-MiniLM-L6-v2) | None (rule-based fallback) | None          | None                  |
+| 1    | Local Enhanced        | fastembed ONNX (same)             | Ollama (llama3.2:3b)       | Ollama daemon | Zero (localhost only) |
+| 2    | Cloud Opt-in          | Cloud API (OpenAI/Cohere)         | Cloud LLM (Claude/GPT)     | API key       | Per-inference         |
 
 ---
 
@@ -104,6 +107,7 @@ The PRIMARY-IMPLEMENTATION-PLAN.md Sprints 1-7 establish the embedding trait, ve
   - **Files:** docs/deployment-guide.md, docs/configuration-reference.md
 
 **Exit criteria:**
+
 - `cargo build` succeeds on macOS ARM and Linux x86_64
 - `cargo test` passes (mock provider used in test config)
 - Running with `provider: "onnx"` auto-downloads model on first launch
@@ -186,6 +190,7 @@ The PRIMARY-IMPLEMENTATION-PLAN.md Sprints 1-7 establish the embedding trait, ve
   - **Files:** backend/src/vectors/models.rs (inline tests), tests/integration/
 
 **Exit criteria:**
+
 - Model auto-downloads on first run with progress reporting
 - SHA-256 verification passes for all known models
 - Model change triggers re-indexing; old vectors remain searchable during process
@@ -204,6 +209,7 @@ The PRIMARY-IMPLEMENTATION-PLAN.md Sprints 1-7 establish the embedding trait, ve
 
 - [ ] **LLM-3.01**: Define `GenerativeModel` trait
   - New trait in backend/src/vectors/generative.rs (new file):
+
     ```rust
     #[async_trait]
     pub trait GenerativeModel: Send + Sync {
@@ -220,6 +226,7 @@ The PRIMARY-IMPLEMENTATION-PLAN.md Sprints 1-7 establish the embedding trait, ve
         async fn is_available(&self) -> bool;
     }
     ```
+
   - This mirrors the `EmbeddingModel` trait pattern (trait-based abstraction, async, provider-agnostic)
   - **File:** backend/src/vectors/generative.rs (new file)
 
@@ -227,6 +234,7 @@ The PRIMARY-IMPLEMENTATION-PLAN.md Sprints 1-7 establish the embedding trait, ve
   - Reuses the existing reqwest client pattern from `OllamaEmbeddingModel`
   - `generate()`: POST to `{ollama_url}/api/generate` with `model`, `prompt`, `stream: false`
   - `classify()`: constructs a structured prompt:
+
     ```
     Classify the following email into exactly one of these categories: [{categories}].
     Respond with only the category name, nothing else.
@@ -234,6 +242,7 @@ The PRIMARY-IMPLEMENTATION-PLAN.md Sprints 1-7 establish the embedding trait, ve
     Email:
     {text}
     ```
+
   - Parse response: extract the category string, verify it matches one of the input categories (case-insensitive), return error if no match
   - Configurable model name (default: `llama3.2:3b`), temperature (default: 0.1 for classification, 0.7 for chat), max_tokens
   - `is_available()`: GET `{ollama_url}/api/tags` and check if configured model is in the list
@@ -307,23 +316,23 @@ The PRIMARY-IMPLEMENTATION-PLAN.md Sprints 1-7 establish the embedding trait, ve
     ```yaml
     ai:
       generative:
-        provider: "none"           # "none" | "ollama" | "cloud"
+        provider: 'none' # "none" | "ollama" | "cloud"
         ollama:
-          url: "http://localhost:11434"
-          classification_model: "llama3.2:3b"
-          chat_model: "llama3.2:3b"
+          url: 'http://localhost:11434'
+          classification_model: 'llama3.2:3b'
+          chat_model: 'llama3.2:3b'
           classification_max_tokens: 50
           chat_max_tokens: 1024
           classification_temperature: 0.1
           chat_temperature: 0.7
         cloud:
-          provider: "anthropic"    # "anthropic" | "openai" | "google"
-          api_key_env: "ANTHROPIC_API_KEY"
-          base_url: null           # null = use provider default
-          classification_model: "claude-haiku-4-5-20251001"
-          chat_model: "claude-sonnet-4-20250514"
+          provider: 'anthropic' # "anthropic" | "openai" | "google"
+          api_key_env: 'ANTHROPIC_API_KEY'
+          base_url: null # null = use provider default
+          classification_model: 'claude-haiku-4-5-20251001'
+          chat_model: 'claude-sonnet-4-20250514'
           rate_limit_rpm: 60
-          max_input_chars: 2000    # truncate email text before sending
+          max_input_chars: 2000 # truncate email text before sending
       consent:
         require_cloud_consent: true
         audit_cloud_calls: true
@@ -348,6 +357,7 @@ The PRIMARY-IMPLEMENTATION-PLAN.md Sprints 1-7 establish the embedding trait, ve
   - **Files:** backend/src/vectors/generative.rs (inline tests), backend/src/vectors/consent.rs (inline tests), tests/integration/, docs/
 
 **Exit criteria:**
+
 - `generative.provider: "none"` (default) produces no cloud or Ollama calls; classification uses centroid + rule fallback
 - `generative.provider: "ollama"` calls Ollama for classification fallback when centroid confidence is low
 - `generative.provider: "cloud"` is blocked until consent is granted via API
@@ -358,29 +368,29 @@ The PRIMARY-IMPLEMENTATION-PLAN.md Sprints 1-7 establish the embedding trait, ve
 
 ## 3. Feature-to-Sprint Mapping
 
-| Feature | Sprint | Priority | Notes |
-|---------|--------|----------|-------|
-| fastembed crate integration | LLM-1 | P0 | Foundation for all ONNX work |
-| OnnxEmbeddingModel implementation | LLM-1 | P0 | Implements existing EmbeddingModel trait |
-| OnnxConfig + config schema | LLM-1 | P0 | Extends existing EmbeddingConfig |
-| Default provider change (mock to onnx) | LLM-1 | P0 | Zero-config experience |
-| Model manifest system | LLM-2 | P0 | Tracks known models and their properties |
-| Model download + SHA-256 verification | LLM-2 | P0 | Integrity guarantee |
-| Re-indexing on model change | LLM-2 | P1 | Handles model upgrades gracefully |
-| AI status API endpoints | LLM-2 | P1 | Frontend needs model info |
-| Frontend AI settings tab | LLM-2 | P1 | User-facing model management |
-| SQLite ai_metadata migration | LLM-2 | P0 | Required for model change detection |
-| GenerativeModel trait | LLM-3 | P1 | Abstraction for generative providers |
-| OllamaGenerativeModel | LLM-3 | P1 | Tier 1 generative capability |
-| CloudGenerativeModel | LLM-3 | P2 | Tier 2 generative capability |
-| Classification LLM fallback | LLM-3 | P1 | Improves accuracy on ambiguous emails |
-| Rule-based fallback (Tier 0) | LLM-3 | P1 | Zero-dependency classification fallback |
-| Consent management + audit log | LLM-3 | P1 | Required before any cloud calls |
-| Chat API backend | LLM-3 | P2 | Conversational AI features |
-| Frontend consent dialog | LLM-3 | P1 | User must consent before cloud usage |
-| Multilingual model support | Future | P3 | multilingual-e5-small, same 384D |
-| Image CLIP embedding | Future | P3 | Requires ImageEmbeddingModel trait |
-| Embedded GGUF generative (no Ollama) | Future | P3 | candle or llama-cpp-rs for in-process generative |
+| Feature                                | Sprint | Priority | Notes                                            |
+| -------------------------------------- | ------ | -------- | ------------------------------------------------ |
+| fastembed crate integration            | LLM-1  | P0       | Foundation for all ONNX work                     |
+| OnnxEmbeddingModel implementation      | LLM-1  | P0       | Implements existing EmbeddingModel trait         |
+| OnnxConfig + config schema             | LLM-1  | P0       | Extends existing EmbeddingConfig                 |
+| Default provider change (mock to onnx) | LLM-1  | P0       | Zero-config experience                           |
+| Model manifest system                  | LLM-2  | P0       | Tracks known models and their properties         |
+| Model download + SHA-256 verification  | LLM-2  | P0       | Integrity guarantee                              |
+| Re-indexing on model change            | LLM-2  | P1       | Handles model upgrades gracefully                |
+| AI status API endpoints                | LLM-2  | P1       | Frontend needs model info                        |
+| Frontend AI settings tab               | LLM-2  | P1       | User-facing model management                     |
+| SQLite ai_metadata migration           | LLM-2  | P0       | Required for model change detection              |
+| GenerativeModel trait                  | LLM-3  | P1       | Abstraction for generative providers             |
+| OllamaGenerativeModel                  | LLM-3  | P1       | Tier 1 generative capability                     |
+| CloudGenerativeModel                   | LLM-3  | P2       | Tier 2 generative capability                     |
+| Classification LLM fallback            | LLM-3  | P1       | Improves accuracy on ambiguous emails            |
+| Rule-based fallback (Tier 0)           | LLM-3  | P1       | Zero-dependency classification fallback          |
+| Consent management + audit log         | LLM-3  | P1       | Required before any cloud calls                  |
+| Chat API backend                       | LLM-3  | P2       | Conversational AI features                       |
+| Frontend consent dialog                | LLM-3  | P1       | User must consent before cloud usage             |
+| Multilingual model support             | Future | P3       | multilingual-e5-small, same 384D                 |
+| Image CLIP embedding                   | Future | P3       | Requires ImageEmbeddingModel trait               |
+| Embedded GGUF generative (no Ollama)   | Future | P3       | candle or llama-cpp-rs for in-process generative |
 
 ---
 
@@ -393,6 +403,7 @@ fastembed wraps ort with model management (download, cache, tokenization) built 
 ### 4.2 Why all-MiniLM-L6-v2 as Default
 
 Per the research (docs/research/llm-options.md Section 4.2):
+
 - 22M parameters, ~90 MB ONNX -- smallest viable model
 - 384 dimensions -- matches the existing MockEmbeddingModel default and HNSW index configuration in config.rs
 - Sub-50ms single-sentence latency on CPU
@@ -406,6 +417,7 @@ fastembed's API is synchronous (no tokio dependency). Rather than introducing a 
 ### 4.4 Why Rule-Based Fallback at Tier 0 Instead of Embedded Generative
 
 A small GGUF model (e.g., Gemma-3-270M at 529 MB) could run in-process via candle or llama-cpp-rs. However:
+
 - Adds 500+ MB to first-run download (vs 90 MB for embedding only)
 - Adds llama.cpp C dependency or candle compile time
 - Classification fallback is needed for only 5-15% of emails
@@ -422,88 +434,88 @@ Per the research (Section 5.5), fastembed ONNX is faster than Ollama for embeddi
 
 ### New Files
 
-| File | Sprint | Description |
-|------|--------|-------------|
-| backend/src/vectors/models.rs | LLM-2 | ModelManifest, ModelDownloadManager |
-| backend/src/vectors/reindex.rs | LLM-2 | Re-indexing orchestrator |
-| backend/src/vectors/generative.rs | LLM-3 | GenerativeModel trait + implementations |
-| backend/src/vectors/consent.rs | LLM-3 | ConsentManager + audit logging |
-| backend/migrations/NNNN_ai_metadata.sql | LLM-2 | ai_metadata table, embedding_status column |
-| backend/migrations/NNNN_ai_consent.sql | LLM-3 | ai_consent + ai_audit_log tables |
+| File                                    | Sprint | Description                                |
+| --------------------------------------- | ------ | ------------------------------------------ |
+| backend/src/vectors/models.rs           | LLM-2  | ModelManifest, ModelDownloadManager        |
+| backend/src/vectors/reindex.rs          | LLM-2  | Re-indexing orchestrator                   |
+| backend/src/vectors/generative.rs       | LLM-3  | GenerativeModel trait + implementations    |
+| backend/src/vectors/consent.rs          | LLM-3  | ConsentManager + audit logging             |
+| backend/migrations/NNNN_ai_metadata.sql | LLM-2  | ai_metadata table, embedding_status column |
+| backend/migrations/NNNN_ai_consent.sql  | LLM-3  | ai_consent + ai_audit_log tables           |
 
 ### Modified Files
 
-| File | Sprint | Changes |
-|------|--------|---------|
-| backend/Cargo.toml | LLM-1 | Add fastembed dependency |
-| backend/src/vectors/embedding.rs | LLM-1 | Add OnnxEmbeddingModel, update pipeline provider matching |
-| backend/src/vectors/config.rs | LLM-1, LLM-3 | Add OnnxConfig, GenerativeConfig, ConsentConfig structs |
-| backend/src/vectors/mod.rs | LLM-2, LLM-3 | Declare new modules (models, reindex, generative, consent) |
-| backend/src/vectors/categorizer.rs | LLM-3 | Wire in generative fallback + rule-based fallback |
-| config/config.development.yaml | LLM-1 | Change default provider to onnx, add onnx section |
-| config/config.test.yaml | LLM-1 | Explicitly set provider to mock |
-| docs/deployment-guide.md | LLM-1, LLM-3 | Update prerequisites, add tier documentation |
-| docs/configuration-reference.md | LLM-1, LLM-3 | Document new config fields |
+| File                               | Sprint       | Changes                                                    |
+| ---------------------------------- | ------------ | ---------------------------------------------------------- |
+| backend/Cargo.toml                 | LLM-1        | Add fastembed dependency                                   |
+| backend/src/vectors/embedding.rs   | LLM-1        | Add OnnxEmbeddingModel, update pipeline provider matching  |
+| backend/src/vectors/config.rs      | LLM-1, LLM-3 | Add OnnxConfig, GenerativeConfig, ConsentConfig structs    |
+| backend/src/vectors/mod.rs         | LLM-2, LLM-3 | Declare new modules (models, reindex, generative, consent) |
+| backend/src/vectors/categorizer.rs | LLM-3        | Wire in generative fallback + rule-based fallback          |
+| config/config.development.yaml     | LLM-1        | Change default provider to onnx, add onnx section          |
+| config/config.test.yaml            | LLM-1        | Explicitly set provider to mock                            |
+| docs/deployment-guide.md           | LLM-1, LLM-3 | Update prerequisites, add tier documentation               |
+| docs/configuration-reference.md    | LLM-1, LLM-3 | Document new config fields                                 |
 
 ---
 
 ## 6. Risk Register
 
-| ID | Risk | Likelihood | Impact | Mitigation |
-|----|------|-----------|--------|------------|
-| R1 | fastembed crate has breaking API change | Low | High | Pin exact version (`=5.12.0`). The `EmbeddingModel` trait facade means swapping fastembed for direct ort or another crate requires changing only one file. |
-| R2 | ONNX Runtime binary size unacceptable | Low | Low | ~25 MB shared library is within budget for a desktop app. If needed, `ort` minimal-build feature reduces size. |
-| R3 | Model download fails on first run (firewall, corporate proxy, air-gapped) | Medium | Medium | Clear error message with manual download URL. Document `model_path` config for pre-staging models. Provide a `make download-models` target. |
-| R4 | Re-indexing too slow for large inboxes (100k+ emails) | Medium | Medium | Background process with progress reporting. Old vectors remain searchable during re-indexing. Batch processing with configurable concurrency. Estimate: 100k emails at 100 sentences/sec = ~17 minutes. |
-| R5 | 384-dimension embeddings insufficient quality for classification | Low | Medium | MTEB ~56 is adequate for email triage. Users can upgrade to bge-base-en-v1.5 (768D, MTEB ~61) via config. Dimension change triggers automatic re-indexing. |
-| R6 | Cloud consent UX confuses users | Low | Medium | Clear, plain-language dialog. Consent is revocable. System immediately stops cloud calls on revocation. |
-| R7 | Ollama API changes break generative integration | Low | Medium | Pin to documented API endpoints (/api/generate, /api/tags). Integration tests with wiremock catch regressions. |
-| R8 | fastembed model cache conflicts with other apps using fastembed | Low | Low | Configure `model_path` to use Emailibrium-specific directory (`~/.emailibrium/models/`) instead of shared `~/.cache/fastembed/`. |
-| R9 | ONNX Runtime telemetry on Windows | Low | Low | Call `DisableTelemetryEvents()` during ort session initialization. Document in privacy policy. Not applicable on macOS/Linux. |
+| ID  | Risk                                                                      | Likelihood | Impact | Mitigation                                                                                                                                                                                              |
+| --- | ------------------------------------------------------------------------- | ---------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| R1  | fastembed crate has breaking API change                                   | Low        | High   | Pin exact version (`=5.12.0`). The `EmbeddingModel` trait facade means swapping fastembed for direct ort or another crate requires changing only one file.                                              |
+| R2  | ONNX Runtime binary size unacceptable                                     | Low        | Low    | ~25 MB shared library is within budget for a desktop app. If needed, `ort` minimal-build feature reduces size.                                                                                          |
+| R3  | Model download fails on first run (firewall, corporate proxy, air-gapped) | Medium     | Medium | Clear error message with manual download URL. Document `model_path` config for pre-staging models. Provide a `make download-models` target.                                                             |
+| R4  | Re-indexing too slow for large inboxes (100k+ emails)                     | Medium     | Medium | Background process with progress reporting. Old vectors remain searchable during re-indexing. Batch processing with configurable concurrency. Estimate: 100k emails at 100 sentences/sec = ~17 minutes. |
+| R5  | 384-dimension embeddings insufficient quality for classification          | Low        | Medium | MTEB ~56 is adequate for email triage. Users can upgrade to bge-base-en-v1.5 (768D, MTEB ~61) via config. Dimension change triggers automatic re-indexing.                                              |
+| R6  | Cloud consent UX confuses users                                           | Low        | Medium | Clear, plain-language dialog. Consent is revocable. System immediately stops cloud calls on revocation.                                                                                                 |
+| R7  | Ollama API changes break generative integration                           | Low        | Medium | Pin to documented API endpoints (/api/generate, /api/tags). Integration tests with wiremock catch regressions.                                                                                          |
+| R8  | fastembed model cache conflicts with other apps using fastembed           | Low        | Low    | Configure `model_path` to use Emailibrium-specific directory (`~/.emailibrium/models/`) instead of shared `~/.cache/fastembed/`.                                                                        |
+| R9  | ONNX Runtime telemetry on Windows                                         | Low        | Low    | Call `DisableTelemetryEvents()` during ort session initialization. Document in privacy policy. Not applicable on macOS/Linux.                                                                           |
 
 ---
 
 ## 7. Success Metrics
 
-| Metric | Target | Measurement Method |
-|--------|--------|--------------------|
-| Default embed latency (ONNX, CPU, single sentence) | < 50 ms | Benchmark test in CI, p95 latency |
-| Batch embed throughput (ONNX, 32 sentences) | > 100 sentences/sec | Benchmark test |
-| First-run model download time (50 Mbps connection) | < 30 seconds | Manual test, ~90 MB download |
-| Classification accuracy with ONNX embeddings | > 93% | Evaluation framework from Primary Plan Sprint 7 |
-| Memory footprint (ONNX model loaded) | < 300 MB additional RSS | Measured via `/proc/self/status` or Activity Monitor |
-| Binary size increase from fastembed + ort | < 30 MB | `ls -la` on release binary before/after |
-| Zero-config experience | `make dev` starts with working embeddings, no setup | Manual smoke test |
-| Re-indexing throughput | > 50 emails/sec | Benchmark on 10k email dataset |
-| Cloud audit log completeness | 100% of cloud calls logged | Integration test assertion |
-| Consent gate reliability | 0 cloud calls without consent | Integration test assertion |
+| Metric                                             | Target                                              | Measurement Method                                   |
+| -------------------------------------------------- | --------------------------------------------------- | ---------------------------------------------------- |
+| Default embed latency (ONNX, CPU, single sentence) | < 50 ms                                             | Benchmark test in CI, p95 latency                    |
+| Batch embed throughput (ONNX, 32 sentences)        | > 100 sentences/sec                                 | Benchmark test                                       |
+| First-run model download time (50 Mbps connection) | < 30 seconds                                        | Manual test, ~90 MB download                         |
+| Classification accuracy with ONNX embeddings       | > 93%                                               | Evaluation framework from Primary Plan Sprint 7      |
+| Memory footprint (ONNX model loaded)               | < 300 MB additional RSS                             | Measured via `/proc/self/status` or Activity Monitor |
+| Binary size increase from fastembed + ort          | < 30 MB                                             | `ls -la` on release binary before/after              |
+| Zero-config experience                             | `make dev` starts with working embeddings, no setup | Manual smoke test                                    |
+| Re-indexing throughput                             | > 50 emails/sec                                     | Benchmark on 10k email dataset                       |
+| Cloud audit log completeness                       | 100% of cloud calls logged                          | Integration test assertion                           |
+| Consent gate reliability                           | 0 cloud calls without consent                       | Integration test assertion                           |
 
 ---
 
 ## 8. Dependencies
 
-| Dependency | Required By | Version | Notes |
-|-----------|------------|---------|-------|
-| `fastembed` | LLM-1 | 5.12.x | Rust crate; auto-downloads ONNX Runtime |
-| `ort` | LLM-1 (transitive) | 2.0.0-rc.12 | Transitive via fastembed |
-| ONNX Runtime | LLM-1 (transitive) | 1.24.x | Shared library, downloaded by ort |
-| `tokenizers` | LLM-1 (transitive) | via fastembed | Hugging Face tokenizer |
-| Internet (first run only) | LLM-1 | N/A | ~90 MB model download from Hugging Face Hub |
-| `reqwest` | LLM-3 | existing | Already in Cargo.toml; used for Ollama and cloud HTTP calls |
-| `sha2` | LLM-2 | 0.10.x | SHA-256 verification; may already be in dependency tree |
-| Ollama (optional) | LLM-3 | any | Only for Tier 1 generative features |
-| Cloud API key (optional) | LLM-3 | N/A | Only for Tier 2; read from env var |
-| Primary Plan Sprint 1 | LLM-1 | N/A | EmbeddingModel trait, EmbeddingPipeline, VectorStore |
-| Primary Plan Sprint 2 | LLM-2 | N/A | Ingestion pipeline (for re-indexing) |
+| Dependency                | Required By        | Version       | Notes                                                       |
+| ------------------------- | ------------------ | ------------- | ----------------------------------------------------------- |
+| `fastembed`               | LLM-1              | 5.12.x        | Rust crate; auto-downloads ONNX Runtime                     |
+| `ort`                     | LLM-1 (transitive) | 2.0.0-rc.12   | Transitive via fastembed                                    |
+| ONNX Runtime              | LLM-1 (transitive) | 1.24.x        | Shared library, downloaded by ort                           |
+| `tokenizers`              | LLM-1 (transitive) | via fastembed | Hugging Face tokenizer                                      |
+| Internet (first run only) | LLM-1              | N/A           | ~90 MB model download from Hugging Face Hub                 |
+| `reqwest`                 | LLM-3              | existing      | Already in Cargo.toml; used for Ollama and cloud HTTP calls |
+| `sha2`                    | LLM-2              | 0.10.x        | SHA-256 verification; may already be in dependency tree     |
+| Ollama (optional)         | LLM-3              | any           | Only for Tier 1 generative features                         |
+| Cloud API key (optional)  | LLM-3              | N/A           | Only for Tier 2; read from env var                          |
+| Primary Plan Sprint 1     | LLM-1              | N/A           | EmbeddingModel trait, EmbeddingPipeline, VectorStore        |
+| Primary Plan Sprint 2     | LLM-2              | N/A           | Ingestion pipeline (for re-indexing)                        |
 
 ---
 
 ## 9. Open Questions
 
-| ID | Question | Decision Needed By | Notes |
-|----|----------|--------------------|-------|
-| Q1 | Should the ONNX model cache use `~/.emailibrium/models/` or `~/.cache/fastembed/` (fastembed default)? | LLM-1 start | Using Emailibrium-specific path avoids conflicts but means fastembed cannot share cache with other apps. Recommendation: use `~/.emailibrium/models/`. |
-| Q2 | Should quantized (INT8) models be the default for smaller download? | LLM-1 start | INT8 reduces download from ~90 MB to ~23 MB with minimal quality loss. Tradeoff: slightly lower accuracy. Recommendation: FP32 default, INT8 available via config. |
-| Q3 | Should the rule-based fallback (Tier 0, no generative) be a separate pluggable trait or inline logic? | LLM-3 start | A trait enables future swapping (e.g., embedded GGUF model). Recommendation: make it a trait with a `RuleBasedClassifier` default implementation. |
-| Q4 | Should cloud audit logs be exportable (CSV/JSON)? | LLM-3 | Useful for compliance. Low effort to add. Recommendation: yes, add GET /api/v1/ai/audit?format=csv. |
-| Q5 | Should re-indexing be cancellable? | LLM-2 | If a user changes the model again mid-reindex, the current reindex should be abandoned and restarted with the new model. Recommendation: yes, support cancellation. |
+| ID  | Question                                                                                               | Decision Needed By | Notes                                                                                                                                                               |
+| --- | ------------------------------------------------------------------------------------------------------ | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Q1  | Should the ONNX model cache use `~/.emailibrium/models/` or `~/.cache/fastembed/` (fastembed default)? | LLM-1 start        | Using Emailibrium-specific path avoids conflicts but means fastembed cannot share cache with other apps. Recommendation: use `~/.emailibrium/models/`.              |
+| Q2  | Should quantized (INT8) models be the default for smaller download?                                    | LLM-1 start        | INT8 reduces download from ~90 MB to ~23 MB with minimal quality loss. Tradeoff: slightly lower accuracy. Recommendation: FP32 default, INT8 available via config.  |
+| Q3  | Should the rule-based fallback (Tier 0, no generative) be a separate pluggable trait or inline logic?  | LLM-3 start        | A trait enables future swapping (e.g., embedded GGUF model). Recommendation: make it a trait with a `RuleBasedClassifier` default implementation.                   |
+| Q4  | Should cloud audit logs be exportable (CSV/JSON)?                                                      | LLM-3              | Useful for compliance. Low effort to add. Recommendation: yes, add GET /api/v1/ai/audit?format=csv.                                                                 |
+| Q5  | Should re-indexing be cancellable?                                                                     | LLM-2              | If a user changes the model again mid-reindex, the current reindex should be abandoned and restarted with the new model. Recommendation: yes, support cancellation. |

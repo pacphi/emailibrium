@@ -1,15 +1,22 @@
-//! Graph-based topic clustering engine (S3-01, S3-02: ADR-009).
+//! GraphSAGE + KMeans++ hybrid topic clustering engine (S3-01, S3-02: ADR-009).
 //!
-//! Implements a production-ready clustering pipeline that mirrors the GraphSAGE
-//! intent: build a similarity graph, propagate information through neighbors,
-//! then cluster via Mini-batch K-Means with automatic K selection.
+//! Implements a production-ready clustering pipeline:
+//! 1. Build an email similarity graph via HNSW neighbors
+//! 2. Run GraphSAGE (via `ruvector-gnn` `RuvectorLayer`) to produce learned node
+//!    embeddings that capture graph structure
+//! 3. Cluster embeddings with KMeans++ for stable, interpretable topic clusters
+//!
+//! This replaces the earlier Mini-batch K-Means approach with a true GNN-based
+//! pipeline that leverages attention-based neighbor aggregation.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
+use ruvector_gnn::RuvectorLayer;
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
+use tracing;
 
 use crate::db::Database;
 
@@ -22,7 +29,7 @@ use super::types::VectorCollection;
 // Configuration
 // ---------------------------------------------------------------------------
 
-/// Configuration for the clustering engine (ADR-009).
+/// Configuration for the GraphSAGE + KMeans++ clustering engine (ADR-009).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClusterConfig {
     /// Minimum number of emails to form a cluster.
@@ -43,6 +50,21 @@ pub struct ClusterConfig {
     /// Number of nearest neighbors for the similarity graph.
     #[serde(default = "default_neighbor_count")]
     pub neighbor_count: usize,
+    /// Hidden dimension for GraphSAGE layers.
+    #[serde(default = "default_graphsage_hidden_dim")]
+    pub graphsage_hidden_dim: usize,
+    /// Number of GraphSAGE propagation layers.
+    #[serde(default = "default_graphsage_num_layers")]
+    pub graphsage_num_layers: usize,
+    /// Number of attention heads per GraphSAGE layer.
+    #[serde(default = "default_graphsage_attention_heads")]
+    pub graphsage_attention_heads: usize,
+    /// Dropout rate for GraphSAGE layers (0.0 = none).
+    #[serde(default = "default_graphsage_dropout")]
+    pub graphsage_dropout: f32,
+    /// Maximum KMeans++ iterations for convergence.
+    #[serde(default = "default_kmeans_max_iters")]
+    pub kmeans_max_iters: usize,
 }
 
 fn default_min_cluster_size() -> usize {
@@ -63,6 +85,21 @@ fn default_max_clusters() -> usize {
 fn default_neighbor_count() -> usize {
     20
 }
+fn default_graphsage_hidden_dim() -> usize {
+    64
+}
+fn default_graphsage_num_layers() -> usize {
+    2
+}
+fn default_graphsage_attention_heads() -> usize {
+    4
+}
+fn default_graphsage_dropout() -> f32 {
+    0.0
+}
+fn default_kmeans_max_iters() -> usize {
+    100
+}
 
 impl Default for ClusterConfig {
     fn default() -> Self {
@@ -73,6 +110,11 @@ impl Default for ClusterConfig {
             min_stability_runs: default_min_stability_runs(),
             max_clusters: default_max_clusters(),
             neighbor_count: default_neighbor_count(),
+            graphsage_hidden_dim: default_graphsage_hidden_dim(),
+            graphsage_num_layers: default_graphsage_num_layers(),
+            graphsage_attention_heads: default_graphsage_attention_heads(),
+            graphsage_dropout: default_graphsage_dropout(),
+            kmeans_max_iters: default_kmeans_max_iters(),
         }
     }
 }
@@ -185,42 +227,66 @@ fn euclidean_distance_sq(a: &[f32], b: &[f32]) -> f32 {
         .sum()
 }
 
-/// Mini-batch K-Means clustering.
+/// KMeans++ clustering (Lloyd's algorithm with KMeans++ initialization).
 ///
 /// Returns cluster assignment for each data point.
-pub fn kmeans(data: &[Vec<f32>], k: usize, max_iters: usize, batch_size: usize) -> Vec<usize> {
+///
+/// This replaces the earlier Mini-batch K-Means with full Lloyd's iterations
+/// for more accurate, stable clusters. KMeans++ seeding ensures good initial
+/// centroid placement, and the algorithm converges when assignments stop changing.
+pub fn kmeans(data: &[Vec<f32>], k: usize, max_iters: usize, _batch_size: usize) -> Vec<usize> {
     let n = data.len();
     if n == 0 || k == 0 {
         return vec![];
     }
     let k = k.min(n);
+    let dim = data[0].len();
 
     let mut centroids = kmeans_plus_plus_init(data, k);
-    let mut counts: Vec<u64> = vec![0; k];
+    let mut assignments: Vec<usize> = data
+        .iter()
+        .map(|point| nearest_centroid(point, &centroids))
+        .collect();
 
-    let effective_batch = batch_size.min(n);
+    for _iter in 0..max_iters {
+        // Recompute centroids from current assignments.
+        let mut new_centroids = vec![vec![0.0_f32; dim]; k];
+        let mut counts = vec![0usize; k];
 
-    for iter in 0..max_iters {
-        // Sample batch (deterministic: sliding window for reproducibility).
-        let start = (iter * effective_batch) % n;
-        let batch_indices: Vec<usize> = (0..effective_batch).map(|i| (start + i) % n).collect();
-
-        for &idx in &batch_indices {
-            let nearest = nearest_centroid(&data[idx], &centroids);
-            counts[nearest] += 1;
-            let lr = 1.0 / counts[nearest] as f32;
-
-            // Update centroid with learning rate.
-            for (c, d) in centroids[nearest].iter_mut().zip(data[idx].iter()) {
-                *c += lr * (*d - *c);
+        for (i, &cluster) in assignments.iter().enumerate() {
+            counts[cluster] += 1;
+            for (d, val) in data[i].iter().enumerate() {
+                new_centroids[cluster][d] += val;
             }
         }
+
+        for c in 0..k {
+            if counts[c] > 0 {
+                let n_f = counts[c] as f32;
+                for val in new_centroids[c].iter_mut() {
+                    *val /= n_f;
+                }
+            } else {
+                // Empty cluster: keep old centroid.
+                new_centroids[c] = centroids[c].clone();
+            }
+        }
+
+        centroids = new_centroids;
+
+        // Reassign all points.
+        let new_assignments: Vec<usize> = data
+            .iter()
+            .map(|point| nearest_centroid(point, &centroids))
+            .collect();
+
+        if new_assignments == assignments {
+            break; // Converged.
+        }
+        assignments = new_assignments;
     }
 
-    // Final assignment pass.
-    data.iter()
-        .map(|point| nearest_centroid(point, &centroids))
-        .collect()
+    assignments
 }
 
 /// Find the index of the nearest centroid to a point.
@@ -385,10 +451,100 @@ fn build_similarity_graph(
     graph
 }
 
-/// Single-layer mean aggregation (simplified GraphSAGE).
+/// GraphSAGE propagation using ruvector-gnn `RuvectorLayer`.
 ///
-/// New embedding = 0.5 * own_vector + 0.5 * mean(neighbor_vectors).
-fn propagate_embeddings(
+/// Runs multiple GNN layers over the similarity graph. Each layer performs
+/// attention-based message passing (multi-head attention + GRU update +
+/// layer normalization) to produce learned node embeddings that capture
+/// multi-hop graph structure.
+///
+/// Falls back to a simple mean-aggregation if GNN layer construction fails
+/// (e.g., dimension mismatch), logging a warning.
+fn propagate_embeddings_graphsage(
+    ids: &[String],
+    embeddings: &[Vec<f32>],
+    graph: &HashMap<String, Vec<(String, f32)>>,
+    config: &ClusterConfig,
+) -> Vec<Vec<f32>> {
+    let id_to_idx: HashMap<&str, usize> = ids
+        .iter()
+        .enumerate()
+        .map(|(i, id)| (id.as_str(), i))
+        .collect();
+
+    let input_dim = embeddings.first().map(|v| v.len()).unwrap_or(0);
+    if input_dim == 0 {
+        return embeddings.to_vec();
+    }
+
+    let hidden_dim = config.graphsage_hidden_dim;
+    let num_layers = config.graphsage_num_layers.max(1);
+    let heads = config.graphsage_attention_heads.max(1);
+    let dropout = config.graphsage_dropout;
+
+    // Build GNN layer stack.
+    // First layer: input_dim -> hidden_dim
+    // Subsequent layers: hidden_dim -> hidden_dim
+    // hidden_dim must be divisible by heads; round up if needed.
+    let effective_hidden = hidden_dim.div_ceil(heads) * heads;
+
+    let mut layers: Vec<RuvectorLayer> = Vec::with_capacity(num_layers);
+    for layer_idx in 0..num_layers {
+        let in_dim = if layer_idx == 0 {
+            input_dim
+        } else {
+            effective_hidden
+        };
+        match RuvectorLayer::new(in_dim, effective_hidden, heads, dropout) {
+            Ok(layer) => layers.push(layer),
+            Err(e) => {
+                tracing::warn!(
+                    "GraphSAGE layer {layer_idx} construction failed: {e}. \
+                     Falling back to mean aggregation."
+                );
+                return propagate_embeddings_mean(ids, embeddings, graph);
+            }
+        }
+    }
+
+    // Run forward pass for each node through the layer stack.
+    let mut current_embeddings = embeddings.to_vec();
+
+    for layer in &layers {
+        let mut next_embeddings = Vec::with_capacity(ids.len());
+
+        for (i, id) in ids.iter().enumerate() {
+            let neighbors = graph.get(id.as_str());
+
+            let (neighbor_embs, edge_weights) = match neighbors {
+                Some(n) if !n.is_empty() => {
+                    let mut embs = Vec::new();
+                    let mut weights = Vec::new();
+                    for (neighbor_id, weight) in n {
+                        if let Some(&j) = id_to_idx.get(neighbor_id.as_str()) {
+                            embs.push(current_embeddings[j].clone());
+                            weights.push(*weight);
+                        }
+                    }
+                    (embs, weights)
+                }
+                _ => (vec![], vec![]),
+            };
+
+            let updated = layer.forward(&current_embeddings[i], &neighbor_embs, &edge_weights);
+            next_embeddings.push(updated);
+        }
+
+        current_embeddings = next_embeddings;
+    }
+
+    current_embeddings
+}
+
+/// Fallback: single-layer mean aggregation when GNN layer construction fails.
+///
+/// New embedding = 0.5 * own_vector + 0.5 * weighted_mean(neighbor_vectors).
+fn propagate_embeddings_mean(
     ids: &[String],
     embeddings: &[Vec<f32>],
     graph: &HashMap<String, Vec<(String, f32)>>,
@@ -409,7 +565,6 @@ fn propagate_embeddings(
                 _ => return embeddings[i].clone(),
             };
 
-            // Compute weighted mean of neighbor embeddings.
             let mut mean = vec![0.0_f32; dim];
             let mut weight_sum = 0.0_f32;
 
@@ -428,7 +583,6 @@ fn propagate_embeddings(
                 }
             }
 
-            // 0.5 * own + 0.5 * neighborhood mean.
             embeddings[i]
                 .iter()
                 .zip(mean.iter())
@@ -691,7 +845,7 @@ impl ClusterEngine {
             })
             .collect();
 
-        // Step 1: Build similarity graph.
+        // Step 1: Build similarity graph via HNSW neighbors.
         let graph = build_similarity_graph(
             &ids,
             &embeddings,
@@ -700,8 +854,8 @@ impl ClusterEngine {
             &thread_map,
         );
 
-        // Step 2: Propagate embeddings.
-        let propagated = propagate_embeddings(&ids, &embeddings, &graph);
+        // Step 2: GraphSAGE propagation (ruvector-gnn learned embeddings).
+        let propagated = propagate_embeddings_graphsage(&ids, &embeddings, &graph, &self.config);
 
         // Step 3: Auto-detect K via silhouette score.
         let max_k = self.config.max_clusters.min(ids.len());
@@ -710,8 +864,9 @@ impl ClusterEngine {
         let mut best_k = min_k;
         let mut best_score = f32::NEG_INFINITY;
 
+        let probe_iters = self.config.kmeans_max_iters.min(50);
         for k in min_k..=max_k.min(10) {
-            let assignments = kmeans(&propagated, k, 50, 64);
+            let assignments = kmeans(&propagated, k, probe_iters, 0);
             let score = silhouette_score(&propagated, &assignments, k);
             if score > best_score {
                 best_score = score;
@@ -719,8 +874,8 @@ impl ClusterEngine {
             }
         }
 
-        // Step 4: Run K-Means with best K.
-        let assignments = kmeans(&propagated, best_k, 100, 64);
+        // Step 4: Run KMeans++ with best K.
+        let assignments = kmeans(&propagated, best_k, self.config.kmeans_max_iters, 0);
 
         // Step 5: Build new clusters.
         let mut cluster_members: HashMap<usize, Vec<usize>> = HashMap::new();
@@ -1079,40 +1234,76 @@ mod tests {
         );
     }
 
-    // -- Graph propagation test ----------------------------------------------
+    // -- Graph propagation test (mean fallback) ---------------------------------
 
     #[test]
-    fn test_graph_neighbor_propagation() {
+    fn test_graph_neighbor_propagation_mean_fallback() {
         let ids = vec!["a".to_string(), "b".to_string(), "c".to_string()];
-        // Use vectors with positive cosine similarity so graph edges have weight > 0.
         let embeddings = vec![
             vec![1.0, 0.1, 0.0],
             vec![0.1, 1.0, 0.1],
             vec![0.0, 0.1, 1.0],
         ];
 
-        // Build a simple graph where all are neighbors.
         let sender_map = HashMap::new();
         let thread_map = HashMap::new();
         let graph = build_similarity_graph(&ids, &embeddings, 2, &sender_map, &thread_map);
 
-        let propagated = propagate_embeddings(&ids, &embeddings, &graph);
+        // Test the mean-aggregation fallback path.
+        let propagated = propagate_embeddings_mean(&ids, &embeddings, &graph);
 
-        // Each propagated embedding should be 0.5 * own + 0.5 * weighted_mean(neighbors).
-        // The vectors have positive overlap, so propagation mixes neighbor info.
         assert_eq!(propagated.len(), 3);
         for emb in &propagated {
             assert_eq!(emb.len(), 3);
         }
 
-        // The first point [1.0, 0.1, 0.0] should gain some weight in dim 2
-        // from neighbor c=[0.0, 0.1, 1.0], moving away from original.
+        // The first point [1.0, 0.1, 0.0] should gain some weight in dim 2.
         let original_dim2 = 0.0_f32;
         assert!(
             propagated[0][2] > original_dim2 + 1e-6,
             "Propagation should mix neighbor information into dim 2, got {}",
             propagated[0][2]
         );
+    }
+
+    // -- GraphSAGE propagation test -------------------------------------------
+
+    #[test]
+    fn test_graphsage_propagation() {
+        let ids = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+        let embeddings = vec![
+            vec![1.0, 0.1, 0.0, 0.0],
+            vec![0.1, 1.0, 0.1, 0.0],
+            vec![0.0, 0.1, 1.0, 0.1],
+        ];
+
+        let sender_map = HashMap::new();
+        let thread_map = HashMap::new();
+        let graph = build_similarity_graph(&ids, &embeddings, 2, &sender_map, &thread_map);
+
+        let config = ClusterConfig {
+            graphsage_hidden_dim: 4,
+            graphsage_num_layers: 1,
+            graphsage_attention_heads: 1,
+            graphsage_dropout: 0.0,
+            ..Default::default()
+        };
+
+        let propagated = propagate_embeddings_graphsage(&ids, &embeddings, &graph, &config);
+
+        assert_eq!(propagated.len(), 3);
+        // Output dim equals effective_hidden (rounded to heads multiple).
+        let effective_hidden = ((config.graphsage_hidden_dim + config.graphsage_attention_heads
+            - 1)
+            / config.graphsage_attention_heads)
+            * config.graphsage_attention_heads;
+        for emb in &propagated {
+            assert_eq!(emb.len(), effective_hidden);
+        }
+
+        // Embeddings should differ from each other (GNN learned different representations).
+        assert_ne!(propagated[0], propagated[1]);
+        assert_ne!(propagated[1], propagated[2]);
     }
 
     // -- Cluster assignment hysteresis test -----------------------------------

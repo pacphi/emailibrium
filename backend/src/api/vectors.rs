@@ -140,10 +140,21 @@ async fn semantic_search(
             limit: req.limit,
         };
 
+        // Obtain SONA preference for re-ranking (item #18).
+        let preference = if state.vector_service.config.search.sona_reranking_enabled {
+            state
+                .vector_service
+                .learning_engine
+                .get_session_preference()
+                .await
+        } else {
+            None
+        };
+
         let result = state
             .vector_service
             .hybrid_search
-            .search(&query)
+            .search_with_sona(&query, preference.as_deref())
             .await
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -277,10 +288,21 @@ async fn hybrid_search(
         limit: req.limit,
     };
 
+    // Obtain the SONA session preference vector for re-ranking (item #18).
+    let preference = if state.vector_service.config.search.sona_reranking_enabled {
+        state
+            .vector_service
+            .learning_engine
+            .get_session_preference()
+            .await
+    } else {
+        None
+    };
+
     let result = state
         .vector_service
         .hybrid_search
-        .search(&query)
+        .search_with_sona(&query, preference.as_deref())
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 

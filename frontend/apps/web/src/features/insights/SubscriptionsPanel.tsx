@@ -175,7 +175,11 @@ function PanelSkeleton() {
   );
 }
 
-export function SubscriptionsPanel({ subscriptions, isLoading, onRefresh }: SubscriptionsPanelProps) {
+export function SubscriptionsPanel({
+  subscriptions,
+  isLoading,
+  onRefresh,
+}: SubscriptionsPanelProps) {
   const [isUnsubscribing, setIsUnsubscribing] = useState(false);
 
   if (isLoading) return <PanelSkeleton />;

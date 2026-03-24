@@ -17,12 +17,12 @@ unsatisfactory.
 
 The evaluation uses representative subject lines from four domains:
 
-| Domain    | Sample Size | Example                                          |
-|-----------|-------------|--------------------------------------------------|
-| Tech      | 5           | "RE: Pull request #234 - Refactor auth module"   |
-| Finance   | 5           | "Q4 Budget Review - Final Numbers Approved"       |
-| Legal     | 5           | "Contract renewal - Master Services Agreement v3" |
-| Marketing | 5           | "Campaign performance report - 23% CTR improvement"|
+| Domain    | Sample Size | Example                                             |
+| --------- | ----------- | --------------------------------------------------- |
+| Tech      | 5           | "RE: Pull request #234 - Refactor auth module"      |
+| Finance   | 5           | "Q4 Budget Review - Final Numbers Approved"         |
+| Legal     | 5           | "Contract renewal - Master Services Agreement v3"   |
+| Marketing | 5           | "Campaign performance report - 23% CTR improvement" |
 
 ### Metrics
 
@@ -45,14 +45,14 @@ The evaluation uses representative subject lines from four domains:
 
 ### Domain Pairs x Similarity Scores (Baseline -- MockEmbeddingModel)
 
-| Pair                | Inter-domain Sim | Centroid Distance |
-|---------------------|------------------|-------------------|
-| Tech <-> Finance    | ~varies          | > 0.0             |
-| Tech <-> Legal      | ~varies          | > 0.0             |
-| Tech <-> Marketing  | ~varies          | > 0.0             |
-| Finance <-> Legal   | ~varies          | > 0.0             |
-| Finance <-> Marketing | ~varies        | > 0.0             |
-| Legal <-> Marketing | ~varies          | > 0.0             |
+| Pair                  | Inter-domain Sim | Centroid Distance |
+| --------------------- | ---------------- | ----------------- |
+| Tech <-> Finance      | ~varies          | > 0.0             |
+| Tech <-> Legal        | ~varies          | > 0.0             |
+| Tech <-> Marketing    | ~varies          | > 0.0             |
+| Finance <-> Legal     | ~varies          | > 0.0             |
+| Finance <-> Marketing | ~varies          | > 0.0             |
+| Legal <-> Marketing   | ~varies          | > 0.0             |
 
 > Run `cargo test --test domain_evaluation -- --nocapture` to obtain exact
 > values for the current embedding model.
@@ -79,9 +79,9 @@ embeddings are incompatible. Follow this procedure:
 ```yaml
 # config.yaml
 embedding:
-  provider: "ollama"          # or "openai", "local-onnx"
-  model: "nomic-embed-text"   # new model name
-  dimensions: 768             # must match the new model output
+  provider: 'ollama' # or "openai", "local-onnx"
+  model: 'nomic-embed-text' # new model name
+  dimensions: 768 # must match the new model output
 ```
 
 ### 2. Re-embed All Emails
@@ -126,6 +126,7 @@ Verify that the new model meets the quality thresholds defined above.
 ### 6. Monitor in Production
 
 After deployment, monitor:
+
 - Classification confidence scores (should increase)
 - Search result click-through rates
 - User feedback on categorization accuracy
@@ -135,14 +136,14 @@ After deployment, monitor:
 For users with multilingual inboxes, consider models with strong cross-lingual
 transfer:
 
-| Model                      | Dims | Languages | Notes                        |
-|----------------------------|------|-----------|------------------------------|
-| all-MiniLM-L6-v2           | 384  | English   | Default. Fast, English-only. |
-| all-MiniLM-L12-v2          | 384  | English   | Higher quality, same dims.   |
-| multilingual-e5-large      | 1024 | 100+      | Best multilingual quality.   |
-| multilingual-e5-base       | 768  | 100+      | Good balance of quality/size.|
-| nomic-embed-text           | 768  | English   | Strong for long documents.   |
-| bge-m3                     | 1024 | 100+      | SOTA multilingual, dense+sparse. |
+| Model                 | Dims | Languages | Notes                            |
+| --------------------- | ---- | --------- | -------------------------------- |
+| all-MiniLM-L6-v2      | 384  | English   | Default. Fast, English-only.     |
+| all-MiniLM-L12-v2     | 384  | English   | Higher quality, same dims.       |
+| multilingual-e5-large | 1024 | 100+      | Best multilingual quality.       |
+| multilingual-e5-base  | 768  | 100+      | Good balance of quality/size.    |
+| nomic-embed-text      | 768  | English   | Strong for long documents.       |
+| bge-m3                | 1024 | 100+      | SOTA multilingual, dense+sparse. |
 
 ### Recommendation
 

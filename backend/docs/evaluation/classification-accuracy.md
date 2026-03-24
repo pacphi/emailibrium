@@ -21,38 +21,38 @@ seeded centroids and measure performance via a multi-class confusion matrix.
 
 ## Metric Definitions
 
-| Metric | Formula | Description |
-|--------|---------|-------------|
-| **Precision** | `TP / (TP + FP)` | Of predicted class X, how many are actually X |
-| **Recall** | `TP / (TP + FN)` | Of actual class X, how many were predicted as X |
-| **F1** | `2 * P * R / (P + R)` | Harmonic mean of precision and recall |
-| **Macro-F1** | `mean(F1 per class)` | Unweighted average F1 across all classes |
-| **Accuracy** | `correct / total` | Overall fraction of correct predictions |
-| **LLM Fallback Rate** | `below_threshold / total` | Fraction requiring LLM classification |
+| Metric                | Formula                   | Description                                     |
+| --------------------- | ------------------------- | ----------------------------------------------- |
+| **Precision**         | `TP / (TP + FP)`          | Of predicted class X, how many are actually X   |
+| **Recall**            | `TP / (TP + FN)`          | Of actual class X, how many were predicted as X |
+| **F1**                | `2 * P * R / (P + R)`     | Harmonic mean of precision and recall           |
+| **Macro-F1**          | `mean(F1 per class)`      | Unweighted average F1 across all classes        |
+| **Accuracy**          | `correct / total`         | Overall fraction of correct predictions         |
+| **LLM Fallback Rate** | `below_threshold / total` | Fraction requiring LLM classification           |
 
 ## Expected Results
 
 ### Per-Category Metrics
 
-| Category | Precision | Recall | F1 | Support |
-|----------|-----------|--------|----|---------|
-| Work | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
-| Personal | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
-| Finance | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
-| Shopping | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
-| Social | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
-| Newsletter | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
-| Marketing | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
-| Notification | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
-| Alerts | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
-| Promotions | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
+| Category     | Precision | Recall | F1    | Support |
+| ------------ | --------- | ------ | ----- | ------- |
+| Work         | _TBD_     | _TBD_  | _TBD_ | _TBD_   |
+| Personal     | _TBD_     | _TBD_  | _TBD_ | _TBD_   |
+| Finance      | _TBD_     | _TBD_  | _TBD_ | _TBD_   |
+| Shopping     | _TBD_     | _TBD_  | _TBD_ | _TBD_   |
+| Social       | _TBD_     | _TBD_  | _TBD_ | _TBD_   |
+| Newsletter   | _TBD_     | _TBD_  | _TBD_ | _TBD_   |
+| Marketing    | _TBD_     | _TBD_  | _TBD_ | _TBD_   |
+| Notification | _TBD_     | _TBD_  | _TBD_ | _TBD_   |
+| Alerts       | _TBD_     | _TBD_  | _TBD_ | _TBD_   |
+| Promotions   | _TBD_     | _TBD_  | _TBD_ | _TBD_   |
 
 ### Aggregate Metrics
 
-| Metric | Value |
-|--------|-------|
-| Macro-F1 | _TBD_ |
-| Accuracy | _TBD_ |
+| Metric            | Value |
+| ----------------- | ----- |
+| Macro-F1          | _TBD_ |
+| Accuracy          | _TBD_ |
 | LLM Fallback Rate | _TBD_ |
 
 > Fill in after running: `cargo test --test classification_evaluation -- --nocapture`

@@ -1,7 +1,9 @@
 # Analysis Commands Compliance Report
 
 ## Overview
+
 Reviewed all command files in `.claude/commands/analysis/` directory to ensure proper usage of:
+
 - `mcp__claude-flow__*` tools (preferred)
 - `npx claude-flow` commands (as fallback)
 - No direct implementation calls
@@ -9,24 +11,29 @@ Reviewed all command files in `.claude/commands/analysis/` directory to ensure p
 ## Files Reviewed
 
 ### 1. token-efficiency.md
+
 **Status**: ✅ Updated
 **Changes Made**:
+
 - Replaced `npx ruv-swarm hook session-end --export-metrics` with proper MCP tool call
 - Updated to: `Tool: mcp__claude-flow__token_usage` with appropriate parameters
 - Maintained result format and context
 
 **Before**:
+
 ```bash
 npx ruv-swarm hook session-end --export-metrics
 ```
 
 **After**:
+
 ```
 Tool: mcp__claude-flow__token_usage
 Parameters: {"operation": "session", "timeframe": "24h"}
 ```
 
 ### 2. performance-bottlenecks.md
+
 **Status**: ✅ Compliant (No changes needed)
 **Reason**: Already uses proper `mcp__claude-flow__task_results` tool format
 

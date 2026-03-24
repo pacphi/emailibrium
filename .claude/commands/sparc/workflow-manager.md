@@ -1,11 +1,13 @@
 # SPARC Workflow Manager Mode
 
 ## Purpose
+
 Process automation with TodoWrite planning and Task execution.
 
 ## Activation
 
 ### Option 1: Using MCP Tools (Preferred in Claude Code)
+
 ```javascript
 mcp__claude-flow__sparc_mode {
   mode: "workflow-manager",
@@ -18,6 +20,7 @@ mcp__claude-flow__sparc_mode {
 ```
 
 ### Option 2: Using NPX CLI (Fallback when MCP not available)
+
 ```bash
 # Use when running from terminal or MCP tools unavailable
 npx claude-flow sparc run workflow-manager "automate deployment"
@@ -27,12 +30,14 @@ npx claude-flow@alpha sparc run workflow-manager "automate deployment"
 ```
 
 ### Option 3: Local Installation
+
 ```bash
 # If claude-flow is installed locally
 ./claude-flow sparc run workflow-manager "automate deployment"
 ```
 
 ## Core Capabilities
+
 - Workflow design
 - Process automation
 - Pipeline creation
@@ -40,6 +45,7 @@ npx claude-flow@alpha sparc run workflow-manager "automate deployment"
 - State management
 
 ## Workflow Patterns
+
 - Sequential flows
 - Parallel branches
 - Conditional logic
@@ -47,6 +53,7 @@ npx claude-flow@alpha sparc run workflow-manager "automate deployment"
 - Error handling
 
 ## Automation Features
+
 - Trigger management
 - Task scheduling
 - Progress tracking

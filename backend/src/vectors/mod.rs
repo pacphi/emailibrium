@@ -3,6 +3,7 @@
 //! This module implements the Email Intelligence bounded context (DDD-001),
 //! providing embedding, vector storage, search, and classification capabilities.
 
+pub mod audit;
 pub mod backup;
 pub mod categorizer;
 pub mod clustering;
@@ -11,21 +12,31 @@ pub mod consent;
 pub mod embedding;
 pub mod encryption;
 pub mod error;
+pub mod evaluation;
+pub mod ewc;
 pub mod generative;
+pub mod generative_router;
+pub mod inference_session;
 pub mod ingestion;
 pub mod insights;
 pub mod interactions;
 pub mod learning;
 pub mod metrics;
+pub mod model_download;
+pub mod model_integrity;
+pub mod model_registry;
 pub mod models;
 pub mod quantization;
 pub mod reindex;
+pub mod ruvector_store;
 pub mod search;
 pub mod store;
 pub mod types;
+pub mod user_learning;
 
 use std::sync::Arc;
 
+use crate::cache::RedisCache;
 use crate::db::Database;
 use config::VectorConfig;
 use embedding::EmbeddingPipeline;
@@ -56,19 +67,53 @@ pub struct VectorService {
 
 impl VectorService {
     /// Create a new VectorService with the given configuration.
-    pub async fn new(config: VectorConfig, db: Arc<Database>) -> Result<Self, error::VectorError> {
-        // Initialize embedding pipeline with fallback chain
-        let embedding = Arc::new(EmbeddingPipeline::new(&config.embedding)?);
+    ///
+    /// `redis` is optional -- when provided, the embedding pipeline uses it as
+    /// an L2 cache to avoid re-computing embeddings across restarts.
+    pub async fn new(
+        config: VectorConfig,
+        db: Arc<Database>,
+        redis: Option<Arc<RedisCache>>,
+    ) -> Result<Self, error::VectorError> {
+        // Initialize embedding pipeline with fallback chain + optional Redis L2 cache
+        let embedding = Arc::new(
+            EmbeddingPipeline::new(&config.embedding)?
+                .with_redis(redis, config.redis.cache_ttl_secs),
+        );
 
-        // Initialize vector store (in-memory for now, RuVector behind feature flag)
+        // Initialize vector store backend based on config (ADR-003).
+        // "ruvector" uses HNSW indexing; "memory" falls back to brute-force.
+        let raw_store: Arc<dyn VectorStoreBackend> = match config.store.backend.as_str() {
+            "memory" => {
+                tracing::info!("Vector store: in-memory brute-force backend");
+                Arc::new(store::InMemoryVectorStore::new())
+            }
+            _ => {
+                // Default to RuVector HNSW backend.
+                match ruvector_store::RuVectorStore::new(
+                    &config.store,
+                    &config.index,
+                    config.embedding.dimensions,
+                ) {
+                    Ok(rv) => {
+                        tracing::info!("Vector store: RuVector HNSW backend");
+                        Arc::new(rv)
+                    }
+                    Err(e) => {
+                        tracing::warn!("RuVector init failed ({e}), falling back to in-memory");
+                        Arc::new(store::InMemoryVectorStore::new())
+                    }
+                }
+            }
+        };
+
         let store: Arc<dyn VectorStoreBackend> = if config.encryption.enabled {
-            let inner = Arc::new(store::InMemoryVectorStore::new());
             Arc::new(encryption::EncryptedVectorStore::new(
-                inner,
+                raw_store,
                 &config.encryption,
             )?)
         } else {
-            Arc::new(store::InMemoryVectorStore::new())
+            raw_store
         };
 
         // Initialize categorizer

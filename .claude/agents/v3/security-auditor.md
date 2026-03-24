@@ -1,7 +1,7 @@
 ---
 name: security-auditor
 type: security
-color: "#DC2626"
+color: '#DC2626'
 description: Advanced security auditor with self-learning vulnerability detection, CVE database search, and compliance auditing
 capabilities:
   - vulnerability_scanning
@@ -11,10 +11,10 @@ capabilities:
   - compliance_auditing
   - threat_modeling
   # V3 Enhanced Capabilities
-  - reasoningbank_learning    # Pattern learning from past audits
-  - hnsw_cve_search          # 150x-12,500x faster CVE lookup
-  - flash_attention_scan     # 2.49x-7.47x faster code scanning
-  - owasp_detection          # OWASP Top 10 vulnerability detection
+  - reasoningbank_learning # Pattern learning from past audits
+  - hnsw_cve_search # 150x-12,500x faster CVE lookup
+  - flash_attention_scan # 2.49x-7.47x faster code scanning
+  - owasp_detection # OWASP Top 10 vulnerability detection
 priority: critical
 hooks:
   pre: |
@@ -116,12 +116,12 @@ const similarVulns = await reasoningBank.searchPatterns({
   task: 'SQL injection detection',
   k: 10,
   minReward: 0.85,
-  namespace: 'security'
+  namespace: 'security',
 });
 
 if (similarVulns.length > 0) {
   console.log('Learning from past successful detections:');
-  similarVulns.forEach(pattern => {
+  similarVulns.forEach((pattern) => {
     console.log(`- ${pattern.task}: ${pattern.reward} accuracy`);
     console.log(`  Detection method: ${pattern.critique}`);
   });
@@ -132,12 +132,12 @@ const missedVulns = await reasoningBank.searchPatterns({
   task: currentScan.target,
   onlyFailures: true,
   k: 5,
-  namespace: 'security'
+  namespace: 'security',
 });
 
 if (missedVulns.length > 0) {
   console.log('Avoiding past detection failures:');
-  missedVulns.forEach(pattern => {
+  missedVulns.forEach((pattern) => {
     console.log(`- Missed: ${pattern.critique}`);
   });
 }
@@ -153,7 +153,7 @@ const cveMatches = await agentDB.hnswSearch({
   query: 'buffer overflow in image processing library',
   index: 'cve_database',
   k: 20,
-  efSearch: 200  // Higher ef for better recall
+  efSearch: 200, // Higher ef for better recall
 });
 
 console.log(`Found ${cveMatches.length} related CVEs in ${cveMatches.executionTimeMs}ms`);
@@ -175,9 +175,9 @@ Scan large codebases efficiently:
 // Process large codebases with Flash Attention (2.49x-7.47x speedup)
 if (codebaseSize > 5000) {
   const scanResult = await agentDB.flashAttention(
-    securityPatternEmbeddings,  // Query: security vulnerability patterns
-    codeEmbeddings,              // Keys: code file embeddings
-    codeEmbeddings               // Values: code content
+    securityPatternEmbeddings, // Query: security vulnerability patterns
+    codeEmbeddings, // Keys: code file embeddings
+    codeEmbeddings, // Values: code content
   );
 
   console.log(`Scanned ${codebaseSize} files in ${scanResult.executionTimeMs}ms`);
@@ -202,9 +202,9 @@ const accessControlPatterns = {
     // Insecure direct object references
     /user\.id\s*===?\s*req\.(?:params|query|body)\./g,
     // Path traversal
-    /path\.(?:join|resolve)\s*\([^)]*req\.(params|query|body)/g
+    /path\.(?:join|resolve)\s*\([^)]*req\.(params|query|body)/g,
   ],
-  remediation: 'Implement proper access control checks at the server side'
+  remediation: 'Implement proper access control checks at the server side',
 };
 ```
 
@@ -224,9 +224,9 @@ const cryptoPatterns = {
     // Missing HTTPS
     /http:\/\/(?!localhost|127\.0\.0\.1)/gi,
     // Weak cipher modes
-    /createCipher(?:iv)?\s*\(\s*['"](?:des|rc4|blowfish)['"]/gi
+    /createCipher(?:iv)?\s*\(\s*['"](?:des|rc4|blowfish)['"]/gi,
   ],
-  remediation: 'Use strong cryptographic algorithms (AES-256-GCM, SHA-256+)'
+  remediation: 'Use strong cryptographic algorithms (AES-256-GCM, SHA-256+)',
 };
 ```
 
@@ -246,9 +246,9 @@ const injectionPatterns = {
     /\{\s*\$(?:where|gt|lt|ne|or|and|regex).*req\./gi,
     // XSS
     /innerHTML\s*=\s*(?:req\.|user\.|data\.)/gi,
-    /document\.write\s*\(.*(?:req\.|user\.)/gi
+    /document\.write\s*\(.*(?:req\.|user\.)/gi,
   ],
-  remediation: 'Use parameterized queries and input validation'
+  remediation: 'Use parameterized queries and input validation',
 };
 ```
 
@@ -264,9 +264,9 @@ const insecureDesignPatterns = {
     // No CAPTCHA on sensitive endpoints
     /(?:register|signup|contact)\s*(?!.*captcha)/gi,
     // Missing input validation
-    /req\.body\.\w+\s*(?!.*(?:validate|sanitize|joi|yup|zod))/g
+    /req\.body\.\w+\s*(?!.*(?:validate|sanitize|joi|yup|zod))/g,
   ],
-  remediation: 'Implement secure design patterns and threat modeling'
+  remediation: 'Implement secure design patterns and threat modeling',
 };
 ```
 
@@ -286,9 +286,9 @@ const misconfigPatterns = {
     // Missing security headers
     /helmet\s*\(\s*\)(?!.*contentSecurityPolicy)/gi,
     // CORS misconfiguration
-    /cors\s*\(\s*\{\s*origin\s*:\s*(?:\*|true)/gi
+    /cors\s*\(\s*\{\s*origin\s*:\s*(?:\*|true)/gi,
   ],
-  remediation: 'Harden configuration and disable unnecessary features'
+  remediation: 'Harden configuration and disable unnecessary features',
 };
 ```
 
@@ -298,16 +298,12 @@ const misconfigPatterns = {
 const vulnerableComponentsCheck = {
   name: 'Vulnerable Components',
   severity: 'HIGH',
-  checks: [
-    'npm audit --json',
-    'snyk test --json',
-    'retire --outputformat json'
-  ],
+  checks: ['npm audit --json', 'snyk test --json', 'retire --outputformat json'],
   knownVulnerablePackages: [
     { name: 'lodash', versions: '<4.17.21', cve: 'CVE-2021-23337' },
     { name: 'axios', versions: '<0.21.1', cve: 'CVE-2020-28168' },
-    { name: 'express', versions: '<4.17.3', cve: 'CVE-2022-24999' }
-  ]
+    { name: 'express', versions: '<4.17.3', cve: 'CVE-2022-24999' },
+  ],
 };
 ```
 
@@ -327,9 +323,9 @@ const authPatterns = {
     // Insecure JWT
     /jwt\.(?:sign|verify)\s*\([^)]*(?:algorithm|alg)\s*[:=]\s*['"](?:none|HS256)['"]/gi,
     // Password in URL
-    /(?:password|secret|token)\s*[:=]\s*req\.(?:query|params)/gi
+    /(?:password|secret|token)\s*[:=]\s*req\.(?:query|params)/gi,
   ],
-  remediation: 'Implement strong authentication with MFA'
+  remediation: 'Implement strong authentication with MFA',
 };
 ```
 
@@ -345,9 +341,9 @@ const integrityPatterns = {
     // Missing integrity checks
     /fetch\s*\([^)]*(?:http|cdn)(?!.*integrity)/gi,
     // Unsigned updates
-    /update\s*\(\s*\{(?!.*signature)/gi
+    /update\s*\(\s*\{(?!.*signature)/gi,
   ],
-  remediation: 'Verify integrity of software updates and data'
+  remediation: 'Verify integrity of software updates and data',
 };
 ```
 
@@ -363,9 +359,9 @@ const loggingPatterns = {
     // Sensitive data in logs
     /(?:console\.log|logger\.info)\s*\([^)]*(?:password|token|secret|key)/gi,
     // Missing error logging
-    /catch\s*\([^)]*\)\s*\{(?!.*(?:log|report|track))/gi
+    /catch\s*\([^)]*\)\s*\{(?!.*(?:log|report|track))/gi,
   ],
-  remediation: 'Implement comprehensive security logging and monitoring'
+  remediation: 'Implement comprehensive security logging and monitoring',
 };
 ```
 
@@ -380,9 +376,9 @@ const ssrfPatterns = {
     /(?:axios|fetch|request|got)\s*\(\s*(?:req\.|user\.|data\.)/gi,
     /http\.(?:get|request)\s*\(\s*(?:req\.|user\.)/gi,
     // URL from user input
-    /new\s+URL\s*\(\s*(?:req\.|user\.)/gi
+    /new\s+URL\s*\(\s*(?:req\.|user\.)/gi,
   ],
-  remediation: 'Validate and sanitize user-supplied URLs'
+  remediation: 'Validate and sanitize user-supplied URLs',
 };
 ```
 
@@ -393,38 +389,26 @@ const secretPatterns = {
   // API Keys
   apiKeys: [
     /(?:api[_-]?key|apikey)\s*[:=]\s*['"][a-zA-Z0-9]{20,}['"]/gi,
-    /(?:AKIA|ABIA|ACCA|ASIA)[0-9A-Z]{16}/g,  // AWS Access Key
-    /sk-[a-zA-Z0-9]{48}/g,                     // OpenAI API Key
-    /ghp_[a-zA-Z0-9]{36}/g,                    // GitHub Personal Access Token
-    /glpat-[a-zA-Z0-9\-_]{20,}/g,              // GitLab Personal Access Token
+    /(?:AKIA|ABIA|ACCA|ASIA)[0-9A-Z]{16}/g, // AWS Access Key
+    /sk-[a-zA-Z0-9]{48}/g, // OpenAI API Key
+    /ghp_[a-zA-Z0-9]{36}/g, // GitHub Personal Access Token
+    /glpat-[a-zA-Z0-9\-_]{20,}/g, // GitLab Personal Access Token
   ],
 
   // Private Keys
-  privateKeys: [
-    /-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----/g,
-    /-----BEGIN PGP PRIVATE KEY BLOCK-----/g,
-  ],
+  privateKeys: [/-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----/g, /-----BEGIN PGP PRIVATE KEY BLOCK-----/g],
 
   // Database Credentials
-  database: [
-    /mongodb(?:\+srv)?:\/\/[^:]+:[^@]+@/gi,
-    /postgres(?:ql)?:\/\/[^:]+:[^@]+@/gi,
-    /mysql:\/\/[^:]+:[^@]+@/gi,
-    /redis:\/\/:[^@]+@/gi,
-  ],
+  database: [/mongodb(?:\+srv)?:\/\/[^:]+:[^@]+@/gi, /postgres(?:ql)?:\/\/[^:]+:[^@]+@/gi, /mysql:\/\/[^:]+:[^@]+@/gi, /redis:\/\/:[^@]+@/gi],
 
   // Cloud Provider Secrets
-  cloud: [
-    /AZURE_[A-Z_]+\s*[:=]\s*['"][^'"]{20,}['"]/gi,
-    /GOOGLE_[A-Z_]+\s*[:=]\s*['"][^'"]{20,}['"]/gi,
-    /HEROKU_[A-Z_]+\s*[:=]\s*['"][^'"]{20,}['"]/gi,
-  ],
+  cloud: [/AZURE_[A-Z_]+\s*[:=]\s*['"][^'"]{20,}['"]/gi, /GOOGLE_[A-Z_]+\s*[:=]\s*['"][^'"]{20,}['"]/gi, /HEROKU_[A-Z_]+\s*[:=]\s*['"][^'"]{20,}['"]/gi],
 
   // JWT and Tokens
   tokens: [
-    /eyJ[a-zA-Z0-9_-]*\.eyJ[a-zA-Z0-9_-]*\.[a-zA-Z0-9_-]*/g,  // JWT
+    /eyJ[a-zA-Z0-9_-]*\.eyJ[a-zA-Z0-9_-]*\.[a-zA-Z0-9_-]*/g, // JWT
     /Bearer\s+[a-zA-Z0-9\-._~+\/]+=*/gi,
-  ]
+  ],
 };
 ```
 
@@ -444,7 +428,7 @@ class DependencyAuditor {
       const cveContext = await agentDB.hnswSearch({
         query: `${name} ${advisory.title}`,
         index: 'cve_database',
-        k: 5
+        k: 5,
       });
 
       results.push({
@@ -454,7 +438,7 @@ class DependencyAuditor {
         cve: advisory.cve,
         recommendation: advisory.recommendation,
         additionalCVEs: cveContext.results,
-        fixAvailable: advisory.fixAvailable
+        fixAvailable: advisory.fixAvailable,
       });
     }
 
@@ -485,36 +469,25 @@ const soc2Patterns = {
   controls: {
     // CC6.1 - Logical and Physical Access Controls
     accessControl: {
-      patterns: [
-        /(?:isAuthenticated|requireAuth|authenticate)/gi,
-        /(?:authorize|checkPermission|hasRole)/gi,
-        /(?:session|jwt|token).*(?:expire|timeout)/gi
-      ],
+      patterns: [/(?:isAuthenticated|requireAuth|authenticate)/gi, /(?:authorize|checkPermission|hasRole)/gi, /(?:session|jwt|token).*(?:expire|timeout)/gi],
       required: true,
-      description: 'Access control mechanisms must be implemented'
+      description: 'Access control mechanisms must be implemented',
     },
 
     // CC6.6 - Security Event Logging
     logging: {
-      patterns: [
-        /(?:audit|security).*log/gi,
-        /logger\.(info|warn|error)\s*\([^)]*(?:auth|access|security)/gi
-      ],
+      patterns: [/(?:audit|security).*log/gi, /logger\.(info|warn|error)\s*\([^)]*(?:auth|access|security)/gi],
       required: true,
-      description: 'Security events must be logged'
+      description: 'Security events must be logged',
     },
 
     // CC7.2 - Encryption
     encryption: {
-      patterns: [
-        /(?:encrypt|decrypt|cipher)/gi,
-        /(?:TLS|SSL|HTTPS)/gi,
-        /(?:AES|RSA).*(?:256|4096)/gi
-      ],
+      patterns: [/(?:encrypt|decrypt|cipher)/gi, /(?:TLS|SSL|HTTPS)/gi, /(?:AES|RSA).*(?:256|4096)/gi],
       required: true,
-      description: 'Data must be encrypted in transit and at rest'
-    }
-  }
+      description: 'Data must be encrypted in transit and at rest',
+    },
+  },
 };
 ```
 
@@ -526,34 +499,25 @@ const gdprPatterns = {
   controls: {
     // Article 17 - Right to Erasure
     dataErasure: {
-      patterns: [
-        /(?:delete|remove|erase).*(?:user|personal|data)/gi,
-        /(?:gdpr|privacy).*(?:delete|forget)/gi
-      ],
+      patterns: [/(?:delete|remove|erase).*(?:user|personal|data)/gi, /(?:gdpr|privacy).*(?:delete|forget)/gi],
       required: true,
-      description: 'Users must be able to request data deletion'
+      description: 'Users must be able to request data deletion',
     },
 
     // Article 20 - Data Portability
     dataPortability: {
-      patterns: [
-        /(?:export|download).*(?:data|personal)/gi,
-        /(?:portable|portability)/gi
-      ],
+      patterns: [/(?:export|download).*(?:data|personal)/gi, /(?:portable|portability)/gi],
       required: true,
-      description: 'Users must be able to export their data'
+      description: 'Users must be able to export their data',
     },
 
     // Article 7 - Consent
     consent: {
-      patterns: [
-        /(?:consent|agree|accept).*(?:privacy|terms|policy)/gi,
-        /(?:opt-in|opt-out)/gi
-      ],
+      patterns: [/(?:consent|agree|accept).*(?:privacy|terms|policy)/gi, /(?:opt-in|opt-out)/gi],
       required: true,
-      description: 'Valid consent must be obtained for data processing'
-    }
-  }
+      description: 'Valid consent must be obtained for data processing',
+    },
+  },
 };
 ```
 
@@ -565,32 +529,25 @@ const hipaaPatterns = {
   controls: {
     // PHI Protection
     phiProtection: {
-      patterns: [
-        /(?:phi|health|medical).*(?:encrypt|protect)/gi,
-        /(?:patient|ssn|dob).*(?:mask|redact|encrypt)/gi
-      ],
+      patterns: [/(?:phi|health|medical).*(?:encrypt|protect)/gi, /(?:patient|ssn|dob).*(?:mask|redact|encrypt)/gi],
       required: true,
-      description: 'Protected Health Information must be secured'
+      description: 'Protected Health Information must be secured',
     },
 
     // Access Audit Trail
     auditTrail: {
-      patterns: [
-        /(?:audit|track).*(?:access|view|modify).*(?:phi|patient|health)/gi
-      ],
+      patterns: [/(?:audit|track).*(?:access|view|modify).*(?:phi|patient|health)/gi],
       required: true,
-      description: 'Access to PHI must be logged'
+      description: 'Access to PHI must be logged',
     },
 
     // Minimum Necessary
     minimumNecessary: {
-      patterns: [
-        /(?:select|query).*(?:phi|patient)(?!.*\*)/gi
-      ],
+      patterns: [/(?:select|query).*(?:phi|patient)(?!.*\*)/gi],
       required: true,
-      description: 'Only minimum necessary PHI should be accessed'
-    }
-  }
+      description: 'Only minimum necessary PHI should be accessed',
+    },
+  },
 };
 ```
 
@@ -624,7 +581,7 @@ async function generateSecurityReport(scanResults: ScanResult[]): Promise<Securi
     dependencyVulnerabilities: await auditDependencies(),
     complianceStatus: checkCompliance(scanResults),
     recommendations: generateRecommendations(scanResults),
-    learningInsights: await getLearningInsights()
+    learningInsights: await getLearningInsights(),
   };
 
   // Store report for future learning
@@ -635,7 +592,7 @@ async function generateSecurityReport(scanResults: ScanResult[]): Promise<Securi
     output: JSON.stringify(report),
     reward: calculateAuditAccuracy(report),
     success: report.summary.critical === 0,
-    critique: generateSelfAssessment(report)
+    critique: generateSelfAssessment(report),
   });
 
   return report;
@@ -649,8 +606,8 @@ async function generateSecurityReport(scanResults: ScanResult[]): Promise<Securi
 ```typescript
 // After each audit, learn from results
 async function learnFromAudit(auditResults: AuditResult[]): Promise<void> {
-  const verifiedVulns = auditResults.filter(r => r.verified);
-  const falsePositives = auditResults.filter(r => r.falsePositive);
+  const verifiedVulns = auditResults.filter((r) => r.verified);
+  const falsePositives = auditResults.filter((r) => r.falsePositive);
 
   // Store successful detections
   for (const vuln of verifiedVulns) {
@@ -662,7 +619,7 @@ async function learnFromAudit(auditResults: AuditResult[]): Promise<void> {
       reward: 1.0,
       success: true,
       critique: `Correctly identified ${vuln.severity} ${vuln.type}`,
-      namespace: 'security'
+      namespace: 'security',
     });
   }
 
@@ -676,7 +633,7 @@ async function learnFromAudit(auditResults: AuditResult[]): Promise<void> {
       reward: 0.0,
       success: false,
       critique: `False positive: ${fp.reason}`,
-      namespace: 'security'
+      namespace: 'security',
     });
   }
 
@@ -685,7 +642,7 @@ async function learnFromAudit(auditResults: AuditResult[]): Promise<void> {
     await neuralTrainer.train({
       patternType: 'prediction',
       trainingData: 'security-patterns',
-      epochs: 50
+      epochs: 50,
     });
   }
 }
@@ -701,7 +658,7 @@ async function enhanceDetection(code: string): Promise<Enhancement[]> {
     task: 'vulnerability-detection',
     k: 20,
     minReward: 0.9,
-    namespace: 'security'
+    namespace: 'security',
   });
 
   // Apply learned patterns to current scan
@@ -712,7 +669,7 @@ async function enhanceDetection(code: string): Promise<Enhancement[]> {
         type: 'learned_pattern',
         confidence: pattern.reward,
         source: pattern.sessionId,
-        suggestion: pattern.critique
+        suggestion: pattern.critique,
       });
     }
   }
@@ -732,30 +689,30 @@ await mcp__claude_flow__memory_usage({
     vulnerabilities: auditResults,
     cveMatches: cveResults,
     compliance: complianceStatus,
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
   }),
   namespace: 'security_audits',
-  ttl: 2592000000  // 30 days
+  ttl: 2592000000, // 30 days
 });
 
 // Search for related past vulnerabilities
 const relatedVulns = await mcp__claude_flow__memory_search({
   pattern: 'CVE-2024',
   namespace: 'security_audits',
-  limit: 20
+  limit: 20,
 });
 
 // Train neural patterns on audit results
 await mcp__claude_flow__neural_train({
   pattern_type: 'prediction',
   training_data: JSON.stringify(auditResults),
-  epochs: 50
+  epochs: 50,
 });
 
 // Run HNSW-indexed CVE search
 await mcp__claude_flow__security_scan({
   target: './src',
-  depth: 'full'
+  depth: 'full',
 });
 ```
 

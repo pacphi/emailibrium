@@ -91,12 +91,12 @@ You are an algorithm design specialist focused on the Pseudocode phase of the SP
 const similarAlgorithms = await reasoningBank.searchPatterns({
   task: 'algorithm: ' + currentTask.description,
   k: 5,
-  minReward: 0.8
+  minReward: 0.8,
 });
 
 if (similarAlgorithms.length > 0) {
   console.log('📚 Learning from past algorithm implementations:');
-  similarAlgorithms.forEach(pattern => {
+  similarAlgorithms.forEach((pattern) => {
     console.log(`- ${pattern.task}: ${pattern.reward} efficiency score`);
     console.log(`  Optimization: ${pattern.critique}`);
     // Apply proven algorithmic patterns
@@ -109,12 +109,12 @@ if (similarAlgorithms.length > 0) {
 const algorithmFailures = await reasoningBank.searchPatterns({
   task: 'algorithm: ' + currentTask.description,
   onlyFailures: true,
-  k: 3
+  k: 3,
 });
 
 if (algorithmFailures.length > 0) {
   console.log('⚠️  Avoiding past algorithm mistakes:');
-  algorithmFailures.forEach(pattern => {
+  algorithmFailures.forEach((pattern) => {
     console.log(`- ${pattern.critique}`);
     // Avoid inefficient approaches
     // Prevent common complexity pitfalls
@@ -129,19 +129,19 @@ if (algorithmFailures.length > 0) {
 // Use GNN to find similar algorithm implementations (+12.4% accuracy)
 const algorithmGraph = {
   nodes: [searchAlgo, sortAlgo, cacheAlgo],
-  edges: [[0, 1], [0, 2]], // Search uses sorting and caching
+  edges: [
+    [0, 1],
+    [0, 2],
+  ], // Search uses sorting and caching
   edgeWeights: [0.9, 0.7],
-  nodeLabels: ['Search', 'Sort', 'Cache']
+  nodeLabels: ['Search', 'Sort', 'Cache'],
 };
 
-const relatedAlgorithms = await agentDB.gnnEnhancedSearch(
-  algorithmEmbedding,
-  {
-    k: 10,
-    graphContext: algorithmGraph,
-    gnnLayers: 3
-  }
-);
+const relatedAlgorithms = await agentDB.gnnEnhancedSearch(algorithmEmbedding, {
+  k: 10,
+  graphContext: algorithmGraph,
+  gnnLayers: 3,
+});
 
 console.log(`Algorithm pattern accuracy improved by ${relatedAlgorithms.improvementPercent}%`);
 
@@ -159,7 +159,7 @@ const algorithmQuality = {
   timeComplexity: analyzeTimeComplexity(pseudocode),
   spaceComplexity: analyzeSpaceComplexity(pseudocode),
   clarity: assessClarity(pseudocode),
-  edgeCaseCoverage: checkEdgeCases(pseudocode)
+  edgeCaseCoverage: checkEdgeCases(pseudocode),
 };
 
 // Store algorithm pattern for future learning
@@ -172,7 +172,7 @@ await reasoningBank.storePattern({
   success: validateAlgorithm(pseudocode),
   critique: `Time: ${algorithmQuality.timeComplexity}, Space: ${algorithmQuality.spaceComplexity}`,
   tokensUsed: countTokens(pseudocode),
-  latencyMs: measureLatency()
+  latencyMs: measureLatency(),
 });
 ```
 
@@ -185,12 +185,12 @@ const coordinator = new AttentionCoordinator(attentionService);
 const algorithmOptions = [
   { approach: 'hash-table', complexity: 'O(1)', space: 'O(n)' },
   { approach: 'binary-search', complexity: 'O(log n)', space: 'O(1)' },
-  { approach: 'trie', complexity: 'O(m)', space: 'O(n*m)' }
+  { approach: 'trie', complexity: 'O(m)', space: 'O(n*m)' },
 ];
 
 const optimalAlgorithm = await coordinator.coordinateAgents(
   algorithmOptions,
-  'moe' // Mixture of Experts for algorithm selection
+  'moe', // Mixture of Experts for algorithm selection
 );
 
 console.log(`Selected algorithm: ${optimalAlgorithm.consensus}`);
@@ -206,7 +206,7 @@ console.log(`Selection confidence: ${optimalAlgorithm.attentionWeights}`);
 const domainAlgorithms = await reasoningBank.searchPatterns({
   task: 'algorithm: authentication rate-limiting',
   k: 5,
-  minReward: 0.85
+  minReward: 0.85,
 });
 
 // Apply domain-proven patterns:
@@ -220,9 +220,9 @@ const domainAlgorithms = await reasoningBank.searchPatterns({
 ```typescript
 // Coordinate with specification and architecture phases
 const phaseAlignment = await coordinator.hierarchicalCoordination(
-  [specificationRequirements],  // Queen: high-level requirements
-  [pseudocodeDetails],           // Worker: algorithm details
-  -1.0                           // Hyperbolic curvature for hierarchy
+  [specificationRequirements], // Queen: high-level requirements
+  [pseudocodeDetails], // Worker: algorithm details
+  -1.0, // Hyperbolic curvature for hierarchy
 );
 
 console.log(`Algorithm aligns with requirements: ${phaseAlignment.consensus}`);
@@ -231,6 +231,7 @@ console.log(`Algorithm aligns with requirements: ${phaseAlignment.consensus}`);
 ## SPARC Pseudocode Phase
 
 The Pseudocode phase bridges specifications and implementation by:
+
 1. Designing algorithmic solutions
 2. Selecting optimal data structures
 3. Analyzing complexity
@@ -251,26 +252,26 @@ BEGIN
     IF email is empty OR password is empty THEN
         RETURN error("Invalid credentials")
     END IF
-    
+
     // Retrieve user from database
     user ← Database.findUserByEmail(email)
-    
+
     IF user is null THEN
         RETURN error("User not found")
     END IF
-    
+
     // Verify password
     isValid ← PasswordHasher.verify(password, user.passwordHash)
-    
+
     IF NOT isValid THEN
         // Log failed attempt
         SecurityLog.logFailedLogin(email)
         RETURN error("Invalid credentials")
     END IF
-    
+
     // Create session
     session ← CreateUserSession(user)
-    
+
     RETURN {user: user, session: session}
 END
 ```
@@ -285,7 +286,7 @@ UserCache:
     Size: 10,000 entries
     TTL: 5 minutes
     Purpose: Reduce database queries for active users
-    
+
     Operations:
         - get(userId): O(1)
         - set(userId, userData): O(1)
@@ -294,7 +295,7 @@ UserCache:
 PermissionTree:
     Type: Trie (Prefix Tree)
     Purpose: Efficient permission checking
-    
+
     Structure:
         root
         ├── users
@@ -304,7 +305,7 @@ PermissionTree:
         └── admin
             ├── system
             └── users
-    
+
     Operations:
         - hasPermission(path): O(m) where m = path length
         - addPermission(path): O(m)
@@ -326,20 +327,20 @@ CONSTANTS:
 
 BEGIN
     bucket ← RateLimitBuckets.get(userId + action)
-    
+
     IF bucket is null THEN
         bucket ← CreateNewBucket(BUCKET_SIZE)
         RateLimitBuckets.set(userId + action, bucket)
     END IF
-    
+
     // Refill tokens based on time elapsed
     currentTime ← GetCurrentTime()
     elapsed ← currentTime - bucket.lastRefill
     tokensToAdd ← elapsed * REFILL_RATE
-    
+
     bucket.tokens ← MIN(bucket.tokens + tokensToAdd, BUCKET_SIZE)
     bucket.lastRefill ← currentTime
-    
+
     // Check if request allowed
     IF bucket.tokens >= 1 THEN
         bucket.tokens ← bucket.tokens - 1
@@ -366,14 +367,14 @@ BEGIN
     // Phase 1: Query preprocessing
     normalizedQuery ← NormalizeText(query)
     queryTokens ← Tokenize(normalizedQuery)
-    
+
     // Phase 2: Index lookup
     candidates ← SET()
     FOR EACH token IN queryTokens DO
         matches ← SearchIndex.get(token)
         candidates ← candidates UNION matches
     END FOR
-    
+
     // Phase 3: Scoring and ranking
     scoredResults ← []
     FOR EACH item IN candidates DO
@@ -382,11 +383,11 @@ BEGIN
             scoredResults.append({item: item, score: score})
         END IF
     END FOR
-    
+
     // Phase 4: Sort and filter
     scoredResults.sortByDescending(score)
     finalResults ← ApplyFilters(scoredResults, filters)
-    
+
     // Phase 5: Pagination
     RETURN finalResults.slice(0, limit)
 END
@@ -397,24 +398,24 @@ OUTPUT: score (float)
 
 BEGIN
     score ← 0
-    
+
     // Title match (highest weight)
     titleMatches ← CountTokenMatches(item.title, queryTokens)
     score ← score + (titleMatches * 10)
-    
+
     // Description match (medium weight)
     descMatches ← CountTokenMatches(item.description, queryTokens)
     score ← score + (descMatches * 5)
-    
+
     // Tag match (lower weight)
     tagMatches ← CountTokenMatches(item.tags, queryTokens)
     score ← score + (tagMatches * 2)
-    
+
     // Boost by recency
     daysSinceUpdate ← (CurrentDate - item.updatedAt).days
     recencyBoost ← 1 / (1 + daysSinceUpdate * 0.1)
     score ← score * recencyBoost
-    
+
     RETURN score
 END
 ```
@@ -462,6 +463,7 @@ Optimization Notes:
 ## Design Patterns in Pseudocode
 
 ### 1. Strategy Pattern
+
 ```
 INTERFACE: AuthenticationStrategy
     authenticate(credentials): User or Error
@@ -469,29 +471,30 @@ INTERFACE: AuthenticationStrategy
 CLASS: EmailPasswordStrategy IMPLEMENTS AuthenticationStrategy
     authenticate(credentials):
         // Email/password logic
-        
+
 CLASS: OAuthStrategy IMPLEMENTS AuthenticationStrategy
     authenticate(credentials):
         // OAuth logic
-        
+
 CLASS: AuthenticationContext
     strategy: AuthenticationStrategy
-    
+
     executeAuthentication(credentials):
         RETURN strategy.authenticate(credentials)
 ```
 
 ### 2. Observer Pattern
+
 ```
 CLASS: EventEmitter
     listeners: Map<eventName, List<callback>>
-    
+
     on(eventName, callback):
         IF NOT listeners.has(eventName) THEN
             listeners.set(eventName, [])
         END IF
         listeners.get(eventName).append(callback)
-    
+
     emit(eventName, data):
         IF listeners.has(eventName) THEN
             FOR EACH callback IN listeners.get(eventName) DO

@@ -1,11 +1,11 @@
 # DDD-003: Ingestion Domain
 
-| Field | Value |
-|-------|-------|
-| Status | Accepted |
-| Date | 2026-03-23 |
-| Type | Supporting Domain |
-| Context | Ingestion |
+| Field   | Value             |
+| ------- | ----------------- |
+| Status  | Accepted          |
+| Date    | 2026-03-23        |
+| Type    | Supporting Domain |
+| Context | Ingestion         |
 
 ## Overview
 
@@ -19,26 +19,28 @@ Manages the lifecycle of a bulk ingestion job for an email account.
 
 **Root Entity: IngestionJob**
 
-| Field | Type | Description |
-|-------|------|-------------|
-| id | IngestionJobId | Unique job identifier |
-| account_id | AccountId | The email account being ingested |
-| status | JobStatus | Pending, Running, Paused, Completed, Failed |
-| total | u32 | Total emails to process |
-| processed | u32 | Emails processed so far |
-| embedded | u32 | Emails successfully embedded |
-| failed | u32 | Emails that failed processing |
-| phase | IngestionPhase | Current pipeline phase |
-| started_at | DateTime | Job start timestamp |
-| completed_at | Option\<DateTime\> | Job completion timestamp |
+| Field        | Type               | Description                                 |
+| ------------ | ------------------ | ------------------------------------------- |
+| id           | IngestionJobId     | Unique job identifier                       |
+| account_id   | AccountId          | The email account being ingested            |
+| status       | JobStatus          | Pending, Running, Paused, Completed, Failed |
+| total        | u32                | Total emails to process                     |
+| processed    | u32                | Emails processed so far                     |
+| embedded     | u32                | Emails successfully embedded                |
+| failed       | u32                | Emails that failed processing               |
+| phase        | IngestionPhase     | Current pipeline phase                      |
+| started_at   | DateTime           | Job start timestamp                         |
+| completed_at | Option\<DateTime\> | Job completion timestamp                    |
 
 **Invariants:**
+
 - Only one active ingestion job per account at a time.
 - Phase transitions must follow the defined order: Syncing --> Embedding --> Categorizing --> Clustering --> Analyzing --> Complete.
 - `processed + failed` must not exceed `total`.
 - A failed job can be retried; retry creates a new IngestionJob that resumes from the last checkpoint.
 
 **Commands:**
+
 - `StartIngestion { account_id, sync_depth }` -- begins a new ingestion job
 - `PauseIngestion { job_id }` -- pauses an active job
 - `ResumeIngestion { job_id }` -- resumes a paused job
@@ -51,45 +53,47 @@ Manages multi-asset extraction for a single email.
 
 **Root Entity: ContentExtraction**
 
-| Field | Type | Description |
-|-------|------|-------------|
-| email_id | EmailId | The email being extracted |
-| html_extracted | ExtractionResult | HTML body extraction result |
-| images_ocrd | Vec\<ImageExtractionResult\> | OCR results for inline images |
+| Field                 | Type                              | Description                      |
+| --------------------- | --------------------------------- | -------------------------------- |
+| email_id              | EmailId                           | The email being extracted        |
+| html_extracted        | ExtractionResult                  | HTML body extraction result      |
+| images_ocrd           | Vec\<ImageExtractionResult\>      | OCR results for inline images    |
 | attachments_extracted | Vec\<AttachmentExtractionResult\> | Text extraction from attachments |
-| urls_resolved | Vec\<UrlResolutionResult\> | URL analysis results |
-| quality_scores | QualityScores | Per-asset quality metrics |
-| extracted_at | DateTime | Extraction timestamp |
+| urls_resolved         | Vec\<UrlResolutionResult\>        | URL analysis results             |
+| quality_scores        | QualityScores                     | Per-asset quality metrics        |
+| extracted_at          | DateTime                          | Extraction timestamp             |
 
 **Invariants:**
+
 - HTML extraction is mandatory; image/attachment/URL extraction is best-effort.
 - Each extraction result includes a quality score; assets below a configurable quality threshold are flagged but not discarded.
 - Failed extractions are recorded with error details (not silently dropped).
 
 **Commands:**
+
 - `ExtractContent { email_id, raw_email }` -- runs the full extraction pipeline
 - `RetryExtraction { email_id, asset_type }` -- retries a failed extraction for a specific asset
 
 ## Domain Events
 
-| Event | Fields | Published When |
-|-------|--------|----------------|
-| IngestionStarted | job_id, account_id, total_emails | A new ingestion job begins |
-| IngestionPhaseChanged | job_id, phase | The job transitions to a new pipeline phase |
-| IngestionProgress | job_id, processed, embedded, failed, emails_per_second | Periodic progress update (streamed via SSE) |
-| IngestionCompleted | job_id, report (summary statistics) | The job finishes successfully |
-| IngestionFailed | job_id, error, last_checkpoint | The job fails with an error |
-| ContentExtracted | email_id, asset_type, quality_score | An asset is successfully extracted from an email |
-| ExtractionFailed | email_id, asset_type, error | An asset extraction fails |
+| Event                 | Fields                                                 | Published When                                   |
+| --------------------- | ------------------------------------------------------ | ------------------------------------------------ |
+| IngestionStarted      | job_id, account_id, total_emails                       | A new ingestion job begins                       |
+| IngestionPhaseChanged | job_id, phase                                          | The job transitions to a new pipeline phase      |
+| IngestionProgress     | job_id, processed, embedded, failed, emails_per_second | Periodic progress update (streamed via SSE)      |
+| IngestionCompleted    | job_id, report (summary statistics)                    | The job finishes successfully                    |
+| IngestionFailed       | job_id, error, last_checkpoint                         | The job fails with an error                      |
+| ContentExtracted      | email_id, asset_type, quality_score                    | An asset is successfully extracted from an email |
+| ExtractionFailed      | email_id, asset_type, error                            | An asset extraction fails                        |
 
 ### Event Consumers
 
-| Event | Consumed By | Purpose |
-|-------|-------------|---------|
-| ContentExtracted | Email Intelligence | Triggers embedding generation for the extracted content |
-| IngestionCompleted | Email Intelligence | Triggers batch clustering and analysis |
-| IngestionStarted | Frontend (via SSE) | Initiates progress UI |
-| IngestionProgress | Frontend (via SSE) | Updates progress bar and statistics |
+| Event              | Consumed By        | Purpose                                                 |
+| ------------------ | ------------------ | ------------------------------------------------------- |
+| ContentExtracted   | Email Intelligence | Triggers embedding generation for the extracted content |
+| IngestionCompleted | Email Intelligence | Triggers batch clustering and analysis                  |
+| IngestionStarted   | Frontend (via SSE) | Initiates progress UI                                   |
+| IngestionProgress  | Frontend (via SSE) | Updates progress bar and statistics                     |
 
 ## Value Objects
 
@@ -108,11 +112,11 @@ enum IngestionPhase {
 
 ### ExtractionQuality
 
-| Field | Type | Description |
-|-------|------|-------------|
-| score | f32 | Quality score [0.0, 1.0] |
-| confidence | f32 | Confidence in the quality assessment |
-| warnings | Vec\<String\> | Quality warnings (e.g., "low OCR confidence", "truncated content") |
+| Field      | Type          | Description                                                        |
+| ---------- | ------------- | ------------------------------------------------------------------ |
+| score      | f32           | Quality score [0.0, 1.0]                                           |
+| confidence | f32           | Confidence in the quality assessment                               |
+| warnings   | Vec\<String\> | Quality warnings (e.g., "low OCR confidence", "truncated content") |
 
 ### AssetType
 
@@ -127,12 +131,12 @@ enum AssetType {
 
 ### ExtractionResult
 
-| Field | Type | Description |
-|-------|------|-------------|
-| status | ExtractionStatus | Success, Failed, Skipped |
-| content | Option\<String\> | Extracted text content |
-| quality | ExtractionQuality | Quality metrics |
-| error | Option\<String\> | Error message if failed |
+| Field   | Type              | Description              |
+| ------- | ----------------- | ------------------------ |
+| status  | ExtractionStatus  | Success, Failed, Skipped |
+| content | Option\<String\>  | Extracted text content   |
+| quality | ExtractionQuality | Quality metrics          |
+| error   | Option\<String\>  | Error message if failed  |
 
 ## Domain Services
 
@@ -141,6 +145,7 @@ enum AssetType {
 Orchestrates the 6-stage per-email pipeline.
 
 **Pipeline Stages:**
+
 1. **Sync** -- Fetch raw email from provider via Account Management context
 2. **Extract** -- Run content extraction (HTML, images, attachments, URLs)
 3. **Embed** -- Generate vector embeddings via Email Intelligence context
@@ -149,6 +154,7 @@ Orchestrates the 6-stage per-email pipeline.
 6. **Analyze** -- Run quality checks and generate analytics
 
 **Responsibilities:**
+
 - Manages backpressure: limits concurrent email processing based on system resources.
 - Implements checkpoint/resume: records progress so failed jobs can restart.
 - Handles rate limiting from email providers (Gmail API quotas, Graph API throttling).
@@ -161,6 +167,7 @@ Extracts clean text from email HTML bodies.
 **Pipeline:** `raw HTML --> ammonia (sanitize) --> scraper (parse) --> html2text (convert)`
 
 **Responsibilities:**
+
 - Strips tracking pixels and invisible elements.
 - Preserves semantic structure (headers, lists, links).
 - Handles malformed HTML gracefully.
@@ -171,10 +178,12 @@ Extracts clean text from email HTML bodies.
 Processes inline images for OCR text and visual embeddings.
 
 **Tools:**
+
 - OCR: `ocrs` crate for text extraction from images
 - Visual embedding: `fastembed` with CLIP model
 
 **Responsibilities:**
+
 - Filters out tracking pixels and decorative images (< 50x50 px or known tracker domains).
 - Runs OCR on images containing text.
 - Generates CLIP embeddings for visual content.
@@ -194,6 +203,7 @@ Extracts text content from file attachments.
 | Other | File type detection via `infer` crate; unsupported types are skipped |
 
 **Responsibilities:**
+
 - Detects file type via magic bytes (`infer` crate), not file extension.
 - Extracts text content with structure preservation where possible.
 - Handles encrypted/password-protected files gracefully (marks as Skipped).
@@ -204,6 +214,7 @@ Extracts text content from file attachments.
 Extracts and analyzes URLs found in email bodies.
 
 **Responsibilities:**
+
 - Extracts URLs from HTML content and plain text.
 - Resolves redirects (follows up to 5 hops).
 - Detects and flags tracking URLs (UTM parameters, known tracker domains).
@@ -214,6 +225,7 @@ Extracts and analyzes URLs found in email bodies.
 Streams ingestion progress to the frontend via Server-Sent Events.
 
 **Responsibilities:**
+
 - Converts IngestionProgress domain events to SSE format.
 - Manages SSE connections (heartbeat, reconnection).
 - Throttles updates to avoid overwhelming the frontend (max 2 updates/second).
@@ -223,14 +235,14 @@ Streams ingestion progress to the frontend via Server-Sent Events.
 
 ### Upstream Dependencies
 
-| Context | Dependency | What Ingestion Consumes |
-|---------|-----------|------------------------|
+| Context            | Dependency                    | What Ingestion Consumes                                   |
+| ------------------ | ----------------------------- | --------------------------------------------------------- |
 | Account Management | Provider credentials and sync | OAuth tokens, provider-specific sync APIs, email metadata |
 
 ### Downstream Consumers
 
-| Context | Relationship | What Ingestion Publishes |
-|---------|-------------|-------------------------|
+| Context            | Relationship        | What Ingestion Publishes                                     |
+| ------------------ | ------------------- | ------------------------------------------------------------ |
 | Email Intelligence | Customer / Supplier | ContentExtracted events trigger embedding and classification |
 
 ### Integration Pattern: Customer / Supplier
@@ -243,15 +255,15 @@ Email Intelligence (the customer) defines the content format it needs. Ingestion
 
 ## Ubiquitous Language
 
-| Term | Definition |
-|------|------------|
-| **Ingestion** | The process of bringing emails from a provider into Emailibrium |
-| **Extraction** | Pulling text and metadata from email content (HTML, images, attachments) |
-| **Phase** | A discrete stage in the ingestion pipeline |
-| **Checkpoint** | A saved progress point allowing job resumption after failure |
-| **Asset** | A piece of content within an email (body, image, attachment, URL) |
-| **Quality score** | A metric indicating how well content was extracted |
-| **Backpressure** | Rate limiting within the pipeline to prevent resource exhaustion |
+| Term              | Definition                                                               |
+| ----------------- | ------------------------------------------------------------------------ |
+| **Ingestion**     | The process of bringing emails from a provider into Emailibrium          |
+| **Extraction**    | Pulling text and metadata from email content (HTML, images, attachments) |
+| **Phase**         | A discrete stage in the ingestion pipeline                               |
+| **Checkpoint**    | A saved progress point allowing job resumption after failure             |
+| **Asset**         | A piece of content within an email (body, image, attachment, URL)        |
+| **Quality score** | A metric indicating how well content was extracted                       |
+| **Backpressure**  | Rate limiting within the pipeline to prevent resource exhaustion         |
 
 ## Boundaries
 

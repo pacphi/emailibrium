@@ -1,37 +1,32 @@
 //! HTML content extraction -- strips tags, decodes entities, and extracts links/images.
 //!
-//! Uses the `regex` crate for HTML processing. For production use with adversarial
-//! HTML, consider migrating to a proper HTML parser (scraper, html5ever).
+//! Uses `ammonia` for HTML sanitization and `scraper` for structured parsing
+//! with CSS selectors. Falls back to regex for edge cases.
 //!
-//! Dependency: `regex = "1"` in Cargo.toml.
+//! Dependencies: `ammonia`, `scraper`, `regex` in Cargo.toml.
 
 use regex::Regex;
+use scraper::{Html, Selector};
 
 /// Stateless HTML extractor with methods for text, links, and images.
 pub struct HtmlExtractor;
 
 impl HtmlExtractor {
     /// Strip HTML tags, decode entities, and collapse whitespace to produce clean text.
+    ///
+    /// Uses `ammonia` to sanitize the HTML (removing script/style/dangerous content)
+    /// then extracts plain text via `scraper`'s DOM traversal.
     pub fn extract_text(html: &str) -> String {
-        // Remove style and script blocks (including content)
-        let re_style = Regex::new(r"(?is)<style[^>]*>.*?</style>").unwrap();
-        let text = re_style.replace_all(html, "");
+        // Step 1: Sanitize with ammonia -- removes scripts, styles, event handlers,
+        // and dangerous elements while preserving safe text content.
+        let sanitized = ammonia::Builder::new()
+            .tags(std::collections::HashSet::new()) // strip ALL tags
+            .clean(html)
+            .to_string();
 
-        let re_script = Regex::new(r"(?is)<script[^>]*>.*?</script>").unwrap();
-        let text = re_script.replace_all(&text, "");
+        // Step 2: Decode remaining entities and collapse whitespace.
+        let text = decode_html_entities(&sanitized);
 
-        // Replace <br>, </p>, </div>, </li>, </tr> with newlines for readability
-        let re_block = Regex::new(r"(?i)<br\s*/?>|</p>|</div>|</li>|</tr>|</h[1-6]>").unwrap();
-        let text = re_block.replace_all(&text, "\n");
-
-        // Strip remaining HTML tags
-        let re_tags = Regex::new(r"<[^>]+>").unwrap();
-        let text = re_tags.replace_all(&text, "");
-
-        // Decode common HTML entities
-        let text = decode_html_entities(&text);
-
-        // Collapse runs of whitespace (spaces/tabs) on each line, then collapse blank lines
         let re_hspace = Regex::new(r"[ \t]+").unwrap();
         let text = re_hspace.replace_all(&text, " ");
 
@@ -41,18 +36,27 @@ impl HtmlExtractor {
         text.trim().to_string()
     }
 
-    /// Extract all `<a href="...">text</a>` pairs from HTML.
+    /// Sanitize HTML for safe display (e.g., in a webview preview).
+    ///
+    /// Strips dangerous elements (scripts, iframes, event handlers) but
+    /// preserves safe formatting tags (p, b, i, a, img, etc.).
+    pub fn sanitize_html(html: &str) -> String {
+        ammonia::clean(html)
+    }
+
+    /// Extract all `<a href="...">text</a>` pairs from HTML using CSS selectors.
     ///
     /// Returns a vec of (url, optional display text).
     pub fn extract_links(html: &str) -> Vec<(String, Option<String>)> {
-        let re = Regex::new(r#"(?is)<a\s[^>]*href\s*=\s*"([^"]*)"[^>]*>(.*?)</a>"#).unwrap();
-        re.captures_iter(html)
-            .map(|cap| {
-                let url = cap[1].to_string();
-                let raw_text = cap[2].to_string();
-                // Strip inner HTML tags from the display text
-                let re_tags = Regex::new(r"<[^>]+>").unwrap();
-                let display = re_tags.replace_all(&raw_text, "").trim().to_string();
+        let document = Html::parse_document(html);
+        let selector = Selector::parse("a[href]").unwrap();
+
+        document
+            .select(&selector)
+            .map(|el| {
+                let url = el.value().attr("href").unwrap_or("").to_string();
+                let display: String = el.text().collect::<Vec<_>>().join(" ");
+                let display = display.trim().to_string();
                 let display = if display.is_empty() {
                     None
                 } else {
@@ -63,23 +67,39 @@ impl HtmlExtractor {
             .collect()
     }
 
-    /// Extract all `<img>` tags, returning (src, alt) pairs.
+    /// Extract all `<img>` tags using CSS selectors, returning (src, alt) pairs.
     pub fn extract_images(html: &str) -> Vec<(String, Option<String>)> {
-        let re_img = Regex::new(r"(?is)<img\s[^>]*>").unwrap();
-        let re_src = Regex::new(r#"(?i)src\s*=\s*"([^"]*)""#).unwrap();
-        let re_alt = Regex::new(r#"(?i)alt\s*=\s*"([^"]*)""#).unwrap();
+        let document = Html::parse_document(html);
+        let selector = Selector::parse("img[src]").unwrap();
 
-        re_img
-            .find_iter(html)
-            .filter_map(|m| {
-                let tag = m.as_str();
-                let src = re_src.captures(tag).map(|c| c[1].to_string())?;
-                let alt = re_alt
-                    .captures(tag)
-                    .map(|c| c[1].to_string())
+        document
+            .select(&selector)
+            .map(|el| {
+                let src = el.value().attr("src").unwrap_or("").to_string();
+                let alt = el
+                    .value()
+                    .attr("alt")
+                    .map(|s| s.to_string())
                     .filter(|s| !s.is_empty());
-                Some((src, alt))
+                (src, alt)
             })
+            .collect()
+    }
+
+    /// Extract structured text from specific HTML elements using CSS selectors.
+    ///
+    /// Useful for extracting specific content like email headers, signatures, etc.
+    pub fn extract_by_selector(html: &str, css_selector: &str) -> Vec<String> {
+        let document = Html::parse_document(html);
+        let selector = match Selector::parse(css_selector) {
+            Ok(s) => s,
+            Err(_) => return Vec::new(),
+        };
+
+        document
+            .select(&selector)
+            .map(|el| el.text().collect::<Vec<_>>().join(" ").trim().to_string())
+            .filter(|s| !s.is_empty())
             .collect()
     }
 }
@@ -164,5 +184,23 @@ mod tests {
         let links = HtmlExtractor::extract_links(html);
         assert_eq!(links.len(), 1);
         assert_eq!(links[0].1, Some("Bold link".to_string()));
+    }
+
+    #[test]
+    fn test_sanitize_html_strips_scripts() {
+        let html = r#"<p>Safe</p><script>alert('xss')</script><b>Also safe</b>"#;
+        let sanitized = HtmlExtractor::sanitize_html(html);
+        assert!(sanitized.contains("Safe"));
+        assert!(sanitized.contains("Also safe"));
+        assert!(!sanitized.contains("script"));
+        assert!(!sanitized.contains("alert"));
+    }
+
+    #[test]
+    fn test_extract_by_selector() {
+        let html = r#"<div class="header">Email Header</div><div class="body">Body text</div>"#;
+        let headers = HtmlExtractor::extract_by_selector(html, "div.header");
+        assert_eq!(headers.len(), 1);
+        assert_eq!(headers[0], "Email Header");
     }
 }

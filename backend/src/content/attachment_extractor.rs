@@ -1,9 +1,13 @@
 //! Attachment text extraction and file-type detection.
 //!
-//! This module provides metadata extraction and file-type detection for
-//! email attachments. Text extraction from PDF/DOCX/XLSX requires the
-//! `pdf-extract`, `calamine`, and `dotext` crates (see ADR-006 for the
-//! integration roadmap).
+//! This module extracts text content from email attachments. Supported formats:
+//! - **PDF**: Text extraction via `pdf-extract` crate
+//! - **Plain text / CSV**: Direct UTF-8 decoding
+//! - **DOCX/XLSX**: Documented as future work (requires calamine/dotext crates)
+//!
+//! Dependencies: `pdf-extract` in Cargo.toml.
+
+use tracing::warn;
 
 use super::types::ExtractedAttachment;
 
@@ -13,20 +17,75 @@ pub struct AttachmentExtractor;
 impl AttachmentExtractor {
     /// Extract text content from an attachment.
     ///
-    /// Returns file metadata and detected type. Text extraction from document
-    /// formats (PDF, DOCX, XLSX) requires the pdf-extract/calamine/dotext
-    /// crates as described in ADR-006; until then `extracted_text` is `None`.
+    /// Detects file type and attempts text extraction for supported formats.
+    /// Returns file metadata and any extracted text with a quality score.
     pub fn extract_text(data: &[u8], filename: &str, content_type: &str) -> ExtractedAttachment {
         let file_type = Self::detect_file_type(data, filename);
         let _ = content_type; // Reserved for content-type fallback detection.
 
+        let (extracted_text, extraction_quality) = match file_type.as_str() {
+            "pdf" => Self::extract_pdf_text(data),
+            "txt" | "csv" => Self::extract_plain_text(data),
+            _ => (None, 0.0),
+        };
+
         ExtractedAttachment {
             filename: filename.to_string(),
             file_type,
-            // Text extraction requires pdf-extract/calamine/dotext crates (see ADR-006).
-            extracted_text: None,
-            extraction_quality: 0.0,
+            extracted_text,
+            extraction_quality,
             size_bytes: data.len(),
+        }
+    }
+
+    /// Extract text from a PDF document using `pdf-extract`.
+    fn extract_pdf_text(data: &[u8]) -> (Option<String>, f32) {
+        match pdf_extract::extract_text_from_mem(data) {
+            Ok(text) => {
+                let trimmed = text.trim().to_string();
+                if trimmed.is_empty() {
+                    // PDF exists but contains no extractable text (e.g., scanned image).
+                    (None, 0.1)
+                } else {
+                    // Score based on text density -- very short extractions may be
+                    // low quality (e.g., only headers or page numbers).
+                    let quality = if trimmed.len() > 100 {
+                        0.9
+                    } else if trimmed.len() > 20 {
+                        0.7
+                    } else {
+                        0.5
+                    };
+                    (Some(trimmed), quality)
+                }
+            }
+            Err(err) => {
+                warn!(error = %err, "PDF text extraction failed");
+                (None, 0.0)
+            }
+        }
+    }
+
+    /// Extract text from plain text or CSV files.
+    fn extract_plain_text(data: &[u8]) -> (Option<String>, f32) {
+        match std::str::from_utf8(data) {
+            Ok(text) => {
+                let trimmed = text.trim().to_string();
+                if trimmed.is_empty() {
+                    (None, 0.0)
+                } else {
+                    (Some(trimmed), 1.0)
+                }
+            }
+            Err(_) => {
+                // Try lossy conversion for files with encoding issues.
+                let text = String::from_utf8_lossy(data).trim().to_string();
+                if text.is_empty() {
+                    (None, 0.0)
+                } else {
+                    (Some(text), 0.6)
+                }
+            }
         }
     }
 
@@ -142,7 +201,37 @@ mod tests {
             AttachmentExtractor::extract_text(b"fake-pdf-data", "report.pdf", "application/pdf");
         assert_eq!(result.filename, "report.pdf");
         assert_eq!(result.file_type, "pdf");
+        // pdf-extract will fail on invalid PDF data, so extracted_text should be None.
         assert!(result.extracted_text.is_none());
         assert_eq!(result.size_bytes, 13);
+    }
+
+    #[test]
+    fn test_extract_plain_text_file() {
+        let data = b"Hello, this is a plain text attachment.";
+        let result = AttachmentExtractor::extract_text(data, "notes.txt", "text/plain");
+        assert_eq!(result.file_type, "txt");
+        assert_eq!(
+            result.extracted_text,
+            Some("Hello, this is a plain text attachment.".to_string())
+        );
+        assert_eq!(result.extraction_quality, 1.0);
+    }
+
+    #[test]
+    fn test_extract_csv_file() {
+        let data = b"name,email\nAlice,alice@example.com\nBob,bob@example.com";
+        let result = AttachmentExtractor::extract_text(data, "contacts.csv", "text/csv");
+        assert_eq!(result.file_type, "csv");
+        assert!(result.extracted_text.is_some());
+        assert!(result.extracted_text.unwrap().contains("Alice"));
+        assert_eq!(result.extraction_quality, 1.0);
+    }
+
+    #[test]
+    fn test_extract_empty_text_file() {
+        let result = AttachmentExtractor::extract_text(b"", "empty.txt", "text/plain");
+        assert_eq!(result.file_type, "txt");
+        assert!(result.extracted_text.is_none());
     }
 }

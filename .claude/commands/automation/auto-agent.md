@@ -45,21 +45,18 @@ npx claude-flow auto agent -t "Fix bug in login" -s minimal
 ## How It Works
 
 1. **Task Analysis**
-
    - Parses task description
    - Identifies required skills
    - Estimates complexity
    - Determines parallelization opportunities
 
 2. **Agent Selection**
-
    - Matches skills to agent types
    - Considers task dependencies
    - Optimizes for efficiency
    - Respects constraints
 
 3. **Topology Selection**
-
    - Chooses optimal swarm structure
    - Configures communication patterns
    - Sets up coordination rules

@@ -10,7 +10,7 @@ services:
       dockerfile: Dockerfile
       target: runtime
       args:
-        RUST_VERSION: "1.85"
+        RUST_VERSION: "1.94"
     container_name: emailibrium-backend
     user: "1000:1000"
     read_only: true
@@ -189,8 +189,8 @@ volumes:
 # ─── Networks (segmented per NIST SP 800-190) ───────────────
 networks:
   db-internal:
-    internal: true     # No external access — only backend <-> postgres
+    internal: true # No external access — only backend <-> postgres
   cache-internal:
-    internal: true     # No external access — only backend <-> redis
+    internal: true # No external access — only backend <-> redis
   frontend-proxy:
-    driver: bridge     # Frontend <-> backend communication
+    driver: bridge # Frontend <-> backend communication

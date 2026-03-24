@@ -1,8 +1,8 @@
 ---
 name: memory-specialist
 type: specialist
-color: "#00D4AA"
-version: "3.0.0"
+color: '#00D4AA'
+version: '3.0.0'
 description: V3 memory optimization specialist with HNSW indexing, hybrid backend management, vector quantization, and EWC++ for preventing catastrophic forgetting
 capabilities:
   - hnsw_indexing_optimization
@@ -76,45 +76,45 @@ class HNSWOptimizer {
   constructor() {
     this.defaultParams = {
       // Construction parameters
-      M: 16,                    // Max connections per layer
-      efConstruction: 200,     // Construction search depth
+      M: 16, // Max connections per layer
+      efConstruction: 200, // Construction search depth
 
       // Query parameters
-      efSearch: 100,           // Search depth (higher = more accurate)
+      efSearch: 100, // Search depth (higher = more accurate)
 
       // Memory optimization
-      maxElements: 1000000,    // Pre-allocate for capacity
-      quantization: 'int8'     // 4x memory reduction
+      maxElements: 1000000, // Pre-allocate for capacity
+      quantization: 'int8', // 4x memory reduction
     };
   }
 
   // Optimize HNSW parameters based on workload
   async optimizeForWorkload(workloadType) {
     const optimizations = {
-      'high_throughput': {
+      high_throughput: {
         M: 12,
         efConstruction: 100,
         efSearch: 50,
-        quantization: 'int8'
+        quantization: 'int8',
       },
-      'high_accuracy': {
+      high_accuracy: {
         M: 32,
         efConstruction: 400,
         efSearch: 200,
-        quantization: 'float32'
+        quantization: 'float32',
       },
-      'balanced': {
+      balanced: {
         M: 16,
         efConstruction: 200,
         efSearch: 100,
-        quantization: 'float16'
+        quantization: 'float16',
       },
-      'memory_constrained': {
+      memory_constrained: {
         M: 8,
         efConstruction: 50,
         efSearch: 30,
-        quantization: 'int4'
-      }
+        quantization: 'int4',
+      },
     };
 
     return optimizations[workloadType] || optimizations['balanced'];
@@ -129,7 +129,7 @@ class HNSWOptimizer {
       linearComplexity: baselineLinear,
       hnswComplexity: hnswComplexity,
       speedup: baselineLinear / hnswComplexity,
-      expectedLatency: hnswComplexity * 0.001 // ms per operation
+      expectedLatency: hnswComplexity * 0.001, // ms per operation
     };
   }
 }
@@ -148,15 +148,15 @@ class HybridMemoryBackend {
       path: process.env.CLAUDE_FLOW_MEMORY_PATH || './data/memory',
       walMode: true,
       cacheSize: 10000,
-      mmap: true
+      mmap: true,
     });
 
     // AgentDB for vector embeddings and semantic search
     this.agentdb = new AgentDBBackend({
-      dimensions: 1536,        // OpenAI embedding dimensions
+      dimensions: 1536, // OpenAI embedding dimensions
       metric: 'cosine',
       indexType: 'hnsw',
-      quantization: 'int8'
+      quantization: 'int8',
     });
 
     // Unified query interface
@@ -181,16 +181,13 @@ class HybridMemoryBackend {
 
   // Hybrid query combining structured and vector search
   async hybridQuery(querySpec) {
-    const [structuredResults, semanticResults] = await Promise.all([
-      this.sqlite.query(querySpec.structured),
-      this.agentdb.semanticSearch(querySpec.semantic)
-    ]);
+    const [structuredResults, semanticResults] = await Promise.all([this.sqlite.query(querySpec.structured), this.agentdb.semanticSearch(querySpec.semantic)]);
 
     // Fusion scoring
     return this.fuseResults(structuredResults, semanticResults, {
       structuredWeight: querySpec.structuredWeight || 0.5,
       semanticWeight: querySpec.semanticWeight || 0.5,
-      rrf_k: 60  // Reciprocal Rank Fusion parameter
+      rrf_k: 60, // Reciprocal Rank Fusion parameter
     });
   }
 
@@ -225,11 +222,11 @@ class HybridMemoryBackend {
 class VectorQuantizer {
   constructor() {
     this.quantizationMethods = {
-      'float32': { bits: 32, factor: 1 },
-      'float16': { bits: 16, factor: 2 },
-      'int8':    { bits: 8,  factor: 4 },
-      'int4':    { bits: 4,  factor: 8 },
-      'binary':  { bits: 1,  factor: 32 }
+      float32: { bits: 32, factor: 1 },
+      float16: { bits: 16, factor: 2 },
+      int8: { bits: 8, factor: 4 },
+      int4: { bits: 4, factor: 8 },
+      binary: { bits: 1, factor: 32 },
     };
   }
 
@@ -243,7 +240,7 @@ class VectorQuantizer {
       method,
       originalDimensions: vectors[0].length,
       compressionRatio: config.factor,
-      calibrationStats: await this.computeCalibrationStats(vectors)
+      calibrationStats: await this.computeCalibrationStats(vectors),
     };
 
     for (const vector of vectors) {
@@ -266,13 +263,13 @@ class VectorQuantizer {
       max: allValues[allValues.length - 1],
       absMax,
       mean: allValues.reduce((a, b) => a + b) / allValues.length,
-      scale: absMax / 127  // For int8 quantization
+      scale: absMax / 127, // For int8 quantization
     };
   }
 
   // INT8 symmetric quantization
   quantizeToInt8(vector, stats) {
-    return vector.map(v => {
+    return vector.map((v) => {
       const scaled = v / stats.scale;
       return Math.max(-128, Math.min(127, Math.round(scaled)));
     });
@@ -280,7 +277,7 @@ class VectorQuantizer {
 
   // Dequantize for inference
   dequantize(quantizedVector, metadata) {
-    return quantizedVector.map(v => v * metadata.calibrationStats.scale);
+    return quantizedVector.map((v) => v * metadata.calibrationStats.scale);
   }
 
   // Product Quantization for extreme compression
@@ -291,16 +288,12 @@ class VectorQuantizer {
     // Train codebooks for each subvector
     const codebooks = [];
     for (let i = 0; i < numSubvectors; i++) {
-      const subvectors = vectors.map(v =>
-        v.slice(i * subvectorDim, (i + 1) * subvectorDim)
-      );
+      const subvectors = vectors.map((v) => v.slice(i * subvectorDim, (i + 1) * subvectorDim));
       codebooks.push(await this.trainCodebook(subvectors, numCentroids));
     }
 
     // Encode vectors using codebooks
-    const encoded = vectors.map(v =>
-      this.encodeWithCodebooks(v, codebooks, subvectorDim)
-    );
+    const encoded = vectors.map((v) => this.encodeWithCodebooks(v, codebooks, subvectorDim));
 
     return { encoded, codebooks, compressionRatio: dims / numSubvectors };
   }
@@ -314,10 +307,10 @@ class VectorQuantizer {
 class MemoryConsolidator {
   constructor() {
     this.consolidationStrategies = {
-      'temporal': new TemporalConsolidation(),
-      'semantic': new SemanticConsolidation(),
-      'importance': new ImportanceBasedConsolidation(),
-      'hybrid': new HybridConsolidation()
+      temporal: new TemporalConsolidation(),
+      semantic: new SemanticConsolidation(),
+      importance: new ImportanceBasedConsolidation(),
+      hybrid: new HybridConsolidation(),
     };
   }
 
@@ -379,9 +372,9 @@ class MemoryConsolidator {
   // Importance-based consolidation
   async importanceConsolidation(memories, retentionRatio = 0.7) {
     // Score memories by importance
-    const scored = memories.map(m => ({
+    const scored = memories.map((m) => ({
       memory: m,
-      score: this.calculateImportanceScore(m)
+      score: this.calculateImportanceScore(m),
     }));
 
     // Sort by importance
@@ -389,17 +382,12 @@ class MemoryConsolidator {
 
     // Keep top N% based on retention ratio
     const keepCount = Math.ceil(scored.length * retentionRatio);
-    return scored.slice(0, keepCount).map(s => s.memory);
+    return scored.slice(0, keepCount).map((s) => s.memory);
   }
 
   // Calculate importance score
   calculateImportanceScore(memory) {
-    return (
-      memory.accessCount * 0.3 +
-      memory.recency * 0.2 +
-      memory.relevanceScore * 0.3 +
-      memory.userExplicit * 0.2
-    );
+    return memory.accessCount * 0.3 + memory.recency * 0.2 + memory.relevanceScore * 0.3 + memory.userExplicit * 0.2;
   }
 }
 ```
@@ -411,10 +399,10 @@ class MemoryConsolidator {
 class SessionPersistenceManager {
   constructor() {
     this.persistenceStrategies = {
-      'full': new FullPersistence(),
-      'incremental': new IncrementalPersistence(),
-      'differential': new DifferentialPersistence(),
-      'checkpoint': new CheckpointPersistence()
+      full: new FullPersistence(),
+      incremental: new IncrementalPersistence(),
+      differential: new DifferentialPersistence(),
+      checkpoint: new CheckpointPersistence(),
     };
   }
 
@@ -430,8 +418,8 @@ class SessionPersistenceManager {
       metadata: {
         strategy,
         version: '3.0.0',
-        checksum: await this.computeChecksum(state)
-      }
+        checksum: await this.computeChecksum(state),
+      },
     };
 
     // Store snapshot
@@ -440,7 +428,7 @@ class SessionPersistenceManager {
       namespace: 'sessions',
       key: `session:${sessionId}:snapshot`,
       value: JSON.stringify(snapshot),
-      ttl: 30 * 24 * 60 * 60 * 1000 // 30 days
+      ttl: 30 * 24 * 60 * 60 * 1000, // 30 days
     });
 
     // Store session index
@@ -455,7 +443,7 @@ class SessionPersistenceManager {
     const snapshotData = await mcp.memory_usage({
       action: 'retrieve',
       namespace: 'sessions',
-      key: `session:${sessionId}:snapshot`
+      key: `session:${sessionId}:snapshot`,
     });
 
     if (!snapshotData) {
@@ -512,20 +500,20 @@ class NamespaceManager {
         replication: config.replication || 1,
         indexing: config.indexing || {
           hnsw: true,
-          fulltext: true
-        }
+          fulltext: true,
+        },
       },
       stats: {
         entryCount: 0,
         sizeBytes: 0,
-        lastAccess: Date.now()
-      }
+        lastAccess: Date.now(),
+      },
     };
 
     // Initialize namespace storage
     await mcp.memory_namespace({
       namespace: name,
-      action: 'create'
+      action: 'create',
     });
 
     this.namespaces.set(name, namespace);
@@ -535,22 +523,22 @@ class NamespaceManager {
   // Namespace isolation policies
   async setIsolationPolicy(namespace, policy) {
     const validPolicies = {
-      'strict': {
+      strict: {
         crossNamespaceAccess: false,
         auditLogging: true,
-        encryption: 'aes-256-gcm'
+        encryption: 'aes-256-gcm',
       },
-      'standard': {
-        crossNamespaceAccess: true,
-        auditLogging: false,
-        encryption: null
-      },
-      'shared': {
+      standard: {
         crossNamespaceAccess: true,
         auditLogging: false,
         encryption: null,
-        readOnly: false
-      }
+      },
+      shared: {
+        crossNamespaceAccess: true,
+        auditLogging: false,
+        encryption: null,
+        readOnly: false,
+      },
     };
 
     if (!validPolicies[policy]) {
@@ -596,17 +584,17 @@ class NamespaceManager {
 class DistributedMemorySync {
   constructor() {
     this.syncStrategies = {
-      'eventual': new EventualConsistencySync(),
-      'strong': new StrongConsistencySync(),
-      'causal': new CausalConsistencySync(),
-      'crdt': new CRDTSync()
+      eventual: new EventualConsistencySync(),
+      strong: new StrongConsistencySync(),
+      causal: new CausalConsistencySync(),
+      crdt: new CRDTSync(),
     };
 
     this.conflictResolvers = {
-      'last-write-wins': (a, b) => a.timestamp > b.timestamp ? a : b,
-      'first-write-wins': (a, b) => a.timestamp < b.timestamp ? a : b,
-      'merge': (a, b) => this.mergeValues(a, b),
-      'vector-clock': (a, b) => this.vectorClockResolve(a, b)
+      'last-write-wins': (a, b) => (a.timestamp > b.timestamp ? a : b),
+      'first-write-wins': (a, b) => (a.timestamp < b.timestamp ? a : b),
+      merge: (a, b) => this.mergeValues(a, b),
+      'vector-clock': (a, b) => this.vectorClockResolve(a, b),
     };
   }
 
@@ -615,9 +603,7 @@ class DistributedMemorySync {
     const syncer = this.syncStrategies[strategy];
 
     // Collect peer states
-    const peerStates = await Promise.all(
-      peers.map(peer => this.fetchPeerState(peer))
-    );
+    const peerStates = await Promise.all(peers.map((peer) => this.fetchPeerState(peer)));
 
     // Merge states
     const mergedState = await syncer.merge(localState, peerStates);
@@ -689,7 +675,7 @@ class EWCPlusPlusManager {
     this.fisherInformation = new Map();
     this.optimalWeights = new Map();
     this.lambda = 5000; // Regularization strength
-    this.gamma = 0.9;   // Decay factor for online EWC
+    this.gamma = 0.9; // Decay factor for online EWC
   }
 
   // Compute Fisher Information Matrix for memory importance
@@ -755,9 +741,9 @@ class EWCPlusPlusManager {
     const importanceWeights = await this.computeImportanceWeights(existingMemories);
 
     // Calculate EWC penalty for each consolidation candidate
-    const candidates = newMemories.map(memory => ({
+    const candidates = newMemories.map((memory) => ({
       memory,
-      penalty: this.calculateConsolidationPenalty(memory, importanceWeights)
+      penalty: this.calculateConsolidationPenalty(memory, importanceWeights),
     }));
 
     // Sort by penalty (lower penalty = safer to consolidate)
@@ -799,10 +785,10 @@ class EWCPlusPlusManager {
 class PatternDistiller {
   constructor() {
     this.distillationMethods = {
-      'lora': new LoRADistillation(),
-      'pruning': new StructuredPruning(),
-      'quantization': new PostTrainingQuantization(),
-      'knowledge': new KnowledgeDistillation()
+      lora: new LoRADistillation(),
+      pruning: new StructuredPruning(),
+      quantization: new PostTrainingQuantization(),
+      knowledge: new KnowledgeDistillation(),
     };
   }
 
@@ -827,8 +813,8 @@ class PatternDistiller {
       metadata: {
         originalCount: memories.length,
         distilledCount: distilled.length,
-        clusterCount: clusters.length
-      }
+        clusterCount: clusters.length,
+      },
     };
   }
 
@@ -846,15 +832,13 @@ class PatternDistiller {
     const Vk = V.slice(0, rank);
 
     // Reconstruct with low-rank approximation
-    const compressed = this.matrixToMemories(
-      this.multiplyMatrices(Uk, this.diag(Sk), Vk)
-    );
+    const compressed = this.matrixToMemories(this.multiplyMatrices(Uk, this.diag(Sk), Vk));
 
     return {
       compressed,
       rank,
       compressionRatio: memoryMatrix[0].length / rank,
-      reconstructionError: this.calculateReconstructionError(memoryMatrix, compressed)
+      reconstructionError: this.calculateReconstructionError(memoryMatrix, compressed),
     };
   }
 
@@ -872,7 +856,7 @@ class PatternDistiller {
     return {
       studentMemories,
       transferQuality,
-      compressionRatio: teacherMemories.length / studentMemories.length
+      compressionRatio: teacherMemories.length / studentMemories.length,
     };
   }
 }
@@ -936,13 +920,13 @@ npx claude-flow@v3alpha memory quantize --namespace="embeddings" --method=int8
 
 ## Performance Targets
 
-| Metric | V2 Baseline | V3 Target | Improvement |
-|--------|-------------|-----------|-------------|
-| Vector Search | 1000ms | 0.8-6.7ms | 150x-12,500x |
-| Memory Usage | 100% | 25-50% | 2-4x reduction |
-| Index Build | 60s | 0.5s | 120x |
-| Query Latency (p99) | 500ms | <10ms | 50x |
-| Consolidation | Manual | Automatic | - |
+| Metric              | V2 Baseline | V3 Target | Improvement    |
+| ------------------- | ----------- | --------- | -------------- |
+| Vector Search       | 1000ms      | 0.8-6.7ms | 150x-12,500x   |
+| Memory Usage        | 100%        | 25-50%    | 2-4x reduction |
+| Index Build         | 60s         | 0.5s      | 120x           |
+| Query Latency (p99) | 500ms       | <10ms     | 50x            |
+| Consolidation       | Manual      | Automatic | -              |
 
 ## Best Practices
 
@@ -982,11 +966,13 @@ Namespace Hierarchy:
 ## ADR References
 
 ### ADR-006: Unified Memory Service
+
 - Single interface for all memory operations
 - Abstraction over multiple backends
 - Consistent API across storage types
 
 ### ADR-009: Hybrid Memory Backend
+
 - SQLite for structured data and metadata
 - AgentDB for vector embeddings
 - HNSW for fast similarity search

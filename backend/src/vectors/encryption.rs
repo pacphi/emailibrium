@@ -6,6 +6,30 @@
 //! In-memory operations are delegated unchanged to the inner store.
 //! Encryption is applied at the persistence boundary (backup/restore)
 //! via the `encrypt_vector` and `decrypt_vector` methods.
+//!
+//! ## SQLCipher Database Encryption (item #31)
+//!
+//! ADR-008 describes using SQLCipher for full database encryption. The
+//! `sqlx` crate does not natively support SQLCipher; integration requires
+//! one of these approaches:
+//!
+//! 1. **Build SQLite with SQLCipher**: Replace `libsqlite3-sys` with a
+//!    SQLCipher-linked build. This requires the `sqlcipher` system library
+//!    and compiling `libsqlite3-sys` with `SQLITE_HAS_CODEC` defined.
+//!    Set `SQLITE3_LIB_DIR` to point to the SQLCipher installation.
+//!
+//! 2. **Application-level encryption**: The current approach encrypts
+//!    vector data at the application boundary (this module) rather than
+//!    at the database level. This provides equivalent confidentiality
+//!    for vector data without requiring a custom SQLite build.
+//!
+//! 3. **Future**: If `sqlx` adds native SQLCipher support via a feature
+//!    flag, enable it in `Cargo.toml` and set `database.encryption_key`
+//!    in the configuration (sourced from an environment variable).
+//!
+//! The current application-level AES-256-GCM encryption provides strong
+//! at-rest protection for the most sensitive data (embedding vectors)
+//! without the build complexity of SQLCipher.
 
 use aes_gcm::aead::Aead;
 use aes_gcm::{Aes256Gcm, KeyInit, Nonce};

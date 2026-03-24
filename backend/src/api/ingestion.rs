@@ -135,6 +135,8 @@ pub fn routes() -> Router<AppState> {
         .route("/start", post(start_ingestion))
         .route("/pause", post(pause_ingestion))
         .route("/resume", post(resume_ingestion))
+        .route("/resume-checkpoint", post(resume_from_checkpoint))
+        .route("/checkpoint", get(get_checkpoint))
         .route("/embedding-status", get(embedding_status))
 }
 
@@ -201,6 +203,20 @@ async fn start_ingestion(
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
+    // Publish EmailIngested domain event for the batch start (Audit Item #20).
+    state
+        .event_bus
+        .emit(
+            &job_id,
+            crate::events::DomainEvent::EmailIngested {
+                email_id: job_id.clone(),
+                account_id: account_id.clone(),
+                subject: format!("Ingestion batch started for {account_id}"),
+                from_addr: String::new(),
+            },
+        )
+        .await;
+
     Ok(Json(JobResponse {
         job_id,
         status: "started".to_string(),
@@ -253,6 +269,69 @@ async fn resume_ingestion(
 #[derive(Debug, Deserialize)]
 pub struct PauseResumeRequest {
     pub job_id: String,
+}
+
+// ---------------------------------------------------------------------------
+// Checkpoint/resume endpoints (audit item #26)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Deserialize)]
+pub struct ResumeCheckpointRequest {
+    pub account_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CheckpointQuery {
+    pub account_id: String,
+}
+
+/// POST /api/v1/ingestion/resume-checkpoint -- resume from last failure checkpoint.
+async fn resume_from_checkpoint(
+    State(state): State<AppState>,
+    Json(req): Json<ResumeCheckpointRequest>,
+) -> Result<Json<JobResponse>, (StatusCode, String)> {
+    debug!(account_id = %req.account_id, "resuming ingestion from checkpoint");
+
+    match state
+        .vector_service
+        .ingestion_pipeline
+        .resume_from_checkpoint(&req.account_id)
+        .await
+    {
+        Ok(Some(job_id)) => Ok(Json(JobResponse {
+            job_id,
+            status: "resumed".to_string(),
+            message: format!(
+                "Ingestion resumed from checkpoint for account {}",
+                req.account_id
+            ),
+        })),
+        Ok(None) => Err((
+            StatusCode::NOT_FOUND,
+            "No incomplete checkpoint found for this account".to_string(),
+        )),
+        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string())),
+    }
+}
+
+/// GET /api/v1/ingestion/checkpoint?account_id=... -- get latest checkpoint.
+async fn get_checkpoint(
+    State(state): State<AppState>,
+    Query(params): Query<CheckpointQuery>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    match state
+        .vector_service
+        .ingestion_pipeline
+        .get_checkpoint(&params.account_id)
+        .await
+    {
+        Ok(Some(cp)) => Ok(Json(serde_json::to_value(cp).unwrap_or_default())),
+        Ok(None) => Err((
+            StatusCode::NOT_FOUND,
+            "No checkpoint found for this account".to_string(),
+        )),
+        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string())),
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -1,11 +1,13 @@
 # SPARC Orchestrator Mode
 
 ## Purpose
+
 Multi-agent task orchestration with TodoWrite/TodoRead/Task/Memory using MCP tools.
 
 ## Activation
 
 ### Option 1: Using MCP Tools (Preferred in Claude Code)
+
 ```javascript
 mcp__claude-flow__sparc_mode {
   mode: "orchestrator",
@@ -14,6 +16,7 @@ mcp__claude-flow__sparc_mode {
 ```
 
 ### Option 2: Using NPX CLI (Fallback when MCP not available)
+
 ```bash
 # Use when running from terminal or MCP tools unavailable
 npx claude-flow sparc run orchestrator "coordinate feature development"
@@ -23,12 +26,14 @@ npx claude-flow@alpha sparc run orchestrator "coordinate feature development"
 ```
 
 ### Option 3: Local Installation
+
 ```bash
 # If claude-flow is installed locally
 ./claude-flow sparc run orchestrator "coordinate feature development"
 ```
 
 ## Core Capabilities
+
 - Task decomposition
 - Agent coordination
 - Resource allocation
@@ -38,6 +43,7 @@ npx claude-flow@alpha sparc run orchestrator "coordinate feature development"
 ## Integration Examples
 
 ### Using MCP Tools (Preferred)
+
 ```javascript
 // Initialize orchestration swarm
 mcp__claude-flow__swarm_init {
@@ -61,6 +67,7 @@ mcp__claude-flow__task_orchestrate {
 ```
 
 ### Using NPX CLI (Fallback)
+
 ```bash
 # Initialize orchestration swarm
 npx claude-flow swarm init --topology hierarchical --strategy auto --max-agents 8
@@ -73,6 +80,7 @@ npx claude-flow task orchestrate --task "feature development" --strategy paralle
 ```
 
 ## Orchestration Patterns
+
 - Hierarchical coordination
 - Parallel execution
 - Sequential pipelines
@@ -80,6 +88,7 @@ npx claude-flow task orchestrate --task "feature development" --strategy paralle
 - Adaptive strategies
 
 ## Coordination Tools
+
 - TodoWrite for planning
 - Task for agent launch
 - Memory for sharing
@@ -89,6 +98,7 @@ npx claude-flow task orchestrate --task "feature development" --strategy paralle
 ## Workflow Example
 
 ### Using MCP Tools (Preferred)
+
 ```javascript
 // 1. Initialize orchestration swarm
 mcp__claude-flow__swarm_init {
@@ -117,6 +127,7 @@ mcp__claude-flow__swarm_monitor {
 ```
 
 ### Using NPX CLI (Fallback)
+
 ```bash
 # 1. Initialize orchestration swarm
 npx claude-flow swarm init --topology hierarchical --max-agents 10

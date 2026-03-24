@@ -1,11 +1,13 @@
 # SPARC Debugger Mode
 
 ## Purpose
+
 Systematic debugging with TodoWrite and Memory integration.
 
 ## Activation
 
 ### Option 1: Using MCP Tools (Preferred in Claude Code)
+
 ```javascript
 mcp__claude-flow__sparc_mode {
   mode: "debugger",
@@ -18,6 +20,7 @@ mcp__claude-flow__sparc_mode {
 ```
 
 ### Option 2: Using NPX CLI (Fallback when MCP not available)
+
 ```bash
 # Use when running from terminal or MCP tools unavailable
 npx claude-flow sparc run debugger "fix authentication issues"
@@ -27,12 +30,14 @@ npx claude-flow@alpha sparc run debugger "fix authentication issues"
 ```
 
 ### Option 3: Local Installation
+
 ```bash
 # If claude-flow is installed locally
 ./claude-flow sparc run debugger "fix authentication issues"
 ```
 
 ## Core Capabilities
+
 - Issue reproduction
 - Root cause analysis
 - Stack trace analysis
@@ -40,6 +45,7 @@ npx claude-flow@alpha sparc run debugger "fix authentication issues"
 - Performance bottleneck identification
 
 ## Debugging Workflow
+
 1. Create debugging plan with TodoWrite
 2. Systematic issue investigation
 3. Store findings in Memory
@@ -47,6 +53,7 @@ npx claude-flow@alpha sparc run debugger "fix authentication issues"
 5. Verify resolution
 
 ## Tools Integration
+
 - Error log analysis
 - Breakpoint simulation
 - Variable inspection

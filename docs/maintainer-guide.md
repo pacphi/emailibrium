@@ -37,7 +37,7 @@ emailibrium/
     Dockerfile               Multi-stage Rust build
 
   frontend/                  React TypeScript monorepo (pnpm workspaces + Turborepo)
-    apps/web/                Main SPA (Vite 6, React 19, TanStack Router)
+    apps/web/                Main SPA (Vite 8, React 19, TanStack Router)
       src/features/          Feature-sliced modules (command-center, inbox-cleaner, etc.)
       e2e/                   Playwright end-to-end tests
     packages/
@@ -78,13 +78,13 @@ emailibrium/
 
 **Prerequisites:**
 
-| Tool | Version | Purpose |
-|------|---------|---------|
-| Rust | 1.94+ | Backend compilation |
-| Node.js | 24+ | Frontend toolchain |
-| pnpm | 10.32+ | Frontend package management |
-| Docker | 24+ | Containerized deployment |
-| SQLite | 3.35+ | Database (usually pre-installed on macOS/Linux) |
+| Tool    | Version | Purpose                                         |
+| ------- | ------- | ----------------------------------------------- |
+| Rust    | 1.94+   | Backend compilation                             |
+| Node.js | 24+     | Frontend toolchain                              |
+| pnpm    | 10.32+  | Frontend package management                     |
+| Docker  | 24+     | Containerized deployment                        |
+| SQLite  | 3.35+   | Database (usually pre-installed on macOS/Linux) |
 
 **First-time setup:**
 
@@ -125,12 +125,12 @@ make docker-down          # Stop everything
 
 The backend is organized into four module groups under `backend/src/`:
 
-| Module | Files | Responsibility |
-|--------|-------|----------------|
-| `api/` | `vectors.rs`, `ingestion.rs`, `insights.rs` | HTTP handlers, request validation, response serialization |
-| `db/` | `mod.rs` | SQLite connection pool via sqlx |
-| `content/` | `html_extractor.rs`, `image_analyzer.rs`, `link_analyzer.rs`, `attachment_extractor.rs`, `tracking_detector.rs` | Multi-asset extraction pipeline (ADR-006) |
-| `vectors/` | 17 files | Core engine: embeddings, store, search, categorizer, clustering, encryption, quantization, SONA learning, backup, insights |
+| Module     | Files                                                                                                                                                                                 | Responsibility                                                                                                                                                                                                    |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `api/`     | 11 handler files (`vectors.rs`, `ingestion.rs`, `insights.rs`, `accounts.rs`, `ai.rs`, `backup.rs`, `clustering.rs`, `consent.rs`, `evaluation.rs`, `interactions.rs`, `learning.rs`) | HTTP handlers, request validation, response serialization                                                                                                                                                         |
+| `db/`      | `mod.rs`                                                                                                                                                                              | SQLite connection pool via sqlx                                                                                                                                                                                   |
+| `content/` | `html_extractor.rs`, `image_analyzer.rs`, `link_analyzer.rs`, `attachment_extractor.rs`, `tracking_detector.rs`                                                                       | Multi-asset extraction pipeline (ADR-006)                                                                                                                                                                         |
+| `vectors/` | 22 files                                                                                                                                                                              | Core engine: embeddings (ONNX/Ollama/cloud/Cohere), store (RuVector/memory), search, categorizer, clustering, encryption, quantization, SONA learning, backup, insights, generative AI, consent, reindex, metrics |
 
 **Adding a new API endpoint:**
 
@@ -158,16 +158,16 @@ make -C backend bench     # Run Criterion benchmarks
 
 The frontend follows a **feature-sliced design** pattern. Features are self-contained modules under `frontend/apps/web/src/features/`:
 
-| Feature | Description |
-|---------|-------------|
-| `command-center/` | Main dashboard and command palette |
-| `inbox-cleaner/` | Bulk email triage and cleanup |
-| `email/` | Email reading and detail view |
-| `chat/` | Conversational email interface |
-| `insights/` | Analytics and subscription detection |
-| `rules/` | Automation rule builder |
-| `settings/` | User preferences and account management |
-| `onboarding/` | First-run setup flow |
+| Feature           | Description                             |
+| ----------------- | --------------------------------------- |
+| `command-center/` | Main dashboard and command palette      |
+| `inbox-cleaner/`  | Bulk email triage and cleanup           |
+| `email/`          | Email reading and detail view           |
+| `chat/`           | Conversational email interface          |
+| `insights/`       | Analytics and subscription detection    |
+| `rules/`          | Automation rule builder                 |
+| `settings/`       | User preferences and account management |
+| `onboarding/`     | First-run setup flow                    |
 
 **Adding a new feature:**
 
@@ -186,14 +186,14 @@ The frontend follows a **feature-sliced design** pattern. Features are self-cont
 
 ### Testing Strategy
 
-| Layer | Tool | Location | Run Command |
-|-------|------|----------|-------------|
-| Backend unit | `#[cfg(test)]` modules | In each `.rs` file | `make -C backend test` |
-| Backend integration | `#[test]` functions | `backend/tests/*.rs` | `make -C backend test` |
-| Backend benchmarks | Criterion | `backend/benches/` | `make -C backend bench` |
-| Frontend unit | Vitest + Testing Library | Co-located with source | `make -C frontend test` |
-| Frontend E2E | Playwright | `frontend/apps/web/e2e/` | `cd frontend/apps/web && pnpm test:e2e` |
-| Security audit | Custom test suite | `backend/tests/security_audit.rs` | `make -C backend test` |
+| Layer               | Tool                     | Location                          | Run Command                             |
+| ------------------- | ------------------------ | --------------------------------- | --------------------------------------- |
+| Backend unit        | `#[cfg(test)]` modules   | In each `.rs` file                | `make -C backend test`                  |
+| Backend integration | `#[test]` functions      | `backend/tests/*.rs`              | `make -C backend test`                  |
+| Backend benchmarks  | Criterion                | `backend/benches/`                | `make -C backend bench`                 |
+| Frontend unit       | Vitest + Testing Library | Co-located with source            | `make -C frontend test`                 |
+| Frontend E2E        | Playwright               | `frontend/apps/web/e2e/`          | `cd frontend/apps/web && pnpm test:e2e` |
+| Security audit      | Custom test suite        | `backend/tests/security_audit.rs` | `make -C backend test`                  |
 
 ### Code Style
 
@@ -220,18 +220,18 @@ Pin exact versions for security-critical crates (`aes-gcm`, `argon2`, `zeroize`)
 
 The shared component library lives at `frontend/packages/ui/src/components/`:
 
-| Component | Purpose |
-|-----------|---------|
-| `Button` | Primary, secondary, ghost, and danger variants |
-| `Card` | Content container with header, body, footer slots |
-| `Badge` | Status indicators and labels |
-| `Input` | Text input with validation states |
-| `Select` | Dropdown selection |
-| `Toggle` | Boolean switch control |
-| `Spinner` | Loading indicator |
-| `Avatar` | User/sender avatar with fallback initials |
-| `EmptyState` | Placeholder for empty lists and search results |
-| `Skeleton` | Loading placeholder with shimmer animation |
+| Component    | Purpose                                           |
+| ------------ | ------------------------------------------------- |
+| `Button`     | Primary, secondary, ghost, and danger variants    |
+| `Card`       | Content container with header, body, footer slots |
+| `Badge`      | Status indicators and labels                      |
+| `Input`      | Text input with validation states                 |
+| `Select`     | Dropdown selection                                |
+| `Toggle`     | Boolean switch control                            |
+| `Spinner`    | Loading indicator                                 |
+| `Avatar`     | User/sender avatar with fallback initials         |
+| `EmptyState` | Placeholder for empty lists and search results    |
+| `Skeleton`   | Loading placeholder with shimmer animation        |
 
 ### Design System
 
@@ -288,10 +288,11 @@ make docker-down-volumes  # Stop and destroy data (CAUTION)
 Emailibrium uses a **layered configuration** system via figment. Later layers override earlier ones:
 
 1. `config.yaml` -- base defaults (committed)
-2. `config.{APP_ENV}.yaml` -- environment-specific (committed)
-3. `config.local.yaml` -- local overrides (gitignored)
-4. `EMAILIBRIUM_*` environment variables -- runtime overrides
-5. `/run/secrets/*` -- Docker secrets (production)
+2. `config.local.yaml` -- local overrides (gitignored)
+3. `EMAILIBRIUM_*` environment variables -- runtime overrides
+
+> Environment-specific files (`config.{APP_ENV}.yaml`) and Docker secrets
+> (`/run/secrets/*`) are planned but not yet wired into the figment chain.
 
 For the complete key reference, see [configuration-reference.md](./configuration-reference.md).
 
@@ -303,10 +304,10 @@ For the complete key reference, see [configuration-reference.md](./configuration
 
 ### Health Checks
 
-| Endpoint | Purpose |
-|----------|---------|
+| Endpoint                     | Purpose                                                        |
+| ---------------------------- | -------------------------------------------------------------- |
 | `GET /api/v1/vectors/health` | Backend readiness (vector store, database, embedding pipeline) |
-| Docker `HEALTHCHECK` | Container-level liveness, configured in `docker-compose.yml` |
+| Docker `HEALTHCHECK`         | Container-level liveness, configured in `docker-compose.yml`   |
 
 ### Backup
 
@@ -319,11 +320,11 @@ For the complete key reference, see [configuration-reference.md](./configuration
 
 Emailibrium is a **single-node, local-first** application by design. Scaling is primarily about memory management.
 
-| Mailbox Size | Quantization Tier | Estimated Memory |
-|--------------|-------------------|-----------------|
-| 10,000 emails | None (fp32) | ~15 MB vectors |
-| 100,000 emails | Scalar (int8) | ~100 MB vectors |
-| 1,000,000 emails | Product/Binary | ~200-400 MB vectors |
+| Mailbox Size     | Quantization Tier | Estimated Memory    |
+| ---------------- | ----------------- | ------------------- |
+| 10,000 emails    | None (fp32)       | ~15 MB vectors      |
+| 100,000 emails   | Scalar (int8)     | ~100 MB vectors     |
+| 1,000,000 emails | Product/Binary    | ~200-400 MB vectors |
 
 Quantization auto-scales when `quantization.mode: auto` (default). See ADR-007 for the tier thresholds and hysteresis logic.
 
@@ -331,13 +332,13 @@ If you need multi-user or multi-node deployment, consider replacing SQLite with 
 
 ### Troubleshooting
 
-| Issue | Cause | Fix |
-|-------|-------|-----|
-| Port 8080 or 3000 already in use | Another process on the port | `lsof -i :8080` to find it, or change ports in config |
-| `database is locked` | Concurrent SQLite writes | Ensure only one backend instance runs; check for orphan processes |
-| High memory usage | Large vector store without quantization | Enable `quantization.mode: auto` or reduce `embedding.cache_size` |
-| Embedding pipeline returns mock vectors | Provider set to `mock` | Set `embedding.provider: ollama` and ensure Ollama is running |
-| Docker build fails on Rust compilation | Insufficient memory for release build | Allocate at least 4 GB RAM to Docker |
+| Issue                                   | Cause                                   | Fix                                                                                                        |
+| --------------------------------------- | --------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| Port 8080 or 3000 already in use        | Another process on the port             | `lsof -i :8080` to find it, or change ports in config                                                      |
+| `database is locked`                    | Concurrent SQLite writes                | Ensure only one backend instance runs; check for orphan processes                                          |
+| High memory usage                       | Large vector store without quantization | Enable `quantization.mode: auto` or reduce `embedding.cache_size`                                          |
+| Embedding pipeline returns mock vectors | Provider set to `mock`                  | Set `embedding.provider: onnx` (default, no external service needed) or `ollama` (requires Ollama running) |
+| Docker build fails on Rust compilation  | Insufficient memory for release build   | Allocate at least 4 GB RAM to Docker                                                                       |
 
 **Log levels:** Set `RUST_LOG` to control backend verbosity:
 
@@ -419,18 +420,18 @@ The implementation plan defines **78 features across 7 sprints**. See [PRIMARY-I
 
 10 Architecture Decision Records document every major technical trade-off:
 
-| ADR | Decision | Key Trade-off |
-|-----|----------|---------------|
-| ADR-001 | Hybrid Search (FTS5 + HNSW + RRF) | Complexity vs. search quality |
-| ADR-002 | Pluggable Embedding Pipeline | Latency vs. quality; mock fallback ensures the system always works |
-| ADR-003 | RuVector with VectorStore Facade | Rust-native performance vs. ecosystem maturity |
-| ADR-004 | SONA Adaptive Learning | Continuous improvement vs. classification stability |
-| ADR-005 | Web SPA (replacing Tauri) | Web accessibility vs. native desktop integration |
-| ADR-006 | Multi-Asset Content Extraction | Extraction breadth vs. reliability |
-| ADR-007 | Adaptive Scalar Quantization | 4x memory reduction vs. slight recall degradation |
-| ADR-008 | Privacy and Encryption | ~5-10% performance overhead vs. data protection |
-| ADR-009 | GraphSAGE Clustering | Novel approach vs. proven methods |
-| ADR-010 | Ingest-Tag-Archive Pipeline | Aggressive automation vs. user safety |
+| ADR     | Decision                          | Key Trade-off                                                      |
+| ------- | --------------------------------- | ------------------------------------------------------------------ |
+| ADR-001 | Hybrid Search (FTS5 + HNSW + RRF) | Complexity vs. search quality                                      |
+| ADR-002 | Pluggable Embedding Pipeline      | Latency vs. quality; mock fallback ensures the system always works |
+| ADR-003 | RuVector with VectorStore Facade  | Rust-native performance vs. ecosystem maturity                     |
+| ADR-004 | SONA Adaptive Learning            | Continuous improvement vs. classification stability                |
+| ADR-005 | Web SPA (replacing Tauri)         | Web accessibility vs. native desktop integration                   |
+| ADR-006 | Multi-Asset Content Extraction    | Extraction breadth vs. reliability                                 |
+| ADR-007 | Adaptive Scalar Quantization      | 4x memory reduction vs. slight recall degradation                  |
+| ADR-008 | Privacy and Encryption            | ~5-10% performance overhead vs. data protection                    |
+| ADR-009 | GraphSAGE Clustering              | Novel approach vs. proven methods                                  |
+| ADR-010 | Ingest-Tag-Archive Pipeline       | Aggressive automation vs. user safety                              |
 
 All ADRs live in `docs/ADRs/` and follow a consistent format (Context, Decision, Consequences).
 
@@ -438,13 +439,13 @@ All ADRs live in `docs/ADRs/` and follow a consistent format (Context, Decision,
 
 Five bounded contexts defined in `docs/DDDs/`:
 
-| Context | Type | Document |
-|---------|------|----------|
-| Email Intelligence | Core | DDD-001 |
-| Search | Core | DDD-002 |
-| Ingestion | Supporting | DDD-003 |
-| Learning | Supporting | DDD-004 |
-| Account Management | Supporting | DDD-005 |
+| Context            | Type       | Document |
+| ------------------ | ---------- | -------- |
+| Email Intelligence | Core       | DDD-001  |
+| Search             | Core       | DDD-002  |
+| Ingestion          | Supporting | DDD-003  |
+| Learning           | Supporting | DDD-004  |
+| Account Management | Supporting | DDD-005  |
 
 See [DDD-000-context-map.md](./DDDs/DDD-000-context-map.md) for integration patterns between contexts.
 
@@ -467,13 +468,13 @@ Located in `docs/evaluation/`. Metrics include:
 
 ### Success Metrics
 
-| Metric | Target |
-|--------|--------|
-| Search latency (p95) | < 50 ms |
-| Categorization accuracy | > 95% macro-F1 |
-| Subscription detection | > 98% precision |
-| Memory (100K emails) | < 700 MB |
-| Lighthouse score | > 90 |
+| Metric                  | Target          |
+| ----------------------- | --------------- |
+| Search latency (p95)    | < 50 ms         |
+| Categorization accuracy | > 95% macro-F1  |
+| Subscription detection  | > 98% precision |
+| Memory (100K emails)    | < 700 MB        |
+| Lighthouse score        | > 90            |
 
 ---
 
@@ -505,13 +506,13 @@ For architectural decisions that affect multiple modules or introduce new depend
 
 ### Issue Labels
 
-| Label | Usage |
-|-------|-------|
-| `bug` | Something is broken |
-| `feature` | New functionality |
-| `documentation` | Docs improvements |
-| `security` | Security-related changes |
-| `performance` | Performance improvements or regressions |
+| Label           | Usage                                   |
+| --------------- | --------------------------------------- |
+| `bug`           | Something is broken                     |
+| `feature`       | New functionality                       |
+| `documentation` | Docs improvements                       |
+| `security`      | Security-related changes                |
+| `performance`   | Performance improvements or regressions |
 
 ---
 
@@ -519,75 +520,75 @@ For architectural decisions that affect multiple modules or introduce new depend
 
 ### Build and Install
 
-| Command | Description |
-|---------|-------------|
+| Command        | Description                                                 |
+| -------------- | ----------------------------------------------------------- |
 | `make install` | Install all dependencies (backend build + frontend install) |
-| `make build` | Build everything (backend release + frontend production) |
-| `make clean` | Remove all build artifacts |
+| `make build`   | Build everything (backend release + frontend production)    |
+| `make clean`   | Remove all build artifacts                                  |
 
 ### Development
 
-| Command | Description |
-|---------|-------------|
-| `make dev` | Start backend and frontend dev servers with hot-reload |
-| `make docker-up-dev` | Start dev stack in Docker with hot-reload |
+| Command              | Description                                            |
+| -------------------- | ------------------------------------------------------ |
+| `make dev`           | Start backend and frontend dev servers with hot-reload |
+| `make docker-up-dev` | Start dev stack in Docker with hot-reload              |
 
 ### Testing
 
-| Command | Description |
-|---------|-------------|
-| `make test` | Run all tests (backend + frontend) |
-| `make ci` | Full CI pipeline: format-check, lint, typecheck, test |
-| `make ci-full` | CI + link checking |
-| `make -C backend bench` | Run Criterion benchmarks |
+| Command                 | Description                                           |
+| ----------------------- | ----------------------------------------------------- |
+| `make test`             | Run all tests (backend + frontend)                    |
+| `make ci`               | Full CI pipeline: format-check, lint, typecheck, test |
+| `make ci-full`          | CI + link checking                                    |
+| `make -C backend bench` | Run Criterion benchmarks                              |
 
 ### Code Quality
 
-| Command | Description |
-|---------|-------------|
-| `make lint` | Lint all code and docs |
-| `make format` | Auto-format all code and docs |
+| Command             | Description                      |
+| ------------------- | -------------------------------- |
+| `make lint`         | Lint all code and docs           |
+| `make format`       | Auto-format all code and docs    |
 | `make format-check` | Check formatting without changes |
-| `make typecheck` | TypeScript type checking |
-| `make deadcode` | Detect unused code |
-| `make audit` | Security audit all dependencies |
+| `make typecheck`    | TypeScript type checking         |
+| `make deadcode`     | Detect unused code               |
+| `make audit`        | Security audit all dependencies  |
 
 ### Docker
 
-| Command | Description |
-|---------|-------------|
-| `make docker-build` | Build all Docker images |
-| `make docker-build-no-cache` | Build images without cache |
-| `make docker-up` | Start production stack |
-| `make docker-up-dev` | Start dev stack with hot-reload |
-| `make docker-down` | Stop all containers |
-| `make docker-down-volumes` | Stop and remove volumes (destroys data) |
-| `make docker-restart` | Restart all containers |
-| `make docker-health` | Show container health status |
-| `make docker-logs` | Tail logs from all containers |
-| `make docker-logs-backend` | Tail backend logs only |
-| `make docker-logs-frontend` | Tail frontend logs only |
-| `make docker-ps` | Show running containers |
-| `make docker-exec-backend` | Shell into backend container |
-| `make docker-exec-frontend` | Shell into frontend container |
-| `make docker-secrets` | Generate development secrets |
-| `make docker-clean` | Remove stopped containers and dangling images |
+| Command                      | Description                                   |
+| ---------------------------- | --------------------------------------------- |
+| `make docker-build`          | Build all Docker images                       |
+| `make docker-build-no-cache` | Build images without cache                    |
+| `make docker-up`             | Start production stack                        |
+| `make docker-up-dev`         | Start dev stack with hot-reload               |
+| `make docker-down`           | Stop all containers                           |
+| `make docker-down-volumes`   | Stop and remove volumes (destroys data)       |
+| `make docker-restart`        | Restart all containers                        |
+| `make docker-health`         | Show container health status                  |
+| `make docker-logs`           | Tail logs from all containers                 |
+| `make docker-logs-backend`   | Tail backend logs only                        |
+| `make docker-logs-frontend`  | Tail frontend logs only                       |
+| `make docker-ps`             | Show running containers                       |
+| `make docker-exec-backend`   | Shell into backend container                  |
+| `make docker-exec-frontend`  | Shell into frontend container                 |
+| `make docker-secrets`        | Generate development secrets                  |
+| `make docker-clean`          | Remove stopped containers and dangling images |
 
 ### Dependencies
 
-| Command | Description |
-|---------|-------------|
+| Command         | Description                             |
+| --------------- | --------------------------------------- |
 | `make outdated` | Show outdated dependencies (no changes) |
-| `make upgrade` | Upgrade within semver ranges |
+| `make upgrade`  | Upgrade within semver ranges            |
 
 ### Documentation
 
-| Command | Description |
-|---------|-------------|
-| `make lint-md` | Lint Markdown files |
-| `make lint-yaml` | Lint YAML files |
-| `make format-md` | Format Markdown with Prettier |
-| `make format-yaml` | Format YAML with Prettier |
-| `make links-check` | Check internal file links |
-| `make links-check-external` | Check external HTTP links |
-| `make links-check-all` | Check all links |
+| Command                     | Description                   |
+| --------------------------- | ----------------------------- |
+| `make lint-md`              | Lint Markdown files           |
+| `make lint-yaml`            | Lint YAML files               |
+| `make format-md`            | Format Markdown with Prettier |
+| `make format-yaml`          | Format YAML with Prettier     |
+| `make links-check`          | Check internal file links     |
+| `make links-check-external` | Check external HTTP links     |
+| `make links-check-all`      | Check all links               |

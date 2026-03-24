@@ -52,6 +52,12 @@ pub struct VectorConfig {
     /// OAuth provider settings (DDD-005).
     #[serde(default)]
     pub oauth: OAuthConfig,
+    /// Redis cache settings.
+    #[serde(default)]
+    pub redis: RedisConfig,
+    /// Security settings (CORS + CSP, audit items #6 / #13).
+    #[serde(default)]
+    pub security: SecurityConfig,
 }
 
 impl Default for VectorConfig {
@@ -72,6 +78,8 @@ impl Default for VectorConfig {
             quantization: super::quantization::QuantizationConfig::default(),
             generative: GenerativeConfig::default(),
             oauth: OAuthConfig::default(),
+            redis: RedisConfig::default(),
+            security: SecurityConfig::default(),
         }
     }
 }
@@ -103,6 +111,9 @@ pub struct StoreConfig {
     /// Whether vectors are enabled.
     #[serde(default = "default_true")]
     pub enabled: bool,
+    /// Backend selection: "ruvector" (HNSW, default) or "memory" (brute-force fallback).
+    #[serde(default = "default_store_backend")]
+    pub backend: String,
 }
 
 impl Default for StoreConfig {
@@ -110,6 +121,7 @@ impl Default for StoreConfig {
         Self {
             path: default_store_path(),
             enabled: true,
+            backend: default_store_backend(),
         }
     }
 }
@@ -140,6 +152,12 @@ pub struct EmbeddingConfig {
     /// ONNX / fastembed configuration (ADR-011).
     #[serde(default)]
     pub onnx: OnnxConfig,
+    /// Cloud embedding settings (OpenAI text-embedding-3-small, audit item #14).
+    #[serde(default)]
+    pub cloud: CloudEmbeddingConfig,
+    /// Cohere embedding settings (audit item #30).
+    #[serde(default)]
+    pub cohere: CohereEmbeddingConfig,
 }
 
 impl Default for EmbeddingConfig {
@@ -153,6 +171,8 @@ impl Default for EmbeddingConfig {
             ollama_url: default_ollama_url(),
             min_query_tokens: default_min_query_tokens(),
             onnx: OnnxConfig::default(),
+            cloud: CloudEmbeddingConfig::default(),
+            cohere: CohereEmbeddingConfig::default(),
         }
     }
 }
@@ -184,6 +204,72 @@ impl Default for OnnxConfig {
             cache_dir: None,
             show_download_progress: true,
             dimensions: default_dimensions(),
+        }
+    }
+}
+
+/// Configuration for the cloud (OpenAI) embedding provider (audit item #14).
+///
+/// Uses OpenAI's embedding API (`text-embedding-3-small` by default).
+/// The API key is read from the environment variable named in `api_key_env`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CloudEmbeddingConfig {
+    /// Name of the environment variable holding the OpenAI API key.
+    #[serde(default = "default_cloud_embedding_api_key_env")]
+    pub api_key_env: String,
+    /// Model identifier (e.g. "text-embedding-3-small", "text-embedding-3-large").
+    #[serde(default = "default_cloud_embedding_model")]
+    pub model: String,
+    /// Base URL for the embedding API.
+    #[serde(default = "default_cloud_embedding_base_url")]
+    pub base_url: String,
+    /// Output embedding dimensions.
+    #[serde(default = "default_cloud_embedding_dimensions")]
+    pub dimensions: usize,
+}
+
+impl Default for CloudEmbeddingConfig {
+    fn default() -> Self {
+        Self {
+            api_key_env: default_cloud_embedding_api_key_env(),
+            model: default_cloud_embedding_model(),
+            base_url: default_cloud_embedding_base_url(),
+            dimensions: default_cloud_embedding_dimensions(),
+        }
+    }
+}
+
+/// Configuration for the Cohere embedding provider (audit item #30).
+///
+/// Uses Cohere's embed API v2 (`embed-english-v3.0` by default).
+/// The API key is read from the environment variable named in `api_key_env`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CohereEmbeddingConfig {
+    /// Name of the environment variable holding the Cohere API key.
+    #[serde(default = "default_cohere_api_key_env")]
+    pub api_key_env: String,
+    /// Model identifier (e.g. "embed-english-v3.0", "embed-multilingual-v3.0").
+    #[serde(default = "default_cohere_embedding_model")]
+    pub model: String,
+    /// Base URL for the Cohere API.
+    #[serde(default = "default_cohere_base_url")]
+    pub base_url: String,
+    /// Output embedding dimensions.
+    #[serde(default = "default_cohere_dimensions")]
+    pub dimensions: usize,
+    /// Input type hint for the Cohere API.
+    #[serde(default = "default_cohere_input_type")]
+    pub input_type: String,
+}
+
+impl Default for CohereEmbeddingConfig {
+    fn default() -> Self {
+        Self {
+            api_key_env: default_cohere_api_key_env(),
+            model: default_cohere_embedding_model(),
+            base_url: default_cohere_base_url(),
+            dimensions: default_cohere_dimensions(),
+            input_type: default_cohere_input_type(),
         }
     }
 }
@@ -222,6 +308,20 @@ pub struct SearchConfig {
     /// Minimum cosine similarity to include in results.
     #[serde(default = "default_similarity_threshold")]
     pub similarity_threshold: f32,
+    /// Whether SONA re-ranking is applied after RRF fusion (DDD-002, item #18).
+    #[serde(default)]
+    pub sona_reranking_enabled: bool,
+    /// Blending weight for SONA re-ranking (0.0 = pure RRF, 1.0 = pure SONA).
+    #[serde(default = "default_sona_weight")]
+    pub sona_weight: f32,
+    /// Collections to search in multi-collection mode (DDD-002, item #25).
+    /// Defaults to `["email_text"]` for backward compatibility.
+    #[serde(default = "default_search_collections")]
+    pub collections: Vec<String>,
+    /// Per-collection weight multipliers keyed by collection name.
+    /// Missing collections default to 1.0.
+    #[serde(default)]
+    pub collection_weights: std::collections::HashMap<String, f32>,
 }
 
 impl Default for SearchConfig {
@@ -230,6 +330,10 @@ impl Default for SearchConfig {
             default_limit: default_search_limit(),
             max_limit: default_max_limit(),
             similarity_threshold: default_similarity_threshold(),
+            sona_reranking_enabled: false,
+            sona_weight: default_sona_weight(),
+            collections: default_search_collections(),
+            collection_weights: std::collections::HashMap::new(),
         }
     }
 }
@@ -300,6 +404,9 @@ fn default_database_url() -> String {
 fn default_store_path() -> String {
     "data/vectors".to_string()
 }
+fn default_store_backend() -> String {
+    "ruvector".to_string()
+}
 fn default_true() -> bool {
     true
 }
@@ -347,6 +454,12 @@ fn default_max_limit() -> usize {
 fn default_similarity_threshold() -> f32 {
     0.5
 }
+fn default_sona_weight() -> f32 {
+    0.3
+}
+fn default_search_collections() -> Vec<String> {
+    vec!["email_text".to_string()]
+}
 fn default_confidence_threshold() -> f32 {
     0.7
 }
@@ -357,6 +470,76 @@ fn default_min_feedback_events() -> u32 {
     10
 }
 fn default_backup_interval() -> u64 {
+    3600
+}
+
+// Cloud embedding defaults (audit item #14)
+fn default_cloud_embedding_api_key_env() -> String {
+    "EMAILIBRIUM_OPENAI_API_KEY".to_string()
+}
+fn default_cloud_embedding_model() -> String {
+    "text-embedding-3-small".to_string()
+}
+fn default_cloud_embedding_base_url() -> String {
+    "https://api.openai.com".to_string()
+}
+fn default_cloud_embedding_dimensions() -> usize {
+    1536
+}
+
+// Cohere embedding defaults (audit item #30)
+fn default_cohere_api_key_env() -> String {
+    "EMAILIBRIUM_COHERE_API_KEY".to_string()
+}
+fn default_cohere_embedding_model() -> String {
+    "embed-english-v3.0".to_string()
+}
+fn default_cohere_base_url() -> String {
+    "https://api.cohere.com".to_string()
+}
+fn default_cohere_dimensions() -> usize {
+    1024
+}
+fn default_cohere_input_type() -> String {
+    "search_document".to_string()
+}
+
+// ---------------------------------------------------------------------------
+// Redis config
+// ---------------------------------------------------------------------------
+
+/// Redis cache configuration.
+///
+/// The backend operates without Redis (graceful degradation). When `enabled`
+/// is `true` and a connection can be established, embedding results and other
+/// hot-path data are cached in Redis to avoid redundant computation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RedisConfig {
+    /// Whether Redis caching is enabled.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Redis connection URL. Respects `REDIS_URL` env var via figment.
+    #[serde(default = "default_redis_url")]
+    pub url: String,
+    /// Default TTL in seconds for cached entries.
+    #[serde(default = "default_cache_ttl_secs")]
+    pub cache_ttl_secs: u64,
+}
+
+impl Default for RedisConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            url: default_redis_url(),
+            cache_ttl_secs: default_cache_ttl_secs(),
+        }
+    }
+}
+
+fn default_redis_url() -> String {
+    "redis://127.0.0.1:6379".to_string()
+}
+fn default_cache_ttl_secs() -> u64 {
     3600
 }
 
@@ -412,21 +595,24 @@ impl Default for OllamaGenerativeConfig {
     }
 }
 
-/// Cloud generative model settings (OpenAI / Anthropic).
+/// Cloud generative model settings (OpenAI / Anthropic / Gemini).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CloudGenerativeConfig {
-    /// Cloud provider: "openai" | "anthropic".
+    /// Cloud provider: "openai" | "anthropic" | "gemini".
     #[serde(default = "default_cloud_provider")]
     pub provider: String,
     /// Name of the environment variable holding the API key.
     #[serde(default = "default_api_key_env")]
     pub api_key_env: String,
-    /// Model identifier (e.g. "gpt-4o-mini", "claude-sonnet-4-20250514").
+    /// Model identifier (e.g. "gpt-4o-mini", "claude-sonnet-4-20250514", "gemini-2.0-flash").
     #[serde(default = "default_cloud_model")]
     pub model: String,
     /// Base URL for the provider API.
     #[serde(default = "default_cloud_base_url")]
     pub base_url: String,
+    /// Gemini-specific settings (audit item #29).
+    #[serde(default)]
+    pub gemini: GeminiGenerativeConfig,
 }
 
 impl Default for CloudGenerativeConfig {
@@ -436,6 +622,31 @@ impl Default for CloudGenerativeConfig {
             api_key_env: default_api_key_env(),
             model: default_cloud_model(),
             base_url: default_cloud_base_url(),
+            gemini: GeminiGenerativeConfig::default(),
+        }
+    }
+}
+
+/// Gemini (Google AI) generative model settings (audit item #29).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GeminiGenerativeConfig {
+    /// Name of the environment variable holding the Gemini API key.
+    #[serde(default = "default_gemini_api_key_env")]
+    pub api_key_env: String,
+    /// Model identifier (e.g. "gemini-2.0-flash", "gemini-2.5-pro").
+    #[serde(default = "default_gemini_model")]
+    pub model: String,
+    /// Base URL for the Gemini API.
+    #[serde(default = "default_gemini_base_url")]
+    pub base_url: String,
+}
+
+impl Default for GeminiGenerativeConfig {
+    fn default() -> Self {
+        Self {
+            api_key_env: default_gemini_api_key_env(),
+            model: default_gemini_model(),
+            base_url: default_gemini_base_url(),
         }
     }
 }
@@ -463,6 +674,17 @@ fn default_cloud_model() -> String {
 }
 fn default_cloud_base_url() -> String {
     "https://api.openai.com".to_string()
+}
+
+// Gemini generative defaults (audit item #29)
+fn default_gemini_api_key_env() -> String {
+    "EMAILIBRIUM_GEMINI_API_KEY".to_string()
+}
+fn default_gemini_model() -> String {
+    "gemini-2.0-flash".to_string()
+}
+fn default_gemini_base_url() -> String {
+    "https://generativelanguage.googleapis.com".to_string()
 }
 
 // ---------------------------------------------------------------------------
@@ -616,6 +838,37 @@ fn default_outlook_scopes() -> Vec<String> {
 }
 
 // ---------------------------------------------------------------------------
+// Security config (audit items #6 CORS, #13 CSP)
+// ---------------------------------------------------------------------------
+
+/// HTTP security configuration: CORS allowed origins and CSP header toggle.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SecurityConfig {
+    /// Origins allowed by the CORS middleware.
+    #[serde(default = "default_allowed_origins")]
+    pub allowed_origins: Vec<String>,
+    /// Whether Content-Security-Policy and related headers are emitted.
+    #[serde(default = "default_true")]
+    pub csp_enabled: bool,
+}
+
+impl Default for SecurityConfig {
+    fn default() -> Self {
+        Self {
+            allowed_origins: default_allowed_origins(),
+            csp_enabled: true,
+        }
+    }
+}
+
+fn default_allowed_origins() -> Vec<String> {
+    vec![
+        "http://localhost:3000".to_string(),
+        "http://localhost:5173".to_string(),
+    ]
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -634,6 +887,42 @@ mod tests {
         assert_eq!(config.cloud.api_key_env, "EMAILIBRIUM_CLOUD_API_KEY");
         assert_eq!(config.cloud.model, "gpt-4o-mini");
         assert_eq!(config.cloud.base_url, "https://api.openai.com");
+        // Gemini sub-config (audit item #29)
+        assert_eq!(
+            config.cloud.gemini.api_key_env,
+            "EMAILIBRIUM_GEMINI_API_KEY"
+        );
+        assert_eq!(config.cloud.gemini.model, "gemini-2.0-flash");
+        assert_eq!(
+            config.cloud.gemini.base_url,
+            "https://generativelanguage.googleapis.com"
+        );
+    }
+
+    #[test]
+    fn test_cloud_embedding_config_defaults() {
+        let config = CloudEmbeddingConfig::default();
+        assert_eq!(config.api_key_env, "EMAILIBRIUM_OPENAI_API_KEY");
+        assert_eq!(config.model, "text-embedding-3-small");
+        assert_eq!(config.base_url, "https://api.openai.com");
+        assert_eq!(config.dimensions, 1536);
+    }
+
+    #[test]
+    fn test_cohere_embedding_config_defaults() {
+        let config = CohereEmbeddingConfig::default();
+        assert_eq!(config.api_key_env, "EMAILIBRIUM_COHERE_API_KEY");
+        assert_eq!(config.model, "embed-english-v3.0");
+        assert_eq!(config.base_url, "https://api.cohere.com");
+        assert_eq!(config.dimensions, 1024);
+        assert_eq!(config.input_type, "search_document");
+    }
+
+    #[test]
+    fn test_embedding_config_includes_cloud_and_cohere() {
+        let config = EmbeddingConfig::default();
+        assert_eq!(config.cloud.model, "text-embedding-3-small");
+        assert_eq!(config.cohere.model, "embed-english-v3.0");
     }
 
     #[test]
@@ -690,6 +979,26 @@ mod tests {
     }
 
     #[test]
+    fn test_security_config_defaults() {
+        let config = SecurityConfig::default();
+        assert!(config.csp_enabled);
+        assert_eq!(config.allowed_origins.len(), 2);
+        assert!(config
+            .allowed_origins
+            .contains(&"http://localhost:3000".to_string()));
+        assert!(config
+            .allowed_origins
+            .contains(&"http://localhost:5173".to_string()));
+    }
+
+    #[test]
+    fn test_vector_config_includes_security() {
+        let config = VectorConfig::default();
+        assert!(config.security.csp_enabled);
+        assert!(!config.security.allowed_origins.is_empty());
+    }
+
+    #[test]
     fn test_generative_config_deserialize_from_json() {
         let json = r#"{
             "provider": "ollama",
@@ -705,5 +1014,22 @@ mod tests {
         assert_eq!(config.ollama.classification_model, "custom-model");
         // Cloud should use defaults since not specified.
         assert_eq!(config.cloud.provider, "openai");
+        // Gemini sub-config should use defaults.
+        assert_eq!(config.cloud.gemini.model, "gemini-2.0-flash");
+    }
+
+    #[test]
+    fn test_redis_config_defaults() {
+        let config = RedisConfig::default();
+        assert!(!config.enabled);
+        assert_eq!(config.url, "redis://127.0.0.1:6379");
+        assert_eq!(config.cache_ttl_secs, 3600);
+    }
+
+    #[test]
+    fn test_vector_config_includes_redis() {
+        let config = VectorConfig::default();
+        assert!(!config.redis.enabled);
+        assert_eq!(config.redis.url, "redis://127.0.0.1:6379");
     }
 }

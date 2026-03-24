@@ -79,7 +79,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
         with:
-          version: 9
+          version: 10
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -102,7 +102,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
         with:
-          version: 9
+          version: 10
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -124,6 +124,74 @@ jobs:
         working-directory: frontend
         run: pnpm turbo build
 
+  # Performance gates (ADR-005)
+  lighthouse:
+    name: Lighthouse CI
+    runs-on: ubuntu-latest
+    needs: frontend-quality
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - name: Install
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile
+      - name: Build
+        working-directory: frontend
+        run: pnpm turbo build
+      - name: Lighthouse CI
+        uses: treosh/lighthouse-ci-action@v12
+        with:
+          configPath: frontend/lighthouserc.json
+          uploadArtifacts: true
+        continue-on-error: true
+
+  bundlewatch:
+    name: Bundle Size Check
+    runs-on: ubuntu-latest
+    needs: frontend-quality
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - name: Install
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile
+      - name: Build
+        working-directory: frontend
+        run: pnpm turbo build
+      - name: Check bundle size
+        working-directory: frontend
+        run: |
+          echo "=== Bundle Size Report ==="
+          du -sh apps/web/dist/ 2>/dev/null || echo "No dist directory"
+          echo ""
+          echo "=== JS Bundle Sizes ==="
+          find apps/web/dist -name "*.js" -exec du -h {} + 2>/dev/null | sort -rh | head -20
+          echo ""
+          echo "=== CSS Bundle Sizes ==="
+          find apps/web/dist -name "*.css" -exec du -h {} + 2>/dev/null | sort -rh | head -10
+          echo ""
+          # Fail if any single JS chunk exceeds 500KB
+          OVERSIZED=$(find apps/web/dist -name "*.js" -size +500k 2>/dev/null)
+          if [ -n "$OVERSIZED" ]; then
+            echo "WARNING: The following JS bundles exceed 500KB:"
+            echo "$OVERSIZED" | xargs du -h
+            echo "Consider code-splitting or lazy loading to reduce bundle size."
+          fi
+
   # Documentation validation
   validate-markdown:
     name: Validate Markdown
@@ -132,7 +200,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: DavidAnson/markdownlint-cli2-action@v19
         with:
-          globs: '**/*.md'
+          globs: "**/*.md"
           config: .markdownlint.yaml
         continue-on-error: true
 

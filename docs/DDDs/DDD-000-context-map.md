@@ -1,10 +1,10 @@
 # DDD-000: Emailibrium Context Map
 
-| Field | Value |
-|-------|-------|
-| Status | Accepted |
-| Date | 2026-03-23 |
-| Scope | System-wide |
+| Field  | Value       |
+| ------ | ----------- |
+| Status | Accepted    |
+| Date   | 2026-03-23  |
+| Scope  | System-wide |
 
 ## Overview
 
@@ -12,13 +12,13 @@ This document defines the bounded context map for Emailibrium, a vector-native e
 
 ## Bounded Contexts
 
-| Context | Type | Document | Responsibility |
-|---------|------|----------|----------------|
-| **Email Intelligence** | Core | DDD-001 | Embedding, classification, clustering, hybrid search internals |
-| **Search** | Core | DDD-002 | Query execution, result fusion, SONA re-ranking |
-| **Ingestion** | Supporting | DDD-003 | Email sync, multi-asset extraction, pipeline orchestration |
-| **Learning** | Supporting | DDD-004 | SONA adaptive learning, centroid updates, feedback processing |
-| **Account Management** | Supporting | DDD-005 | Provider connections, OAuth, sync state, archive strategy |
+| Context                | Type       | Document | Responsibility                                                 |
+| ---------------------- | ---------- | -------- | -------------------------------------------------------------- |
+| **Email Intelligence** | Core       | DDD-001  | Embedding, classification, clustering, hybrid search internals |
+| **Search**             | Core       | DDD-002  | Query execution, result fusion, SONA re-ranking                |
+| **Ingestion**          | Supporting | DDD-003  | Email sync, multi-asset extraction, pipeline orchestration     |
+| **Learning**           | Supporting | DDD-004  | SONA adaptive learning, centroid updates, feedback processing  |
+| **Account Management** | Supporting | DDD-005  | Provider connections, OAuth, sync state, archive strategy      |
 
 ## Context Map Diagram
 
@@ -123,23 +123,23 @@ This document defines the bounded context map for Emailibrium, a vector-native e
 
 ## Anti-Corruption Layers
 
-| ACL | Location | Purpose |
-|-----|----------|---------|
-| **VectorStore facade** | Email Intelligence | Wraps RuVector SDK, isolating the core domain from vector DB implementation details (ADR-003) |
-| **EmbeddingModel trait** | Email Intelligence | Abstracts over RuvLLM, Ollama, and cloud embedding providers (ADR-002) |
-| **EmailProvider trait** | Account Management | Wraps Gmail API, Microsoft Graph API, and IMAP/POP3 behind a unified interface |
+| ACL                      | Location           | Purpose                                                                                       |
+| ------------------------ | ------------------ | --------------------------------------------------------------------------------------------- |
+| **VectorStore facade**   | Email Intelligence | Wraps RuVector SDK, isolating the core domain from vector DB implementation details (ADR-003) |
+| **EmbeddingModel trait** | Email Intelligence | Abstracts over RuvLLM, Ollama, and cloud embedding providers (ADR-002)                        |
+| **EmailProvider trait**  | Account Management | Wraps Gmail API, Microsoft Graph API, and IMAP/POP3 behind a unified interface                |
 
 ## Shared Kernel
 
 The **Email** entity is referenced across all bounded contexts. However, each context maintains its own projection of it rather than sharing a single model.
 
-| Context | Email Projection |
-|---------|-----------------|
-| Account Management | `SyncedEmail { provider_id, account_id, raw_headers, sync_timestamp }` |
-| Ingestion | `RawEmail { email_id, subject, from, to, date, html_body, attachments, headers }` |
-| Email Intelligence | `EmbeddedEmail { email_id, embedding_ids, category, cluster_id }` |
-| Search | `SearchableEmail { email_id, subject, from, to, date, snippet, score }` |
-| Learning | `FeedbackEmail { email_id, category, user_actions, interaction_history }` |
+| Context            | Email Projection                                                                  |
+| ------------------ | --------------------------------------------------------------------------------- |
+| Account Management | `SyncedEmail { provider_id, account_id, raw_headers, sync_timestamp }`            |
+| Ingestion          | `RawEmail { email_id, subject, from, to, date, html_body, attachments, headers }` |
+| Email Intelligence | `EmbeddedEmail { email_id, embedding_ids, category, cluster_id }`                 |
+| Search             | `SearchableEmail { email_id, subject, from, to, date, snippet, score }`           |
+| Learning           | `FeedbackEmail { email_id, category, user_actions, interaction_history }`         |
 
 The `email_id` is the correlation identifier across all contexts. It is generated during ingestion and propagated via domain events.
 

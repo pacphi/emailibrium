@@ -1,5 +1,7 @@
 # PRIMARY IMPLEMENTATION PLAN
+
 ## Emailibrium: RuVector-Powered Intelligent Email Platform
+
 Version 2.0 | Date: 2026-03-23 | Status: Sprint-Ready
 
 ---
@@ -7,6 +9,7 @@ Version 2.0 | Date: 2026-03-23 | Status: Sprint-Ready
 ## 1. Plan Overview
 
 This plan addresses gaps identified in the docs/research/initial.md academic evaluation of the original INCEPTION.md v1.4:
+
 - **Gap 1**: SONA learning model underspecified → Addressed in ADR-004, Sprint 3
 - **Gap 2**: RuVector maturity risk → Addressed in ADR-003 (VectorStore facade), Sprint 1
 - **Gap 3**: Embedding model limitations (no domain adaptation, no multilingual) → Addressed in ADR-002, Sprint 6
@@ -17,6 +20,7 @@ This plan addresses gaps identified in the docs/research/initial.md academic eva
 - **Gap 8**: No error recovery/graceful degradation → Addressed across all sprints
 
 Cross-references:
+
 - Original Plan: docs/INCEPTION.md v1.4
 - Research: docs/research/initial.md
 - ADRs: docs/ADRs/ADR-001 through ADR-010
@@ -27,6 +31,7 @@ Cross-references:
 ## 2. Architecture Summary
 
 ### Bounded Contexts (from DDDs)
+
 1. **Email Intelligence** (Core) — Embedding, classification, clustering
 2. **Search** — Hybrid search, SONA re-ranking
 3. **Ingestion** — Multi-asset extraction, progress streaming
@@ -34,27 +39,30 @@ Cross-references:
 5. **Account Management** — OAuth, multi-provider sync
 
 ### Key Architecture Decisions (from ADRs)
-| ADR | Decision | Sprint |
-|-----|----------|--------|
-| ADR-001 | Hybrid Search (FTS5+HNSW+RRF) | Sprint 2 |
-| ADR-002 | Pluggable Embedding Model | Sprint 1 |
+
+| ADR     | Decision                         | Sprint   |
+| ------- | -------------------------------- | -------- |
+| ADR-001 | Hybrid Search (FTS5+HNSW+RRF)    | Sprint 2 |
+| ADR-002 | Pluggable Embedding Model        | Sprint 1 |
 | ADR-003 | RuVector with VectorStore Facade | Sprint 1 |
-| ADR-004 | SONA Formal Specification | Sprint 3 |
-| ADR-005 | Web SPA (no Tauri) | Sprint 4 |
-| ADR-006 | Multi-Asset Extraction Pipeline | Sprint 2 |
-| ADR-007 | Adaptive Quantization | Sprint 3 |
-| ADR-008 | Privacy & Embedding Security | Sprint 1 |
-| ADR-009 | GraphSAGE Clustering | Sprint 3 |
-| ADR-010 | Ingest-Tag-Archive Pipeline | Sprint 2 |
+| ADR-004 | SONA Formal Specification        | Sprint 3 |
+| ADR-005 | Web SPA (no Tauri)               | Sprint 4 |
+| ADR-006 | Multi-Asset Extraction Pipeline  | Sprint 2 |
+| ADR-007 | Adaptive Quantization            | Sprint 3 |
+| ADR-008 | Privacy & Embedding Security     | Sprint 1 |
+| ADR-009 | GraphSAGE Clustering             | Sprint 3 |
+| ADR-010 | Ingest-Tag-Archive Pipeline      | Sprint 2 |
 
 ---
 
 ## 3. Sprint Plan
 
 ### Sprint 0: Foundation & Validation (Week 0 — 1 week)
+
 **Goal**: Validate RuVector viability and set up project infrastructure
 
 **Tasks**:
+
 - [ ] **S0-01**: RuVector vs Qdrant comparison benchmark (ADR-003)
   - Write throughput, search latency, recall@10, crash recovery
   - Test with 1K, 10K, 100K synthetic vectors
@@ -79,11 +87,13 @@ Cross-references:
 ---
 
 ### Sprint 1: Vector Foundation (Weeks 1-2 — 2 weeks)
+
 **Goal**: Core vector infrastructure — embedding, storage, basic search
 
 **Bounded Context**: Email Intelligence (DDD-001)
 
 **Tasks**:
+
 - [ ] **S1-01**: VectorStore facade trait (ADR-003)
   - trait VectorStore { insert, batch_insert, search, search_filtered, delete, update, health }
   - RuVectorStore implementation
@@ -116,11 +126,13 @@ Cross-references:
 ---
 
 ### Sprint 2: Search & Ingestion (Weeks 3-4 — 2 weeks)
+
 **Goal**: Hybrid search, multi-asset extraction, ingestion pipeline
 
 **Bounded Contexts**: Search (DDD-002), Ingestion (DDD-003)
 
 **Tasks**:
+
 - [ ] **S2-01**: HybridSearch implementation (ADR-001)
   - FTS5 + HNSW parallel execution via tokio::join!
   - Reciprocal Rank Fusion (k=60)
@@ -160,11 +172,13 @@ Cross-references:
 ---
 
 ### Sprint 3: Intelligence & Learning (Weeks 5-6 — 2 weeks)
+
 **Goal**: GNN clustering, SONA learning, quantization
 
 **Bounded Contexts**: Email Intelligence (DDD-001), Learning (DDD-004)
 
 **Tasks**:
+
 - [ ] **S3-01**: GraphSAGE clustering (ADR-009)
   - Graph construction: HNSW neighbors (k=20) + same-sender + same-thread edges
   - 2-layer GraphSAGE, mean aggregation, hidden dim 128
@@ -180,7 +194,7 @@ Cross-references:
   - Minimum 10 feedback events before activation
 - [ ] **S3-04**: SONA Tier 2 — Session learning (ADR-004)
   - Session preference vector: mean(clicked) - mean(skipped)
-  - Re-ranking boost: score'(d) = score(d) + gamma * cos(v(d), p_s), gamma=0.15
+  - Re-ranking boost: score'(d) = score(d) + gamma \* cos(v(d), p_s), gamma=0.15
 - [ ] **S3-05**: SONA Tier 3 — Long-term consolidation (ADR-004)
   - Hourly: mini-batch K-means, reclassify low-confidence (<0.6)
   - Daily: full HDBSCAN, centroid recomputation, EWC++ consolidation
@@ -203,11 +217,13 @@ Cross-references:
 ---
 
 ### Sprint 4: Frontend Foundation (Weeks 7-8 — 2 weeks)
+
 **Goal**: React web app shell, command center, onboarding
 
 **Bounded Context**: Cross-cutting (all DDDs surfaced in UI)
 
 **Tasks**:
+
 - [ ] **S4-01**: App shell (ADR-005)
   - Vite 8 + React 19 + TanStack Router + TanStack Query
   - shadcn/ui + Radix + Tailwind CSS 4
@@ -244,9 +260,11 @@ Cross-references:
 ---
 
 ### Sprint 5: Frontend Features (Weeks 9-10 — 2 weeks)
+
 **Goal**: Inbox cleaner, insights, email client, rules studio
 
 **Tasks**:
+
 - [ ] **S5-01**: Ingestion progress screen
   - SSE-connected real-time progress bars (per phase)
   - Live discovery feed (subscriptions, clusters forming)
@@ -292,9 +310,11 @@ Cross-references:
 ---
 
 ### Sprint 6: Polish & Hardening (Weeks 11-12 — 2 weeks)
+
 **Goal**: Quality, accessibility, performance, domain adaptation
 
 **Tasks**:
+
 - [ ] **S6-01**: Responsive design pass (mobile-friendly)
 - [ ] **S6-02**: Accessibility audit (WCAG 2.1 AA)
   - axe-core in CI
@@ -329,9 +349,11 @@ Cross-references:
 ---
 
 ### Sprint 7: Evaluation & Validation (Weeks 13-14 — 2 weeks)
+
 **Goal**: Formal evaluation framework, benchmarks, documentation (addresses research gap 7)
 
 **Tasks**:
+
 - [ ] **S7-01**: Retrieval quality evaluation (docs/research/initial.md Section 5.1)
   - Build evaluation dataset: 500 queries with relevance labels (from Enron + synthetic)
   - Measure: Recall@5, Recall@10, Recall@20, NDCG@10, MRR
@@ -374,61 +396,62 @@ Cross-references:
 
 Map of all features from INCEPTION.md Section 11 to sprints:
 
-| Feature | Sprint | Status |
-|---------|--------|--------|
-| FEAT-050 Semantic Hybrid Search | Sprint 2 | New |
-| FEAT-051 Vector Embedding Pipeline | Sprint 1 | New |
-| FEAT-052 Inbox Cleaner Wizard | Sprint 5 | New |
-| FEAT-053 Subscription Intelligence | Sprint 2 | New |
-| FEAT-054 Topic Clustering | Sprint 3 | New |
-| FEAT-055 Ingestion Pipeline (SSE) | Sprint 2 | New |
-| FEAT-056 Command Center | Sprint 4 | New |
-| FEAT-057 Insights Explorer | Sprint 5 | New |
-| FEAT-058 SONA Self-Learning | Sprint 3 | New |
-| FEAT-059 Semantic Rule Conditions | Sprint 5 | New |
-| FEAT-060 AI Rule Suggestions | Sprint 5 | New |
-| FEAT-061 Inbox Health Score | Sprint 5 | New |
-| FEAT-062 Conversation Threading | Sprint 5 | New |
-| FEAT-063 Smart Digest Creation | Future | Deferred |
-| FEAT-064 Image & Visual Content Analysis | Sprint 2 | New |
-| FEAT-065 Hyperlink Extraction & Intelligence | Sprint 2 | New |
-| FEAT-066 Attachment Content Extraction | Sprint 2 | New |
-| FEAT-067 Deep HTML Body Extraction | Sprint 2 | New |
-| FEAT-068 Multi-Asset Semantic Search | Sprint 2 | New |
-| FEAT-069 Full Email Client UI | Sprint 5 | New |
-| FEAT-070 Ingest-Tag-Archive Pipeline | Sprint 2 | New |
-| FEAT-071 Dynamic Auto-Grouping | Sprint 3 | New |
-| FEAT-072 Continuous Learning System | Sprint 3 | New |
-| FEAT-073 Periodic Re-Classification | Sprint 3 | New |
-| FEAT-074 Gmail Push Notifications | Sprint 2 | New |
-| FEAT-075 Email Compose & Reply | Sprint 5 | New |
-| FEAT-076 Multi-Account Onboarding | Sprint 4 | New |
-| FEAT-077 Account Management | Sprint 5 | New |
-| FEAT-078 Unified Inbox | Sprint 4 | New |
-| Existing FEAT-001 through FEAT-015 | Enhanced in respective sprints | Existing |
+| Feature                                      | Sprint                         | Status   |
+| -------------------------------------------- | ------------------------------ | -------- |
+| FEAT-050 Semantic Hybrid Search              | Sprint 2                       | New      |
+| FEAT-051 Vector Embedding Pipeline           | Sprint 1                       | New      |
+| FEAT-052 Inbox Cleaner Wizard                | Sprint 5                       | New      |
+| FEAT-053 Subscription Intelligence           | Sprint 2                       | New      |
+| FEAT-054 Topic Clustering                    | Sprint 3                       | New      |
+| FEAT-055 Ingestion Pipeline (SSE)            | Sprint 2                       | New      |
+| FEAT-056 Command Center                      | Sprint 4                       | New      |
+| FEAT-057 Insights Explorer                   | Sprint 5                       | New      |
+| FEAT-058 SONA Self-Learning                  | Sprint 3                       | New      |
+| FEAT-059 Semantic Rule Conditions            | Sprint 5                       | New      |
+| FEAT-060 AI Rule Suggestions                 | Sprint 5                       | New      |
+| FEAT-061 Inbox Health Score                  | Sprint 5                       | New      |
+| FEAT-062 Conversation Threading              | Sprint 5                       | New      |
+| FEAT-063 Smart Digest Creation               | Future                         | Deferred |
+| FEAT-064 Image & Visual Content Analysis     | Sprint 2                       | New      |
+| FEAT-065 Hyperlink Extraction & Intelligence | Sprint 2                       | New      |
+| FEAT-066 Attachment Content Extraction       | Sprint 2                       | New      |
+| FEAT-067 Deep HTML Body Extraction           | Sprint 2                       | New      |
+| FEAT-068 Multi-Asset Semantic Search         | Sprint 2                       | New      |
+| FEAT-069 Full Email Client UI                | Sprint 5                       | New      |
+| FEAT-070 Ingest-Tag-Archive Pipeline         | Sprint 2                       | New      |
+| FEAT-071 Dynamic Auto-Grouping               | Sprint 3                       | New      |
+| FEAT-072 Continuous Learning System          | Sprint 3                       | New      |
+| FEAT-073 Periodic Re-Classification          | Sprint 3                       | New      |
+| FEAT-074 Gmail Push Notifications            | Sprint 2                       | New      |
+| FEAT-075 Email Compose & Reply               | Sprint 5                       | New      |
+| FEAT-076 Multi-Account Onboarding            | Sprint 4                       | New      |
+| FEAT-077 Account Management                  | Sprint 5                       | New      |
+| FEAT-078 Unified Inbox                       | Sprint 4                       | New      |
+| Existing FEAT-001 through FEAT-015           | Enhanced in respective sprints | Existing |
 
 ---
 
 ## 5. Risk Register (Updated from Research)
 
-| # | Risk | Likelihood | Impact | Mitigation | Sprint |
-|---|------|-----------|--------|------------|--------|
-| R1 | RuVector fails crash recovery benchmark | Medium | Critical | VectorStore facade enables swap to Qdrant (ADR-003). Sprint 0 benchmark is go/no-go gate. | S0 |
-| R2 | SONA feedback loops corrupt centroids | Medium | High | Formal safeguards (ADR-004): min 10 events, drift alarm, A/B eval, rollback | S3 |
-| R3 | Embedding model poor on domain jargon | Medium | Medium | Pluggable model (ADR-002), domain evaluation (S6-06), multilingual fallback | S6 |
-| R4 | OCR/PDF extraction unreliable | Medium | Medium | Quality scoring + graceful degradation (ADR-006). Low-quality assets weighted lower. | S2 |
-| R5 | Embedding invertibility privacy leak | Low | High | Encryption at rest + Gaussian noise injection (ADR-008). Privacy documentation. | S1 |
-| R6 | Performance degrades on older hardware | Medium | Medium | Hardware matrix benchmarks (S7-04). Configurable quality/speed tradeoffs. | S7 |
-| R7 | Gmail API quota exhaustion | Low | High | Rate limiting (1000/10min), exponential backoff, quota monitoring (ADR-010) | S2 |
-| R8 | Cluster churn confuses users | Medium | Medium | Stability guardrails (ADR-009): hysteresis, pinning, minimum age | S3 |
-| R9 | Breaking changes in RuVector updates | Medium | High | Pin exact versions, integration test suite, facade abstraction | S0+ |
-| R10 | Browser storage limitations (IndexedDB) | Low | Medium | Graceful degradation to server-side state, quota monitoring | S4 |
+| #   | Risk                                    | Likelihood | Impact   | Mitigation                                                                                | Sprint |
+| --- | --------------------------------------- | ---------- | -------- | ----------------------------------------------------------------------------------------- | ------ |
+| R1  | RuVector fails crash recovery benchmark | Medium     | Critical | VectorStore facade enables swap to Qdrant (ADR-003). Sprint 0 benchmark is go/no-go gate. | S0     |
+| R2  | SONA feedback loops corrupt centroids   | Medium     | High     | Formal safeguards (ADR-004): min 10 events, drift alarm, A/B eval, rollback               | S3     |
+| R3  | Embedding model poor on domain jargon   | Medium     | Medium   | Pluggable model (ADR-002), domain evaluation (S6-06), multilingual fallback               | S6     |
+| R4  | OCR/PDF extraction unreliable           | Medium     | Medium   | Quality scoring + graceful degradation (ADR-006). Low-quality assets weighted lower.      | S2     |
+| R5  | Embedding invertibility privacy leak    | Low        | High     | Encryption at rest + Gaussian noise injection (ADR-008). Privacy documentation.           | S1     |
+| R6  | Performance degrades on older hardware  | Medium     | Medium   | Hardware matrix benchmarks (S7-04). Configurable quality/speed tradeoffs.                 | S7     |
+| R7  | Gmail API quota exhaustion              | Low        | High     | Rate limiting (1000/10min), exponential backoff, quota monitoring (ADR-010)               | S2     |
+| R8  | Cluster churn confuses users            | Medium     | Medium   | Stability guardrails (ADR-009): hysteresis, pinning, minimum age                          | S3     |
+| R9  | Breaking changes in RuVector updates    | Medium     | High     | Pin exact versions, integration test suite, facade abstraction                            | S0+    |
+| R10 | Browser storage limitations (IndexedDB) | Low        | Medium   | Graceful degradation to server-side state, quota monitoring                               | S4     |
 
 ---
 
 ## 6. Definition of Done (per Sprint)
 
 Each sprint is complete when:
+
 1. All tasks marked complete with passing tests
 2. No P0/P1 bugs open
 3. Code reviewed and merged to main
@@ -442,55 +465,55 @@ Each sprint is complete when:
 
 ## 7. Dependencies & Prerequisites
 
-| Dependency | Required By | Notes |
-|-----------|------------|-------|
-| Rust 1.94.0 | Sprint 0 | rustup default stable |
-| Node.js 24+ | Sprint 4 | For Vite 8 |
-| pnpm 10.32+ | Sprint 4 | corepack enable |
-| Docker + Compose | Sprint 0 | For development stack |
-| Gmail API credentials | Sprint 2 | OAuth2 client ID/secret |
-| Outlook (Graph API) credentials | Sprint 2 | App registration |
-| RuVector crates | Sprint 0 | ruvector-core 2.0, ruvector-gnn 2.0, ruvllm 2.0 |
-| SONA (git dep) | Sprint 3 | From ruvector monorepo (ADR-004 note) |
+| Dependency                      | Required By | Notes                                           |
+| ------------------------------- | ----------- | ----------------------------------------------- |
+| Rust 1.94.0                     | Sprint 0    | rustup default stable                           |
+| Node.js 24+                     | Sprint 4    | For Vite 8                                      |
+| pnpm 10.32+                     | Sprint 4    | corepack enable                                 |
+| Docker + Compose                | Sprint 0    | For development stack                           |
+| Gmail API credentials           | Sprint 2    | OAuth2 client ID/secret                         |
+| Outlook (Graph API) credentials | Sprint 2    | App registration                                |
+| RuVector crates                 | Sprint 0    | ruvector-core 2.0, ruvector-gnn 2.0, ruvllm 2.0 |
+| SONA (git dep)                  | Sprint 3    | From ruvector monorepo (ADR-004 note)           |
 
 ---
 
 ## 8. Success Metrics
 
-| Metric | Target | Measured In |
-|--------|--------|-------------|
-| Hybrid search latency (p95) | < 50ms | Sprint 7 |
-| Vector search latency (100K) | < 10ms | Sprint 7 |
-| Email ingestion rate | > 500 emails/sec (text-only) | Sprint 7 |
-| Categorization accuracy | > 95% macro-F1 | Sprint 7 |
-| Subscription detection recall | > 98% | Sprint 7 |
-| Memory footprint (100K emails) | < 700MB | Sprint 7 |
-| Time to inbox zero (10K emails) | < 10 minutes | Sprint 7 |
-| LLM fallback rate | < 15% of classifications | Sprint 7 |
-| Lighthouse performance score | > 90 | Sprint 6 |
-| WCAG 2.1 AA compliance | 100% | Sprint 6 |
+| Metric                          | Target                       | Measured In |
+| ------------------------------- | ---------------------------- | ----------- |
+| Hybrid search latency (p95)     | < 50ms                       | Sprint 7    |
+| Vector search latency (100K)    | < 10ms                       | Sprint 7    |
+| Email ingestion rate            | > 500 emails/sec (text-only) | Sprint 7    |
+| Categorization accuracy         | > 95% macro-F1               | Sprint 7    |
+| Subscription detection recall   | > 98%                        | Sprint 7    |
+| Memory footprint (100K emails)  | < 700MB                      | Sprint 7    |
+| Time to inbox zero (10K emails) | < 10 minutes                 | Sprint 7    |
+| LLM fallback rate               | < 15% of classifications     | Sprint 7    |
+| Lighthouse performance score    | > 90                         | Sprint 6    |
+| WCAG 2.1 AA compliance          | 100%                         | Sprint 6    |
 
 ---
 
 ## 9. Cross-Reference Index
 
-| Document | Location | Purpose |
-|----------|----------|---------|
-| Original Plan | INCEPTION.md | Full technical specification |
-| Research Evaluation | docs/research/initial.md | Academic analysis of plan feasibility |
-| ADR-001 Hybrid Search | docs/ADRs/ADR-001.md | Search architecture decision |
-| ADR-002 Embedding Model | docs/ADRs/ADR-002.md | Model selection and pluggability |
-| ADR-003 RuVector | docs/ADRs/ADR-003.md | Vector DB selection with facade |
-| ADR-004 SONA Specification | docs/ADRs/ADR-004.md | Learning model formalization |
-| ADR-005 Web SPA | docs/ADRs/ADR-005.md | Frontend architecture decision |
-| ADR-006 Multi-Asset Pipeline | docs/ADRs/ADR-006.md | Content extraction strategy |
-| ADR-007 Quantization | docs/ADRs/ADR-007.md | Memory optimization strategy |
-| ADR-008 Privacy | docs/ADRs/ADR-008.md | Embedding security architecture |
-| ADR-009 GNN Clustering | docs/ADRs/ADR-009.md | Topic discovery architecture |
-| ADR-010 Ingest-Tag-Archive | docs/ADRs/ADR-010.md | Zero-inbox pipeline strategy |
-| DDD-000 Context Map | docs/DDDs/DDD-000-context-map.md | Bounded context relationships |
-| DDD-001 Email Intelligence | docs/DDDs/DDD-001-email-intelligence.md | Core domain model |
-| DDD-002 Search | docs/DDDs/DDD-002-search.md | Search domain model |
-| DDD-003 Ingestion | docs/DDDs/DDD-003-ingestion.md | Ingestion domain model |
-| DDD-004 Learning | docs/DDDs/DDD-004-learning.md | SONA learning domain model |
-| DDD-005 Account Management | docs/DDDs/DDD-005-account-management.md | Account domain model |
+| Document                     | Location                                | Purpose                               |
+| ---------------------------- | --------------------------------------- | ------------------------------------- |
+| Original Plan                | INCEPTION.md                            | Full technical specification          |
+| Research Evaluation          | docs/research/initial.md                | Academic analysis of plan feasibility |
+| ADR-001 Hybrid Search        | docs/ADRs/ADR-001.md                    | Search architecture decision          |
+| ADR-002 Embedding Model      | docs/ADRs/ADR-002.md                    | Model selection and pluggability      |
+| ADR-003 RuVector             | docs/ADRs/ADR-003.md                    | Vector DB selection with facade       |
+| ADR-004 SONA Specification   | docs/ADRs/ADR-004.md                    | Learning model formalization          |
+| ADR-005 Web SPA              | docs/ADRs/ADR-005.md                    | Frontend architecture decision        |
+| ADR-006 Multi-Asset Pipeline | docs/ADRs/ADR-006.md                    | Content extraction strategy           |
+| ADR-007 Quantization         | docs/ADRs/ADR-007.md                    | Memory optimization strategy          |
+| ADR-008 Privacy              | docs/ADRs/ADR-008.md                    | Embedding security architecture       |
+| ADR-009 GNN Clustering       | docs/ADRs/ADR-009.md                    | Topic discovery architecture          |
+| ADR-010 Ingest-Tag-Archive   | docs/ADRs/ADR-010.md                    | Zero-inbox pipeline strategy          |
+| DDD-000 Context Map          | docs/DDDs/DDD-000-context-map.md        | Bounded context relationships         |
+| DDD-001 Email Intelligence   | docs/DDDs/DDD-001-email-intelligence.md | Core domain model                     |
+| DDD-002 Search               | docs/DDDs/DDD-002-search.md             | Search domain model                   |
+| DDD-003 Ingestion            | docs/DDDs/DDD-003-ingestion.md          | Ingestion domain model                |
+| DDD-004 Learning             | docs/DDDs/DDD-004-learning.md           | SONA learning domain model            |
+| DDD-005 Account Management   | docs/DDDs/DDD-005-account-management.md | Account domain model                  |

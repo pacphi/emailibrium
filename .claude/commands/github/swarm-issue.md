@@ -1,11 +1,13 @@
 # Swarm Issue - Issue-Based Swarm Coordination
 
 ## Overview
+
 Transform GitHub Issues into intelligent swarm tasks, enabling automatic task decomposition and agent coordination.
 
 ## Core Features
 
 ### 1. Issue-to-Swarm Conversion
+
 ```bash
 # Create swarm from issue using gh CLI
 # Get issue details
@@ -30,10 +32,12 @@ done
 ```
 
 ### 2. Issue Comment Commands
+
 Execute swarm operations via issue comments:
 
 ```markdown
 <!-- In issue comment -->
+
 /swarm analyze
 /swarm decompose 5
 /swarm assign @agent-coder
@@ -45,35 +49,32 @@ Execute swarm operations via issue comments:
 
 ```markdown
 <!-- .github/ISSUE_TEMPLATE/swarm-task.yml -->
+
 name: Swarm Task
 description: Create a task for AI swarm processing
 body:
-  - type: dropdown
-    id: topology
-    attributes:
-      label: Swarm Topology
-      options:
-        - mesh
-        - hierarchical
-        - ring
-        - star
-  - type: input
-    id: agents
-    attributes:
-      label: Required Agents
-      placeholder: "coder, tester, analyst"
-  - type: textarea
-    id: tasks
-    attributes:
-      label: Task Breakdown
-      placeholder: |
-        1. Task one description
-        2. Task two description
+
+- type: dropdown
+  id: topology
+  attributes:
+  label: Swarm Topology
+  options: - mesh - hierarchical - ring - star
+- type: input
+  id: agents
+  attributes:
+  label: Required Agents
+  placeholder: "coder, tester, analyst"
+- type: textarea
+  id: tasks
+  attributes:
+  label: Task Breakdown
+  placeholder: | 1. Task one description 2. Task two description
 ```
 
 ## Issue Label Automation
 
 ### Auto-Label Based on Content
+
 ```javascript
 // .github/swarm-labels.json
 {
@@ -98,6 +99,7 @@ body:
 ```
 
 ### Dynamic Agent Assignment
+
 ```bash
 # Assign agents based on issue content
 npx ruv-swarm github issue-analyze 456 \
@@ -109,6 +111,7 @@ npx ruv-swarm github issue-analyze 456 \
 ## Issue Swarm Commands
 
 ### Initialize from Issue
+
 ```bash
 # Create swarm with full issue context using gh CLI
 # Get complete issue data
@@ -135,6 +138,7 @@ gh issue comment 456 --body "🐝 Swarm initialized for this issue"
 ```
 
 ### Task Decomposition
+
 ```bash
 # Break down issue into subtasks with gh CLI
 # Get issue body
@@ -159,7 +163,7 @@ gh issue edit 456 --body "$UPDATED_BODY"
 echo "$SUBTASKS" | jq -r '.tasks[] | select(.priority == "high")' | while read -r task; do
   TITLE=$(echo "$task" | jq -r '.title')
   BODY=$(echo "$task" | jq -r '.description')
-  
+
   gh issue create \
     --title "$TITLE" \
     --body "$BODY
@@ -170,6 +174,7 @@ done
 ```
 
 ### Progress Tracking
+
 ```bash
 # Update issue with swarm progress using gh CLI
 # Get current issue state
@@ -215,6 +220,7 @@ fi
 ## Advanced Features
 
 ### 1. Issue Dependencies
+
 ```bash
 # Handle issue dependencies
 npx ruv-swarm github issue-deps 456 \
@@ -224,6 +230,7 @@ npx ruv-swarm github issue-deps 456 \
 ```
 
 ### 2. Epic Management
+
 ```bash
 # Coordinate epic-level swarms
 npx ruv-swarm github epic-swarm \
@@ -233,6 +240,7 @@ npx ruv-swarm github epic-swarm \
 ```
 
 ### 3. Issue Templates
+
 ```bash
 # Generate issue from swarm analysis
 npx ruv-swarm github create-issues \
@@ -244,6 +252,7 @@ npx ruv-swarm github create-issues \
 ## Workflow Integration
 
 ### GitHub Actions for Issues
+
 ```yaml
 # .github/workflows/issue-swarm.yml
 name: Issue Swarm Handler
@@ -265,6 +274,7 @@ jobs:
 ```
 
 ### Issue Board Integration
+
 ```bash
 # Sync with project board
 npx ruv-swarm github issue-board-sync \
@@ -279,6 +289,7 @@ npx ruv-swarm github issue-board-sync \
 ## Issue Types & Strategies
 
 ### Bug Reports
+
 ```bash
 # Specialized bug handling
 npx ruv-swarm github bug-swarm 456 \
@@ -289,6 +300,7 @@ npx ruv-swarm github bug-swarm 456 \
 ```
 
 ### Feature Requests
+
 ```bash
 # Feature implementation swarm
 npx ruv-swarm github feature-swarm 456 \
@@ -299,6 +311,7 @@ npx ruv-swarm github feature-swarm 456 \
 ```
 
 ### Technical Debt
+
 ```bash
 # Refactoring swarm
 npx ruv-swarm github debt-swarm 456 \
@@ -311,6 +324,7 @@ npx ruv-swarm github debt-swarm 456 \
 ## Automation Examples
 
 ### Auto-Close Stale Issues
+
 ```bash
 # Process stale issues with swarm using gh CLI
 # Find stale issues
@@ -322,12 +336,12 @@ STALE_ISSUES=$(gh issue list --state open --json number,title,updatedAt,labels \
 echo "$STALE_ISSUES" | jq -r '.number' | while read -r num; do
   # Get full issue context
   ISSUE=$(gh issue view $num --json title,body,comments,labels)
-  
+
   # Analyze with swarm
   ACTION=$(npx ruv-swarm github analyze-stale \
     --issue "$ISSUE" \
     --suggest-action)
-  
+
   case "$ACTION" in
     "close")
       # Add stale label and warning comment
@@ -355,6 +369,7 @@ gh issue list --label stale --state open --json number,updatedAt \
 ```
 
 ### Issue Triage
+
 ```bash
 # Automated triage system
 npx ruv-swarm github triage \
@@ -365,6 +380,7 @@ npx ruv-swarm github triage \
 ```
 
 ### Duplicate Detection
+
 ```bash
 # Find duplicate issues
 npx ruv-swarm github find-duplicates \
@@ -376,6 +392,7 @@ npx ruv-swarm github find-duplicates \
 ## Integration Patterns
 
 ### 1. Issue-PR Linking
+
 ```bash
 # Link issues to PRs automatically
 npx ruv-swarm github link-pr \
@@ -385,6 +402,7 @@ npx ruv-swarm github link-pr \
 ```
 
 ### 2. Milestone Coordination
+
 ```bash
 # Coordinate milestone swarms
 npx ruv-swarm github milestone-swarm \
@@ -394,6 +412,7 @@ npx ruv-swarm github milestone-swarm \
 ```
 
 ### 3. Cross-Repo Issues
+
 ```bash
 # Handle issues across repositories
 npx ruv-swarm github cross-repo \
@@ -405,6 +424,7 @@ npx ruv-swarm github cross-repo \
 ## Metrics & Analytics
 
 ### Issue Resolution Time
+
 ```bash
 # Analyze swarm performance
 npx ruv-swarm github issue-metrics \
@@ -413,6 +433,7 @@ npx ruv-swarm github issue-metrics \
 ```
 
 ### Swarm Effectiveness
+
 ```bash
 # Generate effectiveness report
 npx ruv-swarm github effectiveness \
@@ -423,18 +444,21 @@ npx ruv-swarm github effectiveness \
 ## Best Practices
 
 ### 1. Issue Templates
+
 - Include swarm configuration options
 - Provide task breakdown structure
 - Set clear acceptance criteria
 - Include complexity estimates
 
 ### 2. Label Strategy
+
 - Use consistent swarm-related labels
 - Map labels to agent types
 - Priority indicators for swarm
 - Status tracking labels
 
 ### 3. Comment Etiquette
+
 - Clear command syntax
 - Progress updates in threads
 - Summary comments for decisions
@@ -450,6 +474,7 @@ npx ruv-swarm github effectiveness \
 ## Examples
 
 ### Complex Bug Investigation
+
 ```bash
 # Issue #789: Memory leak in production
 npx ruv-swarm github issue-init 789 \
@@ -460,6 +485,7 @@ npx ruv-swarm github issue-init 789 \
 ```
 
 ### Feature Implementation
+
 ```bash
 # Issue #234: Add OAuth integration
 npx ruv-swarm github issue-init 234 \
@@ -470,6 +496,7 @@ npx ruv-swarm github issue-init 234 \
 ```
 
 ### Documentation Update
+
 ```bash
 # Issue #567: Update API documentation
 npx ruv-swarm github issue-init 567 \

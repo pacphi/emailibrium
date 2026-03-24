@@ -1,11 +1,11 @@
 # DDD-006: AI Providers Domain (Supporting)
 
-| Field | Value |
-|-------|-------|
-| Status | Proposed |
-| Date | 2026-03-23 |
-| Type | Supporting Domain |
-| Context | AI Providers |
+| Field   | Value             |
+| ------- | ----------------- |
+| Status  | Proposed          |
+| Date    | 2026-03-23        |
+| Type    | Supporting Domain |
+| Context | AI Providers      |
 
 ## Overview
 
@@ -15,13 +15,13 @@ This is a **supporting domain**: it does not contain the core intelligence logic
 
 ## Strategic Classification
 
-| Aspect | Value |
-|--------|-------|
-| Domain type | Supporting |
-| Investment priority | High (enables core domain) |
-| Complexity driver | External integration diversity, privacy invariants |
-| Change frequency | Medium (new providers, new models) |
-| Risk | Model integrity, consent violations, cloud data leakage |
+| Aspect              | Value                                                   |
+| ------------------- | ------------------------------------------------------- |
+| Domain type         | Supporting                                              |
+| Investment priority | High (enables core domain)                              |
+| Complexity driver   | External integration diversity, privacy invariants      |
+| Change frequency    | Medium (new providers, new models)                      |
+| Risk                | Model integrity, consent violations, cloud data leakage |
 
 ---
 
@@ -33,15 +33,15 @@ Manages the tiered provider configuration for embedding and generative inference
 
 **Root Entity: ProviderConfig**
 
-| Field | Type | Description |
-|-------|------|-------------|
-| id | ProviderConfigId | Singleton per installation (one active config) |
-| embedding_provider | ProviderType | Active embedding provider (Onnx, Ollama, Cloud) |
-| generative_provider | ProviderType | Active generative provider (None, Ollama, Cloud) |
-| image_embedding_enabled | bool | Whether image embedding is active |
-| image_embedding_provider | ProviderType | Active image embedding provider |
-| consent_status | ConsentStatus | Cloud data-sharing consent state |
-| updated_at | DateTime | Last configuration change timestamp |
+| Field                    | Type             | Description                                      |
+| ------------------------ | ---------------- | ------------------------------------------------ |
+| id                       | ProviderConfigId | Singleton per installation (one active config)   |
+| embedding_provider       | ProviderType     | Active embedding provider (Onnx, Ollama, Cloud)  |
+| generative_provider      | ProviderType     | Active generative provider (None, Ollama, Cloud) |
+| image_embedding_enabled  | bool             | Whether image embedding is active                |
+| image_embedding_provider | ProviderType     | Active image embedding provider                  |
+| consent_status           | ConsentStatus    | Cloud data-sharing consent state                 |
+| updated_at               | DateTime         | Last configuration change timestamp              |
 
 **Invariants:**
 
@@ -66,17 +66,17 @@ Manages the inventory of downloaded, verified, and available AI models. Each mod
 
 **Root Entity: ModelEntry**
 
-| Field | Type | Description |
-|-------|------|-------------|
-| model_id | ModelId | Unique identifier (e.g., "all-MiniLM-L6-v2") |
-| provider | ProviderType | Which provider type this model belongs to (Onnx, Ollama) |
-| manifest | ModelManifest | Model metadata (name, dimensions, SHA-256, URL, size) |
-| path | Option<FilePath> | Local filesystem path to model files |
-| download_status | DownloadStatus | NotStarted, Downloading, Ready, Failed, Corrupted |
-| verified | bool | Whether SHA-256 integrity check has passed |
-| size_bytes | u64 | Actual size on disk |
-| downloaded_at | Option<DateTime> | When the model was downloaded |
-| last_used | Option<DateTime> | Last time the model served an inference request |
+| Field           | Type             | Description                                              |
+| --------------- | ---------------- | -------------------------------------------------------- |
+| model_id        | ModelId          | Unique identifier (e.g., "all-MiniLM-L6-v2")             |
+| provider        | ProviderType     | Which provider type this model belongs to (Onnx, Ollama) |
+| manifest        | ModelManifest    | Model metadata (name, dimensions, SHA-256, URL, size)    |
+| path            | Option<FilePath> | Local filesystem path to model files                     |
+| download_status | DownloadStatus   | NotStarted, Downloading, Ready, Failed, Corrupted        |
+| verified        | bool             | Whether SHA-256 integrity check has passed               |
+| size_bytes      | u64              | Actual size on disk                                      |
+| downloaded_at   | Option<DateTime> | When the model was downloaded                            |
+| last_used       | Option<DateTime> | Last time the model served an inference request          |
 
 **Invariants:**
 
@@ -101,17 +101,17 @@ Manages active inference sessions -- loaded models that are ready to serve reque
 
 **Root Entity: InferenceSession**
 
-| Field | Type | Description |
-|-------|------|-------------|
-| session_id | SessionId | Unique session identifier |
-| provider_type | ProviderType | Onnx, Ollama, or Cloud |
-| model_id | ModelId | The model backing this session |
-| status | SessionStatus | Initializing, Ready, Degraded, Closed |
-| created_at | DateTime | When the session was created |
-| request_count | u64 | Total inference requests served |
-| error_count | u64 | Total errors encountered |
-| last_request_at | Option<DateTime> | Timestamp of most recent inference |
-| last_error | Option<String> | Most recent error message |
+| Field           | Type             | Description                           |
+| --------------- | ---------------- | ------------------------------------- |
+| session_id      | SessionId        | Unique session identifier             |
+| provider_type   | ProviderType     | Onnx, Ollama, or Cloud                |
+| model_id        | ModelId          | The model backing this session        |
+| status          | SessionStatus    | Initializing, Ready, Degraded, Closed |
+| created_at      | DateTime         | When the session was created          |
+| request_count   | u64              | Total inference requests served       |
+| error_count     | u64              | Total errors encountered              |
+| last_request_at | Option<DateTime> | Timestamp of most recent inference    |
+| last_error      | Option<String>   | Most recent error message             |
 
 **Invariants:**
 
@@ -133,40 +133,40 @@ Manages active inference sessions -- loaded models that are ready to serve reque
 
 ## Domain Events
 
-| Event | Fields | Published When |
-|-------|--------|----------------|
-| ModelRegistered | model_id, provider, manifest | New model added to registry |
-| ModelDownloadStarted | model_id, url, expected_sha256, expected_size_bytes | Download begins |
-| ModelDownloadProgress | model_id, bytes_downloaded, total_bytes, percent | Periodic progress update |
-| ModelDownloadCompleted | model_id, path, actual_sha256, verified | Download finishes and verification runs |
-| ModelDownloadFailed | model_id, error, retry_count | Download fails |
-| ModelIntegrityFailed | model_id, expected_sha256, actual_sha256 | SHA-256 mismatch detected |
-| ModelDeleted | model_id, path, freed_bytes | Model files removed from disk |
-| ProviderChanged | old_provider, new_provider, old_model_id, new_model_id, requires_reindex | Embedding or generative provider switched |
-| CloudConsentGranted | user_id, provider, timestamp | User explicitly consents to cloud data sharing |
-| CloudConsentRevoked | user_id, provider, timestamp, downgraded_providers | User revokes consent; affected providers listed |
-| SessionCreated | session_id, provider_type, model_id | Inference session initialized and ready |
-| SessionClosed | session_id, provider_type, model_id, total_requests, total_errors | Session shut down |
-| SessionDegraded | session_id, provider_type, model_id, consecutive_errors | Session health dropped below threshold |
-| InferenceCompleted | session_id, provider_type, latency_ms, input_tokens | Successful inference (emitted per-request for metrics) |
-| InferenceFailed | session_id, provider_type, error, input_tokens | Failed inference |
-| ReindexTriggered | model_id, total_emails, reason | Re-embedding required due to model change |
-| ReindexProgress | model_id, emails_processed, total_emails, percent | Periodic reindex progress |
-| ReindexCompleted | model_id, emails_reindexed, duration_ms, errors | Re-embedding finished |
-| CloudApiCalled | provider, endpoint, request_bytes, response_bytes, latency_ms, timestamp | Audit event for every cloud API call |
+| Event                  | Fields                                                                   | Published When                                         |
+| ---------------------- | ------------------------------------------------------------------------ | ------------------------------------------------------ |
+| ModelRegistered        | model_id, provider, manifest                                             | New model added to registry                            |
+| ModelDownloadStarted   | model_id, url, expected_sha256, expected_size_bytes                      | Download begins                                        |
+| ModelDownloadProgress  | model_id, bytes_downloaded, total_bytes, percent                         | Periodic progress update                               |
+| ModelDownloadCompleted | model_id, path, actual_sha256, verified                                  | Download finishes and verification runs                |
+| ModelDownloadFailed    | model_id, error, retry_count                                             | Download fails                                         |
+| ModelIntegrityFailed   | model_id, expected_sha256, actual_sha256                                 | SHA-256 mismatch detected                              |
+| ModelDeleted           | model_id, path, freed_bytes                                              | Model files removed from disk                          |
+| ProviderChanged        | old_provider, new_provider, old_model_id, new_model_id, requires_reindex | Embedding or generative provider switched              |
+| CloudConsentGranted    | user_id, provider, timestamp                                             | User explicitly consents to cloud data sharing         |
+| CloudConsentRevoked    | user_id, provider, timestamp, downgraded_providers                       | User revokes consent; affected providers listed        |
+| SessionCreated         | session_id, provider_type, model_id                                      | Inference session initialized and ready                |
+| SessionClosed          | session_id, provider_type, model_id, total_requests, total_errors        | Session shut down                                      |
+| SessionDegraded        | session_id, provider_type, model_id, consecutive_errors                  | Session health dropped below threshold                 |
+| InferenceCompleted     | session_id, provider_type, latency_ms, input_tokens                      | Successful inference (emitted per-request for metrics) |
+| InferenceFailed        | session_id, provider_type, error, input_tokens                           | Failed inference                                       |
+| ReindexTriggered       | model_id, total_emails, reason                                           | Re-embedding required due to model change              |
+| ReindexProgress        | model_id, emails_processed, total_emails, percent                        | Periodic reindex progress                              |
+| ReindexCompleted       | model_id, emails_reindexed, duration_ms, errors                          | Re-embedding finished                                  |
+| CloudApiCalled         | provider, endpoint, request_bytes, response_bytes, latency_ms, timestamp | Audit event for every cloud API call                   |
 
 ### Event Consumers
 
-| Event | Consumed By | Purpose |
-|-------|-------------|---------|
-| ProviderChanged | Email Intelligence | Triggers re-embedding if dimensions changed |
-| ReindexTriggered | Email Intelligence | Marks existing embeddings as Stale, queues re-embed |
-| ReindexCompleted | Email Intelligence, Search | Updates search index availability |
-| CloudConsentRevoked | Email Intelligence | Stops any in-flight cloud inference |
-| ModelDownloadCompleted | Email Intelligence (via ProviderConfig) | New model available for use |
-| CloudApiCalled | Account Management | Audit trail for privacy compliance reporting |
-| InferenceCompleted | Learning | Tracks provider performance for optimization |
-| SessionDegraded | Email Intelligence | Triggers fallback to next provider in chain |
+| Event                  | Consumed By                             | Purpose                                             |
+| ---------------------- | --------------------------------------- | --------------------------------------------------- |
+| ProviderChanged        | Email Intelligence                      | Triggers re-embedding if dimensions changed         |
+| ReindexTriggered       | Email Intelligence                      | Marks existing embeddings as Stale, queues re-embed |
+| ReindexCompleted       | Email Intelligence, Search              | Updates search index availability                   |
+| CloudConsentRevoked    | Email Intelligence                      | Stops any in-flight cloud inference                 |
+| ModelDownloadCompleted | Email Intelligence (via ProviderConfig) | New model available for use                         |
+| CloudApiCalled         | Account Management                      | Audit trail for privacy compliance reporting        |
+| InferenceCompleted     | Learning                                | Tracks provider performance for optimization        |
+| SessionDegraded        | Email Intelligence                      | Triggers fallback to next provider in chain         |
 
 ---
 
@@ -196,18 +196,18 @@ enum ProviderTier {
 
 ### ModelManifest
 
-| Field | Type | Description |
-|-------|------|-------------|
-| model_name | String | Human-readable name (e.g., "all-MiniLM-L6-v2") |
-| provider | ProviderType | Which provider type this model serves |
-| capability | ModelCapability | Embedding, Generative, ImageEmbedding |
-| dimensions | Option<u32> | Output vector dimensions (for embedding models) |
-| max_tokens | u32 | Maximum input token length |
-| sha256 | String | Expected SHA-256 checksum of model files |
-| download_url | String | Hugging Face Hub URL for download |
-| size_bytes | u64 | Expected file size |
-| quantized | bool | Whether this is a quantized (INT8) variant |
-| languages | Vec<String> | Supported languages (e.g., ["en"] or ["multilingual"]) |
+| Field        | Type            | Description                                            |
+| ------------ | --------------- | ------------------------------------------------------ |
+| model_name   | String          | Human-readable name (e.g., "all-MiniLM-L6-v2")         |
+| provider     | ProviderType    | Which provider type this model serves                  |
+| capability   | ModelCapability | Embedding, Generative, ImageEmbedding                  |
+| dimensions   | Option<u32>     | Output vector dimensions (for embedding models)        |
+| max_tokens   | u32             | Maximum input token length                             |
+| sha256       | String          | Expected SHA-256 checksum of model files               |
+| download_url | String          | Hugging Face Hub URL for download                      |
+| size_bytes   | u64             | Expected file size                                     |
+| quantized    | bool            | Whether this is a quantized (INT8) variant             |
+| languages    | Vec<String>     | Supported languages (e.g., ["en"] or ["multilingual"]) |
 
 ### ConsentStatus
 
@@ -282,18 +282,18 @@ enum InferenceResult {
 
 ### CloudAuditEntry
 
-| Field | Type | Description |
-|-------|------|-------------|
-| id | AuditId | Unique audit entry identifier |
-| timestamp | DateTime | When the API call was made |
-| provider | CloudProvider | OpenAI, Cohere, Anthropic, Google |
-| endpoint | String | API endpoint called (e.g., "/v1/embeddings") |
-| model | String | Model used (e.g., "text-embedding-3-small") |
-| request_bytes | u64 | Size of request payload |
-| response_bytes | u64 | Size of response payload |
-| input_token_count | Option<u32> | Tokens sent (if reported by provider) |
-| latency_ms | u64 | Round-trip time |
-| input_hash | String | Truncated SHA-256 of input content (not the content itself) |
+| Field             | Type          | Description                                                 |
+| ----------------- | ------------- | ----------------------------------------------------------- |
+| id                | AuditId       | Unique audit entry identifier                               |
+| timestamp         | DateTime      | When the API call was made                                  |
+| provider          | CloudProvider | OpenAI, Cohere, Anthropic, Google                           |
+| endpoint          | String        | API endpoint called (e.g., "/v1/embeddings")                |
+| model             | String        | Model used (e.g., "text-embedding-3-small")                 |
+| request_bytes     | u64           | Size of request payload                                     |
+| response_bytes    | u64           | Size of response payload                                    |
+| input_token_count | Option<u32>   | Tokens sent (if reported by provider)                       |
+| latency_ms        | u64           | Round-trip time                                             |
+| input_hash        | String        | Truncated SHA-256 of input content (not the content itself) |
 
 ### DownloadStatus
 
@@ -429,12 +429,12 @@ Coordinates re-embedding of all emails when the active embedding model changes.
 
 **Reindex Trigger Conditions:**
 
-| Condition | Reindex Required | Reason |
-|-----------|-----------------|--------|
-| Model change, same dimensions (e.g., MiniLM to BGE-small, both 384D) | Yes | Vectors from different models are not comparable |
-| Model change, different dimensions (e.g., 384D to 768D) | Yes | HNSW index must be rebuilt |
-| Provider change, same model (e.g., Onnx to Cloud with same model) | No | Same model produces same vectors |
-| Provider change, different model | Yes | Different model, different vectors |
+| Condition                                                            | Reindex Required | Reason                                           |
+| -------------------------------------------------------------------- | ---------------- | ------------------------------------------------ |
+| Model change, same dimensions (e.g., MiniLM to BGE-small, both 384D) | Yes              | Vectors from different models are not comparable |
+| Model change, different dimensions (e.g., 384D to 768D)              | Yes              | HNSW index must be rebuilt                       |
+| Provider change, same model (e.g., Onnx to Cloud with same model)    | No               | Same model produces same vectors                 |
+| Provider change, different model                                     | Yes              | Different model, different vectors               |
 
 ### AuditLogger
 
@@ -457,13 +457,13 @@ Logs all cloud API calls for privacy compliance.
 
 Wraps the `fastembed` crate's `TextEmbedding` API behind the `EmbeddingModel` trait defined in Email Intelligence.
 
-| Domain Method | fastembed Operation |
-|---------------|---------------------|
-| `embed(text)` | `TextEmbedding::embed(vec![text], None)` via `spawn_blocking` |
-| `embed_batch(texts)` | `TextEmbedding::embed(texts, None)` via `spawn_blocking` |
-| `dimensions()` | Determined by `EmbeddingModel` enum variant at construction |
-| `model_id()` | Mapped from `fastembed::EmbeddingModel` enum to domain `ModelId` |
-| `is_available()` | Always `true` once session is initialized |
+| Domain Method        | fastembed Operation                                              |
+| -------------------- | ---------------------------------------------------------------- |
+| `embed(text)`        | `TextEmbedding::embed(vec![text], None)` via `spawn_blocking`    |
+| `embed_batch(texts)` | `TextEmbedding::embed(texts, None)` via `spawn_blocking`         |
+| `dimensions()`       | Determined by `EmbeddingModel` enum variant at construction      |
+| `model_id()`         | Mapped from `fastembed::EmbeddingModel` enum to domain `ModelId` |
+| `is_available()`     | Always `true` once session is initialized                        |
 
 **Isolation guarantees:**
 
@@ -475,12 +475,12 @@ Wraps the `fastembed` crate's `TextEmbedding` API behind the `EmbeddingModel` tr
 
 Wraps the Ollama HTTP API behind the `EmbeddingModel` trait.
 
-| Domain Method | Ollama Operation |
-|---------------|------------------|
-| `embed(text)` | `POST /api/embeddings { model, prompt }` |
+| Domain Method        | Ollama Operation                                                   |
+| -------------------- | ------------------------------------------------------------------ |
+| `embed(text)`        | `POST /api/embeddings { model, prompt }`                           |
 | `embed_batch(texts)` | Sequential or parallel HTTP calls (Ollama does not natively batch) |
-| `dimensions()` | Configured at construction based on selected Ollama model |
-| `is_available()` | `GET /api/tags` health check |
+| `dimensions()`       | Configured at construction based on selected Ollama model          |
+| `is_available()`     | `GET /api/tags` health check                                       |
 
 **Isolation guarantees:**
 
@@ -492,22 +492,22 @@ Wraps the Ollama HTTP API behind the `EmbeddingModel` trait.
 
 Wraps the Ollama HTTP API behind the `GenerativeModel` trait.
 
-| Domain Method | Ollama Operation |
-|---------------|------------------|
+| Domain Method      | Ollama Operation                                |
+| ------------------ | ----------------------------------------------- |
 | `classify(prompt)` | `POST /api/generate { model, prompt, options }` |
-| `chat(messages)` | `POST /api/chat { model, messages, options }` |
-| `is_available()` | `GET /api/tags` health check |
+| `chat(messages)`   | `POST /api/chat { model, messages, options }`   |
+| `is_available()`   | `GET /api/tags` health check                    |
 
 ### CloudEmbeddingAdapter
 
 Wraps cloud provider SDKs (OpenAI, Cohere, Voyage) behind the `EmbeddingModel` trait.
 
-| Domain Method | Cloud Operation |
-|---------------|-----------------|
-| `embed(text)` | Provider-specific embedding API call |
-| `embed_batch(texts)` | Provider-specific batch embedding API call |
-| `dimensions()` | Configured per provider/model (e.g., OpenAI text-embedding-3-small = 1536) |
-| `is_available()` | API key present + consent granted + rate limit not exceeded |
+| Domain Method        | Cloud Operation                                                            |
+| -------------------- | -------------------------------------------------------------------------- |
+| `embed(text)`        | Provider-specific embedding API call                                       |
+| `embed_batch(texts)` | Provider-specific batch embedding API call                                 |
+| `dimensions()`       | Configured per provider/model (e.g., OpenAI text-embedding-3-small = 1536) |
+| `is_available()`     | API key present + consent granted + rate limit not exceeded                |
 
 **Isolation guarantees:**
 
@@ -520,11 +520,11 @@ Wraps cloud provider SDKs (OpenAI, Cohere, Voyage) behind the `EmbeddingModel` t
 
 Wraps cloud generative APIs (Anthropic, OpenAI, Google) behind the `GenerativeModel` trait.
 
-| Domain Method | Cloud Operation |
-|---------------|-----------------|
-| `classify(prompt)` | Provider-specific completion API with structured output |
-| `chat(messages)` | Provider-specific chat/messages API |
-| `is_available()` | API key present + consent granted + rate limit not exceeded |
+| Domain Method      | Cloud Operation                                             |
+| ------------------ | ----------------------------------------------------------- |
+| `classify(prompt)` | Provider-specific completion API with structured output     |
+| `chat(messages)`   | Provider-specific chat/messages API                         |
+| `is_available()`   | API key present + consent granted + rate limit not exceeded |
 
 ---
 
@@ -564,34 +564,34 @@ AI Providers ──[Published Language]──> Learning
 
 ### Integration Pattern Summary
 
-| Relationship | Pattern | Direction |
-|-------------|---------|-----------|
-| Account Management -> AI Providers | Published Language | Account Mgmt publishes consent events |
-| AI Providers -> Email Intelligence | Published Language | AI Providers publishes model/reindex events |
-| Email Intelligence -> AI Providers | Customer / Supplier | Email Intelligence defines traits, AI Providers implements |
-| AI Providers -> Hugging Face Hub | Customer / Supplier | AI Providers conforms to HF Hub API |
-| AI Providers -> Ollama | Customer / Supplier | AI Providers conforms to Ollama API |
-| AI Providers -> Cloud APIs | Anti-Corruption Layer | Each cloud SDK wrapped in an adapter |
-| AI Providers -> Learning | Published Language | AI Providers publishes inference metrics |
+| Relationship                       | Pattern               | Direction                                                  |
+| ---------------------------------- | --------------------- | ---------------------------------------------------------- |
+| Account Management -> AI Providers | Published Language    | Account Mgmt publishes consent events                      |
+| AI Providers -> Email Intelligence | Published Language    | AI Providers publishes model/reindex events                |
+| Email Intelligence -> AI Providers | Customer / Supplier   | Email Intelligence defines traits, AI Providers implements |
+| AI Providers -> Hugging Face Hub   | Customer / Supplier   | AI Providers conforms to HF Hub API                        |
+| AI Providers -> Ollama             | Customer / Supplier   | AI Providers conforms to Ollama API                        |
+| AI Providers -> Cloud APIs         | Anti-Corruption Layer | Each cloud SDK wrapped in an adapter                       |
+| AI Providers -> Learning           | Published Language    | AI Providers publishes inference metrics                   |
 
 ---
 
 ## Ubiquitous Language
 
-| Term | Definition |
-|------|------------|
-| **Provider** | A source of AI inference capability: ONNX (in-process), Ollama (local HTTP), or Cloud (remote API) |
-| **Tier** | A level of capability and privacy trade-off. Tier 0 = ONNX (zero-config, full privacy). Tier 1 = Ollama (local enhanced). Tier 2 = Cloud (maximum quality, data leaves machine) |
-| **Consent** | Explicit user permission to send email data to a cloud provider. Must be granted before the first cloud API call and can be revoked at any time |
-| **Reindex** | The process of re-embedding all emails after an embedding model change. Required because vectors from different models are not comparable |
-| **Model manifest** | Metadata describing an available model: name, dimensions, SHA-256 checksum, download URL, and file size. Used for download verification and registry management |
-| **Inference session** | A loaded model that is actively serving requests. ONNX sessions hold the model in memory; Ollama sessions hold an HTTP connection; cloud sessions hold an API client |
-| **Audit trail** | A log of all data sent to external (cloud) services. Records metadata (provider, endpoint, size, latency) but never the email content itself |
-| **Fallback chain** | The ordered sequence of providers tried when the primary provider fails: Cloud -> Ollama -> ONNX. Degradation always moves toward more privacy, never less |
-| **Graceful degradation** | When a higher-tier provider is unavailable, the system automatically falls back to a lower tier without user intervention |
-| **Model integrity** | Verification that a downloaded model file matches its expected SHA-256 checksum. Models that fail verification are quarantined |
-| **Provider routing** | The process of directing an inference request to the correct provider based on current configuration, consent status, and provider health |
-| **Consent gate** | The check performed before every cloud API call to verify that the user has granted consent. Defense in depth: checked at both the router and adapter levels |
+| Term                     | Definition                                                                                                                                                                      |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Provider**             | A source of AI inference capability: ONNX (in-process), Ollama (local HTTP), or Cloud (remote API)                                                                              |
+| **Tier**                 | A level of capability and privacy trade-off. Tier 0 = ONNX (zero-config, full privacy). Tier 1 = Ollama (local enhanced). Tier 2 = Cloud (maximum quality, data leaves machine) |
+| **Consent**              | Explicit user permission to send email data to a cloud provider. Must be granted before the first cloud API call and can be revoked at any time                                 |
+| **Reindex**              | The process of re-embedding all emails after an embedding model change. Required because vectors from different models are not comparable                                       |
+| **Model manifest**       | Metadata describing an available model: name, dimensions, SHA-256 checksum, download URL, and file size. Used for download verification and registry management                 |
+| **Inference session**    | A loaded model that is actively serving requests. ONNX sessions hold the model in memory; Ollama sessions hold an HTTP connection; cloud sessions hold an API client            |
+| **Audit trail**          | A log of all data sent to external (cloud) services. Records metadata (provider, endpoint, size, latency) but never the email content itself                                    |
+| **Fallback chain**       | The ordered sequence of providers tried when the primary provider fails: Cloud -> Ollama -> ONNX. Degradation always moves toward more privacy, never less                      |
+| **Graceful degradation** | When a higher-tier provider is unavailable, the system automatically falls back to a lower tier without user intervention                                                       |
+| **Model integrity**      | Verification that a downloaded model file matches its expected SHA-256 checksum. Models that fail verification are quarantined                                                  |
+| **Provider routing**     | The process of directing an inference request to the correct provider based on current configuration, consent status, and provider health                                       |
+| **Consent gate**         | The check performed before every cloud API call to verify that the user has granted consent. Defense in depth: checked at both the router and adapter levels                    |
 
 ---
 
@@ -618,19 +618,19 @@ AI Providers ──[Published Language]──> Learning
 
 The AI Providers context owns the following configuration sections (from `~/.emailibrium/config.yaml`):
 
-| YAML Path | Aggregate | Description |
-|-----------|-----------|-------------|
-| `ai.embedding.provider` | ProviderConfig | Active embedding provider |
-| `ai.embedding.onnx.*` | ProviderConfig, ModelRegistry | ONNX model selection and cache |
-| `ai.embedding.ollama.*` | ProviderConfig | Ollama embedding connection |
-| `ai.embedding.cloud.*` | ProviderConfig | Cloud embedding provider and model |
-| `ai.generative.provider` | ProviderConfig | Active generative provider |
-| `ai.generative.ollama.*` | ProviderConfig | Ollama generative models and parameters |
-| `ai.generative.cloud.*` | ProviderConfig | Cloud generative provider and model |
-| `ai.image_embedding.*` | ProviderConfig | Image embedding toggle and provider |
-| `ai.consent.*` | ProviderConfig (ConsentManager) | Consent and audit settings |
-| `ai.integrity.*` | ModelRegistry | Checksum verification settings |
-| `ai.cache.*` | InferenceSession | Embedding cache size |
+| YAML Path                | Aggregate                       | Description                             |
+| ------------------------ | ------------------------------- | --------------------------------------- |
+| `ai.embedding.provider`  | ProviderConfig                  | Active embedding provider               |
+| `ai.embedding.onnx.*`    | ProviderConfig, ModelRegistry   | ONNX model selection and cache          |
+| `ai.embedding.ollama.*`  | ProviderConfig                  | Ollama embedding connection             |
+| `ai.embedding.cloud.*`   | ProviderConfig                  | Cloud embedding provider and model      |
+| `ai.generative.provider` | ProviderConfig                  | Active generative provider              |
+| `ai.generative.ollama.*` | ProviderConfig                  | Ollama generative models and parameters |
+| `ai.generative.cloud.*`  | ProviderConfig                  | Cloud generative provider and model     |
+| `ai.image_embedding.*`   | ProviderConfig                  | Image embedding toggle and provider     |
+| `ai.consent.*`           | ProviderConfig (ConsentManager) | Consent and audit settings              |
+| `ai.integrity.*`         | ModelRegistry                   | Checksum verification settings          |
+| `ai.cache.*`             | InferenceSession                | Embedding cache size                    |
 
 Environment variable overrides use the `EMAILIBRIUM_AI__` prefix with double-underscore nesting (e.g., `EMAILIBRIUM_AI__EMBEDDING__PROVIDER=ollama`).
 
@@ -661,19 +661,19 @@ Environment variable overrides use the `EMAILIBRIUM_AI__` prefix with double-und
 
 ### Default Model Selection
 
-| Capability | Default Model | Dimensions | Size | Rationale |
-|-----------|---------------|------------|------|-----------|
-| Text embedding (Tier 0) | all-MiniLM-L6-v2 | 384 | ~90 MB | Smallest high-quality model; matches existing HNSW config |
-| Text embedding (multilingual) | multilingual-e5-small | 384 | ~113 MB | Same dimensions as default; drop-in swap |
-| Generative (Tier 1) | llama3.2:3b | N/A | ~2.5 GB | Best instruction-following at 3B scale |
-| Image embedding | CLIP ViT-B-32 | 512 | ~240 MB (text) + ~340 MB (vision) | Cross-modal text/image search |
+| Capability                    | Default Model         | Dimensions | Size                              | Rationale                                                 |
+| ----------------------------- | --------------------- | ---------- | --------------------------------- | --------------------------------------------------------- |
+| Text embedding (Tier 0)       | all-MiniLM-L6-v2      | 384        | ~90 MB                            | Smallest high-quality model; matches existing HNSW config |
+| Text embedding (multilingual) | multilingual-e5-small | 384        | ~113 MB                           | Same dimensions as default; drop-in swap                  |
+| Generative (Tier 1)           | llama3.2:3b           | N/A        | ~2.5 GB                           | Best instruction-following at 3B scale                    |
+| Image embedding               | CLIP ViT-B-32         | 512        | ~240 MB (text) + ~340 MB (vision) | Cross-modal text/image search                             |
 
 ### Performance Targets
 
-| Metric | Tier 0 (ONNX) | Tier 1 (Ollama) | Tier 2 (Cloud) |
-|--------|---------------|-----------------|----------------|
-| Single embed latency | <50 ms | <200 ms | <500 ms |
-| Batch embed (32 items) | <400 ms | <2 sec | <3 sec |
-| Model load time | <800 ms | N/A (daemon) | N/A (API) |
-| First-run download | 5-30 sec | N/A (user pulls) | N/A |
-| Memory (runtime) | ~150-250 MB | Ollama process: ~500-800 MB | Negligible |
+| Metric                 | Tier 0 (ONNX) | Tier 1 (Ollama)             | Tier 2 (Cloud) |
+| ---------------------- | ------------- | --------------------------- | -------------- |
+| Single embed latency   | <50 ms        | <200 ms                     | <500 ms        |
+| Batch embed (32 items) | <400 ms       | <2 sec                      | <3 sec         |
+| Model load time        | <800 ms       | N/A (daemon)                | N/A (API)      |
+| First-run download     | 5-30 sec      | N/A (user pulls)            | N/A            |
+| Memory (runtime)       | ~150-250 MB   | Ollama process: ~500-800 MB | Negligible     |

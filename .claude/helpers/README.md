@@ -20,6 +20,7 @@ This directory contains helper scripts and utilities for V3 development.
 ## Available Helpers
 
 ### 🎛️ V3 Master Tool
+
 - **`v3.sh`** - Main command-line interface for all V3 operations
   ```bash
   .claude/helpers/v3.sh help           # Show all commands
@@ -30,6 +31,7 @@ This directory contains helper scripts and utilities for V3 development.
   ```
 
 ### 📊 V3 Progress Management
+
 - **`update-v3-progress.sh`** - Update V3 development metrics
   ```bash
   # Usage examples:
@@ -41,6 +43,7 @@ This directory contains helper scripts and utilities for V3 development.
   ```
 
 ### 🔍 Configuration Validation
+
 - **`validate-v3-config.sh`** - Comprehensive environment validation
   - Checks all required directories and files
   - Validates JSON configuration files
@@ -49,6 +52,7 @@ This directory contains helper scripts and utilities for V3 development.
   - Validates file permissions
 
 ### ⚡ Quick Status
+
 - **`v3-quick-status.sh`** - Compact development progress overview
   - Shows domain, agent, and DDD progress
   - Displays security and performance metrics
@@ -58,18 +62,22 @@ This directory contains helper scripts and utilities for V3 development.
 ## Helper Script Standards
 
 ### File Naming
+
 - Use kebab-case: `update-v3-progress.sh`
 - Include version prefix: `v3-*` for V3-specific helpers
 - Use descriptive names that indicate purpose
 
 ### Script Requirements
+
 - Must be executable (`chmod +x`)
 - Include proper error handling (`set -e`)
 - Provide usage help when called without arguments
 - Use consistent exit codes (0 = success, non-zero = error)
 
 ### Configuration Integration
+
 Helpers are configured in `.claude/settings.json`:
+
 ```json
 {
   "helpers": {

@@ -20,6 +20,23 @@ use super::error::VectorError;
 use super::store::VectorStoreBackend;
 use super::types::{EmbeddingStatus, VectorCollection, VectorDocument, VectorId};
 
+/// Row tuple for ingestion checkpoint queries.
+type CheckpointRow = (String, String, String, i64, i64, i64, Option<String>);
+
+/// Row tuple for full ingestion checkpoint queries (with account_id, status, etc.).
+type FullCheckpointRow = (
+    String,
+    String,
+    String,
+    String,
+    String,
+    i64,
+    i64,
+    i64,
+    Option<String>,
+    Option<String>,
+);
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -146,6 +163,21 @@ struct PendingEmail {
     subject: String,
     from_addr: String,
     body_text: String,
+}
+
+/// Persisted checkpoint for resume-from-failure (audit item #26).
+#[derive(Debug, Clone, Serialize)]
+pub struct IngestionCheckpoint {
+    pub id: String,
+    pub batch_id: String,
+    pub account_id: String,
+    pub stage: String,
+    pub status: String,
+    pub total: u64,
+    pub processed: u64,
+    pub failed: u64,
+    pub last_processed_id: Option<String>,
+    pub error_msg: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -300,6 +332,141 @@ impl IngestionPipeline {
             emails_per_second: job.emails_per_second,
         })
     }
+
+    /// Resume a previously failed ingestion job from its last checkpoint
+    /// (audit item #26).
+    ///
+    /// Looks up the most recent incomplete checkpoint for the given account
+    /// and resumes processing from the last successfully processed email.
+    pub async fn resume_from_checkpoint(
+        &self,
+        account_id: &str,
+    ) -> Result<Option<String>, VectorError> {
+        // Find the most recent incomplete checkpoint for this account.
+        let checkpoint: Option<CheckpointRow> = sqlx::query_as(
+            r#"SELECT id, batch_id, stage, total, processed, failed, last_processed_id
+                   FROM ingestion_checkpoints
+                   WHERE account_id = ? AND status IN ('running', 'failed', 'paused')
+                   ORDER BY created_at DESC
+                   LIMIT 1"#,
+        )
+        .bind(account_id)
+        .fetch_optional(&self.db.pool)
+        .await
+        .map_err(VectorError::DatabaseError)?;
+
+        let Some((cp_id, batch_id, stage, total, processed, failed, last_id)) = checkpoint else {
+            return Ok(None);
+        };
+
+        info!(
+            batch_id = %batch_id,
+            stage = %stage,
+            processed = processed,
+            total = total,
+            last_id = ?last_id,
+            "Resuming ingestion from checkpoint"
+        );
+
+        // Update checkpoint status to running.
+        sqlx::query(
+            r#"UPDATE ingestion_checkpoints
+               SET status = 'running', updated_at = datetime('now')
+               WHERE id = ?"#,
+        )
+        .bind(&cp_id)
+        .execute(&self.db.pool)
+        .await
+        .map_err(VectorError::DatabaseError)?;
+
+        // Create a new job that picks up where we left off.
+        let mut state = self.state.write().await;
+        if let Some(ref job) = state.current_job {
+            if job.status == JobStatus::Running || job.status == JobStatus::Paused {
+                return Err(VectorError::IngestionError(
+                    "An ingestion job is already in progress".to_string(),
+                ));
+            }
+        }
+
+        let job = IngestionJob {
+            id: batch_id.clone(),
+            account_id: account_id.to_string(),
+            status: JobStatus::Running,
+            total: total as u64,
+            processed: processed as u64,
+            embedded: processed as u64,
+            categorized: 0,
+            failed: failed as u64,
+            phase: match stage.as_str() {
+                "embedding" => IngestionPhase::Embedding,
+                "categorizing" => IngestionPhase::Categorizing,
+                "clustering" => IngestionPhase::Clustering,
+                "analyzing" => IngestionPhase::Analyzing,
+                _ => IngestionPhase::Syncing,
+            },
+            started_at: Utc::now(),
+            completed_at: None,
+            emails_per_second: 0.0,
+        };
+        state.current_job = Some(job);
+        state.paused = false;
+        drop(state);
+
+        // Spawn background task with the resume offset.
+        let pipeline = IngestionPipelineHandle {
+            embedding: self.embedding.clone(),
+            store: self.store.clone(),
+            categorizer: self.categorizer.clone(),
+            db: self.db.clone(),
+            progress_tx: self.progress_tx.clone(),
+            state: self.state.clone(),
+            resume_notify: self.resume_notify.clone(),
+        };
+
+        let jid = batch_id.clone();
+        let aid = account_id.to_string();
+        let resume_after = last_id;
+        tokio::spawn(async move {
+            pipeline
+                .run_ingestion_with_resume(jid, aid, resume_after)
+                .await;
+        });
+
+        Ok(Some(batch_id))
+    }
+
+    /// Get the latest checkpoint for an account.
+    pub async fn get_checkpoint(
+        &self,
+        account_id: &str,
+    ) -> Result<Option<IngestionCheckpoint>, VectorError> {
+        let row: Option<FullCheckpointRow> = sqlx::query_as(
+            r#"SELECT id, batch_id, account_id, stage, status, total, processed, failed,
+                      last_processed_id, error_msg
+               FROM ingestion_checkpoints
+               WHERE account_id = ?
+               ORDER BY created_at DESC
+               LIMIT 1"#,
+        )
+        .bind(account_id)
+        .fetch_optional(&self.db.pool)
+        .await
+        .map_err(VectorError::DatabaseError)?;
+
+        Ok(row.map(|r| IngestionCheckpoint {
+            id: r.0,
+            batch_id: r.1,
+            account_id: r.2,
+            stage: r.3,
+            status: r.4,
+            total: r.5 as u64,
+            processed: r.6 as u64,
+            failed: r.7 as u64,
+            last_processed_id: r.8,
+            error_msg: r.9,
+        }))
+    }
 }
 
 /// Internal handle cloned into the background task. Keeps the same Arc
@@ -315,6 +482,63 @@ struct IngestionPipelineHandle {
 }
 
 impl IngestionPipelineHandle {
+    /// Run ingestion resuming after a specific email ID (checkpoint resume).
+    async fn run_ingestion_with_resume(
+        &self,
+        job_id: String,
+        account_id: String,
+        resume_after_id: Option<String>,
+    ) {
+        info!(
+            job_id = %job_id,
+            account_id = %account_id,
+            resume_after = ?resume_after_id,
+            "Resuming ingestion from checkpoint"
+        );
+
+        // Fetch pending emails, filtering to those after the checkpoint.
+        self.update_phase(IngestionPhase::Syncing).await;
+        let all_emails = match self.fetch_pending_emails(&account_id).await {
+            Ok(e) => e,
+            Err(err) => {
+                error!(job_id = %job_id, "Failed to fetch emails on resume: {err}");
+                self.mark_failed().await;
+                self.save_checkpoint(
+                    &job_id,
+                    &account_id,
+                    "syncing",
+                    "failed",
+                    None,
+                    Some(&err.to_string()),
+                )
+                .await;
+                return;
+            }
+        };
+
+        // Skip emails up to and including the last processed ID.
+        let emails: Vec<PendingEmail> = if let Some(ref last_id) = resume_after_id {
+            let mut found = false;
+            all_emails
+                .into_iter()
+                .filter(|e| {
+                    if found {
+                        return true;
+                    }
+                    if e.id == *last_id {
+                        found = true;
+                    }
+                    false
+                })
+                .collect()
+        } else {
+            all_emails
+        };
+
+        // Run the normal ingestion flow on the remaining emails.
+        self.run_ingestion_inner(job_id, account_id, emails).await;
+    }
+
     async fn run_ingestion(&self, job_id: String, account_id: String) {
         info!(job_id = %job_id, account_id = %account_id, "Starting ingestion");
 
@@ -325,10 +549,33 @@ impl IngestionPipelineHandle {
             Err(err) => {
                 error!(job_id = %job_id, "Failed to fetch emails: {err}");
                 self.mark_failed().await;
+                self.save_checkpoint(
+                    &job_id,
+                    &account_id,
+                    "syncing",
+                    "failed",
+                    None,
+                    Some(&err.to_string()),
+                )
+                .await;
                 return;
             }
         };
 
+        // Save initial checkpoint.
+        self.save_checkpoint(&job_id, &account_id, "syncing", "running", None, None)
+            .await;
+
+        self.run_ingestion_inner(job_id, account_id, emails).await;
+    }
+
+    /// Shared ingestion logic used by both fresh starts and checkpoint resumes.
+    async fn run_ingestion_inner(
+        &self,
+        job_id: String,
+        account_id: String,
+        emails: Vec<PendingEmail>,
+    ) {
         let total = emails.len() as u64;
         {
             let mut state = self.state.write().await;
@@ -342,6 +589,8 @@ impl IngestionPipelineHandle {
             info!(job_id = %job_id, "No pending emails, completing immediately");
             self.update_phase(IngestionPhase::Complete).await;
             self.mark_completed().await;
+            self.save_checkpoint(&job_id, &account_id, "complete", "completed", None, None)
+                .await;
             self.broadcast_progress(&job_id).await;
             return;
         }
@@ -352,10 +601,20 @@ impl IngestionPipelineHandle {
 
         let batch_size = 64;
         let start_time = std::time::Instant::now();
+        let mut last_processed_id: Option<String> = None;
 
         for chunk in emails.chunks(batch_size) {
             // Check pause
             if self.is_paused().await {
+                self.save_checkpoint(
+                    &job_id,
+                    &account_id,
+                    "embedding",
+                    "paused",
+                    last_processed_id.as_deref(),
+                    None,
+                )
+                .await;
                 self.broadcast_progress(&job_id).await;
                 self.wait_for_resume().await;
             }
@@ -423,6 +682,11 @@ impl IngestionPipelineHandle {
                             }
                         }
                     }
+
+                    // Track the last successfully processed email for checkpointing.
+                    if let Some(last_email) = chunk.last() {
+                        last_processed_id = Some(last_email.id.clone());
+                    }
                 }
                 Err(err) => {
                     warn!("Batch embedding failed: {err}");
@@ -431,14 +695,44 @@ impl IngestionPipelineHandle {
                         job.failed += chunk.len() as u64;
                         job.processed += chunk.len() as u64;
                     }
+
+                    // Save checkpoint on batch failure so we can resume.
+                    self.save_checkpoint(
+                        &job_id,
+                        &account_id,
+                        "embedding",
+                        "failed",
+                        last_processed_id.as_deref(),
+                        Some(&err.to_string()),
+                    )
+                    .await;
                 }
             }
 
+            // Periodic checkpoint save (every batch).
+            self.save_checkpoint(
+                &job_id,
+                &account_id,
+                "embedding",
+                "running",
+                last_processed_id.as_deref(),
+                None,
+            )
+            .await;
             self.broadcast_progress(&job_id).await;
         }
 
         // Phase 3: Categorize
         self.update_phase(IngestionPhase::Categorizing).await;
+        self.save_checkpoint(
+            &job_id,
+            &account_id,
+            "categorizing",
+            "running",
+            last_processed_id.as_deref(),
+            None,
+        )
+        .await;
         self.broadcast_progress(&job_id).await;
 
         for email in &emails {
@@ -488,6 +782,15 @@ impl IngestionPipelineHandle {
         // Complete
         self.update_phase(IngestionPhase::Complete).await;
         self.mark_completed().await;
+        self.save_checkpoint(
+            &job_id,
+            &account_id,
+            "complete",
+            "completed",
+            last_processed_id.as_deref(),
+            None,
+        )
+        .await;
         self.broadcast_progress(&job_id).await;
 
         info!(job_id = %job_id, "Ingestion complete");
@@ -598,6 +901,57 @@ impl IngestionPipelineHandle {
         if let Some(ref mut job) = state.current_job {
             job.status = JobStatus::Failed;
             job.completed_at = Some(Utc::now());
+        }
+    }
+
+    /// Persist checkpoint state to the database for resume-from-failure (item #26).
+    async fn save_checkpoint(
+        &self,
+        job_id: &str,
+        account_id: &str,
+        stage: &str,
+        status: &str,
+        last_processed_id: Option<&str>,
+        error_msg: Option<&str>,
+    ) {
+        let (total, processed, failed) = {
+            let state = self.state.read().await;
+            match &state.current_job {
+                Some(job) => (job.total as i64, job.processed as i64, job.failed as i64),
+                None => (0, 0, 0),
+            }
+        };
+
+        let checkpoint_id = format!("{}-{}", job_id, stage);
+        let result = sqlx::query(
+            r#"INSERT INTO ingestion_checkpoints (id, batch_id, account_id, stage, status, total, processed, failed, last_processed_id, error_msg, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+               ON CONFLICT(id) DO UPDATE SET
+                   stage = excluded.stage,
+                   status = excluded.status,
+                   total = excluded.total,
+                   processed = excluded.processed,
+                   failed = excluded.failed,
+                   last_processed_id = excluded.last_processed_id,
+                   error_msg = excluded.error_msg,
+                   updated_at = datetime('now')"#,
+        )
+        .bind(&checkpoint_id)
+        .bind(job_id)
+        .bind(account_id)
+        .bind(stage)
+        .bind(status)
+        .bind(total)
+        .bind(processed)
+        .bind(failed)
+        .bind(last_processed_id)
+        .bind(error_msg)
+        .execute(&self.db.pool)
+        .await;
+
+        if let Err(err) = result {
+            // Checkpoint save failures are non-fatal -- log and continue.
+            warn!(job_id = %job_id, error = %err, "Failed to save ingestion checkpoint");
         }
     }
 

@@ -1,11 +1,13 @@
 # Project Board Sync - GitHub Projects Integration
 
 ## Overview
+
 Synchronize AI swarms with GitHub Projects for visual task management, progress tracking, and team coordination.
 
 ## Core Features
 
 ### 1. Board Initialization
+
 ```bash
 # Connect swarm to GitHub Project using gh CLI
 # Get project details
@@ -26,6 +28,7 @@ gh project field-create $PROJECT_ID --owner @me \
 ```
 
 ### 2. Task Synchronization
+
 ```bash
 # Sync swarm tasks with project cards
 npx ruv-swarm github board-sync \
@@ -40,6 +43,7 @@ npx ruv-swarm github board-sync \
 ```
 
 ### 3. Real-time Updates
+
 ```bash
 # Enable real-time board updates
 npx ruv-swarm github board-realtime \
@@ -51,52 +55,54 @@ npx ruv-swarm github board-realtime \
 ## Configuration
 
 ### Board Mapping Configuration
+
 ```yaml
 # .github/board-sync.yml
 version: 1
 project:
-  name: "AI Development Board"
+  name: 'AI Development Board'
   number: 1
-  
+
 mapping:
   # Map swarm task status to board columns
   status:
-    pending: "Backlog"
-    assigned: "Ready"
-    in_progress: "In Progress"
-    review: "Review"
-    completed: "Done"
-    blocked: "Blocked"
-    
+    pending: 'Backlog'
+    assigned: 'Ready'
+    in_progress: 'In Progress'
+    review: 'Review'
+    completed: 'Done'
+    blocked: 'Blocked'
+
   # Map agent types to labels
   agents:
-    coder: "🔧 Development"
-    tester: "🧪 Testing"
-    analyst: "📊 Analysis"
-    designer: "🎨 Design"
-    architect: "🏗️ Architecture"
-    
+    coder: '🔧 Development'
+    tester: '🧪 Testing'
+    analyst: '📊 Analysis'
+    designer: '🎨 Design'
+    architect: '🏗️ Architecture'
+
   # Map priority to project fields
   priority:
-    critical: "🔴 Critical"
-    high: "🟡 High"
-    medium: "🟢 Medium"
-    low: "⚪ Low"
-    
+    critical: '🔴 Critical'
+    high: '🟡 High'
+    medium: '🟢 Medium'
+    low: '⚪ Low'
+
   # Custom fields
   fields:
-    - name: "Agent Count"
+    - name: 'Agent Count'
       type: number
       source: task.agents.length
-    - name: "Complexity"
+    - name: 'Complexity'
       type: select
       source: task.complexity
-    - name: "ETA"
+    - name: 'ETA'
       type: date
       source: task.estimatedCompletion
 ```
 
 ### View Configuration
+
 ```javascript
 // Custom board views
 {
@@ -128,6 +134,7 @@ mapping:
 ## Automation Features
 
 ### 1. Auto-Assignment
+
 ```bash
 # Automatically assign cards to agents
 npx ruv-swarm github board-auto-assign \
@@ -137,6 +144,7 @@ npx ruv-swarm github board-auto-assign \
 ```
 
 ### 2. Progress Tracking
+
 ```bash
 # Track and visualize progress
 npx ruv-swarm github board-progress \
@@ -146,6 +154,7 @@ npx ruv-swarm github board-progress \
 ```
 
 ### 3. Smart Card Movement
+
 ```bash
 # Intelligent card state transitions
 npx ruv-swarm github board-smart-move \
@@ -159,6 +168,7 @@ npx ruv-swarm github board-smart-move \
 ## Board Commands
 
 ### Create Cards from Issues
+
 ```bash
 # Convert issues to project cards using gh CLI
 # List issues with label
@@ -178,6 +188,7 @@ npx ruv-swarm github board-import-issues \
 ```
 
 ### Bulk Operations
+
 ```bash
 # Bulk card operations
 npx ruv-swarm github board-bulk \
@@ -187,6 +198,7 @@ npx ruv-swarm github board-bulk \
 ```
 
 ### Card Templates
+
 ```bash
 # Create cards from templates
 npx ruv-swarm github board-template \
@@ -202,6 +214,7 @@ npx ruv-swarm github board-template \
 ## Advanced Synchronization
 
 ### 1. Multi-Board Sync
+
 ```bash
 # Sync across multiple boards
 npx ruv-swarm github multi-board-sync \
@@ -213,6 +226,7 @@ npx ruv-swarm github multi-board-sync \
 ```
 
 ### 2. Cross-Organization Sync
+
 ```bash
 # Sync boards across organizations
 npx ruv-swarm github cross-org-sync \
@@ -223,6 +237,7 @@ npx ruv-swarm github cross-org-sync \
 ```
 
 ### 3. External Tool Integration
+
 ```bash
 # Sync with external tools
 npx ruv-swarm github board-integrate \
@@ -235,6 +250,7 @@ npx ruv-swarm github board-integrate \
 ## Visualization & Reporting
 
 ### Board Analytics
+
 ```bash
 # Generate board analytics using gh CLI data
 # Fetch project data
@@ -258,6 +274,7 @@ npx ruv-swarm github board-analytics \
 ```
 
 ### Custom Dashboards
+
 ```javascript
 // Dashboard configuration
 {
@@ -286,6 +303,7 @@ npx ruv-swarm github board-analytics \
 ```
 
 ### Reports
+
 ```bash
 # Generate reports
 npx ruv-swarm github board-report \
@@ -298,6 +316,7 @@ npx ruv-swarm github board-report \
 ## Workflow Integration
 
 ### Sprint Management
+
 ```bash
 # Manage sprints with swarms
 npx ruv-swarm github sprint-manage \
@@ -308,6 +327,7 @@ npx ruv-swarm github sprint-manage \
 ```
 
 ### Milestone Tracking
+
 ```bash
 # Track milestone progress
 npx ruv-swarm github milestone-track \
@@ -318,6 +338,7 @@ npx ruv-swarm github milestone-track \
 ```
 
 ### Release Planning
+
 ```bash
 # Plan releases using board data
 npx ruv-swarm github release-plan-board \
@@ -330,6 +351,7 @@ npx ruv-swarm github release-plan-board \
 ## Team Collaboration
 
 ### Work Distribution
+
 ```bash
 # Distribute work among team
 npx ruv-swarm github board-distribute \
@@ -340,6 +362,7 @@ npx ruv-swarm github board-distribute \
 ```
 
 ### Standup Automation
+
 ```bash
 # Generate standup reports
 npx ruv-swarm github standup-report \
@@ -350,6 +373,7 @@ npx ruv-swarm github standup-report \
 ```
 
 ### Review Coordination
+
 ```bash
 # Coordinate reviews via board
 npx ruv-swarm github review-coordinate \
@@ -362,18 +386,21 @@ npx ruv-swarm github review-coordinate \
 ## Best Practices
 
 ### 1. Board Organization
+
 - Clear column definitions
 - Consistent labeling system
 - Regular board grooming
 - Automation rules
 
 ### 2. Data Integrity
+
 - Bidirectional sync validation
 - Conflict resolution strategies
 - Audit trails
 - Regular backups
 
 ### 3. Team Adoption
+
 - Training materials
 - Clear workflows
 - Regular reviews
@@ -382,6 +409,7 @@ npx ruv-swarm github review-coordinate \
 ## Troubleshooting
 
 ### Sync Issues
+
 ```bash
 # Diagnose sync problems
 npx ruv-swarm github board-diagnose \
@@ -391,6 +419,7 @@ npx ruv-swarm github board-diagnose \
 ```
 
 ### Performance
+
 ```bash
 # Optimize board performance
 npx ruv-swarm github board-optimize \
@@ -401,6 +430,7 @@ npx ruv-swarm github board-optimize \
 ```
 
 ### Data Recovery
+
 ```bash
 # Recover board data
 npx ruv-swarm github board-recover \
@@ -413,6 +443,7 @@ npx ruv-swarm github board-recover \
 ## Examples
 
 ### Agile Development Board
+
 ```bash
 # Setup agile board
 npx ruv-swarm github agile-board \
@@ -423,6 +454,7 @@ npx ruv-swarm github agile-board \
 ```
 
 ### Kanban Flow Board
+
 ```bash
 # Setup kanban board
 npx ruv-swarm github kanban-board \
@@ -435,6 +467,7 @@ npx ruv-swarm github kanban-board \
 ```
 
 ### Research Project Board
+
 ```bash
 # Setup research board
 npx ruv-swarm github research-board \
@@ -446,6 +479,7 @@ npx ruv-swarm github research-board \
 ## Metrics & KPIs
 
 ### Performance Metrics
+
 ```bash
 # Track board performance
 npx ruv-swarm github board-kpis \
@@ -459,6 +493,7 @@ npx ruv-swarm github board-kpis \
 ```
 
 ### Team Metrics
+
 ```bash
 # Track team performance
 npx ruv-swarm github team-metrics \

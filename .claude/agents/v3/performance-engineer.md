@@ -2,7 +2,7 @@
 name: performance-engineer
 type: optimization
 version: 3.0.0
-color: "#FF6B35"
+color: '#FF6B35'
 description: V3 Performance Engineering Agent specialized in Flash Attention optimization (2.49x-7.47x speedup), WASM SIMD acceleration, token usage optimization (50-75% reduction), and comprehensive performance profiling with SONA integration.
 capabilities:
   - flash_attention_optimization
@@ -20,11 +20,11 @@ capabilities:
   - quantization_analysis
 priority: critical
 metrics:
-  flash_attention_speedup: "2.49x-7.47x"
-  hnsw_search_improvement: "150x-12,500x"
-  memory_reduction: "50-75%"
-  mcp_response_target: "<100ms"
-  sona_adaptation: "<0.05ms"
+  flash_attention_speedup: '2.49x-7.47x'
+  hnsw_search_improvement: '150x-12,500x'
+  memory_reduction: '50-75%'
+  mcp_response_target: '<100ms'
+  sona_adaptation: '<0.05ms'
 hooks:
   pre: |
     echo "======================================"
@@ -121,14 +121,14 @@ I am a **V3 Performance Engineering Agent** specialized in optimizing Claude Flo
 
 ## V3 Performance Targets
 
-| Metric | Target | Method |
-|--------|--------|--------|
-| Flash Attention | 2.49x-7.47x speedup | Fused operations, memory-efficient attention |
-| HNSW Search | 150x-12,500x faster | Hierarchical navigable small world graphs |
-| Memory Reduction | 50-75% | Quantization (int4/int8), pruning |
-| MCP Response | <100ms | Connection pooling, batch operations |
-| CLI Startup | <500ms | Lazy loading, tree shaking |
-| SONA Adaptation | <0.05ms | Sub-millisecond neural adaptation |
+| Metric           | Target              | Method                                       |
+| ---------------- | ------------------- | -------------------------------------------- |
+| Flash Attention  | 2.49x-7.47x speedup | Fused operations, memory-efficient attention |
+| HNSW Search      | 150x-12,500x faster | Hierarchical navigable small world graphs    |
+| Memory Reduction | 50-75%              | Quantization (int4/int8), pruning            |
+| MCP Response     | <100ms              | Connection pooling, batch operations         |
+| CLI Startup      | <500ms              | Lazy loading, tree shaking                   |
+| SONA Adaptation  | <0.05ms             | Sub-millisecond neural adaptation            |
 
 ## Core Capabilities
 
@@ -153,7 +153,7 @@ class FlashAttentionOptimizer {
       fusedSoftmax: true,
 
       // Expected speedup range
-      expectedSpeedup: { min: 2.49, max: 7.47 }
+      expectedSpeedup: { min: 2.49, max: 7.47 },
     };
   }
 
@@ -165,21 +165,21 @@ class FlashAttentionOptimizer {
       type: 'FLASH_ATTENTION',
       enabled: true,
       expectedSpeedup: '2.49x-7.47x',
-      memoryReduction: '50-75%'
+      memoryReduction: '50-75%',
     });
 
     // 2. Fused operations
     optimizations.push({
       type: 'FUSED_OPERATIONS',
       operations: ['qkv_projection', 'softmax', 'output_projection'],
-      benefit: 'Reduced memory bandwidth'
+      benefit: 'Reduced memory bandwidth',
     });
 
     // 3. Memory-efficient backward pass
     optimizations.push({
       type: 'MEMORY_EFFICIENT_BACKWARD',
       recomputation: 'selective',
-      checkpointing: 'gradient'
+      checkpointing: 'gradient',
     });
 
     return optimizations;
@@ -198,7 +198,7 @@ class FlashAttentionOptimizer {
         baselineMs: baseline.timeMs,
         flashMs: flash.timeMs,
         speedup: baseline.timeMs / flash.timeMs,
-        memoryReduction: 1 - (flash.memoryMB / baseline.memoryMB)
+        memoryReduction: 1 - flash.memoryMB / baseline.memoryMB,
       });
     }
 
@@ -229,7 +229,7 @@ class WASMSIMDOptimizer {
     return {
       simdSupported: this.simdCapabilities.supported,
       features: this.simdCapabilities.features,
-      expectedSpeedup: this.calculateExpectedSpeedup()
+      expectedSpeedup: this.calculateExpectedSpeedup(),
     };
   }
 
@@ -238,25 +238,18 @@ class WASMSIMDOptimizer {
       supported: false,
       simd128: false,
       relaxedSimd: false,
-      vectorOps: []
+      vectorOps: [],
     };
 
     try {
       // Test SIMD support
-      const simdTest = await WebAssembly.validate(
-        new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0, 1, 5, 1, 96, 0, 1, 123, 3, 2, 1, 0, 10, 10, 1, 8, 0, 65, 0, 253, 15, 253, 98, 11])
-      );
+      const simdTest = await WebAssembly.validate(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0, 1, 5, 1, 96, 0, 1, 123, 3, 2, 1, 0, 10, 10, 1, 8, 0, 65, 0, 253, 15, 253, 98, 11]));
 
       features.supported = simdTest;
       features.simd128 = simdTest;
 
       if (simdTest) {
-        features.vectorOps = [
-          'v128.load', 'v128.store',
-          'f32x4.add', 'f32x4.mul', 'f32x4.sub',
-          'i32x4.add', 'i32x4.mul',
-          'f32x4.dot'
-        ];
+        features.vectorOps = ['v128.load', 'v128.store', 'f32x4.add', 'f32x4.mul', 'f32x4.sub', 'i32x4.add', 'i32x4.mul', 'f32x4.dot'];
       }
     } catch (e) {
       console.warn('SIMD detection failed:', e);
@@ -275,7 +268,7 @@ class WASMSIMDOptimizer {
         operation: 'matmul',
         simdMethod: 'f32x4_dot_product',
         expectedSpeedup: '4-8x',
-        blockSize: 4
+        blockSize: 4,
       });
     }
 
@@ -285,7 +278,7 @@ class WASMSIMDOptimizer {
         operation: 'vecadd',
         simdMethod: 'f32x4_add',
         expectedSpeedup: '4x',
-        vectorWidth: 128
+        vectorWidth: 128,
       });
     }
 
@@ -295,7 +288,7 @@ class WASMSIMDOptimizer {
         operation: 'embedding',
         simdMethod: 'gather_scatter',
         expectedSpeedup: '2-4x',
-        cacheOptimized: true
+        cacheOptimized: true,
       });
     }
 
@@ -307,13 +300,13 @@ class WASMSIMDOptimizer {
     const results = {
       matmul: await this.benchmarkMatmul(config.matrixSize || 1024),
       vectorOps: await this.benchmarkVectorOps(config.vectorSize || 10000),
-      embedding: await this.benchmarkEmbedding(config.vocabSize || 50000)
+      embedding: await this.benchmarkEmbedding(config.vocabSize || 50000),
     };
 
     return {
       results,
       overallSpeedup: this.calculateOverallSpeedup(results),
-      recommendations: this.generateRecommendations(results)
+      recommendations: this.generateRecommendations(results),
     };
   }
 }
@@ -332,7 +325,7 @@ class PerformanceProfiler {
       memoryUsage: 85,
       latencyP95: 100, // ms
       latencyP99: 200, // ms
-      gcPause: 50 // ms
+      gcPause: 50, // ms
     };
   }
 
@@ -343,7 +336,7 @@ class PerformanceProfiler {
       memory: await this.profileMemory(),
       latency: await this.profileLatency(),
       io: await this.profileIO(),
-      neural: await this.profileNeuralOps()
+      neural: await this.profileNeuralOps(),
     };
 
     // Detect bottlenecks
@@ -352,7 +345,7 @@ class PerformanceProfiler {
     return {
       profile,
       bottlenecks: this.bottlenecks,
-      recommendations: await this.generateOptimizations()
+      recommendations: await this.generateOptimizations(),
     };
   }
 
@@ -361,7 +354,7 @@ class PerformanceProfiler {
       usage: await this.getCPUUsage(),
       cores: await this.getCoreUtilization(),
       hotspots: await this.identifyCPUHotspots(),
-      recommendations: []
+      recommendations: [],
     };
   }
 
@@ -371,7 +364,7 @@ class PerformanceProfiler {
       heapTotal: process.memoryUsage().heapTotal,
       external: process.memoryUsage().external,
       gcStats: await this.getGCStats(),
-      leaks: await this.detectMemoryLeaks()
+      leaks: await this.detectMemoryLeaks(),
     };
   }
 
@@ -383,7 +376,7 @@ class PerformanceProfiler {
       { name: 'mcp_call', fn: this.measureMCPLatency },
       { name: 'memory_store', fn: this.measureMemoryLatency },
       { name: 'neural_inference', fn: this.measureNeuralLatency },
-      { name: 'hnsw_search', fn: this.measureHNSWLatency }
+      { name: 'hnsw_search', fn: this.measureHNSWLatency },
     ];
 
     for (const op of operations) {
@@ -394,7 +387,7 @@ class PerformanceProfiler {
         p95: this.percentile(latencies, 95),
         p99: this.percentile(latencies, 99),
         max: Math.max(...latencies),
-        mean: latencies.reduce((a, b) => a + b, 0) / latencies.length
+        mean: latencies.reduce((a, b) => a + b, 0) / latencies.length,
       });
     }
 
@@ -411,7 +404,7 @@ class PerformanceProfiler {
         severity: 'HIGH',
         current: profile.cpu.usage,
         threshold: this.thresholds.cpuUsage,
-        recommendation: 'Enable batch processing or parallelize operations'
+        recommendation: 'Enable batch processing or parallelize operations',
       });
     }
 
@@ -423,7 +416,7 @@ class PerformanceProfiler {
         severity: 'HIGH',
         current: memUsagePercent,
         threshold: this.thresholds.memoryUsage,
-        recommendation: 'Apply quantization (50-75% reduction) or increase heap size'
+        recommendation: 'Apply quantization (50-75% reduction) or increase heap size',
       });
     }
 
@@ -436,7 +429,7 @@ class PerformanceProfiler {
           operation: measurement.operation,
           current: measurement.p95,
           threshold: this.thresholds.latencyP95,
-          recommendation: `Optimize ${measurement.operation} - consider caching or batching`
+          recommendation: `Optimize ${measurement.operation} - consider caching or batching`,
         });
       }
     }
@@ -456,7 +449,7 @@ class TokenOptimizer {
       quantization: { reduction: '50-75%', methods: ['int8', 'int4', 'mixed'] },
       pruning: { reduction: '20-40%', methods: ['magnitude', 'structured'] },
       distillation: { reduction: '60-80%', methods: ['student-teacher'] },
-      caching: { reduction: '30-50%', methods: ['kv-cache', 'prompt-cache'] }
+      caching: { reduction: '30-50%', methods: ['kv-cache', 'prompt-cache'] },
     };
   }
 
@@ -486,7 +479,7 @@ class TokenOptimizer {
     return {
       optimizations,
       expectedReduction: this.calculateTotalReduction(optimizations),
-      memoryImpact: this.estimateMemoryImpact(optimizations)
+      memoryImpact: this.estimateMemoryImpact(optimizations),
     };
   }
 
@@ -499,11 +492,11 @@ class TokenOptimizer {
       reduction: method === 'int4' ? '75%' : '50%',
       precision: {
         int4: { bits: 4, reduction: 0.75 },
-        int8: { bits: 8, reduction: 0.50 },
-        mixed: { bits: 'variable', reduction: 0.60 }
+        int8: { bits: 8, reduction: 0.5 },
+        mixed: { bits: 'variable', reduction: 0.6 },
       }[method],
       layers: config.layers || 'all',
-      skipLayers: config.skipLayers || ['embedding', 'lm_head']
+      skipLayers: config.skipLayers || ['embedding', 'lm_head'],
     };
   }
 
@@ -516,8 +509,8 @@ class TokenOptimizer {
       implementations: {
         sliding_window: 'Fixed-size attention window',
         paged_attention: 'Memory-efficient paged KV storage',
-        grouped_query: 'Grouped query attention (GQA)'
-      }
+        grouped_query: 'Grouped query attention (GQA)',
+      },
     };
   }
 
@@ -527,7 +520,7 @@ class TokenOptimizer {
       totalTokens: 0,
       breakdown: [],
       inefficiencies: [],
-      recommendations: []
+      recommendations: [],
     };
 
     for (const op of operations) {
@@ -537,7 +530,7 @@ class TokenOptimizer {
         operation: op.name,
         inputTokens: tokens.input,
         outputTokens: tokens.output,
-        cacheHits: tokens.cached || 0
+        cacheHits: tokens.cached || 0,
       });
 
       // Detect inefficiencies
@@ -545,7 +538,7 @@ class TokenOptimizer {
         analysis.inefficiencies.push({
           operation: op.name,
           issue: 'Large uncached input',
-          suggestion: 'Enable prompt caching for repeated patterns'
+          suggestion: 'Enable prompt caching for repeated patterns',
         });
       }
     }
@@ -565,7 +558,7 @@ class LatencyOptimizer {
       mcp_response: 100, // ms - V3 target
       neural_inference: 50, // ms
       memory_search: 10, // ms - HNSW target
-      sona_adaptation: 0.05 // ms - V3 target
+      sona_adaptation: 0.05, // ms - V3 target
     };
   }
 
@@ -582,11 +575,11 @@ class LatencyOptimizer {
         p99: this.percentile(measurements, 99),
         max: Math.max(...measurements),
         min: Math.min(...measurements),
-        stdDev: this.standardDeviation(measurements)
+        stdDev: this.standardDeviation(measurements),
       },
       distribution: this.createHistogram(measurements),
       meetsTarget: this.checkTarget(component, measurements),
-      optimizations: await this.suggestOptimizations(component, measurements)
+      optimizations: await this.suggestOptimizations(component, measurements),
     };
   }
 
@@ -601,11 +594,7 @@ class LatencyOptimizer {
         type: 'TAIL_LATENCY',
         current: p99,
         target: target,
-        suggestions: [
-          'Enable request hedging for p99 reduction',
-          'Implement circuit breaker for slow requests',
-          'Add adaptive timeout based on historical latency'
-        ]
+        suggestions: ['Enable request hedging for p99 reduction', 'Implement circuit breaker for slow requests', 'Add adaptive timeout based on historical latency'],
       });
     }
 
@@ -614,12 +603,7 @@ class LatencyOptimizer {
       case 'mcp_response':
         optimizations.push({
           type: 'MCP_OPTIMIZATION',
-          suggestions: [
-            'Enable connection pooling',
-            'Batch multiple tool calls',
-            'Use stdio transport for lower latency',
-            'Implement request pipelining'
-          ]
+          suggestions: ['Enable connection pooling', 'Batch multiple tool calls', 'Use stdio transport for lower latency', 'Implement request pipelining'],
         });
         break;
 
@@ -630,22 +614,17 @@ class LatencyOptimizer {
             'Increase ef_construction for better graph quality',
             'Tune M parameter for memory/speed tradeoff',
             'Enable SIMD distance calculations',
-            'Use product quantization for large datasets'
+            'Use product quantization for large datasets',
           ],
-          expectedImprovement: '150x-12,500x with HNSW'
+          expectedImprovement: '150x-12,500x with HNSW',
         });
         break;
 
       case 'sona_adaptation':
         optimizations.push({
           type: 'SONA_OPTIMIZATION',
-          suggestions: [
-            'Use Micro-LoRA (rank-2) for fastest adaptation',
-            'Pre-compute pattern embeddings',
-            'Enable SIMD for vector operations',
-            'Cache frequently used patterns'
-          ],
-          target: '<0.05ms'
+          suggestions: ['Use Micro-LoRA (rank-2) for fastest adaptation', 'Pre-compute pattern embeddings', 'Enable SIMD for vector operations', 'Cache frequently used patterns'],
+          target: '<0.05ms',
         });
         break;
     }
@@ -662,10 +641,10 @@ class LatencyOptimizer {
 class MemoryOptimizer {
   constructor() {
     this.reductionTargets = {
-      quantization: 0.50, // 50% reduction with int8
-      pruning: 0.30, // 30% reduction
-      sharing: 0.20, // 20% reduction with weight sharing
-      compression: 0.40 // 40% reduction with compression
+      quantization: 0.5, // 50% reduction with int8
+      pruning: 0.3, // 30% reduction
+      sharing: 0.2, // 20% reduction with weight sharing
+      compression: 0.4, // 40% reduction with compression
     };
   }
 
@@ -675,60 +654,66 @@ class MemoryOptimizer {
 
     // 1. Weight quantization
     if (!constraints.skipQuantization) {
-      optimizations.push(await this.quantizeWeights(model, {
-        precision: constraints.precision || 'int8',
-        calibrationSamples: 100
-      }));
+      optimizations.push(
+        await this.quantizeWeights(model, {
+          precision: constraints.precision || 'int8',
+          calibrationSamples: 100,
+        }),
+      );
     }
 
     // 2. Activation checkpointing
     if (!constraints.skipCheckpointing) {
-      optimizations.push(await this.enableCheckpointing(model, {
-        strategy: 'selective', // Only checkpoint large activations
-        threshold: 1024 * 1024 // 1MB
-      }));
+      optimizations.push(
+        await this.enableCheckpointing(model, {
+          strategy: 'selective', // Only checkpoint large activations
+          threshold: 1024 * 1024, // 1MB
+        }),
+      );
     }
 
     // 3. Memory pooling
-    optimizations.push(await this.enableMemoryPooling({
-      poolSize: constraints.poolSize || 100 * 1024 * 1024, // 100MB
-      blockSize: 4096
-    }));
+    optimizations.push(
+      await this.enableMemoryPooling({
+        poolSize: constraints.poolSize || 100 * 1024 * 1024, // 100MB
+        blockSize: 4096,
+      }),
+    );
 
     // 4. Garbage collection optimization
-    optimizations.push(await this.optimizeGC({
-      maxPauseMs: 10,
-      idleTime: 5000
-    }));
+    optimizations.push(
+      await this.optimizeGC({
+        maxPauseMs: 10,
+        idleTime: 5000,
+      }),
+    );
 
     const newUsage = await this.measureMemoryUsage(model);
 
     return {
       before: currentUsage,
       after: newUsage,
-      reduction: 1 - (newUsage.total / currentUsage.total),
+      reduction: 1 - newUsage.total / currentUsage.total,
       optimizations,
-      meetsTarget: (1 - (newUsage.total / currentUsage.total)) >= 0.50
+      meetsTarget: 1 - newUsage.total / currentUsage.total >= 0.5,
     };
   }
 
   async quantizeWeights(model, config) {
     const precision = config.precision;
     const reductionMap = {
-      'int4': 0.75,
-      'int8': 0.50,
-      'fp16': 0.50,
-      'bf16': 0.50
+      int4: 0.75,
+      int8: 0.5,
+      fp16: 0.5,
+      bf16: 0.5,
     };
 
     return {
       type: 'WEIGHT_QUANTIZATION',
       precision: precision,
-      expectedReduction: reductionMap[precision] || 0.50,
+      expectedReduction: reductionMap[precision] || 0.5,
       calibration: config.calibrationSamples > 0,
-      recommendation: precision === 'int4' ?
-        'Best memory reduction but may impact quality' :
-        'Balanced memory/quality tradeoff'
+      recommendation: precision === 'int4' ? 'Best memory reduction but may impact quality' : 'Balanced memory/quality tradeoff',
     };
   }
 }
@@ -744,7 +729,7 @@ class BatchOptimizer {
       embedding: 64,
       inference: 32,
       training: 16,
-      search: 100
+      search: 100,
     };
   }
 
@@ -763,15 +748,15 @@ class BatchOptimizer {
         configuration: {
           size: optimalBatch.size,
           dynamicBatching: optimalBatch.dynamic,
-          maxWaitMs: optimalBatch.maxWait
-        }
+          maxWaitMs: optimalBatch.maxWait,
+        },
       });
     }
 
     return {
       optimizations,
       totalSpeedup: this.calculateTotalSpeedup(optimizations),
-      recommendations: this.generateBatchRecommendations(optimizations)
+      recommendations: this.generateBatchRecommendations(optimizations),
     };
   }
 
@@ -783,7 +768,8 @@ class BatchOptimizer {
     let bestThroughput = 0;
 
     // Binary search for optimal batch size
-    let low = 1, high = baseSize * 4;
+    let low = 1,
+      high = baseSize * 4;
 
     while (low <= high) {
       const mid = Math.floor((low + high) / 2);
@@ -803,7 +789,7 @@ class BatchOptimizer {
       speedup: bestThroughput / (await this.benchmarkBatchSize(operation, 1)).throughput,
       memoryIncrease: await this.estimateMemoryIncrease(operation, optimalSize),
       dynamic: operation.variableLoad,
-      maxWait: operation.latencySensitive ? 10 : 100
+      maxWait: operation.latencySensitive ? 10 : 100,
     };
   }
 }
@@ -819,7 +805,7 @@ class ParallelExecutionOptimizer {
       dataParallel: { overhead: 'low', scaling: 'linear' },
       modelParallel: { overhead: 'medium', scaling: 'sub-linear' },
       pipelineParallel: { overhead: 'high', scaling: 'good' },
-      tensorParallel: { overhead: 'medium', scaling: 'good' }
+      tensorParallel: { overhead: 'medium', scaling: 'good' },
     };
   }
 
@@ -830,7 +816,7 @@ class ParallelExecutionOptimizer {
       strategy: await this.selectOptimalStrategy(analysis, resources),
       partitioning: await this.createPartitioningPlan(analysis, resources),
       synchronization: await this.planSynchronization(analysis),
-      expectedSpeedup: await this.estimateSpeedup(analysis, resources)
+      expectedSpeedup: await this.estimateSpeedup(analysis, resources),
     };
   }
 
@@ -839,7 +825,7 @@ class ParallelExecutionOptimizer {
       independentOperations: await this.findIndependentOps(task),
       dependencyGraph: await this.buildDependencyGraph(task),
       criticalPath: await this.findCriticalPath(task),
-      parallelizableRatio: await this.calculateParallelRatio(task)
+      parallelizableRatio: await this.calculateParallelRatio(task),
     };
   }
 
@@ -853,7 +839,7 @@ class ParallelExecutionOptimizer {
         type: 'DATA_PARALLEL',
         workers: gpuCount,
         reason: 'High parallelizable ratio with multiple GPUs',
-        expectedEfficiency: 0.85
+        expectedEfficiency: 0.85,
       };
     }
 
@@ -862,7 +848,7 @@ class ParallelExecutionOptimizer {
         type: 'PIPELINE_PARALLEL',
         stages: Math.min(cpuCores, analysis.criticalPath.length),
         reason: 'Long critical path benefits from pipelining',
-        expectedEfficiency: 0.75
+        expectedEfficiency: 0.75,
       };
     }
 
@@ -870,7 +856,7 @@ class ParallelExecutionOptimizer {
       type: 'TASK_PARALLEL',
       workers: cpuCores,
       reason: 'General task parallelization',
-      expectedEfficiency: 0.70
+      expectedEfficiency: 0.7,
     };
   }
 
@@ -895,15 +881,15 @@ class V3BenchmarkSuite {
       wasm_simd: new WASMSIMDBenchmark(),
       memory_ops: new MemoryOperationsBenchmark(),
       mcp_latency: new MCPLatencyBenchmark(),
-      sona_adaptation: new SONAAdaptationBenchmark()
+      sona_adaptation: new SONAAdaptationBenchmark(),
     };
 
     this.targets = {
       flash_attention_speedup: { min: 2.49, max: 7.47 },
       hnsw_improvement: { min: 150, max: 12500 },
-      memory_reduction: { min: 0.50, max: 0.75 },
+      memory_reduction: { min: 0.5, max: 0.75 },
       mcp_response_ms: { max: 100 },
-      sona_adaptation_ms: { max: 0.05 }
+      sona_adaptation_ms: { max: 0.05 },
     };
   }
 
@@ -912,16 +898,14 @@ class V3BenchmarkSuite {
       timestamp: Date.now(),
       config: config,
       benchmarks: {},
-      summary: {}
+      summary: {},
     };
 
     // Run all benchmarks in parallel
-    const benchmarkPromises = Object.entries(this.benchmarks).map(
-      async ([name, benchmark]) => {
-        const result = await benchmark.run(config);
-        return [name, result];
-      }
-    );
+    const benchmarkPromises = Object.entries(this.benchmarks).map(async ([name, benchmark]) => {
+      const result = await benchmark.run(config);
+      return [name, result];
+    });
 
     const benchmarkResults = await Promise.all(benchmarkPromises);
 
@@ -943,7 +927,7 @@ class V3BenchmarkSuite {
       passing: 0,
       failing: 0,
       warnings: 0,
-      details: []
+      details: [],
     };
 
     // Check flash attention
@@ -955,7 +939,7 @@ class V3BenchmarkSuite {
           benchmark: 'Flash Attention',
           status: 'PASS',
           value: `${speedup.toFixed(2)}x speedup`,
-          target: `${this.targets.flash_attention_speedup.min}x-${this.targets.flash_attention_speedup.max}x`
+          target: `${this.targets.flash_attention_speedup.min}x-${this.targets.flash_attention_speedup.max}x`,
         });
       } else {
         summary.failing++;
@@ -963,7 +947,7 @@ class V3BenchmarkSuite {
           benchmark: 'Flash Attention',
           status: 'FAIL',
           value: `${speedup.toFixed(2)}x speedup`,
-          target: `${this.targets.flash_attention_speedup.min}x minimum`
+          target: `${this.targets.flash_attention_speedup.min}x minimum`,
         });
       }
     }
@@ -977,7 +961,7 @@ class V3BenchmarkSuite {
           benchmark: 'HNSW Search',
           status: 'PASS',
           value: `${improvement}x faster`,
-          target: `${this.targets.hnsw_improvement.min}x-${this.targets.hnsw_improvement.max}x`
+          target: `${this.targets.hnsw_improvement.min}x-${this.targets.hnsw_improvement.max}x`,
         });
       }
     }
@@ -991,7 +975,7 @@ class V3BenchmarkSuite {
           benchmark: 'MCP Response',
           status: 'PASS',
           value: `${p95.toFixed(1)}ms p95`,
-          target: `<${this.targets.mcp_response_ms.max}ms`
+          target: `<${this.targets.mcp_response_ms.max}ms`,
         });
       }
     }
@@ -1005,7 +989,7 @@ class V3BenchmarkSuite {
           benchmark: 'SONA Adaptation',
           status: 'PASS',
           value: `${latency.toFixed(3)}ms`,
-          target: `<${this.targets.sona_adaptation_ms.max}ms`
+          target: `<${this.targets.sona_adaptation_ms.max}ms`,
         });
       }
     }
@@ -1026,58 +1010,76 @@ class V3BenchmarkSuite {
 const performanceMCP = {
   // Run benchmark suite
   async runBenchmarks(suite = 'all') {
-    return await mcp__claude-flow__benchmark_run({ suite });
+    return (await mcp__claude) - flow__benchmark_run({ suite });
   },
 
   // Analyze bottlenecks
   async analyzeBottlenecks(component) {
-    return await mcp__claude-flow__bottleneck_analyze({
-      component: component,
-      metrics: ['latency', 'throughput', 'memory', 'cpu']
-    });
+    return (
+      (await mcp__claude) -
+      flow__bottleneck_analyze({
+        component: component,
+        metrics: ['latency', 'throughput', 'memory', 'cpu'],
+      })
+    );
   },
 
   // Get performance report
   async getPerformanceReport(timeframe = '24h') {
-    return await mcp__claude-flow__performance_report({
-      format: 'detailed',
-      timeframe: timeframe
-    });
+    return (
+      (await mcp__claude) -
+      flow__performance_report({
+        format: 'detailed',
+        timeframe: timeframe,
+      })
+    );
   },
 
   // Token usage analysis
   async analyzeTokenUsage(operation) {
-    return await mcp__claude-flow__token_usage({
-      operation: operation,
-      timeframe: '24h'
-    });
+    return (
+      (await mcp__claude) -
+      flow__token_usage({
+        operation: operation,
+        timeframe: '24h',
+      })
+    );
   },
 
   // WASM optimization
   async optimizeWASM(operation) {
-    return await mcp__claude-flow__wasm_optimize({
-      operation: operation
-    });
+    return (
+      (await mcp__claude) -
+      flow__wasm_optimize({
+        operation: operation,
+      })
+    );
   },
 
   // Neural pattern optimization
   async optimizeNeuralPatterns() {
-    return await mcp__claude-flow__neural_patterns({
-      action: 'analyze',
-      metadata: { focus: 'performance' }
-    });
+    return (
+      (await mcp__claude) -
+      flow__neural_patterns({
+        action: 'analyze',
+        metadata: { focus: 'performance' },
+      })
+    );
   },
 
   // Store performance metrics
   async storeMetrics(key, value) {
-    return await mcp__claude-flow__memory_usage({
-      action: 'store',
-      key: `performance/${key}`,
-      value: JSON.stringify(value),
-      namespace: 'v3-performance',
-      ttl: 604800000 // 7 days
-    });
-  }
+    return (
+      (await mcp__claude) -
+      flow__memory_usage({
+        action: 'store',
+        key: `performance/${key}`,
+        value: JSON.stringify(value),
+        namespace: 'v3-performance',
+        ttl: 604800000, // 7 days
+      })
+    );
+  },
 };
 ```
 
@@ -1131,7 +1133,7 @@ class SONAPerformanceOptimizer {
     const trajectory = {
       optimization: optimization,
       result: result,
-      qualityScore: this.calculateQualityScore(result)
+      qualityScore: this.calculateQualityScore(result),
     };
 
     this.trajectories.push(trajectory);
@@ -1144,17 +1146,20 @@ class SONAPerformanceOptimizer {
 
   async triggerSONALearning() {
     // Use SONA to learn optimization patterns
-    await mcp__claude-flow__neural_train({
-      pattern_type: 'optimization',
-      training_data: JSON.stringify(this.trajectories),
-      epochs: 10
-    });
+    (await mcp__claude) -
+      flow__neural_train({
+        pattern_type: 'optimization',
+        training_data: JSON.stringify(this.trajectories),
+        epochs: 10,
+      });
 
     // Extract learned patterns
-    const patterns = await mcp__claude-flow__neural_patterns({
-      action: 'analyze',
-      metadata: { domain: 'performance' }
-    });
+    const patterns =
+      (await mcp__claude) -
+      flow__neural_patterns({
+        action: 'analyze',
+        metadata: { domain: 'performance' },
+      });
 
     // Store patterns for future use
     for (const pattern of patterns) {
@@ -1167,17 +1172,19 @@ class SONAPerformanceOptimizer {
 
   async predictOptimalSettings(context) {
     // Use SONA to predict optimal configuration
-    const prediction = await mcp__claude-flow__neural_predict({
-      modelId: 'performance-optimizer',
-      input: JSON.stringify(context)
-    });
+    const prediction =
+      (await mcp__claude) -
+      flow__neural_predict({
+        modelId: 'performance-optimizer',
+        input: JSON.stringify(context),
+      });
 
     return {
       batchSize: prediction.batch_size,
       parallelism: prediction.parallelism,
       caching: prediction.caching_strategy,
       quantization: prediction.quantization_level,
-      confidence: prediction.confidence
+      confidence: prediction.confidence,
     };
   }
 }

@@ -1,9 +1,11 @@
 # GitHub Sync Coordinator
 
 ## Purpose
+
 Multi-package synchronization and version alignment with ruv-swarm coordination for seamless integration between claude-code-flow and ruv-swarm packages.
 
 ## Capabilities
+
 - **Package synchronization** with intelligent dependency resolution
 - **Version alignment** across multiple repositories
 - **Cross-package integration** with automated testing
@@ -11,6 +13,7 @@ Multi-package synchronization and version alignment with ruv-swarm coordination 
 - **Release coordination** with automated deployment pipelines
 
 ## Tools Available
+
 - `mcp__github__push_files`
 - `mcp__github__create_or_update_file`
 - `mcp__github__get_file_contents`
@@ -22,6 +25,7 @@ Multi-package synchronization and version alignment with ruv-swarm coordination 
 ## Usage Patterns
 
 ### 1. Synchronize Package Dependencies
+
 ```javascript
 // Initialize sync coordination swarm
 mcp__claude-flow__swarm_init { topology: "hierarchical", maxAgents: 5 }
@@ -55,6 +59,7 @@ mcp__claude-flow__task_orchestrate {
 ```
 
 ### 2. Documentation Synchronization
+
 ```javascript
 // Synchronize CLAUDE.md files across packages using gh CLI
 // Get file contents
@@ -81,6 +86,7 @@ mcp__claude-flow__memory_usage {
 ```
 
 ### 3. Cross-Package Feature Integration
+
 ```javascript
 // Coordinate feature implementation across packages
 mcp__github__push_files {
@@ -93,7 +99,7 @@ mcp__github__push_files {
       content: "[GitHub modes documentation]"
     },
     {
-      path: "claude-code-flow/claude-code-flow/.claude/commands/github/pr-manager.md", 
+      path: "claude-code-flow/claude-code-flow/.claude/commands/github/pr-manager.md",
       content: "[PR manager documentation]"
     },
     {
@@ -114,7 +120,7 @@ Bash(`gh pr create \
 
 ### Features Added
 - ✅ Comprehensive GitHub command modes
-- ✅ Swarm-coordinated PR management  
+- ✅ Swarm-coordinated PR management
 - ✅ Automated issue tracking
 - ✅ Cross-package synchronization
 
@@ -144,6 +150,7 @@ This integration uses ruv-swarm agents for:
 ## Batch Synchronization Example
 
 ### Complete Package Sync Workflow:
+
 ```javascript
 [Single Message - Complete Synchronization]:
   // Initialize comprehensive sync swarm
@@ -153,13 +160,13 @@ This integration uses ruv-swarm agents for:
   mcp__claude-flow__agent_spawn { type: "coder", name: "Integration Coder" }
   mcp__claude-flow__agent_spawn { type: "tester", name: "Validation Tester" }
   mcp__claude-flow__agent_spawn { type: "reviewer", name: "Quality Reviewer" }
-  
+
   // Read current state of both packages
   Read("/workspaces/ruv-FANN/claude-code-flow/claude-code-flow/package.json")
   Read("/workspaces/ruv-FANN/ruv-swarm/npm/package.json")
   Read("/workspaces/ruv-FANN/claude-code-flow/claude-code-flow/CLAUDE.md")
   Read("/workspaces/ruv-FANN/ruv-swarm/docs/CLAUDE.md")
-  
+
   // Synchronize multiple files simultaneously
   mcp__github__push_files {
     branch: "sync/complete-integration",
@@ -170,12 +177,12 @@ This integration uses ruv-swarm agents for:
     ],
     message: "feat: Complete package synchronization with GitHub integration"
   }
-  
+
   // Run validation tests
   Bash("cd /workspaces/ruv-FANN/claude-code-flow/claude-code-flow && npm install")
   Bash("cd /workspaces/ruv-FANN/claude-code-flow/claude-code-flow && npm test")
   Bash("cd /workspaces/ruv-FANN/ruv-swarm/npm && npm test")
-  
+
   // Track synchronization progress
   TodoWrite { todos: [
     { id: "sync-deps", content: "Synchronize package dependencies", status: "completed", priority: "high" },
@@ -184,7 +191,7 @@ This integration uses ruv-swarm agents for:
     { id: "sync-test", content: "Validate synchronization", status: "completed", priority: "medium" },
     { id: "sync-pr", content: "Create integration PR", status: "pending", priority: "high" }
   ]}
-  
+
   // Store comprehensive sync state
   mcp__claude-flow__memory_usage {
     action: "store",
@@ -203,71 +210,72 @@ This integration uses ruv-swarm agents for:
 ## Synchronization Strategies
 
 ### 1. **Version Alignment Strategy**
+
 ```javascript
 // Intelligent version synchronization
 const syncStrategy = {
-  nodeVersion: ">=20.0.0",  // Align to highest requirement
+  nodeVersion: '>=20.0.0', // Align to highest requirement
   dependencies: {
-    "better-sqlite3": "^12.2.0",  // Use latest stable
-    "ws": "^8.14.2"  // Maintain compatibility
+    'better-sqlite3': '^12.2.0', // Use latest stable
+    ws: '^8.14.2', // Maintain compatibility
   },
   engines: {
     aligned: true,
-    strategy: "highest_common"
-  }
-}
+    strategy: 'highest_common',
+  },
+};
 ```
 
 ### 2. **Documentation Sync Pattern**
+
 ```javascript
 // Keep documentation consistent across packages
 const docSyncPattern = {
-  sourceOfTruth: "ruv-swarm/docs/CLAUDE.md",
+  sourceOfTruth: 'ruv-swarm/docs/CLAUDE.md',
   targets: [
-    "claude-code-flow/claude-code-flow/CLAUDE.md",
-    "CLAUDE.md"  // Root level
+    'claude-code-flow/claude-code-flow/CLAUDE.md',
+    'CLAUDE.md', // Root level
   ],
   customSections: {
-    "claude-code-flow": "GitHub Commands Integration",
-    "ruv-swarm": "MCP Tools Reference"
-  }
-}
+    'claude-code-flow': 'GitHub Commands Integration',
+    'ruv-swarm': 'MCP Tools Reference',
+  },
+};
 ```
 
 ### 3. **Integration Testing Matrix**
+
 ```javascript
 // Comprehensive testing across synchronized packages
 const testMatrix = {
-  packages: ["claude-code-flow", "ruv-swarm"],
-  tests: [
-    "unit_tests",
-    "integration_tests", 
-    "cross_package_tests",
-    "mcp_integration_tests",
-    "github_workflow_tests"
-  ],
-  validation: "parallel_execution"
-}
+  packages: ['claude-code-flow', 'ruv-swarm'],
+  tests: ['unit_tests', 'integration_tests', 'cross_package_tests', 'mcp_integration_tests', 'github_workflow_tests'],
+  validation: 'parallel_execution',
+};
 ```
 
 ## Best Practices
 
 ### 1. **Atomic Synchronization**
+
 - Use batch operations for related changes
 - Maintain consistency across all sync operations
 - Implement rollback mechanisms for failed syncs
 
 ### 2. **Version Management**
+
 - Semantic versioning alignment
 - Dependency compatibility validation
 - Automated version bump coordination
 
 ### 3. **Documentation Consistency**
+
 - Single source of truth for shared concepts
 - Package-specific customizations
 - Automated documentation validation
 
 ### 4. **Testing Integration**
+
 - Cross-package test validation
 - Integration test automation
 - Performance regression detection
@@ -275,12 +283,14 @@ const testMatrix = {
 ## Monitoring and Metrics
 
 ### Sync Quality Metrics:
+
 - Package version alignment percentage
 - Documentation consistency score
 - Integration test success rate
 - Synchronization completion time
 
 ### Automated Reporting:
+
 - Weekly sync status reports
 - Dependency drift detection
 - Documentation divergence alerts
@@ -289,12 +299,14 @@ const testMatrix = {
 ## Error Handling and Recovery
 
 ### Automatic handling of:
+
 - Version conflict resolution
 - Merge conflict detection and resolution
 - Test failure recovery strategies
 - Documentation sync conflicts
 
 ### Recovery procedures:
+
 - Automated rollback on critical failures
 - Incremental sync retry mechanisms
 - Manual intervention points for complex conflicts

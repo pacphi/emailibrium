@@ -1,0 +1,40 @@
+# Production configuration for Docker Compose
+# Mounted at /app/config.yaml in the backend container
+#
+# Overrides backend/config.yaml defaults for containerized production.
+# Secrets (database_url, encryption password, OAuth credentials) are
+# injected via Docker secrets or environment variables -- never here.
+
+host: "0.0.0.0"
+port: 8080
+# database_url: provided via /run/secrets/database_url or EMAILIBRIUM_DATABASE_URL
+
+store:
+  path: "/app/data/vectors"
+  enabled: true
+
+embedding:
+  provider: "ollama"
+  model: "all-MiniLM-L6-v2"
+  dimensions: 384
+  batch_size: 64
+  cache_size: 50000
+  ollama_url: "http://ollama:11434"
+  onnx:
+    model: "all-MiniLM-L6-v2"
+    show_download_progress: false
+    dimensions: 384
+
+encryption:
+  enabled: true
+  # master_password: via EMAILIBRIUM_ENCRYPTION_MASTER_PASSWORD or Docker secret
+
+backup:
+  enabled: true
+  interval_secs: 1800
+
+quantization:
+  mode: "auto"
+
+logging:
+  level: "info"

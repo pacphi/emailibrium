@@ -206,13 +206,24 @@ impl GenerativeModel for OllamaGenerativeModel {
 }
 
 // ---------------------------------------------------------------------------
-// Tier 2 — Cloud provider (OpenAI / Anthropic)
+// Tier 2 — Cloud provider (OpenAI / Anthropic / Gemini)
 // ---------------------------------------------------------------------------
 
-/// Cloud generative model backed by OpenAI or Anthropic APIs.
+/// Cloud generative model backed by OpenAI, Anthropic, or Gemini APIs.
+#[derive(Debug)]
 pub struct CloudGenerativeModel {
     client: reqwest::Client,
     provider: String,
+    api_key: String,
+    model: String,
+    base_url: String,
+    /// Gemini-specific config for when provider == "gemini".
+    gemini_config: Option<GeminiResolvedConfig>,
+}
+
+/// Resolved Gemini configuration (API key already read from env).
+#[derive(Debug)]
+struct GeminiResolvedConfig {
     api_key: String,
     model: String,
     base_url: String,
@@ -222,10 +233,30 @@ impl CloudGenerativeModel {
     /// Create a new cloud generative model.
     ///
     /// Reads the API key from the environment variable named in `config.api_key_env`.
+    /// For Gemini, reads from `config.gemini.api_key_env` instead.
     pub fn new(config: &CloudGenerativeConfig) -> Result<Self, VectorError> {
-        let api_key = std::env::var(&config.api_key_env).map_err(|_| {
-            VectorError::ConfigError(format!("API key env var '{}' not set", config.api_key_env))
-        })?;
+        let (api_key, gemini_config) = if config.provider == "gemini" {
+            let key = std::env::var(&config.gemini.api_key_env).map_err(|_| {
+                VectorError::ConfigError(format!(
+                    "Gemini API key env var '{}' not set",
+                    config.gemini.api_key_env
+                ))
+            })?;
+            let gc = GeminiResolvedConfig {
+                api_key: key.clone(),
+                model: config.gemini.model.clone(),
+                base_url: config.gemini.base_url.clone(),
+            };
+            (key, Some(gc))
+        } else {
+            let key = std::env::var(&config.api_key_env).map_err(|_| {
+                VectorError::ConfigError(format!(
+                    "API key env var '{}' not set",
+                    config.api_key_env
+                ))
+            })?;
+            (key, None)
+        };
 
         Ok(Self {
             client: reqwest::Client::new(),
@@ -233,6 +264,7 @@ impl CloudGenerativeModel {
             api_key,
             model: config.model.clone(),
             base_url: config.base_url.clone(),
+            gemini_config,
         })
     }
 }
@@ -243,6 +275,7 @@ impl GenerativeModel for CloudGenerativeModel {
         match self.provider.as_str() {
             "openai" => self.generate_openai(prompt, max_tokens).await,
             "anthropic" => self.generate_anthropic(prompt, max_tokens).await,
+            "gemini" => self.generate_gemini(prompt, max_tokens).await,
             other => Err(VectorError::ConfigError(format!(
                 "Unknown cloud provider: {other}"
             ))),
@@ -262,12 +295,15 @@ impl GenerativeModel for CloudGenerativeModel {
     }
 
     fn model_name(&self) -> &str {
-        &self.model
+        if let Some(ref gc) = self.gemini_config {
+            &gc.model
+        } else {
+            &self.model
+        }
     }
 
     async fn is_available(&self) -> bool {
         // Cloud providers are assumed available if configured.
-        // A real health check would hit a lightweight endpoint.
         !self.api_key.is_empty()
     }
 }
@@ -363,6 +399,63 @@ impl CloudGenerativeModel {
             .map(|s| s.to_string())
             .ok_or_else(|| {
                 VectorError::CategorizationFailed("Anthropic response missing content".into())
+            })
+    }
+
+    /// Generate text via the Google Gemini REST API (audit item #29).
+    ///
+    /// Uses the `generateContent` endpoint with the model from `gemini_config`.
+    /// Supports `gemini-2.0-flash`, `gemini-2.5-pro`, and other Gemini model IDs.
+    async fn generate_gemini(&self, prompt: &str, max_tokens: u32) -> Result<String, VectorError> {
+        let gc = self
+            .gemini_config
+            .as_ref()
+            .ok_or_else(|| VectorError::ConfigError("Gemini config not initialised".to_string()))?;
+
+        let url = format!(
+            "{}/v1beta/models/{}:generateContent?key={}",
+            gc.base_url, gc.model, gc.api_key
+        );
+
+        let body = serde_json::json!({
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {
+                "maxOutputTokens": max_tokens,
+                "temperature": 0.0,
+            }
+        });
+
+        debug!(model = %gc.model, provider = "gemini", "Cloud generate request");
+
+        let resp = self
+            .client
+            .post(&url)
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| {
+                VectorError::CategorizationFailed(format!("Gemini request failed: {e}"))
+            })?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            return Err(VectorError::CategorizationFailed(format!(
+                "Gemini returned {status}: {text}"
+            )));
+        }
+
+        let parsed: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| VectorError::CategorizationFailed(format!("Gemini parse error: {e}")))?;
+
+        parsed["candidates"][0]["content"]["parts"][0]["text"]
+            .as_str()
+            .map(|s| s.to_string())
+            .ok_or_else(|| {
+                VectorError::CategorizationFailed("Gemini response missing content".into())
             })
     }
 }
@@ -482,5 +575,86 @@ mod tests {
     fn test_validate_classification_no_match() {
         let result = validate_classification("Unknown", &["Work", "Finance"], "Work, Finance");
         assert!(result.is_err());
+    }
+
+    // -- CloudGenerativeModel tests (Gemini, audit item #29) ----------------
+
+    #[test]
+    fn test_gemini_provider_requires_api_key() {
+        std::env::remove_var("EMAILIBRIUM_GEMINI_API_KEY");
+        let config = crate::vectors::config::CloudGenerativeConfig {
+            provider: "gemini".to_string(),
+            ..Default::default()
+        };
+        let result = CloudGenerativeModel::new(&config);
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("EMAILIBRIUM_GEMINI_API_KEY"),
+            "expected Gemini env var name in error, got: {err_msg}"
+        );
+    }
+
+    #[test]
+    fn test_gemini_provider_creates_with_valid_key() {
+        std::env::set_var("__TEST_GEMINI_KEY", "AIza-test-key");
+        let config = crate::vectors::config::CloudGenerativeConfig {
+            provider: "gemini".to_string(),
+            gemini: crate::vectors::config::GeminiGenerativeConfig {
+                api_key_env: "__TEST_GEMINI_KEY".to_string(),
+                model: "gemini-2.0-flash".to_string(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let model = CloudGenerativeModel::new(&config).unwrap();
+        assert_eq!(model.model_name(), "gemini-2.0-flash");
+        assert_eq!(model.provider, "gemini");
+        assert!(model.gemini_config.is_some());
+        std::env::remove_var("__TEST_GEMINI_KEY");
+    }
+
+    #[tokio::test]
+    async fn test_gemini_provider_is_available() {
+        std::env::set_var("__TEST_GEMINI_AVAIL", "AIza-test");
+        let config = crate::vectors::config::CloudGenerativeConfig {
+            provider: "gemini".to_string(),
+            gemini: crate::vectors::config::GeminiGenerativeConfig {
+                api_key_env: "__TEST_GEMINI_AVAIL".to_string(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let model = CloudGenerativeModel::new(&config).unwrap();
+        assert!(model.is_available().await);
+        std::env::remove_var("__TEST_GEMINI_AVAIL");
+    }
+
+    #[test]
+    fn test_openai_provider_still_works() {
+        std::env::set_var("__TEST_OPENAI_KEY", "sk-test");
+        let config = crate::vectors::config::CloudGenerativeConfig {
+            provider: "openai".to_string(),
+            api_key_env: "__TEST_OPENAI_KEY".to_string(),
+            ..Default::default()
+        };
+        let model = CloudGenerativeModel::new(&config).unwrap();
+        assert_eq!(model.model_name(), "gpt-4o-mini");
+        assert!(model.gemini_config.is_none());
+        std::env::remove_var("__TEST_OPENAI_KEY");
+    }
+
+    #[test]
+    fn test_anthropic_provider_still_works() {
+        std::env::set_var("__TEST_ANTHRO_KEY", "sk-ant-test");
+        let config = crate::vectors::config::CloudGenerativeConfig {
+            provider: "anthropic".to_string(),
+            api_key_env: "__TEST_ANTHRO_KEY".to_string(),
+            ..Default::default()
+        };
+        let model = CloudGenerativeModel::new(&config).unwrap();
+        assert_eq!(model.provider, "anthropic");
+        assert!(model.gemini_config.is_none());
+        std::env::remove_var("__TEST_ANTHRO_KEY");
     }
 }

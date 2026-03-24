@@ -13,13 +13,14 @@ All clustering quality metrics are evaluated using the functions in
 Measures how well each point fits within its assigned cluster vs. the nearest
 alternative cluster.
 
-| Scenario | Expected Score | Description |
-|----------|---------------|-------------|
-| Well-separated clusters | > 0.9 | Tight, distant clusters |
-| Overlapping clusters | < 0.5 | Significant inter-cluster overlap |
-| Single cluster | 0.0 | No separation possible |
+| Scenario                | Expected Score | Description                       |
+| ----------------------- | -------------- | --------------------------------- |
+| Well-separated clusters | > 0.9          | Tight, distant clusters           |
+| Overlapping clusters    | < 0.5          | Significant inter-cluster overlap |
+| Single cluster          | 0.0            | No separation possible            |
 
 Formula per point:
+
 - `a` = mean distance to same-cluster points
 - `b` = mean distance to nearest other cluster
 - `s(i) = (b - a) / max(a, b)`
@@ -29,23 +30,23 @@ Formula per point:
 
 Measures agreement between two clusterings, corrected for chance.
 
-| Scenario | Expected ARI | Description |
-|----------|-------------|-------------|
-| Identical clusterings | 1.0 | Perfect agreement |
-| Permuted labels (same structure) | 1.0 | Label-invariant |
-| Random vs. ground truth | ~0.0 | No better than chance |
-| Partially correct | 0.0 - 1.0 | Proportional to agreement |
+| Scenario                         | Expected ARI | Description               |
+| -------------------------------- | ------------ | ------------------------- |
+| Identical clusterings            | 1.0          | Perfect agreement         |
+| Permuted labels (same structure) | 1.0          | Label-invariant           |
+| Random vs. ground truth          | ~0.0         | No better than chance     |
+| Partially correct                | 0.0 - 1.0    | Proportional to agreement |
 
 ### Subscription Detection (Precision / Recall / F1)
 
 Evaluates the accuracy of subscription and recurring sender detection.
 
-| Scenario | Precision | Recall | F1 |
-|----------|-----------|--------|-----|
-| Perfect detection | 1.0 | 1.0 | 1.0 |
-| Conservative (no false positives) | 1.0 | < 1.0 | < 1.0 |
-| Aggressive (no false negatives) | < 1.0 | 1.0 | < 1.0 |
-| Balanced real-world | > 0.85 | > 0.80 | > 0.82 |
+| Scenario                          | Precision | Recall | F1     |
+| --------------------------------- | --------- | ------ | ------ |
+| Perfect detection                 | 1.0       | 1.0    | 1.0    |
+| Conservative (no false positives) | 1.0       | < 1.0  | < 1.0  |
+| Aggressive (no false negatives)   | < 1.0     | 1.0    | < 1.0  |
+| Balanced real-world               | > 0.85    | > 0.80 | > 0.82 |
 
 ## Test Suite
 

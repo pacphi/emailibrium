@@ -16,7 +16,7 @@ store:
 
 # Embedding Pipeline
 embedding:
-  provider: "onnx"          # onnx | mock | ollama | cloud
+  provider: "onnx" # onnx | mock | ollama | cloud
   model: "all-MiniLM-L6-v2"
   dimensions: 384
   batch_size: 64
@@ -30,9 +30,9 @@ embedding:
 
 # HNSW Index
 index:
-  m: 16                     # connections per node
-  ef_construction: 200      # build quality
-  ef_search: 100            # search quality
+  m: 16 # connections per node
+  ef_construction: 200 # build quality
+  ef_search: 100 # search quality
 
 # Search
 search:
@@ -81,7 +81,7 @@ learning:
 
 # Quantization (ADR-007)
 quantization:
-  mode: "auto"              # auto | none | scalar | product | binary
+  mode: "auto" # auto | none | scalar | product | binary
   scalar_threshold: 50000
   product_threshold: 200000
   binary_threshold: 1000000
@@ -102,7 +102,7 @@ oauth:
   outlook:
     client_id_env: "EMAILIBRIUM_MICROSOFT_CLIENT_ID"
     client_secret_env: "EMAILIBRIUM_MICROSOFT_CLIENT_SECRET"
-    tenant: "common"         # "common" for multi-tenant, or a specific tenant UUID
+    tenant: "common" # "common" for multi-tenant, or a specific tenant UUID
     scopes:
       - "Mail.ReadWrite"
       - "Mail.Send"

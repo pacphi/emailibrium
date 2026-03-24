@@ -546,7 +546,20 @@ components:
         category:
           type: string
           description: Predicted category
-          enum: [Work, Personal, Finance, Shopping, Social, Newsletter, Marketing, Notification, Alerts, Promotions, Uncategorized]
+          enum:
+            [
+              Work,
+              Personal,
+              Finance,
+              Shopping,
+              Social,
+              Newsletter,
+              Marketing,
+              Notification,
+              Alerts,
+              Promotions,
+              Uncategorized,
+            ]
         confidence:
           type: number
           format: float

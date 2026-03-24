@@ -40,6 +40,7 @@ The default Emailibrium installation should provide meaningful AI capabilities w
 ### 2.3 Scope
 
 This report covers:
+
 - ONNX Runtime integration for Rust via the `ort` and `fastembed` crates
 - A catalog of embedding models available in ONNX format
 - Small generative models suitable for email classification
@@ -59,15 +60,15 @@ ONNX Runtime is Microsoft's cross-platform, hardware-accelerated inference engin
 
 The `ort` crate (maintained by pyke.io) is the primary Rust interface to ONNX Runtime. It wraps the ONNX Runtime C API in safe, idiomatic Rust.
 
-| Property | Value |
-|---|---|
-| Crate | `ort` |
-| Latest version | 2.0.0-rc.12 (recommended for new projects) |
-| ONNX Runtime version | 1.24.x |
-| Sys crate | `ort-sys` (auto-generated FFI bindings) |
-| License | MIT / Apache-2.0 |
-| Repository | https://github.com/pykeio/ort |
-| Documentation | https://ort.pyke.io/ |
+| Property             | Value                                      |
+| -------------------- | ------------------------------------------ |
+| Crate                | `ort`                                      |
+| Latest version       | 2.0.0-rc.12 (recommended for new projects) |
+| ONNX Runtime version | 1.24.x                                     |
+| Sys crate            | `ort-sys` (auto-generated FFI bindings)    |
+| License              | MIT / Apache-2.0                           |
+| Repository           | https://github.com/pykeio/ort              |
+| Documentation        | https://ort.pyke.io/                       |
 
 **Key features:**
 
@@ -88,12 +89,12 @@ GPU acceleration on Apple Silicon uses the CoreML execution provider, which can 
 
 ### 3.3 Alternative Rust ONNX Crates
 
-| Crate | Status | Notes |
-|---|---|---|
-| `onnxruntime` | Inactive | Original Rust bindings, superseded by `ort` |
-| `onnxruntime-ng` | Low activity | Fork of `onnxruntime`, limited updates |
-| `wonnx` | Active | WebGPU-accelerated, pure Rust, but limited operator support |
-| `tract` | Active | Pure Rust ONNX/NNEF runtime, no C dependency; slower than `ort` for transformer models |
+| Crate            | Status       | Notes                                                                                  |
+| ---------------- | ------------ | -------------------------------------------------------------------------------------- |
+| `onnxruntime`    | Inactive     | Original Rust bindings, superseded by `ort`                                            |
+| `onnxruntime-ng` | Low activity | Fork of `onnxruntime`, limited updates                                                 |
+| `wonnx`          | Active       | WebGPU-accelerated, pure Rust, but limited operator support                            |
+| `tract`          | Active       | Pure Rust ONNX/NNEF runtime, no C dependency; slower than `ort` for transformer models |
 
 **Recommendation:** Use `ort` via `fastembed` (see Section 5). The `ort` crate is the most mature, best-maintained, and highest-performance option. `tract` is a viable fallback if eliminating the C dependency is critical, but its transformer support and performance lag behind `ort`.
 
@@ -117,22 +118,22 @@ The `fastembed` crate implements strategy 3 natively, downloading models from Hu
 
 The following table catalogs ONNX-compatible embedding models suitable for Emailibrium, ordered by the trade-off between quality, size, and performance.
 
-| Model | Params | Dims | ONNX Size (FP32) | ONNX Size (INT8/Q) | MTEB Avg | Max Tokens | Languages | fastembed Support |
-|---|---|---|---|---|---|---|---|---|
-| `all-MiniLM-L6-v2` | 22M | 384 | ~90 MB | ~23 MB | ~56 | 256 | English | Yes |
-| `all-MiniLM-L12-v2` | 33M | 384 | ~130 MB | ~33 MB | ~57 | 256 | English | Yes |
-| `bge-small-en-v1.5` | 33M | 384 | ~127 MB | ~32 MB | ~59 | 512 | English | Yes (default) |
-| `bge-base-en-v1.5` | 109M | 768 | ~420 MB | ~105 MB | ~61 | 512 | English | Yes |
-| `bge-m3` | 568M | 1024 | ~2.2 GB | ~550 MB | ~63 | 8192 | 100+ | Yes |
-| `snowflake-arctic-embed-s` | 22M | 384 | ~90 MB | ~23 MB | ~57 | 512 | English | Yes |
-| `nomic-embed-text-v1.5` | 137M | 64--768 | ~520 MB | ~130 MB | ~62 | 8192 | English | Yes |
-| `e5-small-v2` | 33M | 384 | ~127 MB | ~32 MB | ~57 | 512 | English | Partial |
-| `multilingual-e5-small` | 118M | 384 | ~449 MB | ~113 MB | ~58 | 512 | 100+ | Yes |
-| `multilingual-e5-large` | 560M | 1024 | ~2.1 GB | ~530 MB | ~62 | 512 | 100+ | Yes |
-| `mxbai-embed-large-v1` | 335M | 1024 | ~1.3 GB | ~335 MB | ~64 | 512 | English | Yes |
-| `gte-base-en-v1.5` | 109M | 768 | ~420 MB | ~105 MB | ~62 | 8192 | English | Yes |
-| `CLIP ViT-B-32` (text) | 63M | 512 | ~240 MB | ~60 MB | N/A | 77 | English | Yes (text only) |
-| `CLIP ViT-B-32` (vision) | 88M | 512 | ~340 MB | ~85 MB | N/A | N/A | N/A | Separate model |
+| Model                      | Params | Dims    | ONNX Size (FP32) | ONNX Size (INT8/Q) | MTEB Avg | Max Tokens | Languages | fastembed Support |
+| -------------------------- | ------ | ------- | ---------------- | ------------------ | -------- | ---------- | --------- | ----------------- |
+| `all-MiniLM-L6-v2`         | 22M    | 384     | ~90 MB           | ~23 MB             | ~56      | 256        | English   | Yes               |
+| `all-MiniLM-L12-v2`        | 33M    | 384     | ~130 MB          | ~33 MB             | ~57      | 256        | English   | Yes               |
+| `bge-small-en-v1.5`        | 33M    | 384     | ~127 MB          | ~32 MB             | ~59      | 512        | English   | Yes (default)     |
+| `bge-base-en-v1.5`         | 109M   | 768     | ~420 MB          | ~105 MB            | ~61      | 512        | English   | Yes               |
+| `bge-m3`                   | 568M   | 1024    | ~2.2 GB          | ~550 MB            | ~63      | 8192       | 100+      | Yes               |
+| `snowflake-arctic-embed-s` | 22M    | 384     | ~90 MB           | ~23 MB             | ~57      | 512        | English   | Yes               |
+| `nomic-embed-text-v1.5`    | 137M   | 64--768 | ~520 MB          | ~130 MB            | ~62      | 8192       | English   | Yes               |
+| `e5-small-v2`              | 33M    | 384     | ~127 MB          | ~32 MB             | ~57      | 512        | English   | Partial           |
+| `multilingual-e5-small`    | 118M   | 384     | ~449 MB          | ~113 MB            | ~58      | 512        | 100+      | Yes               |
+| `multilingual-e5-large`    | 560M   | 1024    | ~2.1 GB          | ~530 MB            | ~62      | 512        | 100+      | Yes               |
+| `mxbai-embed-large-v1`     | 335M   | 1024    | ~1.3 GB          | ~335 MB            | ~64      | 512        | English   | Yes               |
+| `gte-base-en-v1.5`         | 109M   | 768     | ~420 MB          | ~105 MB            | ~62      | 8192       | English   | Yes               |
+| `CLIP ViT-B-32` (text)     | 63M    | 512     | ~240 MB          | ~60 MB             | N/A      | 77         | English   | Yes (text only)   |
+| `CLIP ViT-B-32` (vision)   | 88M    | 512     | ~340 MB          | ~85 MB             | N/A      | N/A        | N/A       | Separate model    |
 
 **Notes on MTEB scores:** Scores are approximate averages across the MTEB English benchmark suite (retrieval, classification, clustering, STS, pair classification, reranking, summarization). Higher is better. For comparison, commercial models score higher: Cohere embed-v4 (~65), OpenAI text-embedding-3-large (~64.6), Qwen3-Embedding-8B (~70.6).
 
@@ -192,14 +193,14 @@ For Emailibrium's purposes, pre-exported ONNX models from Hugging Face Hub (used
 
 `fastembed` is a Rust crate purpose-built for fast, lightweight embedding generation using ONNX Runtime. It is maintained by Anush008 (Qdrant contributor) and serves as the Rust counterpart to the Python `fastembed` library by Qdrant.
 
-| Property | Value |
-|---|---|
-| Crate | `fastembed` |
-| Latest version | 5.12.0 |
-| License | Apache-2.0 |
-| Repository | https://github.com/Anush008/fastembed-rs |
-| Dependencies | `ort` (ONNX Runtime), `tokenizers` (Hugging Face) |
-| Async support | Synchronous (no Tokio dependency) |
+| Property       | Value                                             |
+| -------------- | ------------------------------------------------- |
+| Crate          | `fastembed`                                       |
+| Latest version | 5.12.0                                            |
+| License        | Apache-2.0                                        |
+| Repository     | https://github.com/Anush008/fastembed-rs          |
+| Dependencies   | `ort` (ONNX Runtime), `tokenizers` (Hugging Face) |
+| Async support  | Synchronous (no Tokio dependency)                 |
 
 ### 5.2 Key Features
 
@@ -231,9 +232,9 @@ As of version 5.12.0, `fastembed` supports the following text embedding models v
 - `NomicEmbedTextV1` -- nomic-ai/nomic-embed-text-v1
 - `NomicEmbedTextV15` -- nomic-ai/nomic-embed-text-v1.5
 - `ParaphraseMLMiniLML12V2` / `ParaphraseMLMpnetBaseV2` -- multilingual paraphrase models
-- `MultilingualE5Small` / `MultilingualE5Base` / `MultilingualE5Large` -- intfloat/multilingual-e5-*
+- `MultilingualE5Small` / `MultilingualE5Base` / `MultilingualE5Large` -- intfloat/multilingual-e5-\*
 - `MxbaiEmbedLargeV1` -- mixedbread-ai/mxbai-embed-large-v1
-- `GTEBaseENV15` / `GTELargeENV15` -- Alibaba-NLP/gte-*-en-v1.5
+- `GTEBaseENV15` / `GTELargeENV15` -- Alibaba-NLP/gte-\*-en-v1.5
 - `ModernBERTEmbedLarge` -- lightonai/ModernBERT-embed-large
 - `CLIPViTB32Text` -- Qdrant/clip-ViT-B-32-text (text-side CLIP embeddings)
 - Snowflake Arctic Embed variants
@@ -324,27 +325,27 @@ impl crate::vectors::embedding::EmbeddingModel for OnnxEmbeddingModel {
 
 Based on community benchmarks and the `ort` documentation:
 
-| Metric | Value (CPU, Apple M-series) | Value (CPU, Intel i7) |
-|---|---|---|
-| Single sentence latency | 5--15 ms | 15--40 ms |
-| Batch (32 sentences) | 50--120 ms | 150--400 ms |
-| Throughput | 200--600 sentences/sec | 80--200 sentences/sec |
-| Model load time (first run) | 200--500 ms | 300--800 ms |
-| Model download (first ever) | 5--30 sec (network dependent) | 5--30 sec |
-| Memory (runtime, all-MiniLM-L6-v2) | ~150--250 MB RSS | ~150--250 MB RSS |
+| Metric                             | Value (CPU, Apple M-series)   | Value (CPU, Intel i7) |
+| ---------------------------------- | ----------------------------- | --------------------- |
+| Single sentence latency            | 5--15 ms                      | 15--40 ms             |
+| Batch (32 sentences)               | 50--120 ms                    | 150--400 ms           |
+| Throughput                         | 200--600 sentences/sec        | 80--200 sentences/sec |
+| Model load time (first run)        | 200--500 ms                   | 300--800 ms           |
+| Model download (first ever)        | 5--30 sec (network dependent) | 5--30 sec             |
+| Memory (runtime, all-MiniLM-L6-v2) | ~150--250 MB RSS              | ~150--250 MB RSS      |
 
 These figures represent the `all-MiniLM-L6-v2` model. Larger models (e.g., `bge-base-en-v1.5` at 109M params) will have proportionally higher latency and memory usage.
 
 **Comparison to Ollama for embeddings:**
 
-| Metric | fastembed (ONNX) | Ollama (nomic-embed-text) |
-|---|---|---|
-| First-run setup | Auto-download ~90 MB | Install Ollama + pull ~274 MB |
-| Single sentence latency | 5--40 ms | 50--200 ms (HTTP overhead) |
-| Batch throughput | 200--600 sent/sec | 50--150 sent/sec |
-| Memory footprint | ~150--250 MB | ~500--800 MB (Ollama process) |
-| External dependency | None (in-process) | Ollama daemon on localhost |
-| Network calls during inference | Zero | Zero (local, but HTTP to localhost) |
+| Metric                         | fastembed (ONNX)     | Ollama (nomic-embed-text)           |
+| ------------------------------ | -------------------- | ----------------------------------- |
+| First-run setup                | Auto-download ~90 MB | Install Ollama + pull ~274 MB       |
+| Single sentence latency        | 5--40 ms             | 50--200 ms (HTTP overhead)          |
+| Batch throughput               | 200--600 sent/sec    | 50--150 sent/sec                    |
+| Memory footprint               | ~150--250 MB         | ~500--800 MB (Ollama process)       |
+| External dependency            | None (in-process)    | Ollama daemon on localhost          |
+| Network calls during inference | Zero                 | Zero (local, but HTTP to localhost) |
 
 ### 5.6 Alternative: `embed_anything`
 
@@ -368,15 +369,15 @@ For the default (Tier 0) configuration, Emailibrium should handle the ambiguous 
 
 When users opt into Tier 1 (Ollama), the following models are suitable for email classification and light chat:
 
-| Model | Params | RAM (Q4) | Classification Quality | Chat Quality | Format |
-|---|---|---|---|---|---|
-| `gemma-3-1b` | 1B | ~1.5 GB | Good | Basic | GGUF |
-| `TinyLlama-1.1B` | 1.1B | ~1.5 GB | Good | Basic | GGUF |
-| `SmolLM2-1.7B` | 1.7B | ~2 GB | Good | Moderate | GGUF |
-| `Phi-3.5-mini` | 3.8B | ~3 GB | Excellent | Good | GGUF/ONNX |
-| `Qwen2.5-3B` | 3B | ~2.5 GB | Excellent | Good | GGUF |
-| `llama3.2:3b` | 3.2B | ~2.5 GB | Excellent | Good | GGUF |
-| `Gemma-3-4B` | 4B | ~3 GB | Excellent | Good | GGUF |
+| Model            | Params | RAM (Q4) | Classification Quality | Chat Quality | Format    |
+| ---------------- | ------ | -------- | ---------------------- | ------------ | --------- |
+| `gemma-3-1b`     | 1B     | ~1.5 GB  | Good                   | Basic        | GGUF      |
+| `TinyLlama-1.1B` | 1.1B   | ~1.5 GB  | Good                   | Basic        | GGUF      |
+| `SmolLM2-1.7B`   | 1.7B   | ~2 GB    | Good                   | Moderate     | GGUF      |
+| `Phi-3.5-mini`   | 3.8B   | ~3 GB    | Excellent              | Good         | GGUF/ONNX |
+| `Qwen2.5-3B`     | 3B     | ~2.5 GB  | Excellent              | Good         | GGUF      |
+| `llama3.2:3b`    | 3.2B   | ~2.5 GB  | Excellent              | Good         | GGUF      |
+| `Gemma-3-4B`     | 4B     | ~3 GB    | Excellent              | Good         | GGUF      |
 
 **Recommended for Ollama Tier 1:** `llama3.2:3b` or `Phi-3.5-mini`. Both excel at instruction-following tasks like "Classify this email as one of: [promotions, updates, personal, finance, travel]" and require only 2.5--3 GB RAM.
 
@@ -384,15 +385,15 @@ When users opt into Tier 1 (Ollama), the following models are suitable for email
 
 ### 6.3 ONNX vs. GGUF for Generative Models
 
-| Aspect | ONNX (via `ort`) | GGUF (via `llama-cpp-rs`) |
-|---|---|---|
-| Ecosystem maturity for generative | Moderate (Phi-3 official ONNX) | Excellent (most models available) |
-| Quantization options | INT4, INT8 | Q2_K through Q8_0, many variants |
-| Rust crate quality | `ort` (excellent) | `llama-cpp-rs` / `llama-cpp-2` (good) |
-| CPU performance | Good | Excellent (highly optimized) |
-| Apple Silicon Metal | Via CoreML EP | Native Metal support |
-| Model availability | Limited (Phi-3, some BERT-class) | Nearly all open models |
-| Memory efficiency | Moderate | Excellent (memory-mapped) |
+| Aspect                            | ONNX (via `ort`)                 | GGUF (via `llama-cpp-rs`)             |
+| --------------------------------- | -------------------------------- | ------------------------------------- |
+| Ecosystem maturity for generative | Moderate (Phi-3 official ONNX)   | Excellent (most models available)     |
+| Quantization options              | INT4, INT8                       | Q2_K through Q8_0, many variants      |
+| Rust crate quality                | `ort` (excellent)                | `llama-cpp-rs` / `llama-cpp-2` (good) |
+| CPU performance                   | Good                             | Excellent (highly optimized)          |
+| Apple Silicon Metal               | Via CoreML EP                    | Native Metal support                  |
+| Model availability                | Limited (Phi-3, some BERT-class) | Nearly all open models                |
+| Memory efficiency                 | Moderate                         | Excellent (memory-mapped)             |
 
 **Recommendation:** For generative models, GGUF via `llama-cpp-rs` is superior to ONNX. The llama.cpp ecosystem has far more model availability, better quantization options, and more optimized CPU inference. However, this is only relevant for Tier 1+ (Ollama handles GGUF natively). For the Tier 0 default, no generative model is needed.
 
@@ -452,41 +453,41 @@ Candle eliminates the ONNX Runtime C dependency entirely (pure Rust), but has sl
 
 **Target user:** Anyone who installs Emailibrium. No AI knowledge required.
 
-| Component | Implementation | Details |
-|---|---|---|
-| Text embedding | `fastembed` with `all-MiniLM-L6-v2` | 384D, ~90 MB ONNX, auto-downloads to `~/.emailibrium/models/` |
-| Classification | Vector centroid matching | Cosine similarity to learned category centroids |
-| Ambiguous fallback | Rule-based heuristic | Sender domain, keyword matching, header analysis |
-| Chat | Disabled | "Chat features require Tier 1 or higher. Enable Ollama in settings." |
-| Image embedding | Deferred | "Image search requires Tier 1 or higher." |
-| Network calls | Zero | All inference runs in-process |
-| External dependencies | Zero | No Ollama, no cloud APIs, no Docker |
+| Component             | Implementation                      | Details                                                              |
+| --------------------- | ----------------------------------- | -------------------------------------------------------------------- |
+| Text embedding        | `fastembed` with `all-MiniLM-L6-v2` | 384D, ~90 MB ONNX, auto-downloads to `~/.emailibrium/models/`        |
+| Classification        | Vector centroid matching            | Cosine similarity to learned category centroids                      |
+| Ambiguous fallback    | Rule-based heuristic                | Sender domain, keyword matching, header analysis                     |
+| Chat                  | Disabled                            | "Chat features require Tier 1 or higher. Enable Ollama in settings." |
+| Image embedding       | Deferred                            | "Image search requires Tier 1 or higher."                            |
+| Network calls         | Zero                                | All inference runs in-process                                        |
+| External dependencies | Zero                                | No Ollama, no cloud APIs, no Docker                                  |
 
 ### 7.3 Tier 1: Local Enhanced (Ollama)
 
 **Target user:** Power users who want generative AI features while keeping all data local.
 
-| Component | Implementation | Details |
-|---|---|---|
-| Text embedding | `fastembed` (ONNX) | Same as Tier 0 -- ONNX is faster than Ollama for embeddings |
-| Classification | Vector centroid + Ollama fallback | Ollama called only when centroid confidence < 0.7 |
-| Chat | Ollama generative model | User's choice of model (default: `llama3.2:3b`) |
-| Image embedding | CLIP ViT-B-32 via ONNX + Ollama vision | ONNX for CLIP, Ollama for advanced vision models |
-| Network calls | Zero (all localhost) | Ollama runs as a local process |
-| External dependencies | Ollama installed and running | User must `ollama pull` the desired model |
+| Component             | Implementation                         | Details                                                     |
+| --------------------- | -------------------------------------- | ----------------------------------------------------------- |
+| Text embedding        | `fastembed` (ONNX)                     | Same as Tier 0 -- ONNX is faster than Ollama for embeddings |
+| Classification        | Vector centroid + Ollama fallback      | Ollama called only when centroid confidence < 0.7           |
+| Chat                  | Ollama generative model                | User's choice of model (default: `llama3.2:3b`)             |
+| Image embedding       | CLIP ViT-B-32 via ONNX + Ollama vision | ONNX for CLIP, Ollama for advanced vision models            |
+| Network calls         | Zero (all localhost)                   | Ollama runs as a local process                              |
+| External dependencies | Ollama installed and running           | User must `ollama pull` the desired model                   |
 
 ### 7.4 Tier 2: Cloud Opt-in
 
 **Target user:** Users who want maximum quality and accept the privacy trade-off.
 
-| Component | Implementation | Details |
-|---|---|---|
-| Text embedding | Cloud API (OpenAI, Cohere) | Higher quality, but data leaves machine |
-| Classification | Cloud LLM (Claude Haiku, GPT-4o-mini) | Best accuracy for ambiguous emails |
-| Chat | Cloud LLM (Claude Sonnet, GPT-4o) | Full conversational AI capabilities |
-| Network calls | Per-inference API calls | All email text sent to cloud provider |
-| External dependencies | API key required | Set via env var, never stored in config file |
-| Consent | **Mandatory** | User must explicitly acknowledge data sharing before first cloud call |
+| Component             | Implementation                        | Details                                                               |
+| --------------------- | ------------------------------------- | --------------------------------------------------------------------- |
+| Text embedding        | Cloud API (OpenAI, Cohere)            | Higher quality, but data leaves machine                               |
+| Classification        | Cloud LLM (Claude Haiku, GPT-4o-mini) | Best accuracy for ambiguous emails                                    |
+| Chat                  | Cloud LLM (Claude Sonnet, GPT-4o)     | Full conversational AI capabilities                                   |
+| Network calls         | Per-inference API calls               | All email text sent to cloud provider                                 |
+| External dependencies | API key required                      | Set via env var, never stored in config file                          |
+| Consent               | **Mandatory**                         | User must explicitly acknowledge data sharing before first cloud call |
 
 ---
 
@@ -501,7 +502,7 @@ ai:
   # --- Embedding Configuration ---
   embedding:
     # Provider selection: "onnx" (default) | "ollama" | "cloud"
-    provider: "onnx"
+    provider: 'onnx'
 
     # ONNX provider settings (used when provider = "onnx")
     onnx:
@@ -509,11 +510,11 @@ ai:
       # Options: "all-MiniLM-L6-v2", "all-MiniLM-L6-v2-q", "bge-small-en-v1.5",
       #          "bge-small-en-v1.5-q", "bge-base-en-v1.5", "multilingual-e5-small",
       #          "nomic-embed-text-v1.5", "snowflake-arctic-embed-s"
-      model: "all-MiniLM-L6-v2"
+      model: 'all-MiniLM-L6-v2'
 
       # Local cache directory for downloaded model files
       # Models are auto-downloaded from Hugging Face on first run
-      model_path: "~/.emailibrium/models/"
+      model_path: '~/.emailibrium/models/'
 
       # Show download progress bar on first model download
       show_download_progress: true
@@ -528,18 +529,18 @@ ai:
 
     # Ollama provider settings (used when provider = "ollama")
     ollama:
-      url: "http://localhost:11434"
-      model: "nomic-embed-text"
+      url: 'http://localhost:11434'
+      model: 'nomic-embed-text'
       # Dimensions must match the Ollama model's output
       dimensions: 768
 
     # Cloud provider settings (used when provider = "cloud")
     cloud:
       # Cloud provider: "openai" | "cohere" | "voyage"
-      provider: "openai"
+      provider: 'openai'
       # API key is NEVER stored in this file. Use environment variable.
-      api_key_env: "OPENAI_API_KEY"
-      model: "text-embedding-3-small"
+      api_key_env: 'OPENAI_API_KEY'
+      model: 'text-embedding-3-small'
       dimensions: 1536
       # Maximum requests per minute (rate limiting)
       rate_limit_rpm: 500
@@ -548,15 +549,15 @@ ai:
   generative:
     # Provider selection: "none" (default) | "ollama" | "cloud"
     # "none" = classification uses centroid-only + rule-based fallback
-    provider: "none"
+    provider: 'none'
 
     # Ollama generative settings (used when provider = "ollama")
     ollama:
-      url: "http://localhost:11434"
+      url: 'http://localhost:11434'
       # Model for classification fallback
-      classification_model: "llama3.2:3b"
+      classification_model: 'llama3.2:3b'
       # Model for chat/conversational AI (can be same or different)
-      chat_model: "llama3.2:3b"
+      chat_model: 'llama3.2:3b'
       # Maximum tokens for classification responses
       classification_max_tokens: 50
       # Maximum tokens for chat responses
@@ -569,10 +570,10 @@ ai:
     # Cloud generative settings (used when provider = "cloud")
     cloud:
       # Cloud provider: "anthropic" | "openai" | "google"
-      provider: "anthropic"
-      api_key_env: "ANTHROPIC_API_KEY"
-      classification_model: "claude-haiku-4-5-20251001"
-      chat_model: "claude-sonnet-4-20250514"
+      provider: 'anthropic'
+      api_key_env: 'ANTHROPIC_API_KEY'
+      classification_model: 'claude-haiku-4-5-20251001'
+      chat_model: 'claude-sonnet-4-20250514'
       # Maximum requests per minute
       rate_limit_rpm: 60
 
@@ -581,11 +582,11 @@ ai:
     # Enable image embedding: true | false
     enabled: false
     # Provider: "onnx" | "ollama"
-    provider: "onnx"
+    provider: 'onnx'
     onnx:
       # CLIP model for image embeddings
-      model: "clip-vit-b-32"
-      model_path: "~/.emailibrium/models/"
+      model: 'clip-vit-b-32'
+      model_path: '~/.emailibrium/models/'
       use_gpu: false
 
   # --- Classification Tuning ---
@@ -622,7 +623,7 @@ ai:
     # Verify SHA-256 checksums of downloaded model files
     verify_checksums: true
     # Path to checksum manifest file
-    checksum_file: "~/.emailibrium/models/checksums.sha256"
+    checksum_file: '~/.emailibrium/models/checksums.sha256'
 ```
 
 ### 8.2 Environment Variable Overrides
@@ -668,16 +669,16 @@ export ANTHROPIC_API_KEY="sk-ant-..."
 
 ### 9.1 Comparative Privacy Posture
 
-| Aspect | Tier 0 (ONNX) | Tier 1 (Ollama) | Tier 2 (Cloud) |
-|---|---|---|---|
-| Data leaves process | No | No (localhost HTTP) | **Yes** |
-| Data leaves machine | No | No | **Yes** |
-| Network calls during inference | Zero | Zero | Per-request |
-| Third-party can observe content | No | No | **Yes (provider)** |
-| Model telemetry | None (see 9.2) | None (Ollama is open source) | Varies by provider |
-| Attack surface | Model file integrity | Ollama HTTP API on localhost | Internet-facing API calls |
-| Offline operation | Full | Full | None |
-| GDPR compliance | Inherent (no data processing by third party) | Inherent | Requires DPA with provider |
+| Aspect                          | Tier 0 (ONNX)                                | Tier 1 (Ollama)              | Tier 2 (Cloud)             |
+| ------------------------------- | -------------------------------------------- | ---------------------------- | -------------------------- |
+| Data leaves process             | No                                           | No (localhost HTTP)          | **Yes**                    |
+| Data leaves machine             | No                                           | No                           | **Yes**                    |
+| Network calls during inference  | Zero                                         | Zero                         | Per-request                |
+| Third-party can observe content | No                                           | No                           | **Yes (provider)**         |
+| Model telemetry                 | None (see 9.2)                               | None (Ollama is open source) | Varies by provider         |
+| Attack surface                  | Model file integrity                         | Ollama HTTP API on localhost | Internet-facing API calls  |
+| Offline operation               | Full                                         | Full                         | None                       |
+| GDPR compliance                 | Inherent (no data processing by third party) | Inherent                     | Requires DPA with provider |
 
 ### 9.2 ONNX Runtime Telemetry
 
@@ -717,6 +718,7 @@ For Tier 2, Emailibrium should implement:
 **Estimated effort:** 3--5 days
 
 1. **Add `fastembed` dependency to `backend/Cargo.toml`:**
+
    ```toml
    [dependencies]
    fastembed = "5.12"

@@ -43,10 +43,10 @@ This runs the full `make ci` pipeline: format check, lint, typecheck, and all te
 
 Update version numbers in:
 
-| File | Field |
-|------|-------|
-| `backend/Cargo.toml` | `version = "0.1.0"` |
-| `frontend/apps/web/package.json` | `"version": "0.1.0"` |
+| File                               | Field                |
+| ---------------------------------- | -------------------- |
+| `backend/Cargo.toml`               | `version = "0.1.0"`  |
+| `frontend/apps/web/package.json`   | `"version": "0.1.0"` |
 | `frontend/packages/*/package.json` | `"version": "0.1.0"` |
 
 Then commit:
@@ -77,6 +77,7 @@ This pushes the tag to origin, triggering `.github/workflows/release.yml`.
 Watch the Actions tab: `https://github.com/pacphi/emailibrium/actions/workflows/release.yml`
 
 The workflow will:
+
 - Run CI gate (format, test, typecheck)
 - Generate changelog from commit messages since last tag
 - Build `ghcr.io/pacphi/emailibrium/backend:<version>` and `ghcr.io/pacphi/emailibrium/frontend:<version>`
@@ -96,17 +97,17 @@ We follow [Semantic Versioning](https://semver.org/):
 
 Changelogs are auto-generated from [Conventional Commits](https://www.conventionalcommits.org/):
 
-| Prefix | Changelog Section | Example |
-|--------|------------------|---------|
-| `feat:` | Features | `feat: add subscription detection` |
-| `fix:` | Bug Fixes | `fix: correct RRF score calculation` |
-| `perf:` | Performance | `perf: optimize HNSW search latency` |
-| `docs:` | Documentation | `docs: update deployment guide` |
-| `refactor:` | Refactoring | `refactor: extract embedding pipeline trait` |
-| `test:` | Testing | `test: add clustering evaluation suite` |
-| `ci:` | CI/CD | `ci: add shellcheck validation` |
-| `deps:` | Dependencies | `deps: upgrade axum to 0.8.8` |
-| `chore:` | Maintenance | `chore: bump version to 0.2.0` |
+| Prefix      | Changelog Section | Example                                      |
+| ----------- | ----------------- | -------------------------------------------- |
+| `feat:`     | Features          | `feat: add subscription detection`           |
+| `fix:`      | Bug Fixes         | `fix: correct RRF score calculation`         |
+| `perf:`     | Performance       | `perf: optimize HNSW search latency`         |
+| `docs:`     | Documentation     | `docs: update deployment guide`              |
+| `refactor:` | Refactoring       | `refactor: extract embedding pipeline trait` |
+| `test:`     | Testing           | `test: add clustering evaluation suite`      |
+| `ci:`       | CI/CD             | `ci: add shellcheck validation`              |
+| `deps:`     | Dependencies      | `deps: upgrade axum to 0.8.8`                |
+| `chore:`    | Maintenance       | `chore: bump version to 0.2.0`               |
 
 ## Docker Images
 
@@ -142,10 +143,10 @@ make dev
 
 ## Useful Commands
 
-| Command | Description |
-|---------|-------------|
-| `make release-check` | Run full CI pipeline |
-| `make release-tag VERSION=x.y.z` | Create annotated tag |
-| `make release-push` | Push latest tag to origin |
-| `make release VERSION=x.y.z` | All three in sequence |
-| `make changelog VERSION=x.y.z` | Preview changelog without releasing |
+| Command                          | Description                         |
+| -------------------------------- | ----------------------------------- |
+| `make release-check`             | Run full CI pipeline                |
+| `make release-tag VERSION=x.y.z` | Create annotated tag                |
+| `make release-push`              | Push latest tag to origin           |
+| `make release VERSION=x.y.z`     | All three in sequence               |
+| `make changelog VERSION=x.y.z`   | Preview changelog without releasing |

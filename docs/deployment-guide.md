@@ -2,13 +2,13 @@
 
 ## Prerequisites
 
-| Tool | Version | Install |
-|------|---------|---------|
-| Rust | 1.94+ | `rustup default stable` |
-| Node.js | 20+ | [nodejs.org](https://nodejs.org/) or `nvm install 20` |
-| pnpm | 10.32+ | `corepack enable` (ships with Node.js 24+) |
-| Docker + Compose | Latest | [docker.com](https://www.docker.com/) (optional) |
-| Make | Any | Pre-installed on macOS/Linux |
+| Tool             | Version | Install                                               |
+| ---------------- | ------- | ----------------------------------------------------- |
+| Rust             | 1.94+   | `rustup default stable`                               |
+| Node.js          | 24+     | [nodejs.org](https://nodejs.org/) or `nvm install 24` |
+| pnpm             | 10.32+  | `corepack enable` (ships with Node.js 24+)            |
+| Docker + Compose | Latest  | [docker.com](https://www.docker.com/) (optional)      |
+| Make             | Any     | Pre-installed on macOS/Linux                          |
 
 ## Quick Start
 
@@ -17,17 +17,20 @@
 git clone https://github.com/pacphi/emailibrium.git
 cd emailibrium
 
-# 2. Install all dependencies (backend build + frontend install)
-make install
+# 2. Guided first-time setup (recommended)
+make setup              # interactive wizard: prereqs, secrets, AI providers, Docker
 
-# 3. Start both dev servers
-make dev
+# 3. Or skip the wizard and go directly:
+make install            # install all dependencies
+make dev                # start backend + frontend dev servers
 
 # 4. Open the application
 open http://localhost:3000
 ```
 
 The backend runs on `http://localhost:8080` and the frontend on `http://localhost:3000`.
+
+> **First time?** Run `make setup` for a guided walkthrough that checks prerequisites, generates secrets, configures AI providers, and validates your environment. See [Setup Guide](setup-guide.md) for the full reference.
 
 ## Configuration
 
@@ -44,21 +47,25 @@ Emailibrium uses [figment](https://docs.rs/figment) for layered configuration. S
 
 ```yaml
 # config.yaml
-host: "127.0.0.1"
+host: '127.0.0.1'
 port: 8080
-database_url: "sqlite:emailibrium.db?mode=rwc"
+database_url: 'sqlite:emailibrium.db?mode=rwc'
 
 store:
-  path: "data/vectors"
+  path: 'data/vectors'
   enabled: true
 
 embedding:
-  provider: "mock"       # "mock" | "ollama"
-  model: "all-MiniLM-L6-v2"
+  provider: 'onnx' # "onnx" | "mock" | "ollama" | "cloud"
+  model: 'all-MiniLM-L6-v2'
   dimensions: 384
   batch_size: 64
   cache_size: 10000
-  ollama_url: "http://localhost:11434"
+  ollama_url: 'http://localhost:11434'
+  onnx:
+    model: 'all-MiniLM-L6-v2'
+    show_download_progress: true
+    dimensions: 384
 
 encryption:
   enabled: false
@@ -68,6 +75,19 @@ search:
   default_limit: 20
   max_limit: 100
   similarity_threshold: 0.5
+
+# Generative AI (ADR-012) -- classification fallback and chat
+generative:
+  provider: 'none' # "none" | "ollama" | "cloud"
+  ollama:
+    base_url: 'http://localhost:11434'
+    classification_model: 'llama3.2'
+    chat_model: 'llama3.2'
+  cloud:
+    provider: 'openai' # "openai" | "anthropic"
+    api_key_env: 'EMAILIBRIUM_CLOUD_API_KEY'
+    model: 'gpt-4o-mini'
+    base_url: 'https://api.openai.com'
 ```
 
 ### Environment Variables
@@ -154,16 +174,60 @@ docker compose down
 
 ### Compose Services
 
-| Service | Port | Description |
-|---------|------|-------------|
-| `backend` | 8080 | Axum API server |
-| `frontend` | 3000 | Vite dev server (or Nginx for production) |
+| Service    | Port     | Description                               |
+| ---------- | -------- | ----------------------------------------- |
+| `backend`  | 8080     | Axum API server (Rust 1.94+)              |
+| `frontend` | 3000     | Vite dev server (or Nginx for production) |
+| `postgres` | internal | PostgreSQL 16 (no external port)          |
+| `redis`    | internal | Redis 7 cache (no external port)          |
+
+### Docker Configuration Files
+
+Docker Compose mounts environment-specific config from the `configs/` directory:
+
+```text
+configs/
+  config.development.yaml   # SQLite, ONNX embeddings, debug logging
+  config.production.yaml    # PostgreSQL, Ollama embeddings, info logging
+```
+
+The active config is selected via the `APP_ENV` variable (defaults to `development`):
+
+```bash
+# Development (default)
+docker compose up -d
+
+# Production
+APP_ENV=production docker compose up -d
+```
 
 ### Docker Build Notes
 
-- The backend uses a multi-stage Rust build to minimize image size
-- SQLite data is persisted via a named volume
+- The backend uses a multi-stage Rust 1.94 build to minimize image size
+- PostgreSQL and Redis data are persisted via named volumes
 - The frontend is built as static assets and served via Nginx in production
+- Secrets are mounted via Docker secrets from `secrets/{env}/` (see `secrets/dev.example/`)
+
+## Database Strategy: SQLite vs PostgreSQL
+
+SQLite is the primary database for development and single-node deployment. It requires no external process, supports the full feature set, and is the default (`database_url: "sqlite:emailibrium.db?mode=rwc"`).
+
+PostgreSQL 16 is available via Docker Compose for scale-out scenarios and production deployments requiring concurrent write access. The backend uses SQLx with compile-time-checked queries that work against both SQLite and PostgreSQL -- switching is a matter of changing the `database_url` connection string.
+
+| Scenario                     | Recommended Database | Rationale                                         |
+| ---------------------------- | -------------------- | ------------------------------------------------- |
+| Local development            | SQLite               | Zero setup, fast iteration                        |
+| Single-user deployment       | SQLite               | No external dependencies, simpler operations      |
+| Multi-user / team deployment | PostgreSQL 16        | Concurrent write safety, connection pooling       |
+| High-availability production | PostgreSQL 16        | Replication, backup tooling, monitoring ecosystem |
+
+To switch to PostgreSQL, set the database URL:
+
+```bash
+export EMAILIBRIUM_DATABASE_URL="postgres://user:password@localhost:5432/emailibrium"
+```
+
+The Docker Compose configuration provisions a PostgreSQL 16 instance automatically. Data is persisted via a named Docker volume.
 
 ## Production Deployment
 
@@ -225,13 +289,14 @@ emailibrium.example.com {
 
 ### Secrets Management
 
-| Secret | Storage | Notes |
-|--------|---------|-------|
+| Secret                     | Storage              | Notes                                    |
+| -------------------------- | -------------------- | ---------------------------------------- |
 | Encryption master password | Environment variable | Never in config files or version control |
-| OAuth client secrets | Environment variable | Per-provider (Gmail, Outlook) |
-| Database path | Environment variable | Use absolute path in production |
+| OAuth client secrets       | Environment variable | Per-provider (Gmail, Outlook)            |
+| Database path              | Environment variable | Use absolute path in production          |
 
 Recommended approaches:
+
 - **Systemd**: Use `EnvironmentFile=/etc/emailibrium/env`
 - **Docker**: Use Docker secrets or `.env` file (not committed)
 - **Cloud**: Use the platform's secret manager (AWS Secrets Manager, GCP Secret Manager, etc.)
@@ -272,17 +337,17 @@ Use this endpoint for load balancer health checks and uptime monitoring.
 
 ## Build Commands Reference
 
-| Command | Description |
-|---------|-------------|
-| `make install` | Install all dependencies |
-| `make build` | Build backend and frontend |
-| `make test` | Run all tests |
-| `make lint` | Lint all code |
-| `make format` | Format all code |
-| `make ci` | Full CI pipeline (format-check, lint, typecheck, test) |
-| `make dev` | Start dev servers |
-| `make clean` | Clean build artifacts |
-| `make audit` | Security audit dependencies |
+| Command        | Description                                            |
+| -------------- | ------------------------------------------------------ |
+| `make install` | Install all dependencies                               |
+| `make build`   | Build backend and frontend                             |
+| `make test`    | Run all tests                                          |
+| `make lint`    | Lint all code                                          |
+| `make format`  | Format all code                                        |
+| `make ci`      | Full CI pipeline (format-check, lint, typecheck, test) |
+| `make dev`     | Start dev servers                                      |
+| `make clean`   | Clean build artifacts                                  |
+| `make audit`   | Security audit dependencies                            |
 
 ## Troubleshooting
 
@@ -296,7 +361,7 @@ export EMAILIBRIUM_DATABASE_URL="sqlite:emailibrium.db?mode=rwc"
 
 ### Embedding provider unavailable
 
-If Ollama is not running, the system falls back to the mock embedding model automatically. To use real embeddings:
+The default embedding provider is ONNX, which runs locally without any external service. If you need Ollama instead:
 
 ```bash
 # Install and start Ollama
@@ -308,8 +373,19 @@ Then set the provider in config:
 
 ```yaml
 embedding:
-  provider: "ollama"
-  ollama_url: "http://localhost:11434"
+  provider: 'ollama' # onnx | mock | ollama | cloud
+  ollama_url: 'http://localhost:11434'
+```
+
+The ONNX provider downloads the model on first use. To configure ONNX options:
+
+```yaml
+embedding:
+  provider: 'onnx'
+  onnx:
+    model: 'all-MiniLM-L6-v2'
+    show_download_progress: true
+    dimensions: 384
 ```
 
 ### Port already in use
