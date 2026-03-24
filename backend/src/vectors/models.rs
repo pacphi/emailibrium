@@ -37,7 +37,9 @@ pub fn known_models() -> Vec<ModelManifest> {
             onnx_size_bytes: 90_000_000,
             max_tokens: 256,
             languages: vec!["en".to_string()],
-            description: "Fast, lightweight English embedding. Best size/quality trade-off for email.".to_string(),
+            description:
+                "Fast, lightweight English embedding. Best size/quality trade-off for email."
+                    .to_string(),
         },
         ModelManifest {
             name: "bge-small-en-v1.5".to_string(),
@@ -94,11 +96,7 @@ pub fn get_model_statuses(active_model: &str, cache_dir: &str) -> Vec<ModelStatu
                 downloaded,
                 active: m.name == active_model,
                 dimensions: m.dimensions,
-                cache_path: if downloaded {
-                    Some(cache_path)
-                } else {
-                    None
-                },
+                cache_path: if downloaded { Some(cache_path) } else { None },
             }
         })
         .collect()
@@ -128,10 +126,7 @@ mod tests {
             assert!(!model.parameters.is_empty(), "Parameters must not be empty");
             assert!(model.onnx_size_bytes > 0, "ONNX size must be positive");
             assert!(model.max_tokens > 0, "Max tokens must be positive");
-            assert!(
-                !model.languages.is_empty(),
-                "Languages must not be empty"
-            );
+            assert!(!model.languages.is_empty(), "Languages must not be empty");
             assert!(
                 !model.description.is_empty(),
                 "Description must not be empty"

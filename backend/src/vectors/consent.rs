@@ -9,8 +9,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info};
 
-use crate::db::Database;
 use super::error::VectorError;
+use crate::db::Database;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -130,12 +130,14 @@ impl ConsentManager {
 
         Ok(rows
             .into_iter()
-            .map(|(provider, consented_at, revoked_at, acknowledgment)| ConsentRecord {
-                provider,
-                consented_at,
-                revoked_at,
-                acknowledgment,
-            })
+            .map(
+                |(provider, consented_at, revoked_at, acknowledgment)| ConsentRecord {
+                    provider,
+                    consented_at,
+                    revoked_at,
+                    acknowledgment,
+                },
+            )
             .collect())
     }
 
@@ -168,20 +170,28 @@ impl ConsentManager {
     }
 
     /// Get a paginated view of the audit log (newest first).
-    pub async fn get_audit_log(
-        &self,
-        page: u32,
-        per_page: u32,
-    ) -> Result<AuditPage, VectorError> {
+    pub async fn get_audit_log(&self, page: u32, per_page: u32) -> Result<AuditPage, VectorError> {
         let offset = (page.saturating_sub(1)) as i64 * per_page as i64;
         let limit = per_page as i64;
 
-        let (total,): (i64,) =
-            sqlx::query_as("SELECT COUNT(*) FROM ai_audit_log")
-                .fetch_one(&self.db.pool)
-                .await?;
+        let (total,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM ai_audit_log")
+            .fetch_one(&self.db.pool)
+            .await?;
 
-        let rows = sqlx::query_as::<_, (i64, DateTime<Utc>, String, String, String, Option<i64>, Option<i64>, Option<String>, Option<i64>)>(
+        let rows = sqlx::query_as::<
+            _,
+            (
+                i64,
+                DateTime<Utc>,
+                String,
+                String,
+                String,
+                Option<i64>,
+                Option<i64>,
+                Option<String>,
+                Option<i64>,
+            ),
+        >(
             "SELECT id, timestamp, provider, model, endpoint, \
                     input_token_count, output_token_count, input_hash, latency_ms \
              FROM ai_audit_log ORDER BY timestamp DESC LIMIT ? OFFSET ?",

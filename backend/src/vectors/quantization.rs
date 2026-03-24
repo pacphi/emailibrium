@@ -202,7 +202,7 @@ impl ProductQuantizer {
         assert!(!vectors.is_empty(), "need at least one training vector");
         let dims = vectors[0].len();
         assert!(
-            dims % num_subvectors == 0,
+            dims.is_multiple_of(num_subvectors),
             "dimensions must be divisible by num_subvectors"
         );
         let sub_dim = dims / num_subvectors;
@@ -406,6 +406,101 @@ impl BinaryQuantizer {
     pub fn approx_cosine_similarity(a: &BinaryVector, b: &BinaryVector) -> f32 {
         let hamming = Self::hamming_distance(a, b);
         1.0 - 2.0 * hamming as f32 / a.num_dims as f32
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Convenience dispatchers
+// ---------------------------------------------------------------------------
+
+/// Quantize an fp32 vector to a compact byte representation based on the tier.
+///
+/// - `None` → raw little-endian f32 bytes (no compression)
+/// - `Scalar` → int8 per dimension + 8 bytes (min, max) header
+/// - `Binary` → packed sign bits
+///
+/// Note: `Product` quantization requires a trained codebook and cannot be used
+/// with this stateless dispatcher. Use `ProductQuantizer::train` + `quantize` directly.
+pub fn quantize_vector(vector: &[f32], tier: QuantizationTier) -> Vec<u8> {
+    match tier {
+        QuantizationTier::None => {
+            // Raw fp32 little-endian.
+            vector.iter().flat_map(|v| v.to_le_bytes()).collect()
+        }
+        QuantizationTier::Scalar => {
+            let q = ScalarQuantizer::quantize(vector);
+            // Header: min_val (4B) + max_val (4B) + dims (4B), then data.
+            let mut bytes = Vec::with_capacity(12 + q.data.len());
+            bytes.extend_from_slice(&q.min_val.to_le_bytes());
+            bytes.extend_from_slice(&q.max_val.to_le_bytes());
+            bytes.extend_from_slice(&(q.original_dims as u32).to_le_bytes());
+            bytes.extend(q.data.iter().map(|&v| v as u8));
+            bytes
+        }
+        QuantizationTier::Binary => {
+            let bv = BinaryQuantizer::quantize(vector);
+            // Header: num_dims (4B), then packed bits.
+            let mut bytes = Vec::with_capacity(4 + bv.data.len());
+            bytes.extend_from_slice(&(bv.num_dims as u32).to_le_bytes());
+            bytes.extend_from_slice(&bv.data);
+            bytes
+        }
+        QuantizationTier::Product => {
+            // PQ requires a trained codebook; fall through to raw fp32.
+            // Callers needing PQ should use ProductQuantizer directly.
+            vector.iter().flat_map(|v| v.to_le_bytes()).collect()
+        }
+    }
+}
+
+/// Dequantize a byte representation back to fp32 based on the tier.
+///
+/// `dims` is the original vector dimensionality (required for `None` and `Product` tiers).
+pub fn dequantize_vector(bytes: &[u8], tier: QuantizationTier, dims: usize) -> Vec<f32> {
+    match tier {
+        QuantizationTier::None | QuantizationTier::Product => {
+            // Raw fp32 little-endian.
+            bytes
+                .chunks_exact(4)
+                .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+                .collect()
+        }
+        QuantizationTier::Scalar => {
+            if bytes.len() < 12 {
+                return vec![0.0; dims];
+            }
+            let min_val = f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+            let max_val = f32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
+            let original_dims =
+                u32::from_le_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]) as usize;
+            let data: Vec<i8> = bytes[12..].iter().map(|&b| b as i8).collect();
+            let q = QuantizedVector {
+                data,
+                min_val,
+                max_val,
+                original_dims,
+            };
+            ScalarQuantizer::dequantize(&q)
+        }
+        QuantizationTier::Binary => {
+            if bytes.len() < 4 {
+                return vec![0.0; dims];
+            }
+            let num_dims = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as usize;
+            // Binary dequantization: reconstruct sign vector (+1.0 / -1.0).
+            let packed = &bytes[4..];
+            (0..num_dims)
+                .map(|i| {
+                    let byte_idx = i / 8;
+                    let bit_idx = 7 - (i % 8);
+                    if byte_idx < packed.len() && (packed[byte_idx] >> bit_idx) & 1 == 1 {
+                        1.0
+                    } else {
+                        -1.0
+                    }
+                })
+                .collect()
+        }
     }
 }
 

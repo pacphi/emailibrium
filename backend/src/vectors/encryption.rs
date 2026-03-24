@@ -143,7 +143,7 @@ fn f32_slice_to_bytes(values: &[f32]) -> Vec<u8> {
 
 /// Deserialize raw little-endian bytes back into a Vec<f32>.
 fn bytes_to_f32_vec(bytes: &[u8]) -> Result<Vec<f32>, VectorError> {
-    if bytes.len() % 4 != 0 {
+    if !bytes.len().is_multiple_of(4) {
         return Err(VectorError::DecryptionError(format!(
             "Decrypted data length {} is not a multiple of 4",
             bytes.len()

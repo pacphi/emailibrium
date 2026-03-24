@@ -753,8 +753,14 @@ mod tests {
     #[test]
     fn test_parse_email_category() {
         assert_eq!(parse_email_category("Work"), Some(EmailCategory::Work));
-        assert_eq!(parse_email_category("finance"), Some(EmailCategory::Finance));
-        assert_eq!(parse_email_category("SHOPPING"), Some(EmailCategory::Shopping));
+        assert_eq!(
+            parse_email_category("finance"),
+            Some(EmailCategory::Finance)
+        );
+        assert_eq!(
+            parse_email_category("SHOPPING"),
+            Some(EmailCategory::Shopping)
+        );
         assert_eq!(parse_email_category("unknown"), None);
     }
 }

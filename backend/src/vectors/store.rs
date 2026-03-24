@@ -9,6 +9,9 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use super::error::VectorError;
+use super::quantization::{
+    dequantize_vector, quantize_vector, QuantizationEngine, QuantizationTier,
+};
 use super::types::{
     ScoredResult, SearchParams, VectorCollection, VectorDocument, VectorId, VectorStats,
 };
@@ -299,6 +302,94 @@ impl VectorStoreBackend for InMemoryVectorStore {
             .collect();
 
         Ok(docs)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Quantization-aware store wrapper (ADR-007)
+// ---------------------------------------------------------------------------
+
+/// Wraps any `VectorStoreBackend` with transparent quantization support.
+///
+/// Vectors are quantized before storage and dequantized on retrieval.
+/// The quantization tier is determined by the `QuantizationEngine` based on
+/// the current vector count.
+/// A quantized blob: tier, compressed bytes, and original dimensionality.
+type QuantizedBlob = (QuantizationTier, Vec<u8>, usize);
+
+pub struct QuantizedVectorStore {
+    inner: Arc<dyn VectorStoreBackend>,
+    engine: Arc<QuantizationEngine>,
+    /// Quantized blob storage: vector_id → (tier, compressed bytes, original dims).
+    blobs: Arc<RwLock<HashMap<VectorId, QuantizedBlob>>>,
+}
+
+impl QuantizedVectorStore {
+    /// Create a new quantization wrapper around an existing store.
+    pub fn new(inner: Arc<dyn VectorStoreBackend>, engine: Arc<QuantizationEngine>) -> Self {
+        Self {
+            inner,
+            engine,
+            blobs: Arc::new(RwLock::new(HashMap::new())),
+        }
+    }
+
+    /// Store a vector with quantization applied based on the current tier.
+    ///
+    /// The full-precision vector is stored in the inner store for search accuracy,
+    /// while the quantized blob is stored alongside for memory-efficient bulk storage.
+    pub async fn store_with_quantization(
+        &self,
+        doc: VectorDocument,
+    ) -> Result<VectorId, VectorError> {
+        let count = self.inner.count().await?;
+        let tier = self.engine.recommended_tier(count);
+        let dims = doc.vector.len();
+        let compressed = quantize_vector(&doc.vector, tier);
+
+        let id = self.inner.insert(doc).await?;
+
+        let mut blobs = self.blobs.write().await;
+        blobs.insert(id.clone(), (tier, compressed, dims));
+
+        // Check if a tier transition is needed.
+        if let Some(new_tier) = self.engine.check_transition(count + 1).await {
+            tracing::info!(
+                "Quantization tier transition to {:?} at {} vectors",
+                new_tier,
+                count + 1
+            );
+        }
+
+        Ok(id)
+    }
+
+    /// Retrieve the quantized blob for a vector, dequantizing back to fp32.
+    pub async fn get_dequantized(&self, id: &VectorId) -> Result<Option<Vec<f32>>, VectorError> {
+        let blobs = self.blobs.read().await;
+        match blobs.get(id) {
+            Some((tier, bytes, dims)) => Ok(Some(dequantize_vector(bytes, *tier, *dims))),
+            None => {
+                // Fall back to the inner store's full-precision vector.
+                let doc = self.inner.get(id).await?;
+                Ok(doc.map(|d| d.vector))
+            }
+        }
+    }
+
+    /// Get the current quantization tier.
+    pub async fn current_tier(&self) -> QuantizationTier {
+        self.engine.current_tier().await
+    }
+
+    /// Get the number of quantized blobs stored.
+    pub async fn quantized_count(&self) -> usize {
+        self.blobs.read().await.len()
+    }
+
+    /// Access the inner store for standard operations.
+    pub fn inner(&self) -> &Arc<dyn VectorStoreBackend> {
+        &self.inner
     }
 }
 

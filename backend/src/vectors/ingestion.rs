@@ -18,7 +18,7 @@ use super::categorizer::VectorCategorizer;
 use super::embedding::EmbeddingPipeline;
 use super::error::VectorError;
 use super::store::VectorStoreBackend;
-use super::types::{VectorCollection, VectorDocument, VectorId};
+use super::types::{EmbeddingStatus, VectorCollection, VectorDocument, VectorId};
 
 // ---------------------------------------------------------------------------
 // Types
@@ -101,6 +101,45 @@ pub struct IngestionProgress {
     pub emails_per_second: f64,
 }
 
+/// Per-email embedding status record for tracking pipeline progress.
+#[derive(Debug, Clone, Serialize)]
+pub struct EmailEmbeddingRecord {
+    pub email_id: String,
+    pub status: EmbeddingStatus,
+    pub error_message: Option<String>,
+    pub embedded_at: Option<DateTime<Utc>>,
+}
+
+impl EmailEmbeddingRecord {
+    /// Create a new record in Pending state.
+    pub fn pending(email_id: String) -> Self {
+        Self {
+            email_id,
+            status: EmbeddingStatus::Pending,
+            error_message: None,
+            embedded_at: None,
+        }
+    }
+
+    /// Mark as successfully embedded.
+    pub fn mark_embedded(&mut self) {
+        self.status = EmbeddingStatus::Embedded;
+        self.embedded_at = Some(Utc::now());
+        self.error_message = None;
+    }
+
+    /// Mark as failed with an error message.
+    pub fn mark_failed(&mut self, error: String) {
+        self.status = EmbeddingStatus::Failed;
+        self.error_message = Some(error);
+    }
+
+    /// Mark as stale (needs re-embedding).
+    pub fn mark_stale(&mut self) {
+        self.status = EmbeddingStatus::Stale;
+    }
+}
+
 /// Row from the emails table needed for ingestion.
 struct PendingEmail {
     id: String,
@@ -174,10 +213,10 @@ impl IngestionPipeline {
         }
 
         let job_id = Uuid::new_v4().to_string();
-        let job = IngestionJob {
+        let mut job = IngestionJob {
             id: job_id.clone(),
             account_id: account_id.to_string(),
-            status: JobStatus::Running,
+            status: JobStatus::Pending,
             total: 0,
             processed: 0,
             embedded: 0,
@@ -188,6 +227,8 @@ impl IngestionPipeline {
             completed_at: None,
             emails_per_second: 0.0,
         };
+        // Transition Pending → Running before spawning the background task.
+        job.status = JobStatus::Running;
         state.current_job = Some(job);
         state.paused = false;
         drop(state);

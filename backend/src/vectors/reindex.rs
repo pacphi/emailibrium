@@ -73,12 +73,11 @@ impl ReindexOrchestrator {
         current_model: &str,
         _current_dims: usize,
     ) -> Result<bool, VectorError> {
-        let stored: Option<(String,)> = sqlx::query_as(
-            "SELECT value FROM ai_metadata WHERE key = 'active_embedding_model'",
-        )
-        .fetch_optional(&self.db.pool)
-        .await
-        .map_err(VectorError::DatabaseError)?;
+        let stored: Option<(String,)> =
+            sqlx::query_as("SELECT value FROM ai_metadata WHERE key = 'active_embedding_model'")
+                .fetch_optional(&self.db.pool)
+                .await
+                .map_err(VectorError::DatabaseError)?;
 
         match stored {
             Some((stored_model,)) if stored_model != current_model => {
@@ -250,21 +249,19 @@ mod tests {
         assert_eq!(status.total_emails, 5);
 
         // Verify the DB was updated.
-        let stale: (i64,) = sqlx::query_as(
-            "SELECT COUNT(*) FROM emails WHERE embedding_status = 'stale'",
-        )
-        .fetch_one(&db.pool)
-        .await
-        .unwrap();
+        let stale: (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM emails WHERE embedding_status = 'stale'")
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
         assert_eq!(stale.0, 5);
 
         // Pending email should be unchanged.
-        let pending: (String,) = sqlx::query_as(
-            "SELECT embedding_status FROM emails WHERE id = 'email-pending'",
-        )
-        .fetch_one(&db.pool)
-        .await
-        .unwrap();
+        let pending: (String,) =
+            sqlx::query_as("SELECT embedding_status FROM emails WHERE id = 'email-pending'")
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
         assert_eq!(pending.0, "pending");
     }
 }

@@ -2,8 +2,8 @@
 //! Measures silhouette coefficient, ARI, subscription detection precision/recall.
 
 use emailibrium::vectors::metrics::{
-    adjusted_rand_index, detection_metrics, euclidean_distance, silhouette_sample, silhouette_score,
-    DetectionMetrics,
+    adjusted_rand_index, detection_metrics, euclidean_distance, silhouette_sample,
+    silhouette_score, DetectionMetrics,
 };
 
 // ---------------------------------------------------------------------------
@@ -201,7 +201,8 @@ fn test_detection_metrics_partial() {
     // tp=2, fp=1, fn=1
     let expected_precision = 2.0 / 3.0;
     let expected_recall = 2.0 / 3.0;
-    let expected_f1 = 2.0 * expected_precision * expected_recall / (expected_precision + expected_recall);
+    let expected_f1 =
+        2.0 * expected_precision * expected_recall / (expected_precision + expected_recall);
 
     assert!(
         (m.precision - expected_precision).abs() < 1e-5,
@@ -248,14 +249,20 @@ fn test_subscription_detection_pipeline() {
             id: "email-1".into(),
             headers: vec![
                 ("From".into(), "newsletter@example.com".into()),
-                ("List-Unsubscribe".into(), "<mailto:unsub@example.com>".into()),
+                (
+                    "List-Unsubscribe".into(),
+                    "<mailto:unsub@example.com>".into(),
+                ),
             ],
         },
         TestEmail {
             id: "email-2".into(),
             headers: vec![
                 ("From".into(), "promo@store.com".into()),
-                ("List-Unsubscribe".into(), "<https://store.com/unsub>".into()),
+                (
+                    "List-Unsubscribe".into(),
+                    "<https://store.com/unsub>".into(),
+                ),
             ],
         },
         TestEmail {
@@ -291,9 +298,9 @@ fn test_subscription_detection_pipeline() {
     let predicted_subs: Vec<String> = emails
         .iter()
         .filter(|e| {
-            e.headers.iter().any(|(k, v)| {
-                k == "From" && subscription_domains.iter().any(|d| v.contains(d))
-            })
+            e.headers
+                .iter()
+                .any(|(k, v)| k == "From" && subscription_domains.iter().any(|d| v.contains(d)))
         })
         .map(|e| e.id.clone())
         .collect();

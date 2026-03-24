@@ -461,6 +461,59 @@ impl ConfusionMatrix {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Aggregated Evaluation Report
+// ---------------------------------------------------------------------------
+
+/// Aggregated evaluation report combining clustering, classification, and
+/// detection metrics into a single summary (Sprint 7).
+#[derive(Debug, Clone)]
+pub struct EvaluationReport {
+    /// Adjusted Rand Index for clustering quality.
+    pub ari: Option<f32>,
+    /// Mean silhouette coefficient for cluster compactness.
+    pub silhouette: Option<f32>,
+    /// Macro-averaged F1 from the classification confusion matrix.
+    pub classification_f1: Option<f32>,
+    /// Classification accuracy.
+    pub classification_accuracy: Option<f32>,
+    /// Subscription/binary detection metrics.
+    pub subscription_detection: Option<DetectionMetrics>,
+}
+
+/// Input data for cluster silhouette evaluation.
+pub type ClusterEvalData<'a> = (&'a [Vec<f32>], &'a [usize], fn(&[f32], &[f32]) -> f32);
+
+/// Generate an evaluation report from available data.
+///
+/// Each parameter is optional — pass `None` for metrics you don't have data for.
+pub fn generate_evaluation_report(
+    clustering: Option<(&[usize], &[usize])>,
+    cluster_data: Option<ClusterEvalData<'_>>,
+    classification: Option<&ConfusionMatrix>,
+    detection: Option<(&[String], &[String])>,
+) -> EvaluationReport {
+    let ari =
+        clustering.map(|(true_labels, pred_labels)| adjusted_rand_index(true_labels, pred_labels));
+
+    let silhouette =
+        cluster_data.map(|(data, labels, dist_fn)| silhouette_score(data, labels, dist_fn));
+
+    let classification_f1 = classification.map(|cm| cm.macro_f1());
+    let classification_accuracy = classification.map(|cm| cm.accuracy());
+
+    let subscription_detection =
+        detection.map(|(predicted, actual)| detection_metrics(predicted, actual));
+
+    EvaluationReport {
+        ari,
+        silhouette,
+        classification_f1,
+        classification_accuracy,
+        subscription_detection,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -481,7 +534,10 @@ mod tests {
     fn test_ari_identical() {
         let labels = vec![0, 0, 1, 1, 2, 2];
         let ari = adjusted_rand_index(&labels, &labels);
-        assert!((ari - 1.0).abs() < 1e-6, "ARI of identical labellings = 1.0, got {ari}");
+        assert!(
+            (ari - 1.0).abs() < 1e-6,
+            "ARI of identical labellings = 1.0, got {ari}"
+        );
     }
 
     #[test]

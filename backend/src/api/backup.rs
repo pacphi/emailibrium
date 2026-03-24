@@ -69,20 +69,18 @@ async fn backup_stats(
     State(state): State<AppState>,
 ) -> Result<Json<BackupStatsResponse>, (StatusCode, String)> {
     // Query backup count and latest timestamp directly from the database.
-    let row: (i64, Option<String>) = sqlx::query_as(
-        "SELECT COUNT(*), MAX(updated_at) FROM vector_backups",
-    )
-    .fetch_one(&state.db.pool)
-    .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let row: (i64, Option<String>) =
+        sqlx::query_as("SELECT COUNT(*), MAX(updated_at) FROM vector_backups")
+            .fetch_one(&state.db.pool)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     // Estimate total size from vector_data column.
-    let size_row: (Option<i64>,) = sqlx::query_as(
-        "SELECT SUM(LENGTH(vector_data)) FROM vector_backups",
-    )
-    .fetch_one(&state.db.pool)
-    .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let size_row: (Option<i64>,) =
+        sqlx::query_as("SELECT SUM(LENGTH(vector_data)) FROM vector_backups")
+            .fetch_one(&state.db.pool)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     Ok(Json(BackupStatsResponse {
         backup_count: row.0 as u64,

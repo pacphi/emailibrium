@@ -20,6 +20,7 @@ use tracing::{debug, warn};
 
 use super::config::{EmbeddingConfig, OnnxConfig};
 use super::error::VectorError;
+use super::models;
 
 // ---------------------------------------------------------------------------
 // Trait
@@ -385,6 +386,17 @@ impl EmbeddingPipeline {
     ///
     /// Unknown providers return [`VectorError::ConfigError`].
     pub fn new(config: &EmbeddingConfig) -> Result<Self, VectorError> {
+        // Validate model dimensions against the manifest if the model is known.
+        if let Some(manifest) = models::get_manifest(&config.model) {
+            if config.dimensions != manifest.dimensions {
+                warn!(
+                    "Configured dimensions ({}) differ from manifest ({}) for model '{}'. \
+                     Using manifest value.",
+                    config.dimensions, manifest.dimensions, config.model
+                );
+            }
+        }
+
         let mut providers: Vec<Arc<dyn EmbeddingModel>> = Vec::new();
 
         match config.provider.as_str() {
@@ -444,6 +456,21 @@ impl EmbeddingPipeline {
     }
 
     // -- public API ----------------------------------------------------------
+
+    /// List all known embedding models from the manifest catalog.
+    pub fn available_models() -> Vec<models::ModelManifest> {
+        models::known_models()
+    }
+
+    /// Get the validated dimensions for a model name.
+    ///
+    /// If the model is in the manifest, returns the manifest dimensions.
+    /// Otherwise returns the provided fallback value.
+    pub fn validated_dimensions(model_name: &str, fallback: usize) -> usize {
+        models::get_manifest(model_name)
+            .map(|m| m.dimensions)
+            .unwrap_or(fallback)
+    }
 
     /// Embed a single piece of text with caching and fallback.
     pub async fn embed(&self, text: &str) -> Result<Vec<f32>, VectorError> {
@@ -764,11 +791,7 @@ mod tests {
         let config = super::super::config::OnnxConfig::default();
         let model = OnnxEmbeddingModel::new(&config).expect("ONNX init should succeed");
         let v = model.embed("hello world").await.unwrap();
-        assert_eq!(
-            v.len(),
-            384,
-            "all-MiniLM-L6-v2 produces 384-dim embeddings"
-        );
+        assert_eq!(v.len(), 384, "all-MiniLM-L6-v2 produces 384-dim embeddings");
         assert_eq!(model.dimensions(), 384);
     }
 
@@ -790,7 +813,10 @@ mod tests {
 
         let v_cat = model.embed("The cat sat on the mat").await.unwrap();
         let v_dog = model.embed("The dog lay on the rug").await.unwrap();
-        let v_stock = model.embed("Stock prices rose sharply today").await.unwrap();
+        let v_stock = model
+            .embed("Stock prices rose sharply today")
+            .await
+            .unwrap();
 
         fn cosine(a: &[f32], b: &[f32]) -> f32 {
             let dot: f32 = a.iter().zip(b).map(|(x, y)| x * y).sum();

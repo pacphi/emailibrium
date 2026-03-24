@@ -55,8 +55,7 @@ fn f32_slice_to_bytes(values: &[f32]) -> Vec<u8> {
 #[test]
 fn test_encryption_at_rest_roundtrip() {
     let inner: Arc<dyn VectorStoreBackend> = Arc::new(InMemoryVectorStore::new());
-    let store =
-        EncryptedVectorStore::new(inner, &encryption_config("audit-password-1")).unwrap();
+    let store = EncryptedVectorStore::new(inner, &encryption_config("audit-password-1")).unwrap();
 
     let original = vec![0.1_f32, 0.25, -0.37, 0.0, 42.42, 1.0, -1.0, 0.999];
     let encrypted = store.encrypt_vector(&original).unwrap();
@@ -87,8 +86,7 @@ fn test_encryption_at_rest_roundtrip() {
 #[test]
 fn test_encryption_different_nonces() {
     let inner: Arc<dyn VectorStoreBackend> = Arc::new(InMemoryVectorStore::new());
-    let store =
-        EncryptedVectorStore::new(inner, &encryption_config("audit-password-2")).unwrap();
+    let store = EncryptedVectorStore::new(inner, &encryption_config("audit-password-2")).unwrap();
 
     let vector = vec![1.0_f32, 2.0, 3.0, 4.0, 5.0];
 
@@ -291,8 +289,8 @@ async fn test_embedding_invertibility_risk() {
 /// (not raw f32 bytes) when encryption is enabled.
 #[tokio::test]
 async fn test_vector_backup_encrypted() {
-    use emailibrium::vectors::backup::VectorBackupService;
     use emailibrium::db::Database;
+    use emailibrium::vectors::backup::VectorBackupService;
     use sqlx::sqlite::SqlitePoolOptions;
 
     // Set up an in-memory SQLite database with schema.
@@ -422,16 +420,10 @@ fn test_cors_not_wildcard() {
     // 1. The allowed origin should be specific (e.g., http://localhost:3000)
     // 2. It must never be a bare wildcard "*"
 
-    let allowed_origins = vec![
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-    ];
+    let allowed_origins = vec!["http://localhost:3000", "http://127.0.0.1:3000"];
 
     for origin in &allowed_origins {
-        assert_ne!(
-            *origin, "*",
-            "CORS allowed origin must not be a wildcard"
-        );
+        assert_ne!(*origin, "*", "CORS allowed origin must not be a wildcard");
         assert!(
             origin.starts_with("http://") || origin.starts_with("https://"),
             "CORS origin must be a proper URL, got: {origin}"

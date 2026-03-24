@@ -152,7 +152,9 @@ impl VectorService {
                         Some(Arc::new(model))
                     }
                     Err(e) => {
-                        tracing::warn!("Cloud generative model init failed: {e}, falling back to none");
+                        tracing::warn!(
+                            "Cloud generative model init failed: {e}, falling back to none"
+                        );
                         None
                     }
                 },
@@ -173,7 +175,10 @@ impl VectorService {
         {
             if needs_reindex {
                 let count = reindex_orchestrator.mark_all_stale().await.unwrap_or(0);
-                tracing::info!("Marked {} emails for re-indexing due to model change", count);
+                tracing::info!(
+                    "Marked {} emails for re-indexing due to model change",
+                    count
+                );
             }
         }
 

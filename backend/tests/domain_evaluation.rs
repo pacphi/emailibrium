@@ -290,7 +290,10 @@ async fn test_embedding_model_consistency() {
     let pipeline = default_pipeline();
     let v1 = pipeline.embed(text).await.unwrap();
     let v2 = pipeline.embed(text).await.unwrap();
-    assert_eq!(v1, v2, "Pipeline should return consistent results (cache or not)");
+    assert_eq!(
+        v1, v2,
+        "Pipeline should return consistent results (cache or not)"
+    );
 }
 
 #[tokio::test]
@@ -308,7 +311,10 @@ async fn test_model_switching_procedure() {
         "Pipeline should be available with mock provider"
     );
 
-    let sample_vec = pipeline.embed("test embedding dimension check").await.unwrap();
+    let sample_vec = pipeline
+        .embed("test embedding dimension check")
+        .await
+        .unwrap();
     assert_eq!(
         sample_vec.len(),
         config.dimensions,

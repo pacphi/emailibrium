@@ -77,7 +77,8 @@ pub struct SessionState {
 }
 
 impl SessionState {
-    fn new(session_id: String) -> Self {
+    /// Create a new session with the given identifier.
+    pub fn new(session_id: String) -> Self {
         Self {
             session_id,
             started_at: Utc::now(),
@@ -86,6 +87,68 @@ impl SessionState {
             interaction_count: 0,
         }
     }
+
+    /// The unique session identifier.
+    pub fn session_id(&self) -> &str {
+        &self.session_id
+    }
+
+    /// How long this session has been active.
+    pub fn age(&self) -> chrono::Duration {
+        Utc::now() - self.started_at
+    }
+
+    /// Compute the SONA Tier 2 preference vector: mean(clicked) − mean(skipped).
+    ///
+    /// Returns `None` if there are no clicked embeddings (nothing to learn from).
+    pub fn preference_vector(&self) -> Option<Vec<f32>> {
+        if self.clicked_embeddings.is_empty() {
+            return None;
+        }
+
+        let dims = self.clicked_embeddings[0].len();
+
+        let clicked_mean = mean_vector(&self.clicked_embeddings, dims);
+        let skipped_mean = if self.skipped_embeddings.is_empty() {
+            vec![0.0; dims]
+        } else {
+            mean_vector(&self.skipped_embeddings, dims)
+        };
+
+        let pref: Vec<f32> = clicked_mean
+            .iter()
+            .zip(skipped_mean.iter())
+            .map(|(c, s)| c - s)
+            .collect();
+
+        Some(pref)
+    }
+
+    /// Compute the SONA Tier 2 re-ranking boost for a document embedding.
+    ///
+    /// Returns `gamma * cosine_similarity(doc_embedding, preference_vector)`,
+    /// or `0.0` if no preference vector is available.
+    pub fn rerank_boost(&self, doc_embedding: &[f32], gamma: f32) -> f32 {
+        match self.preference_vector() {
+            Some(pref) => gamma * cosine_similarity(doc_embedding, &pref),
+            None => 0.0,
+        }
+    }
+}
+
+/// Compute the element-wise mean of a set of vectors.
+fn mean_vector(vectors: &[Vec<f32>], dims: usize) -> Vec<f32> {
+    let n = vectors.len() as f32;
+    let mut mean = vec![0.0f32; dims];
+    for v in vectors {
+        for (i, &val) in v.iter().enumerate() {
+            mean[i] += val;
+        }
+    }
+    for val in &mut mean {
+        *val /= n;
+    }
+    mean
 }
 
 // ---------------------------------------------------------------------------

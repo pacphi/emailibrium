@@ -200,10 +200,7 @@ fn test_precision_at_k_none() {
     let relevant = vec![s("a")];
     let retrieved = vec![s("x"), s("y")];
     let score = precision_at_k(&relevant, &retrieved, 2);
-    assert!(
-        score.abs() < 1e-6,
-        "No hits => precision 0.0, got {score}"
-    );
+    assert!(score.abs() < 1e-6, "No hits => precision 0.0, got {score}");
 }
 
 // ---------------------------------------------------------------------------

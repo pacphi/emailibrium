@@ -2,8 +2,8 @@
 
 mod ai;
 mod backup;
-mod consent;
 mod clustering;
+mod consent;
 mod evaluation;
 pub mod ingestion;
 mod insights;

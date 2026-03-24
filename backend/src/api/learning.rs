@@ -84,12 +84,8 @@ async fn submit_feedback(
     Json(req): Json<FeedbackRequest>,
 ) -> Result<Json<FeedbackResponse>, (StatusCode, String)> {
     let action = match req.action {
-        FeedbackActionRequest::Reclassify { from, to } => {
-            FeedbackAction::Reclassify { from, to }
-        }
-        FeedbackActionRequest::MoveToGroup { group_id } => {
-            FeedbackAction::MoveToGroup { group_id }
-        }
+        FeedbackActionRequest::Reclassify { from, to } => FeedbackAction::Reclassify { from, to },
+        FeedbackActionRequest::MoveToGroup { group_id } => FeedbackAction::MoveToGroup { group_id },
         FeedbackActionRequest::Star => FeedbackAction::Star,
         FeedbackActionRequest::Reply { delay_secs } => FeedbackAction::Reply {
             delay_secs: delay_secs.unwrap_or(0),
@@ -122,11 +118,7 @@ async fn submit_feedback(
 async fn get_metrics(
     State(state): State<AppState>,
 ) -> Result<Json<MetricsResponse>, (StatusCode, String)> {
-    let metrics = state
-        .vector_service
-        .learning_engine
-        .get_metrics()
-        .await;
+    let metrics = state.vector_service.learning_engine.get_metrics().await;
 
     Ok(Json(MetricsResponse {
         total_feedback: metrics.total_feedback,

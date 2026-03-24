@@ -76,11 +76,7 @@ pub struct PinResponse {
 async fn list_clusters(
     State(state): State<AppState>,
 ) -> Result<Json<ClusterListResponse>, (StatusCode, String)> {
-    let clusters = state
-        .vector_service
-        .cluster_engine
-        .get_clusters()
-        .await;
+    let clusters = state.vector_service.cluster_engine.get_clusters().await;
 
     let summaries: Vec<ClusterSummary> = clusters
         .iter()
@@ -107,11 +103,7 @@ async fn get_cluster(
     State(state): State<AppState>,
     Path(cluster_id): Path<String>,
 ) -> Result<Json<ClusterDetailResponse>, (StatusCode, String)> {
-    let clusters = state
-        .vector_service
-        .cluster_engine
-        .get_clusters()
-        .await;
+    let clusters = state.vector_service.cluster_engine.get_clusters().await;
 
     let cluster = clusters
         .iter()
@@ -193,11 +185,7 @@ async fn unpin_cluster(
     Path(cluster_id): Path<String>,
 ) -> Result<Json<PinResponse>, (StatusCode, String)> {
     // Verify cluster exists.
-    let clusters = state
-        .vector_service
-        .cluster_engine
-        .get_clusters()
-        .await;
+    let clusters = state.vector_service.cluster_engine.get_clusters().await;
 
     let _cluster = clusters
         .iter()

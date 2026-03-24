@@ -284,7 +284,10 @@ fn bench_quantization_comparison(c: &mut Criterion) {
     });
 
     // Scalar (int8) quantized search.
-    let quantized_vectors: Vec<_> = vectors.iter().map(|v| ScalarQuantizer::quantize(v)).collect();
+    let quantized_vectors: Vec<_> = vectors
+        .iter()
+        .map(|v| ScalarQuantizer::quantize(v))
+        .collect();
     let quantized_query = ScalarQuantizer::quantize(&query);
 
     group.bench_function("scalar_search_10k", |bencher| {
@@ -301,7 +304,10 @@ fn bench_quantization_comparison(c: &mut Criterion) {
     });
 
     // Binary quantized search.
-    let binary_vectors: Vec<_> = vectors.iter().map(|v| BinaryQuantizer::quantize(v)).collect();
+    let binary_vectors: Vec<_> = vectors
+        .iter()
+        .map(|v| BinaryQuantizer::quantize(v))
+        .collect();
     let binary_query = BinaryQuantizer::quantize(&query);
 
     group.bench_function("binary_search_10k", |bencher| {

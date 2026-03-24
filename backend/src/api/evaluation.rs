@@ -108,11 +108,7 @@ async fn search_quality(
 async fn clustering_quality(
     State(state): State<AppState>,
 ) -> Result<Json<ClusteringQualityResponse>, (StatusCode, String)> {
-    let clusters = state
-        .vector_service
-        .cluster_engine
-        .get_clusters()
-        .await;
+    let clusters = state.vector_service.cluster_engine.get_clusters().await;
 
     if clusters.is_empty() {
         return Ok(Json(ClusteringQualityResponse {

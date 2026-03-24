@@ -188,7 +188,7 @@ fn test_categorizer_accuracy_with_seeded_centroids() {
         ("Finance", "Finance"),
         ("Finance", "Finance"),
         ("Shopping", "Shopping"),
-        ("Work", "Personal"),     // misclassification
+        ("Work", "Personal"),        // misclassification
         ("Newsletter", "Marketing"), // misclassification
         ("Newsletter", "Newsletter"),
         ("Marketing", "Marketing"),

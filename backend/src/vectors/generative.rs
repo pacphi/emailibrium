@@ -46,7 +46,7 @@ impl RuleBasedClassifier {
     ///
     /// Returns `None` when no rule matches.
     pub fn classify_by_rules(text: &str, from_addr: &str) -> Option<String> {
-        let domain = from_addr.split('@').last().unwrap_or("");
+        let domain = from_addr.split('@').next_back().unwrap_or("");
         let lower = text.to_lowercase();
 
         // --- Domain-based rules ---
@@ -74,8 +74,7 @@ impl RuleBasedClassifier {
         {
             return Some("Finance".into());
         }
-        if lower.contains("unsubscribe") || lower.contains("opt out") || lower.contains("opt-out")
-        {
+        if lower.contains("unsubscribe") || lower.contains("opt out") || lower.contains("opt-out") {
             return Some("Marketing".into());
         }
         if lower.contains("meeting")
@@ -164,7 +163,9 @@ impl GenerativeModel for OllamaGenerativeModel {
             .json(&body)
             .send()
             .await
-            .map_err(|e| VectorError::CategorizationFailed(format!("Ollama request failed: {e}")))?;
+            .map_err(|e| {
+                VectorError::CategorizationFailed(format!("Ollama request failed: {e}"))
+            })?;
 
         if !resp.status().is_success() {
             let status = resp.status();
@@ -223,10 +224,7 @@ impl CloudGenerativeModel {
     /// Reads the API key from the environment variable named in `config.api_key_env`.
     pub fn new(config: &CloudGenerativeConfig) -> Result<Self, VectorError> {
         let api_key = std::env::var(&config.api_key_env).map_err(|_| {
-            VectorError::ConfigError(format!(
-                "API key env var '{}' not set",
-                config.api_key_env
-            ))
+            VectorError::ConfigError(format!("API key env var '{}' not set", config.api_key_env))
         })?;
 
         Ok(Self {
@@ -307,9 +305,10 @@ impl CloudGenerativeModel {
             )));
         }
 
-        let parsed: serde_json::Value = resp.json().await.map_err(|e| {
-            VectorError::CategorizationFailed(format!("OpenAI parse error: {e}"))
-        })?;
+        let parsed: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| VectorError::CategorizationFailed(format!("OpenAI parse error: {e}")))?;
 
         parsed["choices"][0]["message"]["content"]
             .as_str()
@@ -447,8 +446,10 @@ mod tests {
 
     #[test]
     fn test_rule_based_classifier_social_domain() {
-        let result =
-            RuleBasedClassifier::classify_by_rules("You have a new connection", "noreply@linkedin.com");
+        let result = RuleBasedClassifier::classify_by_rules(
+            "You have a new connection",
+            "noreply@linkedin.com",
+        );
         assert_eq!(result, Some("Social".to_string()));
     }
 
@@ -463,7 +464,11 @@ mod tests {
 
     #[test]
     fn test_validate_classification_match() {
-        let result = validate_classification("Finance", &["Work", "Finance", "Personal"], "Work, Finance, Personal");
+        let result = validate_classification(
+            "Finance",
+            &["Work", "Finance", "Personal"],
+            "Work, Finance, Personal",
+        );
         assert_eq!(result.unwrap(), "Finance");
     }
 
