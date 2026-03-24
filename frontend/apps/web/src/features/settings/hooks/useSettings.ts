@@ -3,7 +3,7 @@ import { persist, createJSONStorage } from 'zustand/middleware';
 export type Theme = 'light' | 'dark' | 'system';
 export type SidebarPosition = 'left' | 'right';
 export type EmailListDensity = 'compact' | 'comfortable' | 'spacious';
-export type LlmProvider = 'local' | 'openai' | 'anthropic';
+export type LlmProvider = 'none' | 'local' | 'openai' | 'anthropic';
 
 export interface SettingsState {
   // General
@@ -14,6 +14,9 @@ export interface SettingsState {
   // AI / LLM
   embeddingModel: string;
   llmProvider: LlmProvider;
+  openaiApiKey: string;
+  anthropicApiKey: string;
+  ollamaBaseUrl: string;
   sonaLearningEnabled: boolean;
   learningRateSensitivity: number;
 
@@ -34,6 +37,9 @@ export interface SettingsState {
   setSyncFrequencyMinutes: (minutes: number) => void;
   setEmbeddingModel: (model: string) => void;
   setLlmProvider: (provider: LlmProvider) => void;
+  setOpenaiApiKey: (key: string) => void;
+  setAnthropicApiKey: (key: string) => void;
+  setOllamaBaseUrl: (url: string) => void;
   setSonaLearningEnabled: (enabled: boolean) => void;
   setLearningRateSensitivity: (rate: number) => void;
   setEncryptionAtRest: (enabled: boolean) => void;
@@ -50,8 +56,11 @@ const DEFAULT_STATE = {
   defaultComposeAccountId: null,
   notificationsEnabled: true,
   syncFrequencyMinutes: 5,
-  embeddingModel: 'text-embedding-3-small',
-  llmProvider: 'local' as LlmProvider,
+  embeddingModel: 'all-MiniLM-L6-v2',
+  llmProvider: 'none' as LlmProvider,
+  openaiApiKey: '',
+  anthropicApiKey: '',
+  ollamaBaseUrl: 'http://localhost:11434',
   sonaLearningEnabled: true,
   learningRateSensitivity: 0.5,
   encryptionAtRest: false,
@@ -78,6 +87,9 @@ export const useSettings = create<SettingsState>()(
       setSyncFrequencyMinutes: (minutes) => set({ syncFrequencyMinutes: minutes }),
       setEmbeddingModel: (model) => set({ embeddingModel: model }),
       setLlmProvider: (provider) => set({ llmProvider: provider }),
+      setOpenaiApiKey: (key) => set({ openaiApiKey: key }),
+      setAnthropicApiKey: (key) => set({ anthropicApiKey: key }),
+      setOllamaBaseUrl: (url) => set({ ollamaBaseUrl: url }),
       setSonaLearningEnabled: (enabled) => set({ sonaLearningEnabled: enabled }),
       setLearningRateSensitivity: (rate) => set({ learningRateSensitivity: rate }),
       setEncryptionAtRest: (enabled) => set({ encryptionAtRest: enabled }),
@@ -98,6 +110,9 @@ export const useSettings = create<SettingsState>()(
         syncFrequencyMinutes: state.syncFrequencyMinutes,
         embeddingModel: state.embeddingModel,
         llmProvider: state.llmProvider,
+        openaiApiKey: state.openaiApiKey,
+        anthropicApiKey: state.anthropicApiKey,
+        ollamaBaseUrl: state.ollamaBaseUrl,
         sonaLearningEnabled: state.sonaLearningEnabled,
         learningRateSensitivity: state.learningRateSensitivity,
         encryptionAtRest: state.encryptionAtRest,
