@@ -120,6 +120,10 @@ export const EmailListItem = forwardRef<HTMLDivElement, EmailListItemProps>(
           <Star className="h-4 w-4" fill={email.isStarred ? 'currentColor' : 'none'} />
         </button>
 
+        {/* Unread indicator */}
+        {!email.isRead && (
+          <span className="h-2 w-2 shrink-0 rounded-full bg-indigo-500" aria-label="Unread" />
+        )}
 
         {/* Avatar */}
         <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-indigo-100 text-xs font-semibold text-indigo-700 dark:bg-indigo-900 dark:text-indigo-200">
