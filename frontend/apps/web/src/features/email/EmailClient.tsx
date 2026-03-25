@@ -49,12 +49,13 @@ export function EmailClient() {
   const [isComposeOpen, setIsComposeOpen] = useState(false);
   const [mobilePanel, setMobilePanel] = useState<'sidebar' | 'list' | 'thread'>('list');
 
-  const queryParams = useMemo(
-    () => ({ ...groupToQueryParam(activeGroup), limit: 50 }),
-    [activeGroup],
-  );
+  const queryParams = useMemo(() => groupToQueryParam(activeGroup), [activeGroup]);
   const emailsQuery = useEmailsQuery(queryParams);
-  const emails = useMemo(() => emailsQuery.data?.emails ?? [], [emailsQuery.data?.emails]);
+  const emails = useMemo(
+    () => emailsQuery.data?.pages.flatMap((p) => p.emails) ?? [],
+    [emailsQuery.data?.pages],
+  );
+  const totalEmails = emailsQuery.data?.pages[0]?.total ?? 0;
 
   const selectedEmail = emails.find((e) => e.id === selectedEmailId) ?? null;
   const threadId = selectedEmail?.threadId ?? null;
@@ -73,16 +74,13 @@ export function EmailClient() {
   const currentAccountId = emails.length > 0 ? emails[0]?.accountId : undefined;
   const labelsQuery = useLabelsQuery(currentAccountId);
 
-  // Compute unread counts per group
+  // Compute counts per group. Inbox shows total email count.
   const groupsWithCounts = useMemo(() => {
-    const counts: Record<string, number> = {};
+    const counts: Record<string, number> = { inbox: totalEmails };
     for (const email of emails) {
-      if (!email.isRead) {
-        counts['inbox'] = (counts['inbox'] ?? 0) + 1;
-        if (email.category) {
-          const key = `cat-${email.category.toLowerCase()}`;
-          counts[key] = (counts[key] ?? 0) + 1;
-        }
+      if (email.category && email.category !== 'Uncategorized') {
+        const key = `cat-${email.category.toLowerCase()}`;
+        counts[key] = (counts[key] ?? 0) + 1;
       }
     }
     return defaultGroups.map((g) => ({
@@ -288,6 +286,9 @@ export function EmailClient() {
           onArchiveEmail={handleArchiveEmail}
           onDeleteEmail={handleDeleteEmailFromList}
           onMoveOpen={handleMoveOpen}
+          hasNextPage={emailsQuery.hasNextPage}
+          isFetchingNextPage={emailsQuery.isFetchingNextPage}
+          onFetchNextPage={() => emailsQuery.fetchNextPage()}
         />
       </div>
 

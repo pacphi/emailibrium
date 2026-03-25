@@ -1,4 +1,4 @@
-import { useRef, useCallback } from 'react';
+import { useRef, useCallback, useEffect } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { Loader2 } from 'lucide-react';
 import type { Email } from '@emailibrium/types';
@@ -10,6 +10,9 @@ interface EmailListProps {
   checkedEmailIds: Set<string>;
   isLoading: boolean;
   isError: boolean;
+  hasNextPage?: boolean;
+  isFetchingNextPage?: boolean;
+  onFetchNextPage?: () => void;
   onSelectEmail: (emailId: string) => void;
   onCheckEmail: (emailId: string, checked: boolean) => void;
   onStarEmail: (emailId: string) => void;
@@ -30,6 +33,9 @@ export function EmailList({
   onArchiveEmail,
   onDeleteEmail,
   onMoveOpen,
+  hasNextPage,
+  isFetchingNextPage,
+  onFetchNextPage,
 }: EmailListProps) {
   const parentRef = useRef<HTMLDivElement>(null);
 
@@ -39,6 +45,26 @@ export function EmailList({
     estimateSize: () => 64,
     overscan: 10,
   });
+
+  // Infinite scroll: load more when last few items are visible.
+  useEffect(() => {
+    const lastItem = virtualizer.getVirtualItems().at(-1);
+    if (!lastItem) return;
+    if (
+      lastItem.index >= emails.length - 5 &&
+      hasNextPage &&
+      !isFetchingNextPage &&
+      onFetchNextPage
+    ) {
+      onFetchNextPage();
+    }
+  }, [
+    virtualizer.getVirtualItems(),
+    emails.length,
+    hasNextPage,
+    isFetchingNextPage,
+    onFetchNextPage,
+  ]);
 
   const handleKeyNavigation = useCallback(
     (e: React.KeyboardEvent) => {
@@ -128,6 +154,12 @@ export function EmailList({
           );
         })}
       </div>
+      {isFetchingNextPage && (
+        <div className="flex items-center justify-center py-3">
+          <Loader2 className="h-4 w-4 animate-spin text-indigo-500" />
+          <span className="ml-2 text-xs text-gray-500">Loading more...</span>
+        </div>
+      )}
     </div>
   );
 }

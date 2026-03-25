@@ -1,4 +1,4 @@
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   getEmails,
   getEmail,
@@ -17,10 +17,18 @@ import {
 import type { GetEmailsParams, SendEmailDraft, FolderOrLabel } from '@emailibrium/api';
 import type { Email, EmailThread } from '@emailibrium/types';
 
+const PAGE_SIZE = 50;
+
 export function useEmailsQuery(params?: GetEmailsParams) {
-  return useQuery<{ emails: Email[]; total: number }>({
+  return useInfiniteQuery({
     queryKey: ['emails', params],
-    queryFn: () => getEmails(params),
+    queryFn: ({ pageParam = 0 }) =>
+      getEmails({ ...params, limit: PAGE_SIZE, offset: pageParam as number }),
+    initialPageParam: 0,
+    getNextPageParam: (lastPage, allPages) => {
+      const loaded = allPages.reduce((sum, p) => sum + p.emails.length, 0);
+      return loaded < lastPage.total ? loaded : undefined;
+    },
     staleTime: 30_000,
   });
 }
