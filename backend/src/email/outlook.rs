@@ -103,7 +103,7 @@ impl OutlookProvider {
             .unwrap_or_else(Utc::now);
 
         // Graph categories are the closest analog to labels.
-        let labels: Vec<String> = msg["categories"]
+        let mut labels: Vec<String> = msg["categories"]
             .as_array()
             .map(|arr| {
                 arr.iter()
@@ -111,6 +111,11 @@ impl OutlookProvider {
                     .collect()
             })
             .unwrap_or_default();
+
+        // Outlook flagged messages are equivalent to Gmail's STARRED.
+        if msg["flag"]["flagStatus"].as_str() == Some("flagged") {
+            labels.push("STARRED".to_string());
+        }
 
         let body = msg["body"]["content"].as_str().map(|s| s.to_string());
 
