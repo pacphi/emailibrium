@@ -155,9 +155,11 @@ build: ## Build everything
 
 .PHONY: dev
 dev: ## Start full stack dev servers (native)
-	@$(MAKE) -C $(BACKEND_DIR) dev &
-	@$(MAKE) -C $(FRONTEND_DIR) dev &
 	@echo "$(GREEN)Backend: http://localhost:8080  Frontend: http://localhost:3000$(RESET)"
+	@trap 'kill 0' INT TERM EXIT; \
+		$(MAKE) -C $(BACKEND_DIR) dev & \
+		$(MAKE) -C $(FRONTEND_DIR) dev & \
+		wait
 
 .PHONY: clean
 clean: ## Clean all build artifacts
