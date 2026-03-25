@@ -318,16 +318,102 @@ impl OAuthManager {
         Ok(())
     }
 
-    /// Retrieve the decrypted access token for an account.
+    /// Retrieve the decrypted access token for an account, auto-refreshing if expired.
     pub async fn get_access_token(&self, account_id: &str) -> Result<String, OAuthError> {
-        let row: (Vec<u8>,) =
-            sqlx::query_as("SELECT encrypted_access_token FROM connected_accounts WHERE id = ?1")
-                .bind(account_id)
-                .fetch_optional(&self.pool)
-                .await?
-                .ok_or_else(|| OAuthError::AccountNotFound(account_id.to_string()))?;
+        let row: (Vec<u8>, Option<String>) = sqlx::query_as(
+            "SELECT encrypted_access_token, token_expires_at \
+             FROM connected_accounts WHERE id = ?1",
+        )
+        .bind(account_id)
+        .fetch_optional(&self.pool)
+        .await?
+        .ok_or_else(|| OAuthError::AccountNotFound(account_id.to_string()))?;
+
+        // Check if token is expired (or will expire within 60s).
+        let is_expired = row.1.as_deref().map_or(false, |exp| {
+            chrono::DateTime::parse_from_rfc3339(exp)
+                .map(|dt| dt < Utc::now() + Duration::seconds(60))
+                .unwrap_or(false)
+        });
+
+        if is_expired {
+            tracing::debug!(account_id = %account_id, "Access token expired, refreshing");
+            if let Some(new_token) = self.try_refresh_token(account_id).await {
+                return Ok(new_token);
+            }
+        }
 
         self.decrypt_token(&row.0)
+    }
+
+    /// Attempt to refresh the access token. Returns the new token on success.
+    async fn try_refresh_token(&self, account_id: &str) -> Option<String> {
+        let refresh_token = self.get_refresh_token(account_id).await.ok()??;
+
+        let provider_row: Option<(String,)> =
+            sqlx::query_as("SELECT provider FROM connected_accounts WHERE id = ?1")
+                .bind(account_id)
+                .fetch_optional(&self.pool)
+                .await
+                .ok()?;
+
+        let provider_str = provider_row?.0;
+        let (token_url, client_id_env, client_secret_env) = match provider_str.as_str() {
+            "gmail" => (
+                "https://oauth2.googleapis.com/token",
+                "EMAILIBRIUM_GOOGLE_CLIENT_ID",
+                "EMAILIBRIUM_GOOGLE_CLIENT_SECRET",
+            ),
+            "outlook" => (
+                "https://login.microsoftonline.com/common/oauth2/v2.0/token",
+                "EMAILIBRIUM_MICROSOFT_CLIENT_ID",
+                "EMAILIBRIUM_MICROSOFT_CLIENT_SECRET",
+            ),
+            _ => return None,
+        };
+
+        let client_id = std::env::var(client_id_env).ok()?;
+        let client_secret = std::env::var(client_secret_env).ok()?;
+
+        let resp = self
+            .http
+            .post(token_url)
+            .form(&[
+                ("grant_type", "refresh_token"),
+                ("refresh_token", refresh_token.as_str()),
+                ("client_id", client_id.as_str()),
+                ("client_secret", client_secret.as_str()),
+            ])
+            .send()
+            .await
+            .ok()?;
+
+        if !resp.status().is_success() {
+            tracing::warn!(account_id = %account_id, "Token refresh failed");
+            return None;
+        }
+
+        let body: serde_json::Value = resp.json().await.ok()?;
+        let new_access = body["access_token"].as_str()?.to_string();
+        let new_refresh = body["refresh_token"]
+            .as_str()
+            .map(|s| s.to_string())
+            .or(Some(refresh_token));
+        let expires_in = body["expires_in"].as_i64().unwrap_or(3600);
+
+        let tokens = super::types::OAuthTokens {
+            access_token: new_access.clone(),
+            refresh_token: new_refresh,
+            expires_at: Some(Utc::now() + Duration::seconds(expires_in)),
+            email: None,
+        };
+
+        if let Err(e) = self.update_tokens(account_id, &tokens).await {
+            tracing::warn!(account_id = %account_id, "Failed to persist refreshed tokens: {e}");
+        }
+
+        tracing::info!(account_id = %account_id, "Access token refreshed successfully");
+        Some(new_access)
     }
 
     /// Retrieve the decrypted refresh token for an account.
