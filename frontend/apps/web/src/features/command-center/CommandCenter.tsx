@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { StatsCards } from './StatsCards';
 import { QuickActions } from './QuickActions';
 import { RecentActivity } from './RecentActivity';
@@ -17,22 +17,55 @@ export function CommandCenter() {
   const { stats, isLoading, isError, error, refetch } = useStats();
   const { open: openPalette } = useCommandPalette();
   const [syncing, setSyncing] = useState(false);
+  const [syncStatus, setSyncStatus] = useState('');
+  const [syncError, setSyncError] = useState('');
+  const [hasAccounts, setHasAccounts] = useState(true);
+
+  useEffect(() => {
+    getAccounts()
+      .then((accounts) => setHasAccounts(accounts.some((a) => a.isActive)))
+      .catch(() => setHasAccounts(false));
+  }, []);
 
   const handleQuickAction = useCallback(
     async (actionId: string) => {
       if (actionId === 'sync-now') {
         setSyncing(true);
+        setSyncStatus('Fetching accounts...');
+        setSyncError('');
         try {
           const accounts = await getAccounts();
           const active = accounts.filter((a) => a.isActive);
           if (active.length === 0) {
+            setSyncStatus('');
             window.location.href = '/onboarding';
             return;
           }
-          await Promise.all(active.map((a) => startIngestion(a.id)));
+          const errors: string[] = [];
+          for (let i = 0; i < active.length; i++) {
+            const a = active[i]!;
+            setSyncStatus(
+              `Syncing account ${i + 1} of ${active.length}: ${a.emailAddress}...`,
+            );
+            try {
+              await startIngestion(a.id);
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err);
+              errors.push(`${a.emailAddress}: ${msg}`);
+              console.error(`Sync failed for ${a.emailAddress}:`, err);
+            }
+          }
+          if (errors.length > 0) {
+            setSyncError(`Sync failed for ${errors.length} account(s): ${errors[0]}`);
+          } else {
+            setSyncStatus('Sync complete!');
+            setTimeout(() => setSyncStatus(''), 3000);
+          }
           refetch();
-        } catch {
-          // ingestion may not be fully wired yet — fail silently
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          setSyncError(`Sync failed: ${msg}`);
+          console.error('Sync failed:', err);
         } finally {
           setSyncing(false);
         }
@@ -146,11 +179,56 @@ export function CommandCenter() {
             </div>
           )}
 
+          {/* Sync status banner */}
+          {(syncStatus || syncError) && (
+            <div
+              className={`flex items-center gap-3 rounded-xl border px-4 py-3 text-sm ${
+                syncError
+                  ? 'border-red-200 bg-red-50 text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-400'
+                  : 'border-indigo-200 bg-indigo-50 text-indigo-700 dark:border-indigo-800 dark:bg-indigo-900/20 dark:text-indigo-400'
+              }`}
+              role="status"
+            >
+              {syncing && (
+                <svg
+                  className="h-4 w-4 animate-spin"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  aria-hidden="true"
+                >
+                  <circle
+                    className="opacity-25"
+                    cx="12"
+                    cy="12"
+                    r="10"
+                    stroke="currentColor"
+                    strokeWidth="4"
+                  />
+                  <path
+                    className="opacity-75"
+                    fill="currentColor"
+                    d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+                  />
+                </svg>
+              )}
+              <span>{syncError || syncStatus}</span>
+              {syncError && (
+                <button
+                  type="button"
+                  onClick={() => setSyncError('')}
+                  className="ml-auto font-medium underline"
+                >
+                  Dismiss
+                </button>
+              )}
+            </div>
+          )}
+
           {/* Stats cards */}
           <StatsCards stats={stats} isLoading={isLoading} />
 
           {/* Quick actions */}
-          <QuickActions onAction={handleQuickAction} syncing={syncing} />
+          <QuickActions onAction={handleQuickAction} syncing={syncing} hasAccounts={hasAccounts} />
 
           {/* Two-column layout for activity and clusters */}
           <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">

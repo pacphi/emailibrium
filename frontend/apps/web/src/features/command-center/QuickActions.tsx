@@ -12,9 +12,19 @@ interface QuickAction {
 interface QuickActionsProps {
   onAction?: (actionId: string) => void;
   syncing?: boolean;
+  hasAccounts?: boolean;
 }
 
-export function QuickActions({ onAction, syncing }: QuickActionsProps) {
+// Actions that require at least one connected account.
+const ACCOUNT_REQUIRED = new Set([
+  'clean-inbox',
+  'view-insights',
+  'chat-ai',
+  'manage-rules',
+  'sync-now',
+]);
+
+export function QuickActions({ onAction, syncing, hasAccounts = true }: QuickActionsProps) {
   const actions: QuickAction[] = [
     {
       id: 'clean-inbox',
@@ -72,23 +82,43 @@ export function QuickActions({ onAction, syncing }: QuickActionsProps) {
     <section aria-label="Quick actions">
       <h2 className="mb-3 text-lg font-semibold text-gray-900 dark:text-white">Quick Actions</h2>
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
-        {actions.map((action) => (
-          <button
-            key={action.id}
-            type="button"
-            onClick={() => handleClick(action)}
-            className="flex flex-col items-center gap-2 rounded-xl border border-gray-200 bg-white p-4 text-center shadow-sm transition-all hover:border-indigo-300 hover:shadow-md focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 dark:border-gray-700 dark:bg-gray-800 dark:hover:border-indigo-600"
-            aria-label={action.label}
-          >
-            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-indigo-50 text-indigo-600 dark:bg-indigo-900/30 dark:text-indigo-400">
-              {action.icon}
-            </div>
-            <div>
-              <p className="text-sm font-medium text-gray-900 dark:text-white">{action.label}</p>
-              <p className="text-xs text-gray-500 dark:text-gray-400">{action.description}</p>
-            </div>
-          </button>
-        ))}
+        {actions.map((action) => {
+          const disabled = !hasAccounts && ACCOUNT_REQUIRED.has(action.id);
+          return (
+            <button
+              key={action.id}
+              type="button"
+              disabled={disabled}
+              onClick={() => handleClick(action)}
+              className={`flex flex-col items-center gap-2 rounded-xl border p-4 text-center shadow-sm transition-all focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 ${
+                disabled
+                  ? 'cursor-not-allowed border-gray-100 bg-gray-50 opacity-50 dark:border-gray-800 dark:bg-gray-900'
+                  : 'border-gray-200 bg-white hover:border-indigo-300 hover:shadow-md dark:border-gray-700 dark:bg-gray-800 dark:hover:border-indigo-600'
+              }`}
+              aria-label={action.label}
+            >
+              <div
+                className={`flex h-10 w-10 items-center justify-center rounded-lg ${
+                  disabled
+                    ? 'bg-gray-100 text-gray-400 dark:bg-gray-800 dark:text-gray-600'
+                    : 'bg-indigo-50 text-indigo-600 dark:bg-indigo-900/30 dark:text-indigo-400'
+                }`}
+              >
+                {action.icon}
+              </div>
+              <div>
+                <p
+                  className={`text-sm font-medium ${disabled ? 'text-gray-400 dark:text-gray-600' : 'text-gray-900 dark:text-white'}`}
+                >
+                  {action.label}
+                </p>
+                <p className="text-xs text-gray-500 dark:text-gray-400">
+                  {disabled ? 'Connect an account first' : action.description}
+                </p>
+              </div>
+            </button>
+          );
+        })}
       </div>
     </section>
   );

@@ -5,7 +5,10 @@ import { createSSEStream } from './sse.js';
 
 export async function startIngestion(accountId: string): Promise<{ jobId: string }> {
   return api
-    .post('ingestion/start', { json: { account_id: accountId } })
+    .post('ingestion/start', {
+      json: { account_id: accountId },
+      timeout: 300_000, // 5 minutes — sync fetches all emails from provider
+    })
     .json<{ jobId: string }>();
 }
 

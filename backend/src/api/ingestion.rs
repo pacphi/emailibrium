@@ -258,12 +258,21 @@ async fn sync_emails_from_provider(
         }
     };
 
+    info!(
+        account_id = %account_id,
+        provider = %provider_str,
+        "Starting email sync from provider"
+    );
+
     // Paginate through all messages from the provider.
     let mut inserted = 0u64;
+    let mut skipped = 0u64;
+    let mut page_num = 0u64;
     let mut page_token: Option<String> = None;
     let batch_size = 100u32;
 
     loop {
+        page_num += 1;
         let params = ListParams {
             max_results: batch_size,
             page_token: page_token.clone(),
@@ -271,15 +280,32 @@ async fn sync_emails_from_provider(
             query: None,
         };
 
+        debug!(
+            account_id = %account_id,
+            page = page_num,
+            "Fetching message page from provider"
+        );
+
         let page = provider
             .list_messages(&access_token, &params)
             .await
             .map_err(|e| {
                 (
                     StatusCode::BAD_GATEWAY,
-                    format!("Failed to list messages: {e}"),
+                    format!("Failed to list messages on page {page_num}: {e}"),
                 )
             })?;
+
+        let page_count = page.messages.len();
+        let has_more = page.next_page_token.is_some();
+        info!(
+            account_id = %account_id,
+            page = page_num,
+            messages_in_page = page_count,
+            has_more = has_more,
+            total_inserted = inserted,
+            "Fetched message page from provider"
+        );
 
         for msg in &page.messages {
             // Insert if not already in DB (ON CONFLICT IGNORE for idempotency).
@@ -307,10 +333,18 @@ async fn sync_emails_from_provider(
 
             match result {
                 Ok(r) if r.rows_affected() > 0 => inserted += 1,
-                Ok(_) => {} // already exists
+                Ok(_) => skipped += 1, // already exists
                 Err(e) => warn!(email_id = %msg.id, "Failed to insert email: {e}"),
             }
         }
+
+        debug!(
+            account_id = %account_id,
+            page = page_num,
+            new = inserted,
+            duplicates = skipped,
+            "Page processed"
+        );
 
         // Continue to next page or break.
         page_token = page.next_page_token;

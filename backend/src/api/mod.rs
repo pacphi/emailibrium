@@ -5,6 +5,7 @@ mod ai;
 mod backup;
 mod clustering;
 mod consent;
+mod emails;
 mod evaluation;
 pub mod ingestion;
 mod insights;
@@ -32,6 +33,7 @@ pub fn routes() -> Router<AppState> {
         .nest("/ai", ai::routes())
         .nest("/consent", consent::routes())
         .nest("/auth", accounts::routes())
+        .nest("/emails", emails::routes())
         .nest("/rules", rules::routes())
         .nest("/unsubscribe", unsubscribe::routes())
         .nest("/wipe", wipe::routes())
