@@ -135,7 +135,7 @@ export function OnboardingFlow() {
   // Server health check on mount
   useEffect(() => {
     const controller = new AbortController();
-    fetch('/api/v1/health', { signal: controller.signal })
+    fetch('/api/v1/vectors/health', { signal: controller.signal })
       .then((res) => {
         setBackendStatus(res.ok ? 'online' : 'offline');
       })
