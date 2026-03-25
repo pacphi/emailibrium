@@ -37,6 +37,7 @@ pub struct ListEmailsParams {
     pub account_id: Option<String>,
     pub category: Option<String>,
     pub is_read: Option<bool>,
+    pub is_starred: Option<bool>,
     pub limit: Option<i64>,
     pub offset: Option<i64>,
 }
@@ -123,6 +124,9 @@ async fn list_emails(
     if params.is_read.is_some() {
         where_parts.push("is_read = ?".to_string());
     }
+    if params.is_starred.is_some() {
+        where_parts.push("is_starred = ?".to_string());
+    }
     let where_clause = if where_parts.is_empty() {
         String::new()
     } else {
@@ -139,6 +143,9 @@ async fn list_emails(
         count_q = count_q.bind(v);
     }
     if let Some(v) = params.is_read {
+        count_q = count_q.bind(v);
+    }
+    if let Some(v) = params.is_starred {
         count_q = count_q.bind(v);
     }
     let total = count_q
@@ -158,6 +165,9 @@ async fn list_emails(
         query = query.bind(v);
     }
     if let Some(v) = params.is_read {
+        query = query.bind(v);
+    }
+    if let Some(v) = params.is_starred {
         query = query.bind(v);
     }
     query = query.bind(limit).bind(offset);

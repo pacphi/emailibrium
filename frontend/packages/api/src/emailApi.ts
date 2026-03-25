@@ -5,6 +5,7 @@ export interface GetEmailsParams {
   accountId?: string;
   category?: string;
   isRead?: boolean;
+  isStarred?: boolean;
   limit?: number;
   offset?: number;
 }

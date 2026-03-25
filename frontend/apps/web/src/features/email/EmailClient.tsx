@@ -49,8 +49,15 @@ export function EmailClient() {
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
   const [isComposeOpen, setIsComposeOpen] = useState(false);
   const [mobilePanel, setMobilePanel] = useState<'sidebar' | 'list' | 'thread'>('list');
+  const [filter, setFilter] = useState<'all' | 'read' | 'unread' | 'starred'>('all');
 
-  const queryParams = useMemo(() => groupToQueryParam(activeGroup), [activeGroup]);
+  const queryParams = useMemo(() => {
+    const base = groupToQueryParam(activeGroup);
+    if (filter === 'read') return { ...base, isRead: true };
+    if (filter === 'unread') return { ...base, isRead: false };
+    if (filter === 'starred') return { ...base, isStarred: true };
+    return base;
+  }, [activeGroup, filter]);
   const emailsQuery = useEmailsQuery(queryParams);
   const emails = useMemo(
     () => emailsQuery.data?.pages.flatMap((p) => p.emails) ?? [],
@@ -262,27 +269,46 @@ export function EmailClient() {
         } w-full flex-col border-r border-gray-200 dark:border-gray-700 lg:flex lg:w-[600px]`}
       >
         {/* List header */}
-        <div className="flex items-center justify-between border-b border-gray-200 bg-white px-3 py-2 dark:border-gray-700 dark:bg-gray-800">
-          <button
-            type="button"
-            onClick={() => setMobilePanel('sidebar')}
-            className="text-sm text-gray-500 hover:text-gray-700 dark:text-gray-400 lg:hidden"
-            aria-label="Show sidebar"
-          >
-            Groups
+        <div className="border-b border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800">
+          <div className="flex items-center justify-between px-3 py-2">
+            <button
+              type="button"
+              onClick={() => setMobilePanel('sidebar')}
+              className="text-sm text-gray-500 hover:text-gray-700 dark:text-gray-400 lg:hidden"
+              aria-label="Show sidebar"
+            >
+              Groups
+            </button>
+            <h2 className="text-sm font-semibold text-gray-900 dark:text-white">
+              {defaultGroups.find((g) => g.id === activeGroup)?.label ?? 'Inbox'}
+            </h2>
+            <button
+              type="button"
+              onClick={() => setIsComposeOpen(true)}
+              className="flex items-center gap-1 rounded-md bg-indigo-600 px-2.5 py-1 text-xs font-medium text-white transition-colors hover:bg-indigo-700"
+              aria-label="Compose new email"
+            >
+              <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+              Compose
           </button>
-          <h2 className="text-sm font-semibold text-gray-900 dark:text-white">
-            {defaultGroups.find((g) => g.id === activeGroup)?.label ?? 'Inbox'}
-          </h2>
-          <button
-            type="button"
-            onClick={() => setIsComposeOpen(true)}
-            className="flex items-center gap-1 rounded-md bg-indigo-600 px-2.5 py-1 text-xs font-medium text-white transition-colors hover:bg-indigo-700"
-            aria-label="Compose new email"
-          >
-            <Plus className="h-3.5 w-3.5" aria-hidden="true" />
-            Compose
-          </button>
+          </div>
+          {/* Filter pills */}
+          <div className="flex gap-1 px-3 pb-2">
+            {(['all', 'unread', 'read', 'starred'] as const).map((f) => (
+              <button
+                key={f}
+                type="button"
+                onClick={() => setFilter(f)}
+                className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
+                  filter === f
+                    ? 'bg-indigo-600 text-white'
+                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600'
+                }`}
+              >
+                {f.charAt(0).toUpperCase() + f.slice(1)}
+              </button>
+            ))}
+          </div>
         </div>
         <EmailList
           emails={emails}
