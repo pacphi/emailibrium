@@ -29,14 +29,14 @@ The token bucket is chosen over fixed-window or sliding-window because it handle
 
 All responses include the following headers via a tower-http layer:
 
-| Header                    | Value                                              | Purpose                          |
-| ------------------------- | -------------------------------------------------- | -------------------------------- |
-| Strict-Transport-Security | max-age=63072000; includeSubDomains; preload       | Enforce HTTPS (HSTS)             |
-| X-Frame-Options           | DENY                                               | Prevent clickjacking             |
-| X-Content-Type-Options    | nosniff                                             | Prevent MIME sniffing            |
-| Content-Security-Policy   | default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' | XSS mitigation (from ADR-008) |
-| Referrer-Policy           | strict-origin-when-cross-origin                    | Limit referrer leakage           |
-| Permissions-Policy        | camera=(), microphone=(), geolocation=()           | Disable unnecessary browser APIs |
+| Header                    | Value                                                                   | Purpose                          |
+| ------------------------- | ----------------------------------------------------------------------- | -------------------------------- |
+| Strict-Transport-Security | max-age=63072000; includeSubDomains; preload                            | Enforce HTTPS (HSTS)             |
+| X-Frame-Options           | DENY                                                                    | Prevent clickjacking             |
+| X-Content-Type-Options    | nosniff                                                                 | Prevent MIME sniffing            |
+| Content-Security-Policy   | default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' | XSS mitigation (from ADR-008)    |
+| Referrer-Policy           | strict-origin-when-cross-origin                                         | Limit referrer leakage           |
+| Permissions-Policy        | camera=(), microphone=(), geolocation=()                                | Disable unnecessary browser APIs |
 
 HSTS `max-age` and `includeSubDomains` are configurable in `config.yaml` for environments where HTTPS is not yet configured (development).
 

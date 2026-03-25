@@ -34,12 +34,12 @@ Operations performed while offline are inserted into `sync_queue` with `status =
 
 When a queued operation conflicts with a remote state change (e.g., user archived an email locally, but it was deleted remotely), the system applies a configurable `ConflictStrategy`:
 
-| Strategy        | Behavior                                                            | Default For      |
-| --------------- | ------------------------------------------------------------------- | ---------------- |
-| LastWriterWins  | Most recent timestamp wins (local or remote)                        | Labels, read     |
-| LocalWins       | Local operation always takes precedence                             | Archive, move    |
-| RemoteWins      | Remote state always takes precedence                                | Delete           |
-| Manual          | Mark as conflict, surface to user for resolution                    | None (opt-in)    |
+| Strategy       | Behavior                                         | Default For   |
+| -------------- | ------------------------------------------------ | ------------- |
+| LastWriterWins | Most recent timestamp wins (local or remote)     | Labels, read  |
+| LocalWins      | Local operation always takes precedence          | Archive, move |
+| RemoteWins     | Remote state always takes precedence             | Delete        |
+| Manual         | Mark as conflict, surface to user for resolution | None (opt-in) |
 
 The default strategy per operation type is configurable in `config.yaml`. Conflicts that cannot be auto-resolved are surfaced in the UI with both states shown.
 

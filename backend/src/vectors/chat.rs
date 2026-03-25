@@ -11,7 +11,7 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
-use tracing::{debug, warn};
+use tracing::debug;
 
 use super::error::VectorError;
 use super::generative::GenerativeModel;

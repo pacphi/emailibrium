@@ -1,10 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import {
-  getConsents,
-  recordConsent,
-  requestDataExport,
-  requestDataErase,
-} from '@emailibrium/api';
+import { getConsents, recordConsent, requestDataExport, requestDataErase } from '@emailibrium/api';
 import type {
   GdprConsent,
   ConsentRecord,

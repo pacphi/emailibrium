@@ -1,11 +1,11 @@
 # DDD-007: Rules Domain (Core)
 
-| Field   | Value         |
-| ------- | ------------- |
-| Status  | Accepted      |
-| Date    | 2026-03-24    |
-| Type    | Core Domain   |
-| Context | Rules Engine  |
+| Field   | Value        |
+| ------- | ------------ |
+| Status  | Accepted     |
+| Date    | 2026-03-24   |
+| Type    | Core Domain  |
+| Context | Rules Engine |
 
 ## Overview
 
@@ -17,7 +17,7 @@ The Rules bounded context manages user-defined automation rules that act on emai
 | ------------------- | --------------------------------------------------------- |
 | Domain type         | Core                                                      |
 | Investment priority | High (primary inbox automation feature)                   |
-| Complexity driver   | Semantic condition evaluation, contradiction detection     |
+| Complexity driver   | Semantic condition evaluation, contradiction detection    |
 | Change frequency    | Medium (new condition types, new action types)            |
 | Risk                | False positive rule matches, conflicting rules, data loss |
 
@@ -31,19 +31,19 @@ Manages the lifecycle and configuration of a single automation rule.
 
 **Root Entity: Rule**
 
-| Field         | Type             | Description                                             |
-| ------------- | ---------------- | ------------------------------------------------------- |
-| id            | RuleId           | Unique rule identifier                                  |
-| name          | String           | Human-readable rule name                                |
-| description   | Option\<String\> | Optional explanation of rule purpose                    |
-| priority      | u32              | Evaluation order (lower number = higher priority)       |
-| conditions    | ConditionGroup   | Tree of AND/OR condition clauses                        |
-| actions       | Vec\<Action\>    | Ordered list of actions to execute on match             |
-| enabled       | bool             | Whether the rule is active                              |
-| match_count   | u64              | Number of emails this rule has matched                  |
-| last_match_at | Option\<DateTime\> | Timestamp of most recent match                       |
-| created_at    | DateTime         | When the rule was created                               |
-| updated_at    | DateTime         | When the rule was last modified                         |
+| Field         | Type               | Description                                       |
+| ------------- | ------------------ | ------------------------------------------------- |
+| id            | RuleId             | Unique rule identifier                            |
+| name          | String             | Human-readable rule name                          |
+| description   | Option\<String\>   | Optional explanation of rule purpose              |
+| priority      | u32                | Evaluation order (lower number = higher priority) |
+| conditions    | ConditionGroup     | Tree of AND/OR condition clauses                  |
+| actions       | Vec\<Action\>      | Ordered list of actions to execute on match       |
+| enabled       | bool               | Whether the rule is active                        |
+| match_count   | u64                | Number of emails this rule has matched            |
+| last_match_at | Option\<DateTime\> | Timestamp of most recent match                    |
+| created_at    | DateTime           | When the rule was created                         |
+| updated_at    | DateTime           | When the rule was last modified                   |
 
 **Invariants:**
 
@@ -67,25 +67,25 @@ Manages the lifecycle and configuration of a single automation rule.
 
 ## Domain Events
 
-| Event          | Fields                                                    | Published When                                   |
-| -------------- | --------------------------------------------------------- | ------------------------------------------------ |
-| RuleCreated    | rule_id, name, priority, condition_count, action_count    | New rule successfully created and validated       |
-| RuleUpdated    | rule_id, changed_fields                                   | Existing rule modified                            |
-| RuleDeleted    | rule_id, name                                             | Rule permanently removed                         |
-| RuleEnabled    | rule_id                                                   | Disabled rule activated                          |
-| RuleDisabled   | rule_id                                                   | Active rule deactivated                          |
-| RuleMatched    | rule_id, email_id, matched_conditions, actions_executed   | Rule matched an email and actions were applied   |
-| RuleTestResult | rule_id, sample_size, match_count, sample_matches         | TestRule completed with results                  |
-| ValidationFailed | rule_id, violations                                     | ValidateRule found contradictions or issues       |
+| Event            | Fields                                                  | Published When                                 |
+| ---------------- | ------------------------------------------------------- | ---------------------------------------------- |
+| RuleCreated      | rule_id, name, priority, condition_count, action_count  | New rule successfully created and validated    |
+| RuleUpdated      | rule_id, changed_fields                                 | Existing rule modified                         |
+| RuleDeleted      | rule_id, name                                           | Rule permanently removed                       |
+| RuleEnabled      | rule_id                                                 | Disabled rule activated                        |
+| RuleDisabled     | rule_id                                                 | Active rule deactivated                        |
+| RuleMatched      | rule_id, email_id, matched_conditions, actions_executed | Rule matched an email and actions were applied |
+| RuleTestResult   | rule_id, sample_size, match_count, sample_matches       | TestRule completed with results                |
+| ValidationFailed | rule_id, violations                                     | ValidateRule found contradictions or issues    |
 
 ### Event Consumers
 
-| Event        | Consumed By          | Purpose                                          |
-| ------------ | -------------------- | ------------------------------------------------ |
-| RuleMatched  | Email Intelligence   | Updates email metadata with applied actions      |
-| RuleMatched  | Ingestion            | Executes provider-side actions (archive, label)  |
-| RuleMatched  | Learning             | Feeds rule match data into SONA for adaptation   |
-| RuleCreated  | Search               | Indexes rule for rule search/discovery           |
+| Event       | Consumed By        | Purpose                                         |
+| ----------- | ------------------ | ----------------------------------------------- |
+| RuleMatched | Email Intelligence | Updates email metadata with applied actions     |
+| RuleMatched | Ingestion          | Executes provider-side actions (archive, label) |
+| RuleMatched | Learning           | Feeds rule match data into SONA for adaptation  |
+| RuleCreated | Search             | Indexes rule for rule search/discovery          |
 
 ---
 
@@ -205,15 +205,15 @@ AI Providers --[Customer/Supplier]--> Rules
 
 ## Ubiquitous Language
 
-| Term                   | Definition                                                                                       |
-| ---------------------- | ------------------------------------------------------------------------------------------------ |
-| **Rule**               | A user-defined automation that matches emails by conditions and applies actions                  |
-| **Structural condition** | A condition that matches on exact email field values (sender, subject, age, category)          |
-| **Semantic condition** | A condition that matches on vector similarity between an email embedding and a description embedding |
-| **Priority**           | A numeric ordering that determines which rules are evaluated first (lower = higher priority)     |
-| **Contradiction**      | Two rules with overlapping conditions that apply conflicting actions to the same emails          |
-| **Shadowing**          | A higher-priority rule that fully subsumes a lower-priority rule, making it unreachable          |
-| **Rule match**         | When all conditions in a rule evaluate to true for a given email                                 |
+| Term                     | Definition                                                                                           |
+| ------------------------ | ---------------------------------------------------------------------------------------------------- |
+| **Rule**                 | A user-defined automation that matches emails by conditions and applies actions                      |
+| **Structural condition** | A condition that matches on exact email field values (sender, subject, age, category)                |
+| **Semantic condition**   | A condition that matches on vector similarity between an email embedding and a description embedding |
+| **Priority**             | A numeric ordering that determines which rules are evaluated first (lower = higher priority)         |
+| **Contradiction**        | Two rules with overlapping conditions that apply conflicting actions to the same emails              |
+| **Shadowing**            | A higher-priority rule that fully subsumes a lower-priority rule, making it unreachable              |
+| **Rule match**           | When all conditions in a rule evaluate to true for a given email                                     |
 
 ---
 

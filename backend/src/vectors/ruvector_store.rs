@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! RuVector-backed vector store with HNSW indexing (ADR-003).
 //!
 //! Implements `VectorStoreBackend` using ruvector-core's HNSW index for

@@ -503,8 +503,7 @@ impl OutlookProvider {
     ) -> Result<DeltaResponse, ProviderError> {
         let resp = self.delta_messages(access_token, delta_link).await?;
 
-        let result =
-            super::delta::parse_outlook_delta(&resp).map_err(|e| ProviderError::ParseError(e))?;
+        let result = super::delta::parse_outlook_delta(&resp).map_err(ProviderError::ParseError)?;
 
         let next_link = resp["@odata.nextLink"].as_str().map(|s| s.to_string());
 
@@ -535,8 +534,8 @@ impl OutlookProvider {
                 .delta_messages(access_token, current_link.as_deref())
                 .await?;
 
-            let page_result = super::delta::parse_outlook_delta(&resp)
-                .map_err(|e| ProviderError::ParseError(e))?;
+            let page_result =
+                super::delta::parse_outlook_delta(&resp).map_err(ProviderError::ParseError)?;
 
             all_added.extend(page_result.added_or_modified_ids);
             all_deleted.extend(page_result.deleted_ids);

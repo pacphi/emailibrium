@@ -4,7 +4,6 @@
 //! implementations. Kept separate from `sync.rs` to avoid bloating
 //! the sync orchestrator with provider-specific JSON parsing.
 
-use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------

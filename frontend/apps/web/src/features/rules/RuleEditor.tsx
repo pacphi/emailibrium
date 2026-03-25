@@ -125,10 +125,7 @@ export function RuleEditor({ rule, onClose }: RuleEditorProps) {
         setValidationErrors(result.errors);
         if (result.valid) {
           if (isEditing && rule) {
-            updateMutation.mutate(
-              { id: rule.id, rule: payload },
-              { onSuccess: () => onClose() },
-            );
+            updateMutation.mutate({ id: rule.id, rule: payload }, { onSuccess: () => onClose() });
           } else {
             createMutation.mutate(payload, { onSuccess: () => onClose() });
           }

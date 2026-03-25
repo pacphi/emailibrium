@@ -12,14 +12,8 @@ import { ChatInput } from './ChatInput';
  * action buttons for applying suggested rules. Supports SSE streaming.
  */
 export function ChatInterface() {
-  const {
-    messages,
-    isLoading,
-    streamingEnabled,
-    sendMessage,
-    stopStreaming,
-    clearHistory,
-  } = useChat();
+  const { messages, isLoading, streamingEnabled, sendMessage, stopStreaming, clearHistory } =
+    useChat();
   const createRule = useCreateRule();
   const scrollRef = useRef<HTMLDivElement>(null);
 

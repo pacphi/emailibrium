@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Background sync scheduler for offline queue processing (R-02).
 //!
 //! Periodically drains the offline queue, executing buffered operations
@@ -10,8 +11,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use tracing::{debug, error, info, warn};
+use uuid::Uuid;
 
-use super::checkpoint::CheckpointService;
+use super::checkpoint::{CheckpointService, CheckpointState, ProcessingCheckpoint};
 use super::offline_queue::OfflineQueue;
 
 // ---------------------------------------------------------------------------
@@ -111,6 +113,8 @@ impl SyncScheduler {
     /// Process one batch of pending operations.
     ///
     /// Returns the count of operations processed (completed or failed).
+    /// Saves progress checkpoints as operations are processed for crash
+    /// recovery (R-06).
     pub async fn process_batch(&self) -> Result<u32, String> {
         let batch = self
             .queue
@@ -120,6 +124,28 @@ impl SyncScheduler {
 
         if batch.is_empty() {
             return Ok(0);
+        }
+
+        let job_id = Uuid::new_v4().to_string();
+        let total = batch.len() as i64;
+
+        // Save initial checkpoint in Running state.
+        let checkpoint = ProcessingCheckpoint {
+            job_id: job_id.clone(),
+            provider: "sync_scheduler".to_string(),
+            account_id: batch
+                .first()
+                .map(|op| op.account_id.clone())
+                .unwrap_or_default(),
+            last_processed_id: None,
+            total_count: Some(total),
+            processed_count: 0,
+            state: CheckpointState::Running,
+            error_message: None,
+            updated_at: chrono::Utc::now(),
+        };
+        if let Err(err) = self.checkpoint.save_checkpoint(&checkpoint).await {
+            warn!(job_id = %job_id, error = %err, "Failed to save initial checkpoint");
         }
 
         let mut processed = 0u32;
@@ -141,8 +167,35 @@ impl SyncScheduler {
             // when provider integration is wired.
             if let Err(err) = self.queue.complete(&op.id).await {
                 error!(op_id = %op.id, error = %err, "Failed to mark operation complete");
+                // Record failure in checkpoint and return error.
+                let err_msg = format!("Failed to complete op {}: {err}", op.id);
+                if let Err(cp_err) = self.checkpoint.fail(&job_id, &err_msg).await {
+                    warn!(job_id = %job_id, error = %cp_err, "Failed to record checkpoint failure");
+                }
+                return Err(err_msg);
             }
             processed += 1;
+
+            // Save progress checkpoint after each operation.
+            let progress = ProcessingCheckpoint {
+                job_id: job_id.clone(),
+                provider: "sync_scheduler".to_string(),
+                account_id: op.account_id.clone(),
+                last_processed_id: Some(op.id.clone()),
+                total_count: Some(total),
+                processed_count: processed as i64,
+                state: CheckpointState::Running,
+                error_message: None,
+                updated_at: chrono::Utc::now(),
+            };
+            if let Err(err) = self.checkpoint.save_checkpoint(&progress).await {
+                warn!(job_id = %job_id, error = %err, "Failed to save progress checkpoint");
+            }
+        }
+
+        // Mark checkpoint as completed.
+        if let Err(err) = self.checkpoint.complete(&job_id).await {
+            warn!(job_id = %job_id, error = %err, "Failed to mark checkpoint completed");
         }
 
         Ok(processed)

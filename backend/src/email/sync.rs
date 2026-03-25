@@ -239,7 +239,7 @@ impl ProviderSync {
         };
 
         // Call Gmail history.list API.
-        let mut url = format!(
+        let url = format!(
             "https://gmail.googleapis.com/gmail/v1/users/me/history?startHistoryId={history_id}"
         );
 
@@ -253,8 +253,7 @@ impl ProviderSync {
             .await
             .map_err(|e| ProviderError::ParseError(e.to_string()))?;
 
-        let delta =
-            super::delta::parse_gmail_history(&resp).map_err(|e| ProviderError::ParseError(e))?;
+        let delta = super::delta::parse_gmail_history(&resp).map_err(ProviderError::ParseError)?;
 
         // Map label changes to "updated" messages.
         let updated_ids: Vec<String> = delta
@@ -296,8 +295,7 @@ impl ProviderSync {
             .await
             .map_err(|e| ProviderError::ParseError(e.to_string()))?;
 
-        let delta =
-            super::delta::parse_outlook_delta(&resp).map_err(|e| ProviderError::ParseError(e))?;
+        let delta = super::delta::parse_outlook_delta(&resp).map_err(ProviderError::ParseError)?;
 
         Ok(DeltaResult {
             new_message_ids: delta.added_or_modified_ids,

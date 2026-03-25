@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Bulk unsubscribe functionality (R-04).
 //!
 //! Implements RFC 2369 List-Unsubscribe and RFC 8058 List-Unsubscribe-Post
@@ -86,7 +87,7 @@ pub struct UnsubscribePreview {
 /// An undo-buffer entry, storing enough state to "undo" an unsubscribe.
 #[derive(Debug, Clone)]
 struct UndoEntry {
-    batch_id: String,
+    _batch_id: String,
     targets: Vec<SubscriptionTarget>,
     created_at: Instant,
 }
@@ -182,7 +183,7 @@ pub fn best_method(methods: &[UnsubscribeMethod]) -> Option<&UnsubscribeMethod> 
 ///
 /// Returns `true` if the open/interaction rate exceeds 50%, suggesting the
 /// user may not actually want to unsubscribe.
-pub fn should_warn(subscription: &Subscription, open_rate: f32) -> bool {
+pub fn should_warn(_subscription: &Subscription, open_rate: f32) -> bool {
     open_rate > 0.5
 }
 
@@ -325,7 +326,7 @@ impl UnsubscribeService {
             buffer.insert(
                 batch_id.clone(),
                 UndoEntry {
-                    batch_id: batch_id.clone(),
+                    _batch_id: batch_id.clone(),
                     targets: subscriptions,
                     created_at: Instant::now(),
                 },
@@ -714,7 +715,7 @@ mod tests {
             buffer.insert(
                 "test-batch".to_string(),
                 UndoEntry {
-                    batch_id: "test-batch".to_string(),
+                    _batch_id: "test-batch".to_string(),
                     targets: vec![],
                     created_at: Instant::now() - Duration::from_secs(10),
                 },

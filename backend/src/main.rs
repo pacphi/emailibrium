@@ -1,3 +1,4 @@
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -252,6 +253,11 @@ async fn main() -> anyhow::Result<()> {
         );
     }
 
+    // ── Log scrubbing middleware (R-05) ─────────────────────────────
+    app = app.layer(axum::middleware::from_fn(
+        middleware::log_scrubbing::log_scrubbing_middleware,
+    ));
+
     // ── Rate limiting (R-05) ──────────────────────────────────────────
     if config.security.rate_limit.enabled {
         let capacity = config.security.rate_limit.burst_size as f64;
@@ -261,7 +267,11 @@ async fn main() -> anyhow::Result<()> {
             refill_rate,
             "global".to_string(),
         ));
-        app = app.layer(axum::Extension(limiter));
+        app = app
+            .layer(axum::middleware::from_fn(
+                middleware::rate_limit::rate_limit_middleware,
+            ))
+            .layer(axum::Extension(limiter));
         tracing::info!(
             "Rate limiting enabled ({} req/s, burst {})",
             config.security.rate_limit.requests_per_second,
@@ -273,7 +283,11 @@ async fn main() -> anyhow::Result<()> {
     let addr = format!("{}:{}", config.host, config.port);
     tracing::info!("Listening on {}", addr);
     let listener = TcpListener::bind(&addr).await?;
-    axum::serve(listener, app).await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await?;
 
     Ok(())
 }

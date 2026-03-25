@@ -1,10 +1,6 @@
 import { useState, useCallback, useRef } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import {
-  batchUnsubscribe,
-  undoUnsubscribe,
-  previewUnsubscribe,
-} from '@emailibrium/api';
+import { batchUnsubscribe, undoUnsubscribe, previewUnsubscribe } from '@emailibrium/api';
 import type { UnsubscribeResult, UnsubscribePreview } from '@emailibrium/types';
 
 const UNDO_WINDOW_MS = 5 * 60 * 1000; // 5 minutes
@@ -24,8 +20,7 @@ export function useUnsubscribePreview() {
 export function useBatchUnsubscribe() {
   const queryClient = useQueryClient();
   return useMutation<UnsubscribeResult, Error, string[]>({
-    mutationFn: (subscriptionIds: string[]) =>
-      batchUnsubscribe({ subscriptionIds }),
+    mutationFn: (subscriptionIds: string[]) => batchUnsubscribe({ subscriptionIds }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['subscriptions'] });
     },

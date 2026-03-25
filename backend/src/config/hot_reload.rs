@@ -8,7 +8,7 @@
 //! portable, and sufficient for configuration files that change infrequently.
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
@@ -86,12 +86,10 @@ impl ConfigWatcher {
                     }
                 }
 
-                if changed {
-                    if self.tx.send(()).is_err() {
-                        // All receivers dropped -- stop watching.
-                        debug!("All config watchers dropped, stopping poll loop");
-                        break;
-                    }
+                if changed && self.tx.send(()).is_err() {
+                    // All receivers dropped -- stop watching.
+                    debug!("All config watchers dropped, stopping poll loop");
+                    break;
                 }
             }
         })

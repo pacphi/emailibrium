@@ -68,17 +68,13 @@ export function useChat() {
             request,
             (chunk) => {
               setMessages((prev) =>
-                prev.map((m) =>
-                  m.id === assistantId ? { ...m, content: m.content + chunk } : m,
-                ),
+                prev.map((m) => (m.id === assistantId ? { ...m, content: m.content + chunk } : m)),
               );
             },
             (newSessionId) => {
               setSessionId(newSessionId);
               setMessages((prev) =>
-                prev.map((m) =>
-                  m.id === assistantId ? { ...m, isStreaming: false } : m,
-                ),
+                prev.map((m) => (m.id === assistantId ? { ...m, isStreaming: false } : m)),
               );
               setIsLoading(false);
             },
@@ -147,9 +143,7 @@ export function useChat() {
   const stopStreaming = useCallback(() => {
     abortRef.current?.();
     abortRef.current = null;
-    setMessages((prev) =>
-      prev.map((m) => (m.isStreaming ? { ...m, isStreaming: false } : m)),
-    );
+    setMessages((prev) => prev.map((m) => (m.isStreaming ? { ...m, isStreaming: false } : m)));
     setIsLoading(false);
   }, []);
 

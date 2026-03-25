@@ -21,9 +21,7 @@ export function SyncStatusIndicator() {
       {/* Online/offline dot */}
       <div
         className={`flex items-center gap-1.5 text-xs ${
-          isOnline
-            ? 'text-amber-600 dark:text-amber-400'
-            : 'text-red-600 dark:text-red-400'
+          isOnline ? 'text-amber-600 dark:text-amber-400' : 'text-red-600 dark:text-red-400'
         }`}
       >
         <span

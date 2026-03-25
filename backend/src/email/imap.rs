@@ -200,15 +200,11 @@ fn envelope_to_message(env: ImapEnvelope) -> EmailMessage {
 /// this implementation encapsulates all IMAP protocol logic internally.
 pub struct ImapProvider {
     config: ImapConfig,
-    http: reqwest::Client,
 }
 
 impl ImapProvider {
     pub fn new(config: ImapConfig) -> Self {
-        Self {
-            config,
-            http: reqwest::Client::new(),
-        }
+        Self { config }
     }
 
     /// Build IMAP FETCH command for a range of messages.
@@ -317,25 +313,22 @@ impl EmailProvider for ImapProvider {
     ) -> Result<EmailPage, ProviderError> {
         self.validate_config()?;
 
-        // In production with tokio-native-tls, this would:
-        // 1. Connect + LOGIN
-        // 2. SELECT mailbox
-        // 3. UID SEARCH to get message UIDs
-        // 4. UID FETCH for each batch of UIDs
-        // 5. Parse FETCH responses into EmailMessage
-        // 6. LOGOUT
-
+        // Build the IMAP commands that would be sent over a TLS connection:
+        // 1. UID SEARCH to locate matching messages
         let _search_cmd = Self::build_search_command(params);
+        // 2. FETCH headers for the matching UIDs
+        let _fetch_cmd = Self::build_fetch_command(1, params.max_results, false);
 
-        // For now, return an empty page. The IMAP transport layer will
-        // be wired in once tokio-native-tls is added to Cargo.toml.
-        // The command generation and parsing logic is fully implemented
-        // and tested independently.
-        Ok(EmailPage {
-            messages: Vec::new(),
-            next_page_token: None,
-            result_size_estimate: Some(0),
-        })
+        // The parsing pipeline is ready:
+        //   raw IMAP response -> parse_fetch_response -> envelope_to_message -> EmailMessage
+        // Demonstrate the pipeline compiles (no-op on empty input):
+        let envelopes = parse_fetch_response("");
+        let _messages: Vec<EmailMessage> = envelopes.into_iter().map(envelope_to_message).collect();
+
+        // TODO: Actual IMAP connection requires tokio-native-tls or the `imap` crate.
+        Err(ProviderError::ConfigError(
+            "IMAP connection requires the `imap` crate (not yet in Cargo.toml)".into(),
+        ))
     }
 
     /// Get a single message by its IMAP UID.
@@ -346,20 +339,21 @@ impl EmailProvider for ImapProvider {
     ) -> Result<EmailMessage, ProviderError> {
         self.validate_config()?;
 
-        // In production:
-        // 1. Connect + LOGIN
-        // 2. SELECT mailbox
-        // 3. UID FETCH {id} (FLAGS BODY[HEADER.FIELDS (...)] BODY[TEXT])
-        // 4. Parse response
-        // 5. LOGOUT
-
-        let _fetch_cmd = format!(
-            "UID FETCH {} (FLAGS BODY[HEADER.FIELDS (FROM TO SUBJECT DATE)] BODY[TEXT])",
-            id
+        // Build the IMAP FETCH command for a single message with full body.
+        let _fetch_cmd = Self::build_fetch_command(
+            id.parse::<u32>().unwrap_or(1),
+            1,
+            true, // include BODY[TEXT]
         );
 
-        Err(ProviderError::RequestFailed(
-            "IMAP transport not yet connected (requires tokio-native-tls)".to_string(),
+        // The parsing pipeline is ready:
+        //   raw IMAP response -> parse_fetch_response -> envelope_to_message -> EmailMessage
+        let envelopes = parse_fetch_response("");
+        let _messages: Vec<EmailMessage> = envelopes.into_iter().map(envelope_to_message).collect();
+
+        // TODO: Actual IMAP connection requires tokio-native-tls or the `imap` crate.
+        Err(ProviderError::ConfigError(
+            "IMAP connection requires the `imap` crate (not yet in Cargo.toml)".into(),
         ))
     }
 
@@ -667,7 +661,7 @@ Subject: Second
     }
 
     #[tokio::test]
-    async fn test_list_messages_returns_empty_page() {
+    async fn test_list_messages_returns_config_error() {
         let provider = ImapProvider::new(test_config());
         let params = ListParams {
             max_results: 10,
@@ -675,8 +669,9 @@ Subject: Second
             label: None,
             query: None,
         };
-        let page = provider.list_messages("token", &params).await.unwrap();
-        assert!(page.messages.is_empty());
+        let result = provider.list_messages("token", &params).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("imap"));
     }
 
     #[tokio::test]

@@ -65,9 +65,7 @@ function ConsentToggle({
       >
         <span
           className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white
-            shadow ring-0 transition-transform ${
-              granted ? 'translate-x-5' : 'translate-x-0'
-            }`}
+            shadow ring-0 transition-transform ${granted ? 'translate-x-5' : 'translate-x-0'}`}
         />
       </button>
     </div>
@@ -268,8 +266,8 @@ export function ConsentSettings() {
         ) : (
           <div className="rounded-lg border border-red-200 bg-red-50 p-4 dark:border-red-800 dark:bg-red-900/20">
             <p className="mb-3 text-sm font-medium text-red-700 dark:text-red-400">
-              Are you absolutely sure? This will permanently delete all your emails, vectors,
-              rules, settings, and consent records. This cannot be undone.
+              Are you absolutely sure? This will permanently delete all your emails, vectors, rules,
+              settings, and consent records. This cannot be undone.
             </p>
             <div className="flex gap-2">
               <button

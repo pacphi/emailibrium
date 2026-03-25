@@ -8,7 +8,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
-use tracing::warn;
 use uuid::Uuid;
 
 use super::offline_queue::QueuedOperation;
@@ -18,10 +17,11 @@ use super::offline_queue::QueuedOperation;
 // ---------------------------------------------------------------------------
 
 /// Strategy for resolving sync conflicts.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ConflictStrategy {
     /// Use the most recent timestamp (default).
+    #[default]
     LastWriterWins,
     /// Always prefer local (offline) changes.
     LocalWins,
@@ -29,12 +29,6 @@ pub enum ConflictStrategy {
     RemoteWins,
     /// Queue for manual user resolution.
     Manual,
-}
-
-impl Default for ConflictStrategy {
-    fn default() -> Self {
-        Self::LastWriterWins
-    }
 }
 
 /// How a conflict was resolved.
@@ -288,8 +282,8 @@ impl ConflictResolver {
 // ---------------------------------------------------------------------------
 
 fn row_to_conflict(row: ConflictRow) -> SyncConflict {
-    let local_state = serde_json::from_str(&row.2).unwrap_or_else(|_| serde_json::Value::Null);
-    let remote_state = serde_json::from_str(&row.3).unwrap_or_else(|_| serde_json::Value::Null);
+    let local_state = serde_json::from_str(&row.2).unwrap_or(serde_json::Value::Null);
+    let remote_state = serde_json::from_str(&row.3).unwrap_or(serde_json::Value::Null);
     let resolution = row.4.as_deref().and_then(|s| s.parse::<Resolution>().ok());
     let resolved_at = row
         .5

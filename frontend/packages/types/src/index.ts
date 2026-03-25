@@ -1,8 +1,4 @@
-export type {
-  Email,
-  EmailThread,
-  EmbeddingStatus,
-} from './email.js';
+export type { Email, EmailThread, EmbeddingStatus } from './email.js';
 
 export type {
   SearchMode,
@@ -12,11 +8,7 @@ export type {
   SearchResponse,
 } from './search.js';
 
-export type {
-  Cluster,
-  VectorStats,
-  HealthStatus,
-} from './vectors.js';
+export type { Cluster, VectorStats, HealthStatus } from './vectors.js';
 
 export type {
   RecurrencePattern,
@@ -26,10 +18,7 @@ export type {
   InboxReport,
 } from './insights.js';
 
-export type {
-  IngestionPhase,
-  IngestionProgress,
-} from './ingestion.js';
+export type { IngestionPhase, IngestionProgress } from './ingestion.js';
 
 export type {
   Provider,
@@ -39,12 +28,7 @@ export type {
   ImapConfig,
 } from './auth.js';
 
-export type {
-  Rule,
-  RuleCondition,
-  RuleAction,
-  RuleSuggestion,
-} from './rules.js';
+export type { Rule, RuleCondition, RuleAction, RuleSuggestion } from './rules.js';
 
 export type {
   ConsentPurpose,
@@ -55,15 +39,6 @@ export type {
   DataEraseResponse,
 } from './consent.js';
 
-export type {
-  ChatSession,
-  ChatRequest,
-  ChatResponse,
-  ChatStreamChunk,
-} from './chat.js';
+export type { ChatSession, ChatRequest, ChatResponse, ChatStreamChunk } from './chat.js';
 
-export type {
-  UnsubscribeRequest,
-  UnsubscribeResult,
-  UnsubscribePreview,
-} from './unsubscribe.js';
+export type { UnsubscribeRequest, UnsubscribeResult, UnsubscribePreview } from './unsubscribe.js';

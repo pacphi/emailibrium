@@ -551,8 +551,8 @@ impl GmailProvider {
                 .history_list(access_token, start_history_id, page_token.as_deref())
                 .await?;
 
-            let delta = super::delta::parse_gmail_history(&resp)
-                .map_err(|e| ProviderError::ParseError(e))?;
+            let delta =
+                super::delta::parse_gmail_history(&resp).map_err(ProviderError::ParseError)?;
 
             all_added.extend(delta.added_message_ids);
             all_deleted.extend(delta.deleted_message_ids);

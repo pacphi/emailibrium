@@ -2,17 +2,9 @@ export { api } from './client.js';
 export { createSSEStream } from './sse.js';
 export type { SSEStream } from './sse.js';
 
-export {
-  searchEmails,
-  findSimilar,
-  classifyEmail,
-} from './searchApi.js';
+export { searchEmails, findSimilar, classifyEmail } from './searchApi.js';
 
-export {
-  getSubscriptions,
-  getRecurringSenders,
-  getInboxReport,
-} from './insightsApi.js';
+export { getSubscriptions, getRecurringSenders, getInboxReport } from './insightsApi.js';
 
 export {
   startIngestion,
@@ -56,18 +48,9 @@ export {
 } from './rulesApi.js';
 export type { RuleValidationResult, RuleTestResult } from './rulesApi.js';
 
-export {
-  bulkArchive,
-  bulkDelete,
-  bulkLabel,
-  unsubscribe,
-} from './actionsApi.js';
+export { bulkArchive, bulkDelete, bulkLabel, unsubscribe } from './actionsApi.js';
 
-export {
-  batchUnsubscribe,
-  undoUnsubscribe,
-  previewUnsubscribe,
-} from './unsubscribeApi.js';
+export { batchUnsubscribe, undoUnsubscribe, previewUnsubscribe } from './unsubscribeApi.js';
 
 export {
   sendChatMessage,
@@ -77,12 +60,7 @@ export {
   deleteChatSession,
 } from './chatApi.js';
 
-export {
-  recordConsent,
-  getConsents,
-  requestDataExport,
-  requestDataErase,
-} from './consentApi.js';
+export { recordConsent, getConsents, requestDataExport, requestDataErase } from './consentApi.js';
 
 export { submitFeedback } from './learningApi.js';
 export type { FeedbackPayload, FeedbackAction } from './learningApi.js';

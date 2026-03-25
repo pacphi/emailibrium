@@ -10,9 +10,10 @@ export async function sendChatMessage(request: ChatRequest): Promise<ChatRespons
  * Returns an EventSource-compatible interface that emits tokens
  * as they arrive from the backend.
  */
-export function createChatStream(
-  request: ChatRequest,
-): { eventSource: EventSource; abort: () => void } {
+export function createChatStream(request: ChatRequest): {
+  eventSource: EventSource;
+  abort: () => void;
+} {
   const params = new URLSearchParams();
   params.set('message', request.message);
   if (request.sessionId) {

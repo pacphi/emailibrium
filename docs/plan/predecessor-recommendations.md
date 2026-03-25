@@ -15,32 +15,32 @@ The predecessor (`pacphi/emailibrium`) is a Rust + Tauri 2.0 desktop application
 
 ## Capability Comparison Matrix
 
-| Capability | Predecessor | Current Repo | Gap |
-|---|---|---|---|
-| **Email Providers (Gmail/Outlook/IMAP)** | Full API clients wired | OAuth UI scaffolded, no API clients | Critical |
-| **POP3 Support** | Implemented | Not present | Minor |
-| **Offline-First Sync** | Queue-based with CRDT conflict resolution | Not implemented | Significant |
-| **Rule Engine** | Full parser + validator + processor | AI-suggested rules (UI only) | Significant |
-| **Adaptive Categorizer (feedback loop)** | Per-user training from corrections | SONA learning (designed, partially wired) | Moderate |
-| **AI Chat Interface** | Streaming responses, session mgmt | Chat UI exists, no LLM wired | Moderate |
-| **Bulk Unsubscribe** | Intelligent detection + false-positive prevention | Subscription detection (insights only) | Moderate |
-| **Native Desktop (Tauri 2.0)** | Cross-platform DMG/MSI/DEB | Web SPA + PWA | Architectural choice |
-| **Hot-Reload Config** | File-watch with live updates | Layered figment config (no hot-reload) | Minor |
-| **Redis Distributed Cache** | Moka + Redis fallback | Moka only (Redis in docker-compose but unwired) | Minor |
-| **Processing Checkpoints** | Resume batch jobs after crash | Not implemented | Moderate |
-| **Rate Limiting Middleware** | Governor-based per-route | Not implemented | Moderate |
-| **Security Headers Middleware** | X-Frame-Options, CSP, HSTS | CSP planned but not wired | Moderate |
-| **Log Scrubbing** | Automatic secret removal from logs | Not implemented | Minor |
-| **SQLCipher DB Encryption** | Optional full-DB encryption | SQLite encryption extension (planned) | Minor |
-| **GDPR Consent Tracking** | Consent table + audit trail | Consent API endpoint exists, no persistence | Moderate |
-| **CLI Setup Wizard** | `config init` + `config validate` | `make setup` Makefile wizard | Parity |
-| **Property Testing** | proptest for fuzzing | Not present | Minor |
-| **Semantic Search** | Not present | HNSW + FTS5 + RRF hybrid | Current leads |
-| **SONA Adaptive Learning** | Not present | 3-tier with EWC++ | Current leads |
-| **GraphSAGE Clustering** | Not present | GNN on HNSW graph | Current leads |
-| **Multi-Asset Extraction** | Not present | HTML, images, PDFs, OCR | Current leads |
-| **Quantization** | Not present | Scalar/PQ/binary adaptive | Current leads |
-| **Differential Privacy** | Not present | Gaussian noise injection | Current leads |
+| Capability                               | Predecessor                                       | Current Repo                                    | Gap                  |
+| ---------------------------------------- | ------------------------------------------------- | ----------------------------------------------- | -------------------- |
+| **Email Providers (Gmail/Outlook/IMAP)** | Full API clients wired                            | OAuth UI scaffolded, no API clients             | Critical             |
+| **POP3 Support**                         | Implemented                                       | Not present                                     | Minor                |
+| **Offline-First Sync**                   | Queue-based with CRDT conflict resolution         | Not implemented                                 | Significant          |
+| **Rule Engine**                          | Full parser + validator + processor               | AI-suggested rules (UI only)                    | Significant          |
+| **Adaptive Categorizer (feedback loop)** | Per-user training from corrections                | SONA learning (designed, partially wired)       | Moderate             |
+| **AI Chat Interface**                    | Streaming responses, session mgmt                 | Chat UI exists, no LLM wired                    | Moderate             |
+| **Bulk Unsubscribe**                     | Intelligent detection + false-positive prevention | Subscription detection (insights only)          | Moderate             |
+| **Native Desktop (Tauri 2.0)**           | Cross-platform DMG/MSI/DEB                        | Web SPA + PWA                                   | Architectural choice |
+| **Hot-Reload Config**                    | File-watch with live updates                      | Layered figment config (no hot-reload)          | Minor                |
+| **Redis Distributed Cache**              | Moka + Redis fallback                             | Moka only (Redis in docker-compose but unwired) | Minor                |
+| **Processing Checkpoints**               | Resume batch jobs after crash                     | Not implemented                                 | Moderate             |
+| **Rate Limiting Middleware**             | Governor-based per-route                          | Not implemented                                 | Moderate             |
+| **Security Headers Middleware**          | X-Frame-Options, CSP, HSTS                        | CSP planned but not wired                       | Moderate             |
+| **Log Scrubbing**                        | Automatic secret removal from logs                | Not implemented                                 | Minor                |
+| **SQLCipher DB Encryption**              | Optional full-DB encryption                       | SQLite encryption extension (planned)           | Minor                |
+| **GDPR Consent Tracking**                | Consent table + audit trail                       | Consent API endpoint exists, no persistence     | Moderate             |
+| **CLI Setup Wizard**                     | `config init` + `config validate`                 | `make setup` Makefile wizard                    | Parity               |
+| **Property Testing**                     | proptest for fuzzing                              | Not present                                     | Minor                |
+| **Semantic Search**                      | Not present                                       | HNSW + FTS5 + RRF hybrid                        | Current leads        |
+| **SONA Adaptive Learning**               | Not present                                       | 3-tier with EWC++                               | Current leads        |
+| **GraphSAGE Clustering**                 | Not present                                       | GNN on HNSW graph                               | Current leads        |
+| **Multi-Asset Extraction**               | Not present                                       | HTML, images, PDFs, OCR                         | Current leads        |
+| **Quantization**                         | Not present                                       | Scalar/PQ/binary adaptive                       | Current leads        |
+| **Differential Privacy**                 | Not present                                       | Gaussian noise injection                        | Current leads        |
 
 ---
 
@@ -55,6 +55,7 @@ The predecessor (`pacphi/emailibrium`) is a Rust + Tauri 2.0 desktop application
 **Current gap:** OAuth UI scaffolded (`GmailConnect.tsx`, `OutlookConnect.tsx`) but no backend provider client code. The `EmailProvider` trait exists but has no concrete implementations calling actual APIs.
 
 **Recommendation:** Port the provider client architecture from the predecessor. The predecessor's `gmail.rs`, `outlook.rs`, and `imap.rs` provide battle-tested patterns for:
+
 - OAuth2 PKCE flow with encrypted token storage
 - Incremental sync via `historyId` (Gmail) and `deltaLink` (Outlook)
 - Token refresh service with retry logic
@@ -72,6 +73,7 @@ The predecessor (`pacphi/emailibrium`) is a Rust + Tauri 2.0 desktop application
 **Current gap:** No offline support. Ingestion pipeline assumes continuous connectivity.
 
 **Recommendation:** Adopt the predecessor's sync architecture:
+
 - `sync_queue` table for offline operation buffering
 - Conflict resolution strategy (last-writer-wins with vector clock tiebreaker)
 - `processing_checkpoints` table for crash recovery during batch ingestion
@@ -89,6 +91,7 @@ This pairs well with the current PWA service worker (already caching static asse
 #### R-03: Rule Engine with Parser and Validator — COMPLETED
 
 **What predecessor has:** A complete rule engine with:
+
 - Rule parser (natural language and structured conditions)
 - Rule validator (prevents contradictions and infinite loops)
 - Rule processor (applies rules to incoming emails)
@@ -97,6 +100,7 @@ This pairs well with the current PWA service worker (already caching static asse
 **Current gap:** Rules Studio UI exists with AI-suggested semantic conditions, but no backend rule execution engine.
 
 **Recommendation:** Build a hybrid rule engine combining:
+
 - Predecessor's structured parser/validator for deterministic rules
 - Current repo's semantic conditions (vector similarity) for fuzzy matching
 - Rule priority ordering and conflict detection
@@ -115,6 +119,7 @@ The semantic dimension is a unique advantage — "emails about budgets from fina
 **Current gap:** Subscription detection exists in Insights Explorer (47+ newsletter types detected), but no unsubscribe action execution.
 
 **Recommendation:** Extend the existing insights module with:
+
 - `List-Unsubscribe` header parsing and one-click execution
 - `List-Unsubscribe-Post` (RFC 8058) for one-click mailto-less unsubscribe
 - False-positive guard: require confirmation for senders with >50% open rate
@@ -132,6 +137,7 @@ The semantic dimension is a unique advantage — "emails about budgets from fina
 **Current gap:** CSP headers planned in ADR-008 but not wired. No rate limiting. CORS exists but is permissive.
 
 **Recommendation:**
+
 - Add `tower-governor` (or `tower`-native rate limiting) with per-route configuration
 - Wire CSP, HSTS, X-Frame-Options, X-Content-Type-Options headers via `tower-http`
 - Tighten CORS to specific allowed origins
@@ -149,6 +155,7 @@ The semantic dimension is a unique advantage — "emails about budgets from fina
 **Current gap:** Ingestion pipeline has no checkpoint/resume. A crash during a large sync loses all progress.
 
 **Recommendation:** Add a checkpoint table to the existing SQLite schema:
+
 ```sql
 CREATE TABLE processing_checkpoints (
     job_id TEXT PRIMARY KEY,
@@ -191,6 +198,7 @@ Wire into the existing `IngestionJobAggregate` (DDD-003) as a domain event (`Che
 **Current gap:** Figment loads config at startup only. Changes require restart.
 
 **Recommendation:** Add `notify` crate file watcher on `config.yaml` and `config.local.yaml`. On change:
+
 1. Parse new config
 2. Validate against schema
 3. If valid, swap `Arc<Config>` via `arc_swap` or similar
@@ -208,6 +216,7 @@ Wire into the existing `IngestionJobAggregate` (DDD-003) as a domain event (`Che
 **Current gap:** Consent API endpoint exists but consent decisions are not persisted. Privacy audit logging planned but not implemented.
 
 **Recommendation:**
+
 - Persist consent decisions to SQLite (add migration)
 - Log data access events to append-only audit table
 - Add data export endpoint (user's emails + metadata as JSON/ZIP)
@@ -225,6 +234,7 @@ Wire into the existing `IngestionJobAggregate` (DDD-003) as a domain event (`Che
 **Current gap:** Only criterion benchmarks and integration tests. No fuzzing.
 
 **Recommendation:** Add `proptest` to backend `dev-dependencies` and write property tests for:
+
 - Email content extraction (arbitrary HTML → clean text)
 - Vector quantization (round-trip correctness)
 - Search query parsing (arbitrary input → valid query or error)
@@ -257,6 +267,7 @@ Wire into the existing `IngestionJobAggregate` (DDD-003) as a domain event (`Che
 **Current gap:** Redis service defined in `docker-compose.yml` but not wired in backend code.
 
 **Recommendation:** Wire Redis as optional cache backend behind the existing `cache/` module. Use for:
+
 - Embedding cache (avoid recomputing for same content)
 - Session storage (if multi-instance deployment needed)
 - Pub/sub for real-time updates (alternative to SSE polling)
@@ -268,13 +279,13 @@ Wire into the existing `IngestionJobAggregate` (DDD-003) as a domain event (`Che
 
 ## Capabilities NOT Recommended for Adoption
 
-| Predecessor Capability | Reason to Skip |
-|---|---|
-| **XState state machines** | Current Zustand stores are simpler and sufficient |
-| **Figment config (predecessor version)** | Already using figment in current repo |
-| **SQLx PostgreSQL dual-mode** | Current SQLite-first strategy is correct for local-first |
-| **Tauri IPC bridge** | Only needed if adopting Tauri (R-11) |
-| **OAuth `state` parameter CSRF** | Current PKCE flow provides equivalent protection |
+| Predecessor Capability                   | Reason to Skip                                           |
+| ---------------------------------------- | -------------------------------------------------------- |
+| **XState state machines**                | Current Zustand stores are simpler and sufficient        |
+| **Figment config (predecessor version)** | Already using figment in current repo                    |
+| **SQLx PostgreSQL dual-mode**            | Current SQLite-first strategy is correct for local-first |
+| **Tauri IPC bridge**                     | Only needed if adopting Tauri (R-11)                     |
+| **OAuth `state` parameter CSRF**         | Current PKCE flow provides equivalent protection         |
 
 ---
 
@@ -282,17 +293,17 @@ Wire into the existing `IngestionJobAggregate` (DDD-003) as a domain event (`Che
 
 These are areas where the predecessor should NOT influence direction — the current repo's approach is architecturally superior:
 
-| Capability | Current Advantage |
-|---|---|
-| **Semantic Search** | HNSW + FTS5 + RRF hybrid vs no search in predecessor |
-| **SONA Adaptive Learning** | 3-tier learning with EWC++ vs simple feedback categorizer |
-| **GraphSAGE Clustering** | GNN on HNSW graph vs no clustering |
-| **Multi-Asset Extraction** | HTML + images + PDFs + OCR vs text-only |
-| **Vector Quantization** | Scalar/PQ/binary adaptive vs none |
-| **Differential Privacy** | Noise injection on embeddings vs none |
-| **Subscription Intelligence** | 47+ pattern detection vs basic categorization |
-| **DDD Architecture** | 6 bounded contexts with event sourcing vs module-based |
-| **Evaluation Framework** | NDCG@10, Silhouette, Macro-F1 suites vs basic tests |
+| Capability                    | Current Advantage                                         |
+| ----------------------------- | --------------------------------------------------------- |
+| **Semantic Search**           | HNSW + FTS5 + RRF hybrid vs no search in predecessor      |
+| **SONA Adaptive Learning**    | 3-tier learning with EWC++ vs simple feedback categorizer |
+| **GraphSAGE Clustering**      | GNN on HNSW graph vs no clustering                        |
+| **Multi-Asset Extraction**    | HTML + images + PDFs + OCR vs text-only                   |
+| **Vector Quantization**       | Scalar/PQ/binary adaptive vs none                         |
+| **Differential Privacy**      | Noise injection on embeddings vs none                     |
+| **Subscription Intelligence** | 47+ pattern detection vs basic categorization             |
+| **DDD Architecture**          | 6 bounded contexts with event sourcing vs module-based    |
+| **Evaluation Framework**      | NDCG@10, Silhouette, Macro-F1 suites vs basic tests       |
 
 ---
 
