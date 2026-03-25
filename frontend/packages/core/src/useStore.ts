@@ -33,8 +33,7 @@ export const useAuthStore = create<AuthState>((set) => ({
   removeAccount: (accountId) =>
     set((state) => {
       const accounts = state.accounts.filter((a) => a.id !== accountId);
-      const currentAccount =
-        state.currentAccount?.id === accountId ? null : state.currentAccount;
+      const currentAccount = state.currentAccount?.id === accountId ? null : state.currentAccount;
       return {
         accounts,
         currentAccount,
@@ -67,8 +66,7 @@ export const useUIStore = create<UIState>((set) => ({
 
   setTheme: (theme) => set({ theme }),
 
-  toggleCommandPalette: () =>
-    set((state) => ({ commandPaletteOpen: !state.commandPaletteOpen })),
+  toggleCommandPalette: () => set((state) => ({ commandPaletteOpen: !state.commandPaletteOpen })),
 }));
 
 // --- Ingestion Store ---

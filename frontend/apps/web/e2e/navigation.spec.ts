@@ -23,7 +23,9 @@ test.describe('Navigation', () => {
   test('sidebar navigation works', async ({ page }) => {
     await page.goto('/command-center');
     // Find and click a sidebar navigation link
-    const sidebarLink = page.getByRole('link', { name: /inbox cleaner|email|rules|insights|settings/i }).first();
+    const sidebarLink = page
+      .getByRole('link', { name: /inbox cleaner|email|rules|insights|settings/i })
+      .first();
     if (await sidebarLink.isVisible({ timeout: 3000 }).catch(() => false)) {
       await sidebarLink.click();
       // URL should change away from command-center

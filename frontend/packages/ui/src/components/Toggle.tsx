@@ -34,9 +34,7 @@ export function Toggle({
           'relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200',
           'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2',
           'disabled:cursor-not-allowed disabled:opacity-50',
-          checked
-            ? 'bg-indigo-600'
-            : 'bg-gray-200 dark:bg-gray-700',
+          checked ? 'bg-indigo-600' : 'bg-gray-200 dark:bg-gray-700',
         ].join(' ')}
       >
         <span
@@ -47,10 +45,7 @@ export function Toggle({
           ].join(' ')}
         />
       </button>
-      <span
-        id={labelId}
-        className="text-sm text-gray-700 dark:text-gray-300"
-      >
+      <span id={labelId} className="text-sm text-gray-700 dark:text-gray-300">
         {label}
       </span>
     </div>

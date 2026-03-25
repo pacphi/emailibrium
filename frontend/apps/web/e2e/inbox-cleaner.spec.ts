@@ -19,7 +19,8 @@ test.describe('Inbox Cleaner', () => {
     // Wait for the page content to load
     await page.waitForTimeout(1000);
     // Check for subscription-related UI elements
-    const content = page.locator('[data-testid="subscription-row"]')
+    const content = page
+      .locator('[data-testid="subscription-row"]')
       .or(page.getByRole('checkbox').first())
       .or(page.getByText(/subscription/i).first());
     if (await content.isVisible({ timeout: 3000 }).catch(() => false)) {

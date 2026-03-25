@@ -55,16 +55,9 @@ export async function replyToEmail(
   id: string,
   body: { bodyText?: string; bodyHtml?: string },
 ): Promise<{ messageId: string }> {
-  return api
-    .post(`emails/${id}/reply`, { json: body })
-    .json<{ messageId: string }>();
+  return api.post(`emails/${id}/reply`, { json: body }).json<{ messageId: string }>();
 }
 
-export async function forwardEmail(
-  id: string,
-  to: string,
-): Promise<{ messageId: string }> {
-  return api
-    .post(`emails/${id}/forward`, { json: { to } })
-    .json<{ messageId: string }>();
+export async function forwardEmail(id: string, to: string): Promise<{ messageId: string }> {
+  return api.post(`emails/${id}/forward`, { json: { to } }).json<{ messageId: string }>();
 }

@@ -5,7 +5,8 @@ test.describe('Rules Studio', () => {
     await page.goto('/rules');
     await expect(page).toHaveURL(/\/rules/);
     // Look for tab navigation or rule-related headings
-    const tabOrHeading = page.getByRole('tab')
+    const tabOrHeading = page
+      .getByRole('tab')
       .or(page.getByText(/active|suggestions|rules/i))
       .first();
     await expect(tabOrHeading).toBeVisible({ timeout: 5000 });
@@ -17,7 +18,8 @@ test.describe('Rules Studio', () => {
     if (await createButton.isVisible({ timeout: 3000 }).catch(() => false)) {
       await createButton.click();
       // A rule editor form or modal should appear
-      const editor = page.getByText(/condition|action|when|then/i)
+      const editor = page
+        .getByText(/condition|action|when|then/i)
         .or(page.getByRole('dialog'))
         .first();
       await expect(editor).toBeVisible({ timeout: 3000 });

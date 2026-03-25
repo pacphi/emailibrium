@@ -20,15 +20,11 @@ export function Card({ children, header, footer, className = '' }: CardProps) {
       ].join(' ')}
     >
       {header && (
-        <div className="border-b border-gray-200 px-4 py-3 dark:border-gray-700">
-          {header}
-        </div>
+        <div className="border-b border-gray-200 px-4 py-3 dark:border-gray-700">{header}</div>
       )}
       <div className="px-4 py-4">{children}</div>
       {footer && (
-        <div className="border-t border-gray-200 px-4 py-3 dark:border-gray-700">
-          {footer}
-        </div>
+        <div className="border-t border-gray-200 px-4 py-3 dark:border-gray-700">{footer}</div>
       )}
     </div>
   );

@@ -12,7 +12,10 @@ test.describe('Search & Command Palette', () => {
   test('can type search query', async ({ page }) => {
     await page.goto('/command-center');
     await page.keyboard.press('Meta+k');
-    const searchInput = page.getByRole('combobox').or(page.getByPlaceholder(/search/i)).first();
+    const searchInput = page
+      .getByRole('combobox')
+      .or(page.getByPlaceholder(/search/i))
+      .first();
     await searchInput.fill('test query');
     await expect(searchInput).toHaveValue('test query');
   });
@@ -20,7 +23,10 @@ test.describe('Search & Command Palette', () => {
   test('search results display', async ({ page }) => {
     await page.goto('/command-center');
     await page.keyboard.press('Meta+k');
-    const searchInput = page.getByRole('combobox').or(page.getByPlaceholder(/search/i)).first();
+    const searchInput = page
+      .getByRole('combobox')
+      .or(page.getByPlaceholder(/search/i))
+      .first();
     await searchInput.fill('inbox');
     // Allow time for results to load
     await page.waitForTimeout(500);

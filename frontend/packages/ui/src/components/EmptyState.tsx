@@ -12,19 +12,12 @@ export interface EmptyStateProps {
  * A placeholder component for empty lists or search results.
  * Displays an optional icon, title, description, and action button.
  */
-export function EmptyState({
-  icon,
-  title,
-  description,
-  action,
-  className = '',
-}: EmptyStateProps) {
+export function EmptyState({ icon, title, description, action, className = '' }: EmptyStateProps) {
   return (
     <div
-      className={[
-        'flex flex-col items-center justify-center py-12 text-center',
-        className,
-      ].join(' ')}
+      className={['flex flex-col items-center justify-center py-12 text-center', className].join(
+        ' ',
+      )}
     >
       {icon && (
         <div className="mb-4 text-gray-300 dark:text-gray-600" aria-hidden="true">
@@ -33,9 +26,7 @@ export function EmptyState({
       )}
       <h3 className="text-sm font-semibold text-gray-900 dark:text-white">{title}</h3>
       {description && (
-        <p className="mt-1 max-w-sm text-sm text-gray-500 dark:text-gray-400">
-          {description}
-        </p>
+        <p className="mt-1 max-w-sm text-sm text-gray-500 dark:text-gray-400">{description}</p>
       )}
       {action && <div className="mt-4">{action}</div>}
     </div>

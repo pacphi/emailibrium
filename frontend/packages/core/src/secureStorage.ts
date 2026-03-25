@@ -19,18 +19,11 @@ async function getCryptoKey(): Promise<CryptoKey> {
   return key;
 }
 
-async function encrypt(
-  key: CryptoKey,
-  plaintext: string,
-): Promise<ArrayBuffer> {
+async function encrypt(key: CryptoKey, plaintext: string): Promise<ArrayBuffer> {
   const iv = crypto.getRandomValues(new Uint8Array(IV_LENGTH));
   const encoded = new TextEncoder().encode(plaintext);
 
-  const ciphertext = await crypto.subtle.encrypt(
-    { name: 'AES-GCM', iv },
-    key,
-    encoded,
-  );
+  const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, encoded);
 
   // Prepend IV to ciphertext for storage
   const result = new Uint8Array(iv.length + ciphertext.byteLength);
@@ -39,19 +32,12 @@ async function encrypt(
   return result.buffer;
 }
 
-async function decrypt(
-  key: CryptoKey,
-  data: ArrayBuffer,
-): Promise<string> {
+async function decrypt(key: CryptoKey, data: ArrayBuffer): Promise<string> {
   const bytes = new Uint8Array(data);
   const iv = bytes.slice(0, IV_LENGTH);
   const ciphertext = bytes.slice(IV_LENGTH);
 
-  const decrypted = await crypto.subtle.decrypt(
-    { name: 'AES-GCM', iv },
-    key,
-    ciphertext,
-  );
+  const decrypted = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ciphertext);
 
   return new TextDecoder().decode(decrypted);
 }
