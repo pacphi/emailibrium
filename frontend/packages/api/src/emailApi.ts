@@ -61,3 +61,23 @@ export async function replyToEmail(
 export async function forwardEmail(id: string, to: string): Promise<{ messageId: string }> {
   return api.post(`emails/${id}/forward`, { json: { to } }).json<{ messageId: string }>();
 }
+
+export interface FolderOrLabel {
+  id: string;
+  name: string;
+  kind: 'folder' | 'label';
+  isSystem: boolean;
+}
+
+export async function getLabels(accountId: string): Promise<FolderOrLabel[]> {
+  return api
+    .get('emails/labels', { searchParams: { accountId } })
+    .json<FolderOrLabel[]>();
+}
+
+export async function moveEmail(
+  id: string,
+  body: { accountId: string; targetId: string; kind: 'folder' | 'label' },
+): Promise<void> {
+  await api.post(`emails/${id}/move`, { json: body });
+}

@@ -2,6 +2,7 @@ import { useRef, useCallback } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { Loader2 } from 'lucide-react';
 import type { Email } from '@emailibrium/types';
+import type { FolderOrLabel } from '@emailibrium/api';
 import { EmailListItem } from './EmailListItem';
 
 interface EmailListProps {
@@ -10,11 +11,13 @@ interface EmailListProps {
   checkedEmailIds: Set<string>;
   isLoading: boolean;
   isError: boolean;
+  availableLabels?: FolderOrLabel[];
   onSelectEmail: (emailId: string) => void;
   onCheckEmail: (emailId: string, checked: boolean) => void;
   onStarEmail: (emailId: string) => void;
   onArchiveEmail: (emailId: string) => void;
   onDeleteEmail: (emailId: string) => void;
+  onMoveEmail?: (emailId: string, targetId: string, kind: 'folder' | 'label') => void;
 }
 
 export function EmailList({
@@ -28,6 +31,8 @@ export function EmailList({
   onStarEmail,
   onArchiveEmail,
   onDeleteEmail,
+  availableLabels,
+  onMoveEmail,
 }: EmailListProps) {
   const parentRef = useRef<HTMLDivElement>(null);
 
@@ -115,11 +120,13 @@ export function EmailList({
                 email={email}
                 isSelected={selectedEmailId === email.id}
                 isChecked={checkedEmailIds.has(email.id)}
+                availableLabels={availableLabels}
                 onSelect={onSelectEmail}
                 onCheck={onCheckEmail}
                 onStar={onStarEmail}
                 onArchive={onArchiveEmail}
                 onDelete={onDeleteEmail}
+                onMove={onMoveEmail}
               />
             </div>
           );

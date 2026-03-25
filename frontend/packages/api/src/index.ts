@@ -36,8 +36,10 @@ export {
   sendEmail,
   replyToEmail,
   forwardEmail,
+  getLabels,
+  moveEmail,
 } from './emailApi.js';
-export type { GetEmailsParams, SendEmailDraft } from './emailApi.js';
+export type { GetEmailsParams, SendEmailDraft, FolderOrLabel } from './emailApi.js';
 
 export {
   getRules,

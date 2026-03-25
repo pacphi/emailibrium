@@ -569,6 +569,105 @@ impl EmailProvider for GmailProvider {
         check_error_response(&resp)?;
         Ok(())
     }
+
+    async fn list_folders(
+        &self,
+        access_token: &str,
+    ) -> Result<Vec<super::provider::FolderOrLabel>, ProviderError> {
+        use super::provider::{FolderOrLabel, MoveKind};
+
+        let labels = self.list_labels(access_token).await?;
+        let system_labels = [
+            "INBOX", "SENT", "TRASH", "SPAM", "DRAFT", "STARRED", "UNREAD", "IMPORTANT",
+        ];
+
+        Ok(labels
+            .into_iter()
+            .map(|(id, name)| {
+                let is_system = system_labels.contains(&id.as_str());
+                let kind = if is_system {
+                    MoveKind::Folder
+                } else {
+                    MoveKind::Label
+                };
+                FolderOrLabel {
+                    id,
+                    name,
+                    kind,
+                    is_system,
+                }
+            })
+            .collect())
+    }
+
+    async fn move_message(
+        &self,
+        access_token: &str,
+        message_id: &str,
+        target_id: &str,
+        kind: super::provider::MoveKind,
+    ) -> Result<(), ProviderError> {
+        use super::provider::MoveKind;
+
+        let body = match kind {
+            MoveKind::Folder => {
+                // Move to folder: add target label, remove INBOX.
+                serde_json::json!({
+                    "addLabelIds": [target_id],
+                    "removeLabelIds": ["INBOX"]
+                })
+            }
+            MoveKind::Label => {
+                // Add label only (additive).
+                serde_json::json!({
+                    "addLabelIds": [target_id]
+                })
+            }
+        };
+
+        let resp: serde_json::Value = self
+            .http
+            .post(format!("{GMAIL_API_BASE}/messages/{message_id}/modify"))
+            .bearer_auth(access_token)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| ProviderError::RequestFailed(e.to_string()))?
+            .json()
+            .await
+            .map_err(|e| ProviderError::ParseError(e.to_string()))?;
+
+        check_error_response(&resp)?;
+        Ok(())
+    }
+
+    async fn star_message(
+        &self,
+        access_token: &str,
+        message_id: &str,
+        starred: bool,
+    ) -> Result<(), ProviderError> {
+        let body = if starred {
+            serde_json::json!({ "addLabelIds": ["STARRED"] })
+        } else {
+            serde_json::json!({ "removeLabelIds": ["STARRED"] })
+        };
+
+        let resp: serde_json::Value = self
+            .http
+            .post(format!("{GMAIL_API_BASE}/messages/{message_id}/modify"))
+            .bearer_auth(access_token)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| ProviderError::RequestFailed(e.to_string()))?
+            .json()
+            .await
+            .map_err(|e| ProviderError::ParseError(e.to_string()))?;
+
+        check_error_response(&resp)?;
+        Ok(())
+    }
 }
 
 impl GmailProvider {

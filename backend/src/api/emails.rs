@@ -6,13 +6,15 @@
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
-    routing::{delete, get, post},
+    routing::{get, post},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use tracing::debug;
 
+use crate::api::provider_helpers::resolve_provider_and_token;
+use crate::email::provider::{FolderOrLabel, MoveKind};
 use crate::AppState;
 
 /// Build email API routes.
@@ -22,6 +24,8 @@ pub fn routes() -> Router<AppState> {
         .route("/{id}", get(get_email).delete(delete_email))
         .route("/{id}/archive", post(archive_email))
         .route("/{id}/star", post(star_email))
+        .route("/{id}/move", post(move_email))
+        .route("/labels", get(list_account_labels))
         .route("/thread/{thread_id}", get(get_thread))
 }
 
@@ -270,12 +274,37 @@ async fn get_thread(
     }))
 }
 
-/// POST /api/v1/emails/:id/archive — mark email as archived (remove from inbox view).
+/// Look up the account_id for an email so we can resolve the provider.
+async fn get_email_account_id(
+    state: &AppState,
+    email_id: &str,
+) -> Result<String, (StatusCode, String)> {
+    let row: Option<(String,)> =
+        sqlx::query_as("SELECT account_id FROM emails WHERE id = ?1")
+            .bind(email_id)
+            .fetch_optional(&state.db.pool)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    row.map(|(aid,)| aid)
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "Email not found".to_string()))
+}
+
+/// POST /api/v1/emails/:id/archive — archive on provider + update local DB.
 async fn archive_email(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, (StatusCode, String)> {
     debug!(email_id = %id, "Archiving email");
+
+    // Try to archive on the provider (best-effort).
+    if let Ok(account_id) = get_email_account_id(&state, &id).await {
+        if let Ok((provider, token, _)) = resolve_provider_and_token(&state, &account_id).await {
+            if let Err(e) = provider.archive_message(&token, &id).await {
+                debug!(email_id = %id, "Provider archive failed (continuing locally): {e}");
+            }
+        }
+    }
+
     let rows = sqlx::query("UPDATE emails SET labels = 'ARCHIVED' WHERE id = ?1")
         .bind(&id)
         .execute(&state.db.pool)
@@ -289,23 +318,41 @@ async fn archive_email(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// POST /api/v1/emails/:id/star — toggle the starred status.
+/// POST /api/v1/emails/:id/star — toggle starred on provider + local DB.
 async fn star_email(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, (StatusCode, String)> {
     debug!(email_id = %id, "Toggling star");
-    let rows =
-        sqlx::query("UPDATE emails SET is_starred = NOT is_starred WHERE id = ?1")
+
+    // Determine new starred state from local DB.
+    let current: Option<(bool,)> =
+        sqlx::query_as("SELECT is_starred FROM emails WHERE id = ?1")
             .bind(&id)
-            .execute(&state.db.pool)
+            .fetch_optional(&state.db.pool)
             .await
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let new_starred = !current
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "Email not found".to_string()))?
+        .0;
 
-    if rows.rows_affected() == 0 {
-        return Err((StatusCode::NOT_FOUND, "Email not found".to_string()));
+    // Star/unstar on the provider (best-effort).
+    if let Ok(account_id) = get_email_account_id(&state, &id).await {
+        if let Ok((provider, token, _)) = resolve_provider_and_token(&state, &account_id).await {
+            if let Err(e) = provider.star_message(&token, &id, new_starred).await {
+                debug!(email_id = %id, "Provider star failed (continuing locally): {e}");
+            }
+        }
     }
-    debug!(email_id = %id, "Star toggled");
+
+    sqlx::query("UPDATE emails SET is_starred = ?1 WHERE id = ?2")
+        .bind(new_starred)
+        .bind(&id)
+        .execute(&state.db.pool)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    debug!(email_id = %id, starred = new_starred, "Star toggled");
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -315,6 +362,19 @@ async fn delete_email(
     Path(id): Path<String>,
 ) -> Result<StatusCode, (StatusCode, String)> {
     debug!(email_id = %id, "Deleting email");
+
+    // Try to move to trash on provider (best-effort).
+    if let Ok(account_id) = get_email_account_id(&state, &id).await {
+        if let Ok((provider, token, _)) = resolve_provider_and_token(&state, &account_id).await {
+            if let Err(e) = provider
+                .move_message(&token, &id, "TRASH", MoveKind::Folder)
+                .await
+            {
+                debug!(email_id = %id, "Provider trash failed (continuing locally): {e}");
+            }
+        }
+    }
+
     let rows = sqlx::query("DELETE FROM emails WHERE id = ?1")
         .bind(&id)
         .execute(&state.db.pool)
@@ -325,5 +385,100 @@ async fn delete_email(
         return Err((StatusCode::NOT_FOUND, "Email not found".to_string()));
     }
     debug!(email_id = %id, "Email deleted");
+    Ok(StatusCode::NO_CONTENT)
+}
+
+// --- Labels / Move endpoints ---
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListLabelsParams {
+    pub account_id: String,
+}
+
+/// GET /api/v1/emails/labels?accountId=X — list folders and labels for an account.
+async fn list_account_labels(
+    State(state): State<AppState>,
+    Query(params): Query<ListLabelsParams>,
+) -> Result<Json<Vec<FolderOrLabel>>, (StatusCode, String)> {
+    debug!(account_id = %params.account_id, "Listing folders/labels");
+
+    let (provider, token, _) = resolve_provider_and_token(&state, &params.account_id).await?;
+    let labels = provider.list_folders(&token).await.map_err(|e| {
+        (
+            StatusCode::BAD_GATEWAY,
+            format!("Failed to list folders: {e}"),
+        )
+    })?;
+
+    debug!(account_id = %params.account_id, count = labels.len(), "Listed folders/labels");
+    Ok(Json(labels))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MoveEmailBody {
+    pub account_id: String,
+    pub target_id: String,
+    pub kind: MoveKind,
+}
+
+/// POST /api/v1/emails/:id/move — move email to a folder or add a label.
+async fn move_email(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<MoveEmailBody>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    debug!(
+        email_id = %id,
+        target = %body.target_id,
+        kind = ?body.kind,
+        "Moving email"
+    );
+
+    let (provider, token, _) = resolve_provider_and_token(&state, &body.account_id).await?;
+
+    // Move on the provider.
+    provider
+        .move_message(&token, &id, &body.target_id, body.kind.clone())
+        .await
+        .map_err(|e| (StatusCode::BAD_GATEWAY, format!("Move failed: {e}")))?;
+
+    // Update local DB labels.
+    match body.kind {
+        MoveKind::Folder => {
+            sqlx::query("UPDATE emails SET labels = ?1 WHERE id = ?2")
+                .bind(&body.target_id)
+                .bind(&id)
+                .execute(&state.db.pool)
+                .await
+                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        }
+        MoveKind::Label => {
+            // Append label (avoid duplicates with a read-modify-write).
+            let current: Option<(String,)> =
+                sqlx::query_as("SELECT labels FROM emails WHERE id = ?1")
+                    .bind(&id)
+                    .fetch_optional(&state.db.pool)
+                    .await
+                    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+            if let Some((labels,)) = current {
+                let mut label_set: Vec<&str> = labels.split(',').filter(|s| !s.is_empty()).collect();
+                if !label_set.iter().any(|l| *l == body.target_id) {
+                    label_set.push(&body.target_id);
+                }
+                let new_labels = label_set.join(",");
+                sqlx::query("UPDATE emails SET labels = ?1 WHERE id = ?2")
+                    .bind(&new_labels)
+                    .bind(&id)
+                    .execute(&state.db.pool)
+                    .await
+                    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            }
+        }
+    }
+
+    debug!(email_id = %id, "Email moved");
     Ok(StatusCode::NO_CONTENT)
 }

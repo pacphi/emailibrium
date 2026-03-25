@@ -8,6 +8,7 @@ mod consent;
 mod emails;
 mod evaluation;
 pub mod ingestion;
+pub mod provider_helpers;
 mod insights;
 mod interactions;
 mod learning;

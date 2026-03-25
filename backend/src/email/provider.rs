@@ -5,8 +5,27 @@
 //! provider's REST API and the domain model types.
 
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
 
 use super::types::{EmailMessage, EmailPage, ListParams, OAuthTokens};
+
+/// Whether a move target is a folder (exclusive location) or label (additive tag).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum MoveKind {
+    Folder,
+    Label,
+}
+
+/// A folder or label available for an account.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FolderOrLabel {
+    pub id: String,
+    pub name: String,
+    pub kind: MoveKind,
+    pub is_system: bool,
+}
 
 /// Errors from email provider operations.
 #[derive(Debug, thiserror::Error)]
@@ -110,6 +129,44 @@ pub trait EmailProvider: Send + Sync {
     ) -> Result<(), ProviderError> {
         Err(ProviderError::ConfigError(
             "unarchive not supported by this provider".into(),
+        ))
+    }
+
+    /// List all available folders and labels for the account.
+    async fn list_folders(
+        &self,
+        _access_token: &str,
+    ) -> Result<Vec<FolderOrLabel>, ProviderError> {
+        Err(ProviderError::ConfigError(
+            "list_folders not supported by this provider".into(),
+        ))
+    }
+
+    /// Move a message to a folder or add a label.
+    /// For folder moves, removes from the current location.
+    /// For label adds, the message stays in its current folder.
+    async fn move_message(
+        &self,
+        _access_token: &str,
+        _message_id: &str,
+        _target_id: &str,
+        _kind: MoveKind,
+    ) -> Result<(), ProviderError> {
+        Err(ProviderError::ConfigError(
+            "move_message not supported by this provider".into(),
+        ))
+    }
+
+    /// Star/flag a message on the provider. Gmail: add STARRED label.
+    /// Outlook: set flag.flagStatus to "flagged".
+    async fn star_message(
+        &self,
+        _access_token: &str,
+        _message_id: &str,
+        _starred: bool,
+    ) -> Result<(), ProviderError> {
+        Err(ProviderError::ConfigError(
+            "star_message not supported by this provider".into(),
         ))
     }
 }

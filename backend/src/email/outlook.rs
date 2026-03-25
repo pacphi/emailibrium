@@ -525,6 +525,133 @@ impl EmailProvider for OutlookProvider {
         }
         Ok(())
     }
+
+    async fn list_folders(
+        &self,
+        access_token: &str,
+    ) -> Result<Vec<super::provider::FolderOrLabel>, ProviderError> {
+        use super::provider::{FolderOrLabel, MoveKind};
+
+        let mut results = Vec::new();
+
+        // Fetch mail folders.
+        let resp: serde_json::Value = self
+            .http
+            .get(format!("{GRAPH_API_BASE}/mailFolders?$top=100"))
+            .bearer_auth(access_token)
+            .send()
+            .await
+            .map_err(|e| ProviderError::RequestFailed(e.to_string()))?
+            .json()
+            .await
+            .map_err(|e| ProviderError::ParseError(e.to_string()))?;
+
+        check_graph_error(&resp)?;
+
+        let system_names = [
+            "Inbox",
+            "Drafts",
+            "Sent Items",
+            "Deleted Items",
+            "Archive",
+            "Junk Email",
+            "Outbox",
+        ];
+
+        if let Some(folders) = resp["value"].as_array() {
+            for f in folders {
+                let id = f["id"].as_str().unwrap_or_default().to_string();
+                let name = f["displayName"].as_str().unwrap_or_default().to_string();
+                let is_system = system_names.iter().any(|s| s.eq_ignore_ascii_case(&name));
+                results.push(FolderOrLabel {
+                    id,
+                    name,
+                    kind: MoveKind::Folder,
+                    is_system,
+                });
+            }
+        }
+
+        // Fetch categories (label-like).
+        let cats = self.list_labels(access_token).await.unwrap_or_default();
+        for (id, name) in cats {
+            results.push(FolderOrLabel {
+                id,
+                name,
+                kind: MoveKind::Label,
+                is_system: false,
+            });
+        }
+
+        Ok(results)
+    }
+
+    async fn move_message(
+        &self,
+        access_token: &str,
+        message_id: &str,
+        target_id: &str,
+        kind: super::provider::MoveKind,
+    ) -> Result<(), ProviderError> {
+        use super::provider::MoveKind;
+
+        match kind {
+            MoveKind::Folder => {
+                let body = serde_json::json!({ "destinationId": target_id });
+                let resp = self
+                    .http
+                    .post(format!("{GRAPH_API_BASE}/messages/{message_id}/move"))
+                    .bearer_auth(access_token)
+                    .json(&body)
+                    .send()
+                    .await
+                    .map_err(|e| ProviderError::RequestFailed(e.to_string()))?;
+
+                if !resp.status().is_success() {
+                    let err_body = resp.text().await.unwrap_or_default();
+                    return Err(ProviderError::RequestFailed(format!(
+                        "Move failed: {err_body}"
+                    )));
+                }
+            }
+            MoveKind::Label => {
+                // Add category to the message.
+                self.label_message(access_token, message_id, &[target_id.to_string()])
+                    .await?;
+            }
+        }
+        Ok(())
+    }
+
+    async fn star_message(
+        &self,
+        access_token: &str,
+        message_id: &str,
+        starred: bool,
+    ) -> Result<(), ProviderError> {
+        // Outlook uses flag.flagStatus: "flagged" or "notFlagged".
+        let flag_status = if starred { "flagged" } else { "notFlagged" };
+        let body = serde_json::json!({
+            "flag": { "flagStatus": flag_status }
+        });
+
+        let resp = self
+            .http
+            .patch(format!("{GRAPH_API_BASE}/messages/{message_id}"))
+            .bearer_auth(access_token)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| ProviderError::RequestFailed(e.to_string()))?;
+
+        if !resp.status().is_success() {
+            let err_body = resp.text().await.unwrap_or_default();
+            return Err(ProviderError::RequestFailed(format!(
+                "Star/flag failed: {err_body}"
+            )));
+        }
+        Ok(())
+    }
 }
 
 impl OutlookProvider {

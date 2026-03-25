@@ -16,6 +16,8 @@ import {
   useForwardEmail,
   useBulkArchive,
   useBulkDelete,
+  useLabelsQuery,
+  useMoveEmail,
 } from './hooks/useEmails';
 
 // Default sidebar groups -- in production these would come from an API or store.
@@ -64,6 +66,11 @@ export function EmailClient() {
   const forwardMutation = useForwardEmail();
   const bulkArchiveMutation = useBulkArchive();
   const bulkDeleteMutation = useBulkDelete();
+  const moveMutation = useMoveEmail();
+
+  // Determine account ID from the first email for label fetching.
+  const currentAccountId = emails.length > 0 ? emails[0]?.accountId : undefined;
+  const labelsQuery = useLabelsQuery(currentAccountId);
 
   // Compute unread counts per group
   const groupsWithCounts = useMemo(() => {
@@ -125,6 +132,23 @@ export function EmailClient() {
       if (selectedEmailId === emailId) setSelectedEmailId(null);
     },
     [deleteMutation, selectedEmailId],
+  );
+
+  const handleMoveEmail = useCallback(
+    (emailId: string, targetId: string, kind: 'folder' | 'label') => {
+      const email = emails.find((e) => e.id === emailId);
+      if (!email) return;
+      moveMutation.mutate({
+        id: emailId,
+        accountId: email.accountId,
+        targetId,
+        kind,
+      });
+      if (kind === 'folder' && selectedEmailId === emailId) {
+        setSelectedEmailId(null);
+      }
+    },
+    [emails, moveMutation, selectedEmailId],
   );
 
   // Thread-level actions
@@ -252,6 +276,8 @@ export function EmailClient() {
           onStarEmail={handleStarEmail}
           onArchiveEmail={handleArchiveEmail}
           onDeleteEmail={handleDeleteEmailFromList}
+          availableLabels={labelsQuery.data}
+          onMoveEmail={handleMoveEmail}
         />
       </div>
 

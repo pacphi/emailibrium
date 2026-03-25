@@ -2,16 +2,19 @@ import { forwardRef, useState, useRef, useEffect } from 'react';
 import { Star, Archive, Trash2, FolderInput, Paperclip } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import type { Email } from '@emailibrium/types';
+import type { FolderOrLabel } from '@emailibrium/api';
 
 interface EmailListItemProps {
   email: Email;
   isSelected: boolean;
   isChecked: boolean;
+  availableLabels?: FolderOrLabel[];
   onSelect: (emailId: string) => void;
   onCheck: (emailId: string, checked: boolean) => void;
   onStar: (emailId: string) => void;
   onArchive: (emailId: string) => void;
   onDelete: (emailId: string) => void;
+  onMove?: (emailId: string, targetId: string, kind: 'folder' | 'label') => void;
 }
 
 const providerBadge: Record<string, { label: string; className: string }> = {
@@ -45,7 +48,7 @@ function getPreview(email: Email): string {
 }
 
 export const EmailListItem = forwardRef<HTMLDivElement, EmailListItemProps>(function EmailListItem(
-  { email, isSelected, isChecked, onSelect, onCheck, onStar, onArchive, onDelete },
+  { email, isSelected, isChecked, availableLabels, onSelect, onCheck, onStar, onArchive, onDelete, onMove },
   ref,
 ) {
   const [showActions, setShowActions] = useState(false);
@@ -220,29 +223,53 @@ export const EmailListItem = forwardRef<HTMLDivElement, EmailListItemProps>(func
                 <FolderInput className="h-4 w-4" />
               </button>
               {showMoveMenu && (
-                <div className="absolute right-0 top-full z-50 mt-1 w-40 rounded-lg border border-gray-200 bg-white py-1 shadow-lg dark:border-gray-700 dark:bg-gray-800">
-                  {[
-                    { label: 'Archive', value: 'ARCHIVED' },
-                    { label: 'Spam', value: 'SPAM' },
-                    { label: 'Trash', value: 'TRASH' },
-                  ].map((dest) => (
-                    <button
-                      key={dest.value}
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setShowMoveMenu(false);
-                        if (dest.value === 'TRASH') {
-                          onDelete(email.id);
-                        } else {
-                          onArchive(email.id);
-                        }
-                      }}
-                      className="w-full px-3 py-1.5 text-left text-sm text-gray-700 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700"
-                    >
-                      {dest.label}
-                    </button>
-                  ))}
+                <div className="absolute right-0 top-full z-50 mt-1 w-48 max-h-64 overflow-y-auto rounded-lg border border-gray-200 bg-white py-1 shadow-lg dark:border-gray-700 dark:bg-gray-800">
+                  {/* System folders first */}
+                  {(availableLabels ?? [])
+                    .filter((l) => l.isSystem && l.kind === 'folder')
+                    .map((label) => (
+                      <button
+                        key={label.id}
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setShowMoveMenu(false);
+                          if (onMove) {
+                            onMove(email.id, label.id, label.kind);
+                          }
+                        }}
+                        className="w-full px-3 py-1.5 text-left text-sm text-gray-700 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700"
+                      >
+                        {label.name}
+                      </button>
+                    ))}
+                  {/* Divider if there are custom labels */}
+                  {(availableLabels ?? []).some((l) => !l.isSystem) && (
+                    <div className="my-1 border-t border-gray-200 dark:border-gray-700" />
+                  )}
+                  {/* Custom labels */}
+                  {(availableLabels ?? [])
+                    .filter((l) => !l.isSystem)
+                    .map((label) => (
+                      <button
+                        key={label.id}
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setShowMoveMenu(false);
+                          if (onMove) {
+                            onMove(email.id, label.id, label.kind);
+                          }
+                        }}
+                        className="w-full px-3 py-1.5 text-left text-sm text-gray-700 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700"
+                      >
+                        {label.name}
+                      </button>
+                    ))}
+                  {/* Fallback if no labels loaded */}
+                  {(!availableLabels || availableLabels.length === 0) && (
+                    <div className="px-3 py-2 text-xs text-gray-400">Loading folders...</div>
+                  )}
                 </div>
               )}
             </div>

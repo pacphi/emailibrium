@@ -11,8 +11,10 @@ import {
   forwardEmail,
   bulkArchive,
   bulkDelete,
+  getLabels,
+  moveEmail,
 } from '@emailibrium/api';
-import type { GetEmailsParams, SendEmailDraft } from '@emailibrium/api';
+import type { GetEmailsParams, SendEmailDraft, FolderOrLabel } from '@emailibrium/api';
 import type { Email, EmailThread } from '@emailibrium/types';
 
 export function useEmailsQuery(params?: GetEmailsParams) {
@@ -118,6 +120,51 @@ export function useBulkDelete() {
   return useMutation({
     mutationFn: bulkDelete,
     onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['emails'] });
+    },
+  });
+}
+
+export function useLabelsQuery(accountId: string | undefined) {
+  return useQuery<FolderOrLabel[]>({
+    queryKey: ['labels', accountId],
+    queryFn: () => getLabels(accountId!),
+    enabled: !!accountId,
+    staleTime: 300_000,
+  });
+}
+
+export function useMoveEmail() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      id,
+      ...body
+    }: {
+      id: string;
+      accountId: string;
+      targetId: string;
+      kind: 'folder' | 'label';
+    }) => moveEmail(id, body),
+    onMutate: async ({ id }) => {
+      await queryClient.cancelQueries({ queryKey: ['emails'] });
+      const prev = queryClient.getQueryData<{ emails: Email[]; total: number }>([
+        'emails',
+      ]);
+      if (prev) {
+        queryClient.setQueryData(['emails'], {
+          emails: prev.emails.filter((e) => e.id !== id),
+          total: prev.total - 1,
+        });
+      }
+      return { prev };
+    },
+    onError: (_err, _vars, context) => {
+      if (context?.prev) {
+        queryClient.setQueryData(['emails'], context.prev);
+      }
+    },
+    onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ['emails'] });
     },
   });
