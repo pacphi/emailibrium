@@ -21,8 +21,9 @@ export function Layout({ children }: LayoutProps) {
 }
 
 function Sidebar() {
-  const { sidebarPosition } = useSettings();
+  const { sidebarPosition, llmProvider } = useSettings();
   const borderClass = sidebarPosition === 'right' ? 'border-l' : 'border-r';
+  const hasLlm = llmProvider !== 'none';
 
   return (
     <nav
@@ -34,18 +35,42 @@ function Sidebar() {
       <div className="flex-1 p-2 space-y-1">
         <NavItem href="/command-center" label="Command Center" />
         <NavItem href="/email" label="Email" />
-        <NavItem href="/inbox-cleaner" label="Inbox Cleaner" />
+        <NavItem href="/inbox-cleaner" label="Inbox Cleaner" needsLlm disabled={!hasLlm} />
         <NavItem href="/insights" label="Insights" />
         <NavItem href="/rules" label="Rules" />
-        <NavItem href="/chat" label="Chat" />
+        <NavItem href="/chat" label="Chat" needsLlm disabled={!hasLlm} />
         <NavItem href="/settings" label="Settings" />
       </div>
     </nav>
   );
 }
 
-function NavItem({ href, label }: { href: string; label: string }) {
+interface NavItemProps {
+  href: string;
+  label: string;
+  needsLlm?: boolean;
+  disabled?: boolean;
+}
+
+function NavItem({ href, label, needsLlm, disabled }: NavItemProps) {
   const isActive = window.location.pathname.startsWith(href);
+
+  if (disabled) {
+    return (
+      <div
+        className="flex items-center justify-between px-3 py-2 rounded-md text-sm font-medium text-gray-400 dark:text-gray-600 cursor-not-allowed"
+        title={needsLlm ? 'Configure an LLM provider in Settings > AI / LLM' : undefined}
+      >
+        {label}
+        {needsLlm && (
+          <span className="text-[10px] font-normal bg-gray-100 dark:bg-gray-700 px-1.5 py-0.5 rounded text-gray-400 dark:text-gray-500">
+            LLM
+          </span>
+        )}
+      </div>
+    );
+  }
+
   return (
     <a
       href={href}
