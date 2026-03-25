@@ -216,7 +216,7 @@ export function EmailClient() {
       <div
         className={`${
           mobilePanel === 'list' ? 'flex' : 'hidden'
-        } w-full flex-col border-r border-gray-200 dark:border-gray-700 lg:flex lg:w-96`}
+        } w-full flex-col border-r border-gray-200 dark:border-gray-700 lg:flex lg:w-[600px]`}
       >
         {/* List header */}
         <div className="flex items-center justify-between border-b border-gray-200 bg-white px-3 py-2 dark:border-gray-700 dark:bg-gray-800">

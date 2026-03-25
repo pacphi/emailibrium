@@ -6,11 +6,12 @@
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
-    routing::get,
+    routing::{delete, get, post},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
+use tracing::debug;
 
 use crate::AppState;
 
@@ -18,7 +19,9 @@ use crate::AppState;
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/", get(list_emails))
-        .route("/{id}", get(get_email))
+        .route("/{id}", get(get_email).delete(delete_email))
+        .route("/{id}/archive", post(archive_email))
+        .route("/{id}/star", post(star_email))
         .route("/thread/{thread_id}", get(get_thread))
 }
 
@@ -265,4 +268,62 @@ async fn get_thread(
         participants,
         last_activity,
     }))
+}
+
+/// POST /api/v1/emails/:id/archive — mark email as archived (remove from inbox view).
+async fn archive_email(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    debug!(email_id = %id, "Archiving email");
+    let rows = sqlx::query("UPDATE emails SET labels = 'ARCHIVED' WHERE id = ?1")
+        .bind(&id)
+        .execute(&state.db.pool)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    if rows.rows_affected() == 0 {
+        return Err((StatusCode::NOT_FOUND, "Email not found".to_string()));
+    }
+    debug!(email_id = %id, "Email archived");
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// POST /api/v1/emails/:id/star — toggle the starred status.
+async fn star_email(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    debug!(email_id = %id, "Toggling star");
+    let rows =
+        sqlx::query("UPDATE emails SET is_starred = NOT is_starred WHERE id = ?1")
+            .bind(&id)
+            .execute(&state.db.pool)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    if rows.rows_affected() == 0 {
+        return Err((StatusCode::NOT_FOUND, "Email not found".to_string()));
+    }
+    debug!(email_id = %id, "Star toggled");
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// DELETE /api/v1/emails/:id — delete email from local DB.
+async fn delete_email(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    debug!(email_id = %id, "Deleting email");
+    let rows = sqlx::query("DELETE FROM emails WHERE id = ?1")
+        .bind(&id)
+        .execute(&state.db.pool)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    if rows.rows_affected() == 0 {
+        return Err((StatusCode::NOT_FOUND, "Email not found".to_string()));
+    }
+    debug!(email_id = %id, "Email deleted");
+    Ok(StatusCode::NO_CONTENT)
 }

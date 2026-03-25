@@ -191,9 +191,13 @@ export const EmailListItem = forwardRef<HTMLDivElement, EmailListItemProps>(func
             </button>
             <button
               type="button"
-              onClick={(e) => e.stopPropagation()}
+              onClick={(e) => {
+                e.stopPropagation();
+                onArchive(email.id);
+              }}
               className="rounded p-1 text-gray-400 hover:bg-gray-200 hover:text-gray-600 dark:hover:bg-gray-700 dark:hover:text-gray-300"
-              aria-label="Move"
+              aria-label="Move to archive"
+              title="Move to archive"
             >
               <FolderInput className="h-4 w-4" />
             </button>
