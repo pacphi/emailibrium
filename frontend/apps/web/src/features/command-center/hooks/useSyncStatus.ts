@@ -10,17 +10,26 @@ export interface PendingOperation {
 
 const STORAGE_KEY = 'emailibrium-offline-queue';
 
+// Cache the parsed result so useSyncExternalStore gets a stable reference.
+// A new array on every call triggers infinite re-renders because [] !== [].
+let cachedRaw: string | null = null;
+let cachedResult: PendingOperation[] = [];
+const EMPTY: PendingOperation[] = [];
+
 function getSnapshot(): PendingOperation[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? (JSON.parse(raw) as PendingOperation[]) : [];
+    if (raw === cachedRaw) return cachedResult;
+    cachedRaw = raw;
+    cachedResult = raw ? (JSON.parse(raw) as PendingOperation[]) : EMPTY;
+    return cachedResult;
   } catch {
-    return [];
+    return EMPTY;
   }
 }
 
 function getServerSnapshot(): PendingOperation[] {
-  return [];
+  return EMPTY;
 }
 
 let listeners: Array<() => void> = [];
