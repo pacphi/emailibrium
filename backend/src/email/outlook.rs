@@ -9,6 +9,28 @@ use chrono::{DateTime, Utc};
 use super::provider::{EmailProvider, ProviderError};
 use super::types::{EmailMessage, EmailPage, ListParams, OAuthTokens, ProviderConfig};
 
+// ---------------------------------------------------------------------------
+// Outlook Delta Sync Types (R-01)
+// ---------------------------------------------------------------------------
+
+/// High-level response from Outlook delta sync via Graph delta query.
+///
+/// Convenience wrapper providing a simpler interface than the lower-level
+/// `OutlookDeltaResult` in `delta.rs`, including categorized message IDs
+/// and the next delta link for subsequent calls.
+#[derive(Debug, Clone, Default)]
+pub struct DeltaResponse {
+    /// Message IDs that were added or modified since the last delta.
+    pub added_or_modified: Vec<String>,
+    /// Message IDs that were deleted since the last delta.
+    pub deleted: Vec<String>,
+    /// The delta link to pass in the next call for incremental changes.
+    /// `None` if more pages remain (use `next_link` to continue).
+    pub delta_link: Option<String>,
+    /// Pagination link for multi-page delta responses.
+    pub next_link: Option<String>,
+}
+
 const GRAPH_API_BASE: &str = "https://graph.microsoft.com/v1.0/me";
 
 /// Outlook provider using the Microsoft Graph API.
@@ -428,6 +450,119 @@ impl EmailProvider for OutlookProvider {
     }
 }
 
+impl OutlookProvider {
+    // -----------------------------------------------------------------------
+    // Outlook Delta Query (incremental sync)
+    // -----------------------------------------------------------------------
+
+    /// Fetch message deltas from the inbox using Microsoft Graph delta query.
+    ///
+    /// On the first call, pass `delta_link = None` to get the initial set.
+    /// On subsequent calls, pass the `@odata.deltaLink` from the previous
+    /// response to get only changes since then.
+    ///
+    /// Returns the raw JSON response which can be parsed with
+    /// `delta::parse_outlook_delta`.
+    pub async fn delta_messages(
+        &self,
+        access_token: &str,
+        delta_link: Option<&str>,
+    ) -> Result<serde_json::Value, ProviderError> {
+        let url = match delta_link {
+            Some(link) => link.to_string(),
+            None => format!(
+                "{GRAPH_API_BASE}/mailFolders/inbox/messages/delta?$top=50\
+                 &$select=id,subject,receivedDateTime,isRead,categories,bodyPreview,from,toRecipients"
+            ),
+        };
+
+        let resp: serde_json::Value = self
+            .http
+            .get(&url)
+            .bearer_auth(access_token)
+            .send()
+            .await
+            .map_err(|e| ProviderError::RequestFailed(e.to_string()))?
+            .json()
+            .await
+            .map_err(|e| ProviderError::ParseError(e.to_string()))?;
+
+        check_graph_error(&resp)?;
+        Ok(resp)
+    }
+
+    /// Fetch message changes via Graph delta query, returning a typed
+    /// `DeltaResponse`.
+    ///
+    /// On the first call, pass `delta_link = None`. On subsequent calls,
+    /// pass the `delta_link` from the previous `DeltaResponse`.
+    pub async fn delta_messages_typed(
+        &self,
+        access_token: &str,
+        delta_link: Option<&str>,
+    ) -> Result<DeltaResponse, ProviderError> {
+        let resp = self.delta_messages(access_token, delta_link).await?;
+
+        let result = super::delta::parse_outlook_delta(&resp)
+            .map_err(|e| ProviderError::ParseError(e))?;
+
+        let next_link = resp["@odata.nextLink"]
+            .as_str()
+            .map(|s| s.to_string());
+
+        Ok(DeltaResponse {
+            added_or_modified: result.added_or_modified_ids,
+            deleted: result.deleted_ids,
+            delta_link: result.delta_link,
+            next_link,
+        })
+    }
+
+    /// Fetch all delta pages until a `@odata.deltaLink` is obtained.
+    ///
+    /// Returns the aggregated delta result including the new delta link
+    /// for subsequent calls.
+    pub async fn delta_messages_all(
+        &self,
+        access_token: &str,
+        delta_link: Option<&str>,
+    ) -> Result<super::delta::OutlookDeltaResult, ProviderError> {
+        let mut all_added = Vec::new();
+        let mut all_deleted = Vec::new();
+        let mut current_link: Option<String> = delta_link.map(|s| s.to_string());
+        let mut final_delta_link = None;
+
+        loop {
+            let resp = self
+                .delta_messages(access_token, current_link.as_deref())
+                .await?;
+
+            let page_result = super::delta::parse_outlook_delta(&resp)
+                .map_err(|e| ProviderError::ParseError(e))?;
+
+            all_added.extend(page_result.added_or_modified_ids);
+            all_deleted.extend(page_result.deleted_ids);
+
+            if page_result.delta_link.is_some() {
+                final_delta_link = page_result.delta_link;
+                break;
+            }
+
+            // Check for @odata.nextLink for pagination.
+            match resp["@odata.nextLink"].as_str() {
+                Some(next) => current_link = Some(next.to_string()),
+                None => break,
+            }
+        }
+
+        Ok(super::delta::OutlookDeltaResult {
+            added_or_modified_ids: all_added,
+            deleted_ids: all_deleted,
+            delta_link: final_delta_link,
+        })
+    }
+}
+
 /// Check if a Graph API response contains an error object.
 fn check_graph_error(resp: &serde_json::Value) -> Result<(), ProviderError> {
     if let Some(error) = resp["error"].as_object() {
@@ -457,4 +592,173 @@ fn check_graph_error(resp: &serde_json::Value) -> Result<(), ProviderError> {
         )));
     }
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_config() -> ProviderConfig {
+        ProviderConfig {
+            client_id: "test-client-id".to_string(),
+            client_secret: "test-client-secret".to_string(),
+            redirect_uri: "http://localhost:3000/callback".to_string(),
+            auth_url: "https://login.microsoftonline.com/common/oauth2/v2.0/authorize".to_string(),
+            token_url: "https://login.microsoftonline.com/common/oauth2/v2.0/token".to_string(),
+            scopes: vec!["Mail.Read".to_string()],
+        }
+    }
+
+    #[test]
+    fn test_delta_response_default() {
+        let resp = DeltaResponse::default();
+        assert!(resp.added_or_modified.is_empty());
+        assert!(resp.deleted.is_empty());
+        assert!(resp.delta_link.is_none());
+        assert!(resp.next_link.is_none());
+    }
+
+    #[test]
+    fn test_delta_response_fields() {
+        let resp = DeltaResponse {
+            added_or_modified: vec!["msg-1".to_string(), "msg-2".to_string()],
+            deleted: vec!["msg-3".to_string()],
+            delta_link: Some("https://graph.microsoft.com/delta?token=abc".to_string()),
+            next_link: None,
+        };
+        assert_eq!(resp.added_or_modified.len(), 2);
+        assert_eq!(resp.deleted.len(), 1);
+        assert!(resp.delta_link.is_some());
+    }
+
+    #[test]
+    fn test_check_graph_error_ok() {
+        let resp = serde_json::json!({"value": []});
+        assert!(check_graph_error(&resp).is_ok());
+    }
+
+    #[test]
+    fn test_check_graph_error_auth() {
+        let resp = serde_json::json!({
+            "error": {
+                "code": "InvalidAuthenticationToken",
+                "message": "Token expired"
+            }
+        });
+        let err = check_graph_error(&resp).unwrap_err();
+        assert!(matches!(err, ProviderError::TokenExpired(_)));
+    }
+
+    #[test]
+    fn test_check_graph_error_not_found() {
+        let resp = serde_json::json!({
+            "error": {
+                "code": "ErrorItemNotFound",
+                "message": "Item not found"
+            }
+        });
+        let err = check_graph_error(&resp).unwrap_err();
+        assert!(matches!(err, ProviderError::NotFound(_)));
+    }
+
+    #[test]
+    fn test_check_graph_error_rate_limited() {
+        let resp = serde_json::json!({
+            "error": {
+                "code": "ErrorTooManyRequests",
+                "message": "Too many requests"
+            }
+        });
+        let err = check_graph_error(&resp).unwrap_err();
+        assert!(matches!(err, ProviderError::RateLimited { .. }));
+    }
+
+    #[test]
+    fn test_check_graph_error_generic() {
+        let resp = serde_json::json!({
+            "error": {
+                "code": "GeneralException",
+                "message": "Something went wrong"
+            }
+        });
+        let err = check_graph_error(&resp).unwrap_err();
+        assert!(matches!(err, ProviderError::RequestFailed(_)));
+        assert!(err.to_string().contains("GeneralException"));
+    }
+
+    #[test]
+    fn test_parse_message_basic() {
+        let msg = serde_json::json!({
+            "id": "AAMkAG1",
+            "conversationId": "conv-1",
+            "subject": "Test Email",
+            "bodyPreview": "Preview text",
+            "from": {
+                "emailAddress": { "address": "sender@test.com" }
+            },
+            "toRecipients": [
+                { "emailAddress": { "address": "me@test.com" } },
+                { "emailAddress": { "address": "other@test.com" } }
+            ],
+            "isRead": false,
+            "receivedDateTime": "2024-01-15T10:30:00Z",
+            "categories": ["Important", "Work"],
+            "body": { "content": "<p>Full body</p>" }
+        });
+        let email = OutlookProvider::parse_message(&msg).unwrap();
+        assert_eq!(email.id, "AAMkAG1");
+        assert_eq!(email.thread_id, Some("conv-1".to_string()));
+        assert_eq!(email.subject, "Test Email");
+        assert_eq!(email.snippet, "Preview text");
+        assert_eq!(email.from, "sender@test.com");
+        assert_eq!(email.to.len(), 2);
+        assert!(!email.is_read);
+        assert_eq!(email.labels, vec!["Important", "Work"]);
+        assert_eq!(email.body, Some("<p>Full body</p>".to_string()));
+    }
+
+    #[test]
+    fn test_parse_message_read() {
+        let msg = serde_json::json!({
+            "id": "read-msg",
+            "isRead": true,
+            "receivedDateTime": "2024-01-15T10:30:00Z"
+        });
+        let email = OutlookProvider::parse_message(&msg).unwrap();
+        assert!(email.is_read);
+    }
+
+    #[test]
+    fn test_parse_message_missing_optional_fields() {
+        let msg = serde_json::json!({
+            "id": "minimal",
+            "receivedDateTime": "2024-01-15T10:30:00Z"
+        });
+        let email = OutlookProvider::parse_message(&msg).unwrap();
+        assert_eq!(email.id, "minimal");
+        assert!(email.thread_id.is_none());
+        assert!(email.from.is_empty());
+        assert!(email.to.is_empty());
+        assert!(email.labels.is_empty());
+    }
+
+    #[test]
+    fn test_outlook_provider_new() {
+        let config = test_config();
+        let provider = OutlookProvider::new(config.clone());
+        assert_eq!(provider.config.client_id, "test-client-id");
+    }
+
+    #[test]
+    fn test_create_label_returns_name() {
+        // Outlook categories are name-based; create_label just returns the name.
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let provider = OutlookProvider::new(test_config());
+        let result = rt.block_on(provider.create_label("token", "TestCategory"));
+        assert_eq!(result.unwrap(), "TestCategory");
+    }
 }

@@ -1,5 +1,5 @@
 import { useRef, useEffect, useCallback } from 'react';
-import { MessageSquare, Trash2, Loader2 } from 'lucide-react';
+import { MessageSquare, Trash2, Loader2, Square } from 'lucide-react';
 import type { RuleSuggestion } from '@emailibrium/types';
 import { useCreateRule } from '@/features/rules/hooks/useRules';
 import { useChat } from './hooks/useChat';
@@ -9,10 +9,17 @@ import { ChatInput } from './ChatInput';
 /**
  * Full-height chat interface for the conversational rule-building
  * AI assistant. Displays message history, typing indicators, and
- * action buttons for applying suggested rules.
+ * action buttons for applying suggested rules. Supports SSE streaming.
  */
 export function ChatInterface() {
-  const { messages, isLoading, sendMessage, clearHistory } = useChat();
+  const {
+    messages,
+    isLoading,
+    streamingEnabled,
+    sendMessage,
+    stopStreaming,
+    clearHistory,
+  } = useChat();
   const createRule = useCreateRule();
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -38,13 +45,13 @@ export function ChatInterface() {
 
   const handleEditRule = useCallback((_suggestion: RuleSuggestion) => {
     // Navigate to rule editor with pre-filled data
-    // This can be wired up to a router or modal in the parent
   }, []);
 
   const handleFindSimilar = useCallback((_suggestion: RuleSuggestion) => {
     // Trigger a search for similar rules
-    // This can be wired up to the search feature
   }, []);
+
+  const isStreaming = messages.some((m) => m.isStreaming);
 
   return (
     <div className="flex h-full flex-col">
@@ -53,18 +60,36 @@ export function ChatInterface() {
         <div className="flex items-center gap-2">
           <MessageSquare className="h-5 w-5 text-indigo-500" aria-hidden="true" />
           <h2 className="text-sm font-semibold text-gray-900 dark:text-white">Email Assistant</h2>
+          {streamingEnabled && (
+            <span className="rounded-full bg-green-100 px-1.5 py-0.5 text-[10px] font-medium text-green-700 dark:bg-green-900/30 dark:text-green-400">
+              Live
+            </span>
+          )}
         </div>
-        {messages.length > 0 && (
-          <button
-            type="button"
-            onClick={clearHistory}
-            className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-gray-400 transition-colors hover:text-gray-600 dark:hover:text-gray-300"
-            aria-label="Clear chat history"
-          >
-            <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
-            Clear
-          </button>
-        )}
+        <div className="flex items-center gap-2">
+          {isStreaming && (
+            <button
+              type="button"
+              onClick={stopStreaming}
+              className="flex items-center gap-1 rounded-md bg-red-50 px-2 py-1 text-xs text-red-600 transition-colors hover:bg-red-100 dark:bg-red-900/20 dark:text-red-400 dark:hover:bg-red-900/30"
+              aria-label="Stop generating"
+            >
+              <Square className="h-3 w-3" aria-hidden="true" />
+              Stop
+            </button>
+          )}
+          {messages.length > 0 && !isStreaming && (
+            <button
+              type="button"
+              onClick={clearHistory}
+              className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-gray-400 transition-colors hover:text-gray-600 dark:hover:text-gray-300"
+              aria-label="Clear chat history"
+            >
+              <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+              Clear
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Message list */}
@@ -94,8 +119,8 @@ export function ChatInterface() {
               />
             ))}
 
-            {/* Typing indicator */}
-            {isLoading && (
+            {/* Typing indicator (non-streaming mode) */}
+            {isLoading && !isStreaming && (
               <div className="flex items-center gap-2 text-gray-400 dark:text-gray-500">
                 <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
                 <span className="text-xs" role="status">
@@ -108,7 +133,7 @@ export function ChatInterface() {
       </div>
 
       {/* Input */}
-      <ChatInput onSend={sendMessage} disabled={isLoading} />
+      <ChatInput onSend={sendMessage} disabled={isLoading && !isStreaming} />
     </div>
   );
 }

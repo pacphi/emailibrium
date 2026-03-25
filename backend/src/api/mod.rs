@@ -10,6 +10,8 @@ pub mod ingestion;
 mod insights;
 mod interactions;
 mod learning;
+mod rules;
+mod unsubscribe;
 mod vectors;
 mod wipe;
 
@@ -30,5 +32,7 @@ pub fn routes() -> Router<AppState> {
         .nest("/ai", ai::routes())
         .nest("/consent", consent::routes())
         .nest("/auth", accounts::routes())
+        .nest("/rules", rules::routes())
+        .nest("/unsubscribe", unsubscribe::routes())
         .nest("/wipe", wipe::routes())
 }

@@ -6,6 +6,7 @@
 pub mod audit;
 pub mod backup;
 pub mod categorizer;
+pub mod chat;
 pub mod clustering;
 pub mod config;
 pub mod hdbscan;
@@ -27,6 +28,7 @@ pub mod model_download;
 pub mod model_integrity;
 pub mod model_registry;
 pub mod models;
+pub mod privacy;
 pub mod qdrant_store;
 pub mod quantization;
 pub mod reindex;
@@ -66,6 +68,8 @@ pub struct VectorService {
     pub generative: Option<Arc<dyn generative::GenerativeModel>>,
     pub consent_manager: Arc<consent::ConsentManager>,
     pub remote_wipe_service: Arc<remote_wipe::RemoteWipeService>,
+    pub privacy_service: Arc<privacy::PrivacyService>,
+    pub unsubscribe_service: Option<Arc<crate::email::unsubscribe::UnsubscribeService>>,
     pub config: VectorConfig,
     pub db: Arc<Database>,
 }
@@ -271,6 +275,17 @@ impl VectorService {
             tracing::warn!("Failed to create wipe audit table: {e}");
         }
 
+        // Initialize GDPR privacy service (R-09: consent persistence)
+        let privacy_service = Arc::new(privacy::PrivacyService::new(db.clone()));
+        if let Err(e) = privacy_service.ensure_tables().await {
+            tracing::warn!("Failed to create GDPR consent tables: {e}");
+        }
+
+        // Initialize unsubscribe service (R-04: bulk unsubscribe)
+        let unsubscribe_service = Some(Arc::new(
+            crate::email::unsubscribe::UnsubscribeService::new(),
+        ));
+
         // Initialize re-index orchestrator and check for model changes
         let reindex_orchestrator = Arc::new(reindex::ReindexOrchestrator::new(db.clone()));
         if let Ok(needs_reindex) = reindex_orchestrator
@@ -302,6 +317,8 @@ impl VectorService {
             generative: gen_model,
             consent_manager,
             remote_wipe_service,
+            privacy_service,
+            unsubscribe_service,
             config,
             db,
         })

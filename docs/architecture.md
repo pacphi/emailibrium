@@ -17,8 +17,9 @@ Emailibrium is a **vector-native email intelligence platform** organized as a fo
 +-------------------------------+----------------------------------+
 |                    API GATEWAY TIER                                |
 |  Axum web framework with tower-http middleware                    |
-|  Routes: /vectors, /ingestion, /insights                         |
-|  CORS, tracing, CSP headers (ADR-008)                            |
+|  Routes: /vectors, /ingestion, /insights, /privacy               |
+|  CORS, tracing, CSP/HSTS headers (ADR-008, ADR-016)             |
+|  Token bucket rate limiting, log scrubbing (ADR-016)             |
 +-------------------------------+----------------------------------+
                                 |
 +-------------------------------+----------------------------------+
@@ -29,6 +30,7 @@ Emailibrium is a **vector-native email intelligence platform** organized as a fo
 |  Clustering (ADR-009): GraphSAGE on HNSW neighbor graph          |
 |  Quantization (ADR-007): adaptive scalar quantization            |
 |  Insight Engine: subscription detection, recurring sender analysis|
+|  Rule Engine (ADR-014): hybrid structural + semantic conditions  |
 |  Content Pipeline (ADR-006): HTML, images, attachments, links    |
 +-------------------------------+----------------------------------+
                                 |
@@ -37,12 +39,13 @@ Emailibrium is a **vector-native email intelligence platform** organized as a fo
 |  SQLite (structured data, FTS5 search, email metadata, config)   |
 |  Vector Store (embeddings, HNSW index, clusters)                 |
 |  Moka Cache (embedding cache, LLM response cache)                |
+|  Sync Queue + Checkpoints (ADR-015): offline ops, crash recovery |
 +------------------------------------------------------------------+
 ```
 
 ## Bounded Contexts
 
-Emailibrium follows Domain-Driven Design with five bounded contexts (DDD-000 through DDD-005):
+Emailibrium follows Domain-Driven Design with seven bounded contexts (DDD-000 through DDD-007):
 
 | Context                | Type       | Document | Responsibility                                                            |
 | ---------------------- | ---------- | -------- | ------------------------------------------------------------------------- |
@@ -51,6 +54,8 @@ Emailibrium follows Domain-Driven Design with five bounded contexts (DDD-000 thr
 | **Ingestion**          | Supporting | DDD-003  | Email sync from providers, multi-asset extraction, pipeline orchestration |
 | **Learning**           | Supporting | DDD-004  | SONA adaptive learning, centroid updates, feedback processing             |
 | **Account Management** | Supporting | DDD-005  | Provider connections (OAuth), sync state, archive strategy                |
+| **AI Providers**       | Supporting | DDD-006  | Model registry, provider routing, consent enforcement, inference sessions |
+| **Rules**              | Core       | DDD-007  | Rule lifecycle, hybrid condition evaluation, NL parsing, validation       |
 
 ### Context Map
 
@@ -128,6 +133,10 @@ Throughput targets:
 | ADR-008 | Privacy & Security         | AES-256-GCM encryption at rest, Argon2id key derivation, embedding noise            | ~5-10% performance overhead vs. data protection                    |
 | ADR-009 | Clustering                 | GraphSAGE on HNSW neighbor graph for topic discovery                                | Novel approach (needs empirical validation) vs. proven methods     |
 | ADR-010 | Inbox Strategy             | Ingest-Tag-Archive pipeline ("Gmail is dumb store, Emailibrium is smart interface") | Aggressive automation vs. user safety and undo capability          |
+| ADR-014 | Rule Engine                | Hybrid structural + semantic conditions with NL parser and validator                | Semantic power vs. embedding quality dependency                    |
+| ADR-015 | Offline Sync               | Queue-based offline ops with conflict resolution and crash-recovery checkpoints     | Optimistic UI complexity vs. offline reliability                   |
+| ADR-016 | Security Middleware        | Token bucket rate limiting, HSTS, security headers, log scrubbing                   | Middleware overhead vs. production security posture                |
+| ADR-017 | GDPR Compliance            | Consent tracking, append-only audit log, data export, right to erasure              | Storage and complexity vs. regulatory compliance                   |
 
 ## Module Structure
 
@@ -249,3 +258,36 @@ Refer to ADR-008 for the full security design. Key points:
 - **CORS**: Restricted to specific origins (not wildcard)
 - **OAuth tokens**: Stored via Web Crypto API in browser (not localStorage)
 - **Embedding privacy**: Calibrated Gaussian noise injection (differential privacy lite)
+- **Rate limiting**: Per-IP token bucket (configurable burst size and refill rate) returning HTTP 429 with `Retry-After` (ADR-016)
+- **HSTS**: `Strict-Transport-Security` with configurable `max-age` and `includeSubDomains` (ADR-016)
+- **Security headers**: `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Referrer-Policy`, `Permissions-Policy` (ADR-016)
+- **Log scrubbing**: Automatic redaction of OAuth tokens, API keys, and email content from log output (ADR-016)
+
+## Rule Engine
+
+Refer to ADR-014 and DDD-007 for full design. Key points:
+
+- **Hybrid conditions**: Rules combine structural field matching (sender, subject, age, category) with semantic vector similarity conditions ("emails about project budgets")
+- **NL parser**: Natural language rule descriptions are parsed into structured conditions using the generative AI tier (Tier 1/2) with template-matching fallback at Tier 0
+- **Validator**: Detects contradictions (conflicting actions on overlapping conditions), circular dependencies, and shadowed (unreachable) rules before activation
+- **Processor**: Evaluates enabled rules in priority order against each incoming email; semantic conditions use pre-computed condition embeddings compared via cosine similarity against existing email embeddings (zero additional embedding cost)
+- **Test runner**: Users can test a rule against a sample of existing emails before enabling it
+
+## Offline Sync and Crash Recovery
+
+Refer to ADR-015 for full design. Key points:
+
+- **Sync queue**: Offline operations (label, archive, delete, move) are buffered in a `sync_queue` SQLite table and replayed when connectivity returns
+- **Conflict resolution**: Configurable per operation type -- LastWriterWins (labels), LocalWins (archive/move), RemoteWins (delete), or Manual
+- **SyncScheduler**: Background task monitors connectivity, drains the queue in FIFO order, applies exponential backoff on transient failures (1s to 60s max)
+- **Processing checkpoints**: Batch ingestion jobs save progress every 100 emails to a `processing_checkpoints` table; crashes resume from the last checkpoint rather than restarting
+- **PWA integration**: Pairs with the existing service worker static asset cache for full offline-first behavior
+
+## Privacy and GDPR Compliance
+
+Refer to ADR-017 for full design. Key points:
+
+- **Consent tracking**: Immutable `consent_decisions` table records all grants and revocations with timestamps, IP addresses, and policy versions
+- **Audit logging**: Append-only `privacy_audit_log` table records all data access, export, erasure, and cloud API calls (metadata only, no PII content)
+- **Data export** (Article 20): `GET /api/v1/privacy/export` generates a JSON archive of all user data (email metadata, categories, rules, consent history, audit log)
+- **Right to erasure** (Article 17): `POST /api/v1/privacy/erase` deletes all email metadata, vector embeddings, learning data, and rules; retains only the audit entry recording that erasure occurred and the consent history

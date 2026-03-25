@@ -45,3 +45,25 @@ export type {
   RuleAction,
   RuleSuggestion,
 } from './rules.js';
+
+export type {
+  ConsentPurpose,
+  GdprConsent,
+  ConsentRecord,
+  DataExportRequest,
+  DataExportResponse,
+  DataEraseResponse,
+} from './consent.js';
+
+export type {
+  ChatSession,
+  ChatRequest,
+  ChatResponse,
+  ChatStreamChunk,
+} from './chat.js';
+
+export type {
+  UnsubscribeRequest,
+  UnsubscribeResult,
+  UnsubscribePreview,
+} from './unsubscribe.js';

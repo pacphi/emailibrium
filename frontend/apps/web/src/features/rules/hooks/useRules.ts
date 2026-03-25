@@ -1,5 +1,14 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { getRules, createRule, updateRule, deleteRule, getRuleSuggestions } from '@emailibrium/api';
+import {
+  getRules,
+  createRule,
+  updateRule,
+  deleteRule,
+  getRuleSuggestions,
+  validateRule,
+  testRule,
+} from '@emailibrium/api';
+import type { RuleValidationResult, RuleTestResult } from '@emailibrium/api';
 import type { Rule, RuleSuggestion } from '@emailibrium/types';
 
 export function useRulesQuery() {
@@ -57,5 +66,25 @@ export function useToggleRule() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['rules'] });
     },
+  });
+}
+
+export function useValidateRule() {
+  return useMutation<
+    RuleValidationResult,
+    Error,
+    Omit<Rule, 'id' | 'matchCount' | 'accuracy' | 'createdAt'>
+  >({
+    mutationFn: validateRule,
+  });
+}
+
+export function useTestRule() {
+  return useMutation<
+    RuleTestResult,
+    Error,
+    Omit<Rule, 'id' | 'matchCount' | 'accuracy' | 'createdAt'>
+  >({
+    mutationFn: testRule,
   });
 }

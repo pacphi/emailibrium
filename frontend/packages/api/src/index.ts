@@ -46,11 +46,15 @@ export type { GetEmailsParams, SendEmailDraft } from './emailApi.js';
 
 export {
   getRules,
+  getRule,
   createRule,
   updateRule,
   deleteRule,
   getRuleSuggestions,
+  validateRule,
+  testRule,
 } from './rulesApi.js';
+export type { RuleValidationResult, RuleTestResult } from './rulesApi.js';
 
 export {
   bulkArchive,
@@ -58,6 +62,27 @@ export {
   bulkLabel,
   unsubscribe,
 } from './actionsApi.js';
+
+export {
+  batchUnsubscribe,
+  undoUnsubscribe,
+  previewUnsubscribe,
+} from './unsubscribeApi.js';
+
+export {
+  sendChatMessage,
+  createChatStream,
+  streamChatMessage,
+  getChatSessions,
+  deleteChatSession,
+} from './chatApi.js';
+
+export {
+  recordConsent,
+  getConsents,
+  requestDataExport,
+  requestDataErase,
+} from './consentApi.js';
 
 export { submitFeedback } from './learningApi.js';
 export type { FeedbackPayload, FeedbackAction } from './learningApi.js';

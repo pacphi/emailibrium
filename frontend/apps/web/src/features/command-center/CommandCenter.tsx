@@ -5,6 +5,7 @@ import { RecentActivity } from './RecentActivity';
 import { ClusterVisualization } from './ClusterVisualization';
 import { CommandPalette } from './CommandPalette';
 import { SearchResults } from './SearchResults';
+import { SyncStatusIndicator } from './SyncStatusIndicator';
 import { useStats } from './hooks/useStats';
 import { useCommandPalette } from './hooks/useCommandPalette';
 
@@ -30,6 +31,9 @@ export function CommandCenter() {
             </p>
           </div>
           <div className="flex items-center gap-3">
+            {/* Sync status */}
+            <SyncStatusIndicator />
+
             {/* View toggle */}
             <div
               className="flex rounded-lg border border-gray-200 dark:border-gray-600"

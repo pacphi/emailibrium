@@ -4,8 +4,9 @@ import { AccountSettings } from './AccountSettings';
 import { AISettings } from './AISettings';
 import { PrivacySettings } from './PrivacySettings';
 import { AppearanceSettings } from './AppearanceSettings';
+import { ConsentSettings } from './ConsentSettings';
 
-type SettingsTab = 'general' | 'accounts' | 'ai' | 'privacy' | 'appearance';
+type SettingsTab = 'general' | 'accounts' | 'ai' | 'privacy' | 'consent' | 'appearance';
 
 interface TabDef {
   id: SettingsTab;
@@ -17,6 +18,7 @@ const TABS: TabDef[] = [
   { id: 'accounts', label: 'Accounts' },
   { id: 'ai', label: 'AI / LLM' },
   { id: 'privacy', label: 'Privacy' },
+  { id: 'consent', label: 'Consent / GDPR' },
   { id: 'appearance', label: 'Appearance' },
 ];
 
@@ -30,6 +32,8 @@ function TabPanel({ tab }: { tab: SettingsTab }) {
       return <AISettings />;
     case 'privacy':
       return <PrivacySettings />;
+    case 'consent':
+      return <ConsentSettings />;
     case 'appearance':
       return <AppearanceSettings />;
   }

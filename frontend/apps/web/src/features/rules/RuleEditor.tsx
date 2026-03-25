@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Plus, X, FlaskConical, Save } from 'lucide-react';
 import type { Rule, RuleCondition, RuleAction } from '@emailibrium/types';
 import { SemanticCondition } from './SemanticCondition';
-import { useCreateRule, useUpdateRule } from './hooks/useRules';
+import { useCreateRule, useUpdateRule, useValidateRule, useTestRule } from './hooks/useRules';
 
 interface RuleEditorProps {
   rule?: Rule;
@@ -63,7 +63,12 @@ export function RuleEditor({ rule, onClose }: RuleEditorProps) {
 
   const createMutation = useCreateRule();
   const updateMutation = useUpdateRule();
+  const validateMutation = useValidateRule();
+  const testMutation = useTestRule();
   const isSaving = createMutation.isPending || updateMutation.isPending;
+  const [validationErrors, setValidationErrors] = useState<
+    Array<{ field: string; message: string }>
+  >([]);
 
   function updateCondition(index: number, patch: Partial<RuleCondition>) {
     setConditions((prev) => prev.map((c, i) => (i === index ? { ...c, ...patch } : c)));
@@ -82,8 +87,58 @@ export function RuleEditor({ rule, onClose }: RuleEditorProps) {
   }
 
   function handleTest() {
-    // Placeholder: in production this would call a test endpoint
-    setTestResult('This rule would match approximately 42 emails in your inbox.');
+    const payload = {
+      name: name.trim(),
+      conditions,
+      actions,
+      isActive: rule?.isActive ?? true,
+    };
+    setTestResult(null);
+    testMutation.mutate(payload, {
+      onSuccess: (result) => {
+        const matchText =
+          result.matchCount === 0
+            ? 'This rule would not match any emails in your inbox.'
+            : `This rule would match ${result.matchCount} email${result.matchCount === 1 ? '' : 's'} in your inbox.`;
+        const sampleText =
+          result.sampleMatches.length > 0
+            ? ` Example: "${result.sampleMatches[0]!.subject}" from ${result.sampleMatches[0]!.from}`
+            : '';
+        setTestResult(matchText + sampleText);
+      },
+      onError: () => {
+        setTestResult('Failed to test rule. Please try again.');
+      },
+    });
+  }
+
+  async function handleValidateAndSave() {
+    const payload = {
+      name: name.trim(),
+      conditions,
+      actions,
+      isActive: rule?.isActive ?? true,
+    };
+
+    validateMutation.mutate(payload, {
+      onSuccess: (result) => {
+        setValidationErrors(result.errors);
+        if (result.valid) {
+          if (isEditing && rule) {
+            updateMutation.mutate(
+              { id: rule.id, rule: payload },
+              { onSuccess: () => onClose() },
+            );
+          } else {
+            createMutation.mutate(payload, { onSuccess: () => onClose() });
+          }
+        }
+      },
+      onError: () => {
+        // Fall back to saving without validation if the endpoint is unavailable
+        handleSave();
+      },
+    });
   }
 
   function handleSave() {
@@ -261,6 +316,22 @@ export function RuleEditor({ rule, onClose }: RuleEditorProps) {
         </div>
       </div>
 
+      {/* Validation errors */}
+      {validationErrors.length > 0 && (
+        <div className="mb-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 dark:border-red-800 dark:bg-red-900/20">
+          <p className="mb-1 text-sm font-medium text-red-700 dark:text-red-400">
+            Validation errors:
+          </p>
+          <ul className="list-inside list-disc text-sm text-red-600 dark:text-red-400">
+            {validationErrors.map((err, i) => (
+              <li key={i}>
+                <span className="font-medium">{err.field}:</span> {err.message}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       {/* Test result */}
       {testResult && (
         <div className="mb-4 rounded-md border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-700 dark:border-green-800 dark:bg-green-900/20 dark:text-green-400">
@@ -273,10 +344,11 @@ export function RuleEditor({ rule, onClose }: RuleEditorProps) {
         <button
           type="button"
           onClick={handleTest}
-          className="flex items-center gap-1 rounded-md border border-gray-200 px-3 py-1.5 text-sm text-gray-600 transition-colors hover:bg-gray-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-700"
+          disabled={testMutation.isPending || !name.trim()}
+          className="flex items-center gap-1 rounded-md border border-gray-200 px-3 py-1.5 text-sm text-gray-600 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-700"
         >
           <FlaskConical className="h-4 w-4" aria-hidden="true" />
-          Test Rule
+          {testMutation.isPending ? 'Testing...' : 'Test Rule'}
         </button>
         <div className="flex items-center gap-2">
           <button
@@ -288,12 +360,18 @@ export function RuleEditor({ rule, onClose }: RuleEditorProps) {
           </button>
           <button
             type="button"
-            onClick={handleSave}
-            disabled={isSaving || !name.trim()}
+            onClick={handleValidateAndSave}
+            disabled={isSaving || validateMutation.isPending || !name.trim()}
             className="flex items-center gap-1 rounded-md bg-indigo-600 px-4 py-1.5 text-sm font-medium text-white transition-colors hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <Save className="h-4 w-4" aria-hidden="true" />
-            {isSaving ? 'Saving...' : isEditing ? 'Update' : 'Create'}
+            {isSaving
+              ? 'Saving...'
+              : validateMutation.isPending
+                ? 'Validating...'
+                : isEditing
+                  ? 'Update'
+                  : 'Create'}
           </button>
         </div>
       </div>

@@ -853,7 +853,8 @@ fn default_outlook_scopes() -> Vec<String> {
 // Security config (audit items #6 CORS, #13 CSP)
 // ---------------------------------------------------------------------------
 
-/// HTTP security configuration: CORS allowed origins and CSP header toggle.
+/// HTTP security configuration: CORS allowed origins, CSP header toggle,
+/// rate limiting, and HSTS.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SecurityConfig {
     /// Origins allowed by the CORS middleware.
@@ -862,6 +863,12 @@ pub struct SecurityConfig {
     /// Whether Content-Security-Policy and related headers are emitted.
     #[serde(default = "default_true")]
     pub csp_enabled: bool,
+    /// Rate limiting settings (R-05).
+    #[serde(default)]
+    pub rate_limit: RateLimitConfig,
+    /// HSTS settings (R-05).
+    #[serde(default)]
+    pub hsts: HstsConfig,
 }
 
 impl Default for SecurityConfig {
@@ -869,8 +876,70 @@ impl Default for SecurityConfig {
         Self {
             allowed_origins: default_allowed_origins(),
             csp_enabled: true,
+            rate_limit: RateLimitConfig::default(),
+            hsts: HstsConfig::default(),
         }
     }
+}
+
+/// Rate-limiting configuration (R-05).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RateLimitConfig {
+    /// Whether rate limiting is enabled.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Sustained requests per second per IP.
+    #[serde(default = "default_requests_per_second")]
+    pub requests_per_second: u32,
+    /// Maximum burst size (initial token count).
+    #[serde(default = "default_burst_size")]
+    pub burst_size: u32,
+}
+
+impl Default for RateLimitConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            requests_per_second: default_requests_per_second(),
+            burst_size: default_burst_size(),
+        }
+    }
+}
+
+fn default_requests_per_second() -> u32 {
+    10
+}
+
+fn default_burst_size() -> u32 {
+    50
+}
+
+/// HSTS (Strict-Transport-Security) configuration (R-05).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HstsConfig {
+    /// Whether the HSTS header is emitted.
+    #[serde(default)]
+    pub enabled: bool,
+    /// `max-age` directive in seconds (default: 2 years).
+    #[serde(default = "default_hsts_max_age")]
+    pub max_age_secs: u64,
+    /// Whether the `includeSubDomains` directive is added.
+    #[serde(default = "default_true")]
+    pub include_subdomains: bool,
+}
+
+impl Default for HstsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            max_age_secs: default_hsts_max_age(),
+            include_subdomains: true,
+        }
+    }
+}
+
+fn default_hsts_max_age() -> u64 {
+    63_072_000 // 2 years
 }
 
 fn default_allowed_origins() -> Vec<String> {

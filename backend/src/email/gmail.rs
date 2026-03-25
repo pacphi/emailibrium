@@ -9,6 +9,29 @@ use chrono::{DateTime, TimeZone, Utc};
 use super::provider::{EmailProvider, ProviderError};
 use super::types::{EmailMessage, EmailPage, ListParams, OAuthTokens, ProviderConfig};
 
+// ---------------------------------------------------------------------------
+// Gmail Incremental Sync Types (R-01)
+// ---------------------------------------------------------------------------
+
+/// High-level response from Gmail incremental sync via history.list API.
+///
+/// This is a convenience wrapper around the lower-level `GmailHistoryDelta`
+/// that provides a simpler interface for consumers who only need message IDs
+/// and label change tuples.
+#[derive(Debug, Clone, Default)]
+pub struct HistoryResponse {
+    /// Message IDs that were added to the mailbox since the last sync.
+    pub messages_added: Vec<String>,
+    /// Message IDs that were deleted from the mailbox.
+    pub messages_deleted: Vec<String>,
+    /// Label additions: (message_id, label_ids) pairs.
+    pub labels_added: Vec<(String, Vec<String>)>,
+    /// Label removals: (message_id, label_ids) pairs.
+    pub labels_removed: Vec<(String, Vec<String>)>,
+    /// The new history ID to use as `startHistoryId` in the next call.
+    pub new_history_id: String,
+}
+
 const GMAIL_API_BASE: &str = "https://gmail.googleapis.com/gmail/v1/users/me";
 
 /// Gmail provider using the Gmail REST API v1.
@@ -453,6 +476,212 @@ impl EmailProvider for GmailProvider {
 }
 
 impl GmailProvider {
+    // -----------------------------------------------------------------------
+    // Gmail History API (incremental / delta sync)
+    // -----------------------------------------------------------------------
+
+    /// Fetch the current history ID from the user's Gmail profile.
+    ///
+    /// This is used as the starting point for subsequent `history_list` calls.
+    pub async fn get_history_id(&self, access_token: &str) -> Result<String, ProviderError> {
+        let resp: serde_json::Value = self
+            .http
+            .get(format!("{GMAIL_API_BASE}/profile"))
+            .bearer_auth(access_token)
+            .send()
+            .await
+            .map_err(|e| ProviderError::RequestFailed(e.to_string()))?
+            .json()
+            .await
+            .map_err(|e| ProviderError::ParseError(e.to_string()))?;
+
+        check_error_response(&resp)?;
+
+        resp["historyId"]
+            .as_str()
+            .map(|s| s.to_string())
+            .ok_or_else(|| ProviderError::ParseError("Missing historyId in profile".into()))
+    }
+
+    /// Call the Gmail `history.list` API to get changes since `start_history_id`.
+    ///
+    /// Returns the raw JSON response which can be parsed with
+    /// `delta::parse_gmail_history`.
+    pub async fn history_list(
+        &self,
+        access_token: &str,
+        start_history_id: &str,
+        page_token: Option<&str>,
+    ) -> Result<serde_json::Value, ProviderError> {
+        let mut url = format!(
+            "{GMAIL_API_BASE}/history?startHistoryId={start_history_id}"
+        );
+
+        if let Some(pt) = page_token {
+            url.push_str(&format!("&pageToken={pt}"));
+        }
+
+        let resp: serde_json::Value = self
+            .http
+            .get(&url)
+            .bearer_auth(access_token)
+            .send()
+            .await
+            .map_err(|e| ProviderError::RequestFailed(e.to_string()))?
+            .json()
+            .await
+            .map_err(|e| ProviderError::ParseError(e.to_string()))?;
+
+        check_error_response(&resp)?;
+        Ok(resp)
+    }
+
+    /// Fetch all history pages and return an aggregated delta.
+    pub async fn history_list_all(
+        &self,
+        access_token: &str,
+        start_history_id: &str,
+    ) -> Result<super::delta::GmailHistoryDelta, ProviderError> {
+        let mut all_added = Vec::new();
+        let mut all_deleted = Vec::new();
+        let mut all_label_changes = Vec::new();
+        let mut latest_history_id = None;
+        let mut page_token: Option<String> = None;
+
+        loop {
+            let resp = self
+                .history_list(access_token, start_history_id, page_token.as_deref())
+                .await?;
+
+            let delta = super::delta::parse_gmail_history(&resp)
+                .map_err(|e| ProviderError::ParseError(e))?;
+
+            all_added.extend(delta.added_message_ids);
+            all_deleted.extend(delta.deleted_message_ids);
+            all_label_changes.extend(delta.label_changes);
+
+            if delta.new_history_id.is_some() {
+                latest_history_id = delta.new_history_id;
+            }
+
+            // Check for next page.
+            match resp["nextPageToken"].as_str() {
+                Some(token) => page_token = Some(token.to_string()),
+                None => break,
+            }
+        }
+
+        Ok(super::delta::GmailHistoryDelta {
+            added_message_ids: all_added,
+            deleted_message_ids: all_deleted,
+            label_changes: all_label_changes,
+            new_history_id: latest_history_id,
+        })
+    }
+
+    // -----------------------------------------------------------------------
+    // Convenience Wrappers (R-01)
+    // -----------------------------------------------------------------------
+
+    /// Get the current history ID from the user's Gmail profile.
+    ///
+    /// Alias for `get_history_id` — named to match the R-01 specification.
+    pub async fn get_current_history_id(
+        &self,
+        access_token: &str,
+    ) -> Result<String, ProviderError> {
+        self.get_history_id(access_token).await
+    }
+
+    /// Fetch changes since the given history ID and return a typed
+    /// `HistoryResponse`.
+    ///
+    /// This aggregates all pages from `history.list` and converts the
+    /// low-level `GmailHistoryDelta` into the simpler `HistoryResponse`
+    /// format with tuple-based label changes.
+    pub async fn history_list_typed(
+        &self,
+        access_token: &str,
+        start_history_id: &str,
+    ) -> Result<HistoryResponse, ProviderError> {
+        let delta = self
+            .history_list_all(access_token, start_history_id)
+            .await?;
+
+        let labels_added: Vec<(String, Vec<String>)> = delta
+            .label_changes
+            .iter()
+            .filter(|lc| !lc.added_labels.is_empty())
+            .map(|lc| (lc.message_id.clone(), lc.added_labels.clone()))
+            .collect();
+
+        let labels_removed: Vec<(String, Vec<String>)> = delta
+            .label_changes
+            .iter()
+            .filter(|lc| !lc.removed_labels.is_empty())
+            .map(|lc| (lc.message_id.clone(), lc.removed_labels.clone()))
+            .collect();
+
+        Ok(HistoryResponse {
+            messages_added: delta.added_message_ids,
+            messages_deleted: delta.deleted_message_ids,
+            labels_added,
+            labels_removed,
+            new_history_id: delta.new_history_id.unwrap_or_default(),
+        })
+    }
+
+    // -----------------------------------------------------------------------
+    // Batch Message Fetching
+    // -----------------------------------------------------------------------
+
+    /// Fetch multiple messages concurrently with bounded concurrency.
+    ///
+    /// Limits to `max_concurrent` simultaneous requests (default 10) to
+    /// avoid Gmail API rate limits.
+    pub async fn batch_get_messages(
+        &self,
+        access_token: &str,
+        message_ids: &[String],
+        max_concurrent: usize,
+    ) -> Result<Vec<super::types::EmailMessage>, ProviderError> {
+        use futures::stream::{self, StreamExt};
+
+        let concurrency = if max_concurrent == 0 { 10 } else { max_concurrent };
+
+        let results: Vec<Result<super::types::EmailMessage, ProviderError>> =
+            stream::iter(message_ids.iter())
+                .map(|msg_id| {
+                    let token = access_token.to_string();
+                    let id = msg_id.clone();
+                    let http = self.http.clone();
+                    async move {
+                        let resp: serde_json::Value = http
+                            .get(format!("{GMAIL_API_BASE}/messages/{id}?format=full"))
+                            .bearer_auth(&token)
+                            .send()
+                            .await
+                            .map_err(|e| ProviderError::RequestFailed(e.to_string()))?
+                            .json()
+                            .await
+                            .map_err(|e| ProviderError::ParseError(e.to_string()))?;
+
+                        check_error_response(&resp)?;
+                        Self::parse_message(&resp)
+                    }
+                })
+                .buffer_unordered(concurrency)
+                .collect()
+                .await;
+
+        // Collect successes, propagate first error.
+        let mut messages = Vec::with_capacity(results.len());
+        for result in results {
+            messages.push(result?);
+        }
+        Ok(messages)
+    }
+
     /// Find a label's ID by its name (for idempotent create).
     async fn find_label_id(&self, access_token: &str, name: &str) -> Result<String, ProviderError> {
         let resp: serde_json::Value = self
@@ -508,4 +737,204 @@ fn check_error_response(resp: &serde_json::Value) -> Result<(), ProviderError> {
         )));
     }
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_config() -> ProviderConfig {
+        ProviderConfig {
+            client_id: "test-client-id".to_string(),
+            client_secret: "test-client-secret".to_string(),
+            redirect_uri: "http://localhost:3000/callback".to_string(),
+            auth_url: "https://accounts.google.com/o/oauth2/v2/auth".to_string(),
+            token_url: "https://oauth2.googleapis.com/token".to_string(),
+            scopes: vec!["https://www.googleapis.com/auth/gmail.readonly".to_string()],
+        }
+    }
+
+    #[test]
+    fn test_history_response_default() {
+        let resp = HistoryResponse::default();
+        assert!(resp.messages_added.is_empty());
+        assert!(resp.messages_deleted.is_empty());
+        assert!(resp.labels_added.is_empty());
+        assert!(resp.labels_removed.is_empty());
+        assert!(resp.new_history_id.is_empty());
+    }
+
+    #[test]
+    fn test_history_response_fields() {
+        let resp = HistoryResponse {
+            messages_added: vec!["msg-1".to_string(), "msg-2".to_string()],
+            messages_deleted: vec!["msg-3".to_string()],
+            labels_added: vec![
+                ("msg-1".to_string(), vec!["STARRED".to_string()]),
+            ],
+            labels_removed: vec![
+                ("msg-1".to_string(), vec!["UNREAD".to_string()]),
+            ],
+            new_history_id: "12345".to_string(),
+        };
+        assert_eq!(resp.messages_added.len(), 2);
+        assert_eq!(resp.messages_deleted.len(), 1);
+        assert_eq!(resp.labels_added[0].0, "msg-1");
+        assert_eq!(resp.labels_added[0].1, vec!["STARRED"]);
+        assert_eq!(resp.labels_removed[0].1, vec!["UNREAD"]);
+        assert_eq!(resp.new_history_id, "12345");
+    }
+
+    #[test]
+    fn test_check_error_response_ok() {
+        let resp = serde_json::json!({"messages": []});
+        assert!(check_error_response(&resp).is_ok());
+    }
+
+    #[test]
+    fn test_check_error_response_rate_limited() {
+        let resp = serde_json::json!({
+            "error": { "code": 429, "message": "Rate limit exceeded" }
+        });
+        let err = check_error_response(&resp).unwrap_err();
+        assert!(matches!(err, ProviderError::RateLimited { retry_after_secs: 60 }));
+    }
+
+    #[test]
+    fn test_check_error_response_token_expired() {
+        let resp = serde_json::json!({
+            "error": { "code": 401, "message": "Invalid credentials" }
+        });
+        let err = check_error_response(&resp).unwrap_err();
+        assert!(matches!(err, ProviderError::TokenExpired(_)));
+    }
+
+    #[test]
+    fn test_check_error_response_not_found() {
+        let resp = serde_json::json!({
+            "error": { "code": 404, "message": "Not found" }
+        });
+        let err = check_error_response(&resp).unwrap_err();
+        assert!(matches!(err, ProviderError::NotFound(_)));
+    }
+
+    #[test]
+    fn test_check_error_response_generic() {
+        let resp = serde_json::json!({
+            "error": { "code": 500, "message": "Internal error" }
+        });
+        let err = check_error_response(&resp).unwrap_err();
+        assert!(matches!(err, ProviderError::RequestFailed(_)));
+        assert!(err.to_string().contains("500"));
+    }
+
+    #[test]
+    fn test_parse_message_minimal() {
+        let msg = serde_json::json!({
+            "id": "abc123",
+            "threadId": "thread-1",
+            "snippet": "Hello world",
+            "labelIds": ["INBOX", "UNREAD"],
+            "internalDate": "1700000000000",
+            "payload": {
+                "headers": [
+                    { "name": "From", "value": "sender@test.com" },
+                    { "name": "To", "value": "me@test.com" },
+                    { "name": "Subject", "value": "Test Subject" }
+                ]
+            }
+        });
+        let email = GmailProvider::parse_message(&msg).unwrap();
+        assert_eq!(email.id, "abc123");
+        assert_eq!(email.thread_id, Some("thread-1".to_string()));
+        assert_eq!(email.from, "sender@test.com");
+        assert_eq!(email.to, vec!["me@test.com"]);
+        assert_eq!(email.subject, "Test Subject");
+        assert_eq!(email.snippet, "Hello world");
+        assert!(!email.is_read); // UNREAD label present
+        assert_eq!(email.labels, vec!["INBOX", "UNREAD"]);
+    }
+
+    #[test]
+    fn test_parse_message_read() {
+        let msg = serde_json::json!({
+            "id": "read-msg",
+            "labelIds": ["INBOX"],
+            "internalDate": "1700000000000",
+            "payload": { "headers": [] }
+        });
+        let email = GmailProvider::parse_message(&msg).unwrap();
+        assert!(email.is_read); // No UNREAD label
+    }
+
+    #[test]
+    fn test_parse_message_multiple_recipients() {
+        let msg = serde_json::json!({
+            "id": "multi-to",
+            "internalDate": "1700000000000",
+            "payload": {
+                "headers": [
+                    { "name": "To", "value": "a@test.com, b@test.com, c@test.com" }
+                ]
+            }
+        });
+        let email = GmailProvider::parse_message(&msg).unwrap();
+        assert_eq!(email.to.len(), 3);
+    }
+
+    #[test]
+    fn test_decode_base64url_valid() {
+        // "Hello" in URL-safe base64 no padding
+        let encoded = "SGVsbG8";
+        let decoded = decode_base64url(encoded);
+        assert_eq!(decoded, Some("Hello".to_string()));
+    }
+
+    #[test]
+    fn test_decode_base64url_invalid() {
+        let decoded = decode_base64url("!!!invalid!!!");
+        assert!(decoded.is_none());
+    }
+
+    #[test]
+    fn test_extract_body_text_direct() {
+        let msg = serde_json::json!({
+            "payload": {
+                "body": { "data": "SGVsbG8gV29ybGQ" }
+            }
+        });
+        let body = extract_body_text(&msg);
+        assert_eq!(body, Some("Hello World".to_string()));
+    }
+
+    #[test]
+    fn test_extract_body_text_from_parts() {
+        let msg = serde_json::json!({
+            "payload": {
+                "parts": [
+                    {
+                        "mimeType": "text/plain",
+                        "body": { "data": "UGxhaW4gdGV4dA" }
+                    },
+                    {
+                        "mimeType": "text/html",
+                        "body": { "data": "PGh0bWw-" }
+                    }
+                ]
+            }
+        });
+        let body = extract_body_text(&msg);
+        assert_eq!(body, Some("Plain text".to_string()));
+    }
+
+    #[test]
+    fn test_gmail_provider_new() {
+        let config = test_config();
+        let provider = GmailProvider::new(config.clone());
+        assert_eq!(provider.config.client_id, "test-client-id");
+    }
 }

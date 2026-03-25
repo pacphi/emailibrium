@@ -88,7 +88,7 @@ function SuggestionActions({
 
 /**
  * Renders a single chat message bubble with support for code blocks,
- * rule suggestions, and action buttons.
+ * rule suggestions, action buttons, and streaming cursor.
  */
 export function ChatMessage({ message, onApplyRule, onEditRule, onFindSimilar }: ChatMessageProps) {
   const isUser = message.role === 'user';
@@ -134,6 +134,9 @@ export function ChatMessage({ message, onApplyRule, onEditRule, onFindSimilar }:
                 {segment.value}
               </span>
             ),
+          )}
+          {message.isStreaming && (
+            <span className="inline-block h-4 w-1.5 animate-pulse rounded-sm bg-gray-400 align-text-bottom dark:bg-gray-500" />
           )}
         </div>
 

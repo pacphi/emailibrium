@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::{
     http::{header, HeaderValue, Method},
@@ -11,9 +12,12 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 mod api;
 mod cache;
+pub mod config;
 mod db;
 pub mod email;
 pub mod events;
+mod middleware;
+mod rules;
 mod vectors;
 
 pub use vectors::config::VectorConfig;
@@ -27,17 +31,21 @@ pub struct AppState {
     pub ingestion_broadcast: api::ingestion::IngestionBroadcast,
     pub oauth_manager: Arc<email::oauth::OAuthManager>,
     pub event_bus: events::EventBus,
+    /// Chat service for AI-assisted email conversations (R-07).
+    /// `None` when no generative model is configured.
+    pub chat_service: Option<Arc<vectors::chat::ChatService>>,
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // Initialize tracing
+    // Initialize tracing with log-scrubbing safety net (R-05).
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| "emailibrium=info,tower_http=info".into()),
         )
         .with(tracing_subscriber::fmt::layer())
+        .with(middleware::log_scrub::ScrubLayer)
         .init();
 
     // ── CLI: --download-models (ADR-013, item #33) ────────────────────
@@ -142,6 +150,15 @@ async fn main() -> anyhow::Result<()> {
         }))
         .await;
 
+    // Initialize chat service if a generative model is available (R-07)
+    let chat_service = vector_service.generative.as_ref().map(|gen| {
+        Arc::new(vectors::chat::ChatService::new(
+            Duration::from_secs(3600), // 1 hour session TTL
+            20,                        // 20-message sliding window
+            gen.clone(),
+        ))
+    });
+
     let state = AppState {
         vector_service,
         db,
@@ -149,6 +166,7 @@ async fn main() -> anyhow::Result<()> {
         ingestion_broadcast: api::ingestion::IngestionBroadcast::default(),
         oauth_manager,
         event_bus,
+        chat_service,
     };
 
     // ── CORS middleware (audit item #6) ────────────────────────────────
@@ -219,6 +237,34 @@ async fn main() -> anyhow::Result<()> {
                 header::REFERRER_POLICY,
                 HeaderValue::from_static("strict-origin-when-cross-origin"),
             ));
+    }
+
+    // ── HSTS header (R-05) ────────────────────────────────────────────
+    if config.security.hsts.enabled {
+        app = app.layer(middleware::hsts::hsts_layer(
+            config.security.hsts.max_age_secs,
+            config.security.hsts.include_subdomains,
+        ));
+        tracing::info!(
+            "HSTS enabled (max-age={}s, includeSubDomains={})",
+            config.security.hsts.max_age_secs,
+            config.security.hsts.include_subdomains,
+        );
+    }
+
+    // ── Rate limiting (R-05) ──────────────────────────────────────────
+    if config.security.rate_limit.enabled {
+        let capacity = config.security.rate_limit.burst_size as f64;
+        let refill_rate = config.security.rate_limit.requests_per_second as f64;
+        let limiter = std::sync::Arc::new(
+            middleware::rate_limit::RateLimiter::new_in_memory(capacity, refill_rate, "global".to_string()),
+        );
+        app = app.layer(axum::Extension(limiter));
+        tracing::info!(
+            "Rate limiting enabled ({} req/s, burst {})",
+            config.security.rate_limit.requests_per_second,
+            config.security.rate_limit.burst_size,
+        );
     }
 
     // Start server

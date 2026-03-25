@@ -1,7 +1,9 @@
 import { useState } from 'react';
 import type { SubscriptionInsight } from '@emailibrium/types';
-import { unsubscribe } from '@emailibrium/api';
 import { FrequencyBadge } from './components/FrequencyBadge';
+import { UnsubscribePreviewDialog } from './components/UnsubscribePreviewDialog';
+import { UndoToast } from './components/UndoToast';
+import { useUnsubscribeFlow } from './hooks/useUnsubscribe';
 
 interface SubscriptionsPanelProps {
   subscriptions: SubscriptionInsight[] | undefined;
@@ -14,7 +16,8 @@ interface SectionProps {
   count: number;
   tintClass: string;
   items: SubscriptionInsight[];
-  bulkAction?: { label: string; onClick: () => void };
+  bulkAction?: { label: string; onClick: () => void; disabled?: boolean };
+  onUnsubscribeSingle?: (id: string) => void;
   defaultExpanded?: boolean;
 }
 
@@ -35,7 +38,13 @@ function ReadRateBar({ rate }: { rate: number }) {
   );
 }
 
-function SubscriptionRow({ item }: { item: SubscriptionInsight }) {
+function SubscriptionRow({
+  item,
+  onUnsubscribe,
+}: {
+  item: SubscriptionInsight;
+  onUnsubscribe?: (id: string) => void;
+}) {
   const readRate = 0; // API does not expose read rate yet; default to 0
   const actionLabel =
     item.suggestedAction === 'unsubscribe'
@@ -74,7 +83,13 @@ function SubscriptionRow({ item }: { item: SubscriptionInsight }) {
         {new Date(item.lastSeen).toLocaleDateString()}
       </td>
       <td className="py-3">
-        <button className={`text-sm font-medium ${actionColor}`}>{actionLabel}</button>
+        <button
+          type="button"
+          onClick={() => onUnsubscribe?.(item.senderAddress)}
+          className={`text-sm font-medium ${actionColor}`}
+        >
+          {actionLabel}
+        </button>
       </td>
     </tr>
   );
@@ -86,6 +101,7 @@ function SubscriptionSection({
   tintClass,
   items,
   bulkAction,
+  onUnsubscribeSingle,
   defaultExpanded = false,
 }: SectionProps) {
   const [expanded, setExpanded] = useState(defaultExpanded);
@@ -118,15 +134,19 @@ function SubscriptionSection({
             tabIndex={0}
             onClick={(e) => {
               e.stopPropagation();
-              bulkAction.onClick();
+              if (!bulkAction.disabled) bulkAction.onClick();
             }}
             onKeyDown={(e) => {
               if (e.key === 'Enter' || e.key === ' ') {
                 e.stopPropagation();
-                bulkAction.onClick();
+                if (!bulkAction.disabled) bulkAction.onClick();
               }
             }}
-            className="text-xs font-medium text-red-600 hover:text-red-500 dark:text-red-400"
+            className={`text-xs font-medium ${
+              bulkAction.disabled
+                ? 'cursor-not-allowed text-gray-400'
+                : 'text-red-600 hover:text-red-500 dark:text-red-400'
+            }`}
           >
             {bulkAction.label}
           </span>
@@ -147,7 +167,11 @@ function SubscriptionSection({
             </thead>
             <tbody>
               {items.map((item) => (
-                <SubscriptionRow key={item.senderAddress} item={item} />
+                <SubscriptionRow
+                  key={item.senderAddress}
+                  item={item}
+                  onUnsubscribe={onUnsubscribeSingle}
+                />
               ))}
             </tbody>
           </table>
@@ -178,9 +202,22 @@ function PanelSkeleton() {
 export function SubscriptionsPanel({
   subscriptions,
   isLoading,
-  onRefresh,
+  onRefresh: _onRefresh,
 }: SubscriptionsPanelProps) {
-  const [isUnsubscribing, setIsUnsubscribing] = useState(false);
+  const {
+    isPreviewOpen,
+    isPreviewLoading,
+    previewData,
+    pendingIds,
+    openPreview,
+    closePreview,
+    confirmUnsubscribe,
+    isUnsubscribing,
+    undoState,
+    isUndoing,
+    handleUndo,
+    dismissUndo,
+  } = useUnsubscribeFlow();
 
   if (isLoading) return <PanelSkeleton />;
 
@@ -194,6 +231,15 @@ export function SubscriptionsPanel({
     (s) => s.suggestedAction === 'archive' || s.suggestedAction === 'digest',
   );
   const regularlyOpened = all.filter((s) => s.suggestedAction === 'keep');
+
+  function handleSingleUnsubscribe(senderAddress: string) {
+    openPreview([senderAddress]);
+  }
+
+  function handleBulkUnsubscribe(items: SubscriptionInsight[]) {
+    const ids = items.map((s) => s.senderAddress);
+    openPreview(ids);
+  }
 
   return (
     <div className="space-y-6">
@@ -226,19 +272,11 @@ export function SubscriptionsPanel({
         count={neverOpened.length}
         tintClass="border-red-200 bg-red-50/50 dark:border-red-900/40 dark:bg-red-900/10"
         items={neverOpened}
+        onUnsubscribeSingle={handleSingleUnsubscribe}
         bulkAction={{
           label: isUnsubscribing ? 'Unsubscribing...' : 'Unsubscribe All',
-          onClick: async () => {
-            setIsUnsubscribing(true);
-            try {
-              for (const sub of neverOpened) {
-                await unsubscribe(sub.senderAddress);
-              }
-              onRefresh?.();
-            } finally {
-              setIsUnsubscribing(false);
-            }
-          },
+          disabled: isUnsubscribing || neverOpened.length === 0,
+          onClick: () => handleBulkUnsubscribe(neverOpened),
         }}
         defaultExpanded
       />
@@ -248,6 +286,7 @@ export function SubscriptionsPanel({
         count={rarelyOpened.length}
         tintClass="border-yellow-200 bg-yellow-50/50 dark:border-yellow-900/40 dark:bg-yellow-900/10"
         items={rarelyOpened}
+        onUnsubscribeSingle={handleSingleUnsubscribe}
       />
 
       <SubscriptionSection
@@ -255,7 +294,30 @@ export function SubscriptionsPanel({
         count={regularlyOpened.length}
         tintClass="border-green-200 bg-green-50/50 dark:border-green-900/40 dark:bg-green-900/10"
         items={regularlyOpened}
+        onUnsubscribeSingle={handleSingleUnsubscribe}
       />
+
+      {/* Unsubscribe preview dialog */}
+      <UnsubscribePreviewDialog
+        isOpen={isPreviewOpen}
+        isLoading={isPreviewLoading}
+        previews={previewData}
+        pendingCount={pendingIds.length}
+        isUnsubscribing={isUnsubscribing}
+        onConfirm={confirmUnsubscribe}
+        onCancel={closePreview}
+      />
+
+      {/* Undo toast */}
+      {undoState && (
+        <UndoToast
+          count={undoState.count}
+          deadline={undoState.deadline}
+          isUndoing={isUndoing}
+          onUndo={handleUndo}
+          onDismiss={dismissUndo}
+        />
+      )}
     </div>
   );
 }

@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use super::provider::{EmailProvider, ProviderError};
-use super::types::{EmailPage, ListParams, SyncState};
+use super::types::{EmailPage, ListParams, ProviderKind, SyncState};
 
 // ---------------------------------------------------------------------------
 // Sync Status
@@ -95,9 +95,15 @@ pub struct DeltaResult {
 ///
 /// Uses the `EmailProvider` trait to fetch messages and track sync state
 /// via history IDs or page tokens for incremental syncing.
+///
+/// When a `provider_kind` is set, `detect_delta` uses provider-specific
+/// delta APIs (Gmail history.list, Outlook delta query) instead of the
+/// generic list-based fallback.
 pub struct ProviderSync {
     provider: Arc<dyn EmailProvider>,
     batch_size: u32,
+    /// Optional: the kind of provider, enabling provider-specific delta APIs.
+    provider_kind: Option<ProviderKind>,
 }
 
 impl ProviderSync {
@@ -106,6 +112,20 @@ impl ProviderSync {
         Self {
             provider,
             batch_size,
+            provider_kind: None,
+        }
+    }
+
+    /// Create a new sync service with an explicit provider kind for delta APIs.
+    pub fn with_kind(
+        provider: Arc<dyn EmailProvider>,
+        batch_size: u32,
+        kind: ProviderKind,
+    ) -> Self {
+        Self {
+            provider,
+            batch_size,
+            provider_kind: Some(kind),
         }
     }
 
@@ -194,9 +214,112 @@ impl ProviderSyncService for ProviderSync {
         access_token: &str,
         state: &SyncState,
     ) -> Result<DeltaResult, ProviderError> {
-        // Delta detection fetches one page starting from the last cursor.
-        // Provider-specific delta APIs (Gmail history.list, Graph delta)
-        // would be used in a full implementation; this uses list as fallback.
+        // Try provider-specific delta APIs first, fall back to list-based.
+        match self.provider_kind {
+            Some(ProviderKind::Gmail) => {
+                self.detect_delta_gmail(access_token, state).await
+            }
+            Some(ProviderKind::Outlook) => {
+                self.detect_delta_outlook(access_token, state).await
+            }
+            _ => self.detect_delta_fallback(access_token, state).await,
+        }
+    }
+}
+
+impl ProviderSync {
+    /// Gmail-specific delta detection using history.list API.
+    async fn detect_delta_gmail(
+        &self,
+        access_token: &str,
+        state: &SyncState,
+    ) -> Result<DeltaResult, ProviderError> {
+        let history_id = match &state.history_id {
+            Some(id) => id.clone(),
+            None => {
+                // No history ID yet -- fall back to list-based detection.
+                return self.detect_delta_fallback(access_token, state).await;
+            }
+        };
+
+        // Call Gmail history.list API.
+        let mut url = format!(
+            "https://gmail.googleapis.com/gmail/v1/users/me/history?startHistoryId={history_id}"
+        );
+
+        let resp: serde_json::Value = reqwest::Client::new()
+            .get(&url)
+            .bearer_auth(access_token)
+            .send()
+            .await
+            .map_err(|e| ProviderError::RequestFailed(e.to_string()))?
+            .json()
+            .await
+            .map_err(|e| ProviderError::ParseError(e.to_string()))?;
+
+        let delta = super::delta::parse_gmail_history(&resp)
+            .map_err(|e| ProviderError::ParseError(e))?;
+
+        // Map label changes to "updated" messages.
+        let updated_ids: Vec<String> = delta
+            .label_changes
+            .iter()
+            .map(|lc| lc.message_id.clone())
+            .collect();
+
+        Ok(DeltaResult {
+            new_message_ids: delta.added_message_ids,
+            updated_message_ids: updated_ids,
+            deleted_message_ids: delta.deleted_message_ids,
+            new_history_id: delta.new_history_id,
+        })
+    }
+
+    /// Outlook-specific delta detection using Graph delta query.
+    async fn detect_delta_outlook(
+        &self,
+        access_token: &str,
+        state: &SyncState,
+    ) -> Result<DeltaResult, ProviderError> {
+        // Use history_id as the delta link storage.
+        let delta_link = state.history_id.as_deref();
+
+        let url = match delta_link {
+            Some(link) => link.to_string(),
+            None => {
+                "https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages/delta?$top=50"
+                    .to_string()
+            }
+        };
+
+        let resp: serde_json::Value = reqwest::Client::new()
+            .get(&url)
+            .bearer_auth(access_token)
+            .send()
+            .await
+            .map_err(|e| ProviderError::RequestFailed(e.to_string()))?
+            .json()
+            .await
+            .map_err(|e| ProviderError::ParseError(e.to_string()))?;
+
+        let delta = super::delta::parse_outlook_delta(&resp)
+            .map_err(|e| ProviderError::ParseError(e))?;
+
+        Ok(DeltaResult {
+            new_message_ids: delta.added_or_modified_ids,
+            updated_message_ids: Vec::new(),
+            deleted_message_ids: delta.deleted_ids,
+            // Store the delta link as the new "history ID" for the next call.
+            new_history_id: delta.delta_link,
+        })
+    }
+
+    /// Fallback delta detection using the generic list_messages API.
+    async fn detect_delta_fallback(
+        &self,
+        access_token: &str,
+        state: &SyncState,
+    ) -> Result<DeltaResult, ProviderError> {
         let params = ListParams {
             max_results: self.batch_size,
             page_token: state.next_page_token.clone(),

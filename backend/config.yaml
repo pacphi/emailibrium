@@ -92,6 +92,17 @@ quantization:
   binary_threshold: 1000000
   hysteresis_percent: 0.10
 
+# Security Middleware (ADR-016)
+security:
+  rate_limit:
+    enabled: true
+    requests_per_second: 10
+    burst_size: 50
+  hsts:
+    enabled: true
+    max_age_secs: 63072000 # 2 years
+    include_subdomains: true
+
 # OAuth (DDD-005: Account Management)
 # Client credentials are loaded from environment variables, never config files.
 # See docs/deployment-guide.md for setup instructions.
