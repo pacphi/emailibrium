@@ -1,4 +1,4 @@
-import { forwardRef, useState } from 'react';
+import { forwardRef, useState, useRef, useEffect } from 'react';
 import { Star, Archive, Trash2, FolderInput, Paperclip } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import type { Email } from '@emailibrium/types';
@@ -49,6 +49,20 @@ export const EmailListItem = forwardRef<HTMLDivElement, EmailListItemProps>(func
   ref,
 ) {
   const [showActions, setShowActions] = useState(false);
+  const [showMoveMenu, setShowMoveMenu] = useState(false);
+  const moveMenuRef = useRef<HTMLDivElement>(null);
+
+  // Close move menu on outside click.
+  useEffect(() => {
+    if (!showMoveMenu) return;
+    function handleClick(e: MouseEvent) {
+      if (moveMenuRef.current && !moveMenuRef.current.contains(e.target as Node)) {
+        setShowMoveMenu(false);
+      }
+    }
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, [showMoveMenu]);
   const badge = providerBadge[email.provider] ?? providerBadge['imap']!;
   const preview = getPreview(email);
   const dateLabel = formatDistanceToNow(new Date(email.receivedAt), {
@@ -107,6 +121,7 @@ export const EmailListItem = forwardRef<HTMLDivElement, EmailListItemProps>(func
             : 'text-gray-300 hover:text-yellow-400 dark:text-gray-600'
         }`}
         aria-label={email.isStarred ? 'Unstar email' : 'Star email'}
+        title={email.isStarred ? 'Unstar' : 'Star'}
       >
         <Star className="h-4 w-4" fill={email.isStarred ? 'currentColor' : 'none'} />
       </button>
@@ -175,6 +190,7 @@ export const EmailListItem = forwardRef<HTMLDivElement, EmailListItemProps>(func
               }}
               className="rounded p-1 text-gray-400 hover:bg-gray-200 hover:text-gray-600 dark:hover:bg-gray-700 dark:hover:text-gray-300"
               aria-label="Archive"
+              title="Archive"
             >
               <Archive className="h-4 w-4" />
             </button>
@@ -186,21 +202,50 @@ export const EmailListItem = forwardRef<HTMLDivElement, EmailListItemProps>(func
               }}
               className="rounded p-1 text-gray-400 hover:bg-red-100 hover:text-red-600 dark:hover:bg-red-900/30 dark:hover:text-red-400"
               aria-label="Delete"
+              title="Delete"
             >
               <Trash2 className="h-4 w-4" />
             </button>
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                onArchive(email.id);
-              }}
-              className="rounded p-1 text-gray-400 hover:bg-gray-200 hover:text-gray-600 dark:hover:bg-gray-700 dark:hover:text-gray-300"
-              aria-label="Move to archive"
-              title="Move to archive"
-            >
-              <FolderInput className="h-4 w-4" />
-            </button>
+            <div className="relative" ref={moveMenuRef}>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setShowMoveMenu(!showMoveMenu);
+                }}
+                className="rounded p-1 text-gray-400 hover:bg-gray-200 hover:text-gray-600 dark:hover:bg-gray-700 dark:hover:text-gray-300"
+                aria-label="Move to folder"
+                title="Move to folder"
+              >
+                <FolderInput className="h-4 w-4" />
+              </button>
+              {showMoveMenu && (
+                <div className="absolute right-0 top-full z-50 mt-1 w-40 rounded-lg border border-gray-200 bg-white py-1 shadow-lg dark:border-gray-700 dark:bg-gray-800">
+                  {[
+                    { label: 'Archive', value: 'ARCHIVED' },
+                    { label: 'Spam', value: 'SPAM' },
+                    { label: 'Trash', value: 'TRASH' },
+                  ].map((dest) => (
+                    <button
+                      key={dest.value}
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setShowMoveMenu(false);
+                        if (dest.value === 'TRASH') {
+                          onDelete(email.id);
+                        } else {
+                          onArchive(email.id);
+                        }
+                      }}
+                      className="w-full px-3 py-1.5 text-left text-sm text-gray-700 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700"
+                    >
+                      {dest.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         ) : (
           <span className="whitespace-nowrap text-xs text-gray-400 dark:text-gray-500">
