@@ -14,6 +14,42 @@ use super::error::VectorError;
 use crate::db::Database;
 
 // ---------------------------------------------------------------------------
+// SQLx row type aliases (clippy::type_complexity)
+// ---------------------------------------------------------------------------
+
+/// Row from consent_decisions query.
+type ConsentRow = (
+    String,
+    String,
+    i32,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    String,
+);
+
+/// Row from privacy_audit_log query.
+type AuditRow = (
+    i64,
+    String,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    String,
+);
+
+/// Row from emails query for data export.
+type EmailExportRow = (
+    String,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+);
+
+// ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
@@ -248,16 +284,7 @@ impl PrivacyService {
         &self,
         consent_type: &str,
     ) -> Result<Option<ConsentDecision>, VectorError> {
-        let row: Option<(
-            String,
-            String,
-            i32,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-            String,
-        )> = sqlx::query_as(
+        let row: Option<ConsentRow> = sqlx::query_as(
             "SELECT id, consent_type, granted, granted_at, revoked_at, \
                     ip_address, user_agent, created_at \
              FROM consent_decisions \
@@ -285,16 +312,7 @@ impl PrivacyService {
 
     /// List all current consent decisions (latest per type).
     pub async fn list_consents(&self) -> Result<Vec<ConsentDecision>, VectorError> {
-        let rows: Vec<(
-            String,
-            String,
-            i32,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-            String,
-        )> = sqlx::query_as(
+        let rows: Vec<ConsentRow> = sqlx::query_as(
             "SELECT d.id, d.consent_type, d.granted, d.granted_at, d.revoked_at, \
                     d.ip_address, d.user_agent, d.created_at \
              FROM consent_decisions d \
@@ -364,15 +382,7 @@ impl PrivacyService {
             .fetch_one(&self.db.pool)
             .await?;
 
-        let rows: Vec<(
-            i64,
-            String,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-            String,
-        )> = sqlx::query_as(
+        let rows: Vec<AuditRow> = sqlx::query_as(
             "SELECT id, event_type, resource_type, resource_id, actor, details, created_at \
              FROM privacy_audit_log \
              ORDER BY created_at DESC \
@@ -427,13 +437,7 @@ impl PrivacyService {
         let consent_decisions = self.list_consents().await?;
 
         // Export emails.
-        let email_rows: Vec<(
-            String,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-        )> = sqlx::query_as(
+        let email_rows: Vec<EmailExportRow> = sqlx::query_as(
             "SELECT id, from_addr, subject, received_at, category \
                  FROM emails ORDER BY received_at DESC",
         )
