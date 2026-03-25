@@ -4,6 +4,8 @@ import { submitFeedback } from '@emailibrium/api';
 import { EmailSidebar } from './EmailSidebar';
 import type { SidebarGroup } from './EmailSidebar';
 import { EmailList } from './EmailList';
+import { GroupedEmailList } from './GroupedEmailList';
+import { groupByDomain } from './utils/groupBySender';
 import { ThreadView } from './ThreadView';
 import { ComposeEmail } from './ComposeEmail';
 import { MoveDialog } from './MoveDialog';
@@ -50,6 +52,9 @@ export function EmailClient() {
   const [isComposeOpen, setIsComposeOpen] = useState(false);
   const [mobilePanel, setMobilePanel] = useState<'sidebar' | 'list' | 'thread'>('list');
   const [filter, setFilter] = useState<'all' | 'read' | 'unread' | 'starred'>('all');
+  const [isGrouped, setIsGrouped] = useState(false);
+  const [expandedDomains, setExpandedDomains] = useState<Set<string>>(new Set());
+  const [expandedSenders, setExpandedSenders] = useState<Set<string>>(new Set());
 
   const queryParams = useMemo(() => {
     const base = groupToQueryParam(activeGroup);
@@ -97,6 +102,35 @@ export function EmailClient() {
       unreadCount: counts[g.id] ?? 0,
     }));
   }, [emails]);
+
+  const domainGroups = useMemo(
+    () => (isGrouped ? groupByDomain(emails) : []),
+    [isGrouped, emails],
+  );
+
+  const toggleDomainExpand = useCallback((domain: string) => {
+    setExpandedDomains((prev) => {
+      const next = new Set(prev);
+      if (next.has(domain)) next.delete(domain);
+      else next.add(domain);
+      return next;
+    });
+  }, []);
+
+  const toggleSenderExpand = useCallback((groupKey: string) => {
+    setExpandedSenders((prev) => {
+      const next = new Set(prev);
+      if (next.has(groupKey)) next.delete(groupKey);
+      else next.add(groupKey);
+      return next;
+    });
+  }, []);
+
+  const handleToggleGrouped = useCallback(() => {
+    setIsGrouped((prev) => !prev);
+    setExpandedDomains(new Set());
+    setExpandedSenders(new Set());
+  }, []);
 
   const handleGroupSelect = useCallback((groupId: string) => {
     setActiveGroup(groupId);
@@ -150,32 +184,98 @@ export function EmailClient() {
     [deleteMutation, selectedEmailId],
   );
 
-  // Move dialog state.
+  const handleGroupBulkArchive = useCallback(
+    (emailIds: string[]) => {
+      bulkArchiveMutation.mutate(emailIds);
+      if (selectedEmailId && emailIds.includes(selectedEmailId)) {
+        setSelectedEmailId(null);
+      }
+    },
+    [bulkArchiveMutation, selectedEmailId],
+  );
+
+  const handleGroupBulkDelete = useCallback(
+    (emailIds: string[]) => {
+      bulkDeleteMutation.mutate(emailIds);
+      if (selectedEmailId && emailIds.includes(selectedEmailId)) {
+        setSelectedEmailId(null);
+      }
+    },
+    [bulkDeleteMutation, selectedEmailId],
+  );
+
+  const handleGroupBulkMarkRead = useCallback(
+    (emailIds: string[]) => {
+      for (const id of emailIds) {
+        markReadMutation.mutate({ id, read: true });
+      }
+    },
+    [markReadMutation],
+  );
+
+  const handleGroupBulkMarkUnread = useCallback(
+    (emailIds: string[]) => {
+      for (const id of emailIds) {
+        markReadMutation.mutate({ id, read: false });
+      }
+    },
+    [markReadMutation],
+  );
+
+  // Move dialog state — supports single email or bulk.
   const [moveDialogEmailId, setMoveDialogEmailId] = useState<string | null>(null);
+  const [bulkMoveIds, setBulkMoveIds] = useState<string[] | null>(null);
+  const [bulkMoveSubject, setBulkMoveSubject] = useState('');
   const moveDialogEmail = moveDialogEmailId
     ? emails.find((e) => e.id === moveDialogEmailId)
     : null;
+  const isMoveOpen = moveDialogEmailId !== null || bulkMoveIds !== null;
 
   const handleMoveOpen = useCallback((emailId: string) => {
     setMoveDialogEmailId(emailId);
   }, []);
 
+  const handleBulkMoveOpen = useCallback((emailIds: string[], subject: string) => {
+    setBulkMoveIds(emailIds);
+    setBulkMoveSubject(subject);
+  }, []);
+
   const handleMoveConfirm = useCallback(
     (targetId: string, kind: 'folder' | 'label') => {
-      if (!moveDialogEmail) return;
-      moveMutation.mutate({
-        id: moveDialogEmail.id,
-        accountId: moveDialogEmail.accountId,
-        targetId,
-        kind,
-      });
-      if (kind === 'folder' && selectedEmailId === moveDialogEmail.id) {
-        setSelectedEmailId(null);
+      if (bulkMoveIds) {
+        // Bulk move: move each email to the target
+        for (const id of bulkMoveIds) {
+          const email = emails.find((e) => e.id === id);
+          if (email) {
+            moveMutation.mutate({ id: email.id, accountId: email.accountId, targetId, kind });
+          }
+        }
+        if (kind === 'folder' && selectedEmailId && bulkMoveIds.includes(selectedEmailId)) {
+          setSelectedEmailId(null);
+        }
+        setBulkMoveIds(null);
+        setBulkMoveSubject('');
+      } else if (moveDialogEmail) {
+        moveMutation.mutate({
+          id: moveDialogEmail.id,
+          accountId: moveDialogEmail.accountId,
+          targetId,
+          kind,
+        });
+        if (kind === 'folder' && selectedEmailId === moveDialogEmail.id) {
+          setSelectedEmailId(null);
+        }
+        setMoveDialogEmailId(null);
       }
-      setMoveDialogEmailId(null);
     },
-    [moveDialogEmail, moveMutation, selectedEmailId],
+    [bulkMoveIds, moveDialogEmail, moveMutation, selectedEmailId, emails],
   );
+
+  const handleMoveClose = useCallback(() => {
+    setMoveDialogEmailId(null);
+    setBulkMoveIds(null);
+    setBulkMoveSubject('');
+  }, []);
 
   // Thread-level actions
   const handleThreadArchive = useCallback(() => {
@@ -293,7 +393,7 @@ export function EmailClient() {
           </button>
           </div>
           {/* Filter pills */}
-          <div className="flex gap-1 px-3 pb-2">
+          <div className="flex items-center gap-1 px-3 pb-2">
             {(['all', 'unread', 'read', 'starred'] as const).map((f) => (
               <button
                 key={f}
@@ -308,25 +408,69 @@ export function EmailClient() {
                 {f.charAt(0).toUpperCase() + f.slice(1)}
               </button>
             ))}
+            {/* Divider */}
+            <div className="mx-1 h-4 w-px bg-gray-300 dark:bg-gray-600" />
+            {/* Grouped toggle */}
+            <button
+              type="button"
+              onClick={handleToggleGrouped}
+              aria-pressed={isGrouped}
+              className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
+                isGrouped
+                  ? 'bg-indigo-600 text-white'
+                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600'
+              }`}
+            >
+              Grouped
+            </button>
           </div>
         </div>
-        <EmailList
-          emails={emails}
-          selectedEmailId={selectedEmailId}
-          checkedEmailIds={checkedIds}
-          isLoading={emailsQuery.isLoading}
-          isError={emailsQuery.isError}
-          onSelectEmail={handleSelectEmail}
-          onCheckEmail={handleCheckEmail}
-          onStarEmail={handleStarEmail}
-          onArchiveEmail={handleArchiveEmail}
-          onDeleteEmail={handleDeleteEmailFromList}
-          onMoveOpen={handleMoveOpen}
-          onMarkUnread={(id) => markReadMutation.mutate({ id, read: false })}
-          hasNextPage={emailsQuery.hasNextPage}
-          isFetchingNextPage={emailsQuery.isFetchingNextPage}
-          onFetchNextPage={() => emailsQuery.fetchNextPage()}
-        />
+        {isGrouped ? (
+          <GroupedEmailList
+            domains={domainGroups}
+            expandedDomains={expandedDomains}
+            expandedSenders={expandedSenders}
+            onToggleDomain={toggleDomainExpand}
+            onToggleSender={toggleSenderExpand}
+            selectedEmailId={selectedEmailId}
+            checkedEmailIds={checkedIds}
+            onSelectEmail={handleSelectEmail}
+            onCheckEmail={handleCheckEmail}
+            onStarEmail={handleStarEmail}
+            onArchiveEmail={handleArchiveEmail}
+            onDeleteEmail={handleDeleteEmailFromList}
+            onMoveOpen={handleMoveOpen}
+            onMarkUnread={(id) => markReadMutation.mutate({ id, read: false })}
+            onBulkArchive={handleGroupBulkArchive}
+            onBulkDelete={handleGroupBulkDelete}
+            onBulkMoveOpen={handleBulkMoveOpen}
+            onBulkMarkRead={handleGroupBulkMarkRead}
+            onBulkMarkUnread={handleGroupBulkMarkUnread}
+            isLoading={emailsQuery.isLoading}
+            isError={emailsQuery.isError}
+            hasNextPage={emailsQuery.hasNextPage}
+            isFetchingNextPage={emailsQuery.isFetchingNextPage}
+            onFetchNextPage={() => emailsQuery.fetchNextPage()}
+          />
+        ) : (
+          <EmailList
+            emails={emails}
+            selectedEmailId={selectedEmailId}
+            checkedEmailIds={checkedIds}
+            isLoading={emailsQuery.isLoading}
+            isError={emailsQuery.isError}
+            onSelectEmail={handleSelectEmail}
+            onCheckEmail={handleCheckEmail}
+            onStarEmail={handleStarEmail}
+            onArchiveEmail={handleArchiveEmail}
+            onDeleteEmail={handleDeleteEmailFromList}
+            onMoveOpen={handleMoveOpen}
+            onMarkUnread={(id) => markReadMutation.mutate({ id, read: false })}
+            hasNextPage={emailsQuery.hasNextPage}
+            isFetchingNextPage={emailsQuery.isFetchingNextPage}
+            onFetchNextPage={() => emailsQuery.fetchNextPage()}
+          />
+        )}
       </div>
 
       {/* Right panel: thread view */}
@@ -360,11 +504,11 @@ export function EmailClient() {
 
       {/* Move to folder dialog */}
       <MoveDialog
-        isOpen={moveDialogEmailId !== null}
-        emailSubject={moveDialogEmail?.subject ?? ''}
+        isOpen={isMoveOpen}
+        emailSubject={bulkMoveIds ? bulkMoveSubject : (moveDialogEmail?.subject ?? '')}
         labels={labelsQuery.data ?? []}
         onMove={handleMoveConfirm}
-        onClose={() => setMoveDialogEmailId(null)}
+        onClose={handleMoveClose}
       />
     </div>
   );
