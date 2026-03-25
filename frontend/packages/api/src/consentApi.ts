@@ -12,7 +12,8 @@ export async function recordConsent(consent: ConsentRecord): Promise<GdprConsent
 }
 
 export async function getConsents(): Promise<GdprConsent[]> {
-  return api.get('consent/gdpr').json<GdprConsent[]>();
+  const resp = await api.get('consent/gdpr').json<{ decisions: GdprConsent[] }>();
+  return resp.decisions ?? [];
 }
 
 export async function requestDataExport(request: DataExportRequest): Promise<DataExportResponse> {
