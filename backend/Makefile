@@ -63,11 +63,11 @@ help:
 
 .PHONY: build
 build: ## Build backend (debug)
-	@$(CARGO) build
+	@$(CARGO) build -p emailibrium
 
 .PHONY: build-release
 build-release: ## Build backend (release, optimized)
-	@$(CARGO) build --release
+	@$(CARGO) build --release -p emailibrium
 
 .PHONY: dev
 dev: ## Start dev server
@@ -82,8 +82,8 @@ clean: ## Clean build artifacts
 # ============================================================================
 
 .PHONY: test
-test: ## Run all tests
-	@$(CARGO) test
+test: ## Run all tests (emailibrium only)
+	@$(CARGO) test -p emailibrium
 
 .PHONY: test-lib
 test-lib: ## Run library tests only
@@ -102,8 +102,8 @@ bench: ## Run benchmarks
 # ============================================================================
 
 .PHONY: lint
-lint: ## Run clippy
-	@$(CARGO) clippy -- -D warnings 2>&1 | grep -v "dead_code\|never used\|never constructed\|never read" || true
+lint: ## Run clippy (emailibrium only, excludes ruvector submodule)
+	@$(CARGO) clippy -p emailibrium -- -D warnings 2>&1 | grep -v "dead_code\|never used\|never constructed\|never read" || true
 
 .PHONY: format
 format: ## Format code

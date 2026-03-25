@@ -1,0 +1,4 @@
+# Suppress warnings from ruvector git submodule path dependencies.
+# See scripts/rustc-wrapper.sh for details.
+[build]
+rustc-wrapper = "./scripts/rustc-wrapper.sh"
