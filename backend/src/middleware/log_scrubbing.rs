@@ -87,9 +87,7 @@ pub async fn log_scrubbing_middleware(request: Request<Body>, next: Next) -> Res
     let status = response.status();
     if status.is_client_error() || status.is_server_error() {
         // Build a synthetic error to exercise scrub_error_message
-        let synthetic_err = std::io::Error::other(
-            format!("{status} on {scrubbed_uri}"),
-        );
+        let synthetic_err = std::io::Error::other(format!("{status} on {scrubbed_uri}"));
         let scrubbed_msg = scrub_error_message(&synthetic_err);
 
         if status.is_server_error() {
