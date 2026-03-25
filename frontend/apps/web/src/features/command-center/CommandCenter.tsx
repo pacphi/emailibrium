@@ -8,7 +8,7 @@ import { SearchResults } from './SearchResults';
 import { SyncStatusIndicator } from './SyncStatusIndicator';
 import { useStats } from './hooks/useStats';
 import { useCommandPalette } from './hooks/useCommandPalette';
-import { getAccounts, startIngestion } from '@emailibrium/api';
+import { useSyncStore } from '@/shared/stores/syncStore';
 
 type View = 'dashboard' | 'search';
 
@@ -16,62 +16,35 @@ export function CommandCenter() {
   const [view, setView] = useState<View>('dashboard');
   const { stats, isLoading, isError, error, refetch } = useStats();
   const { open: openPalette } = useCommandPalette();
-  const [syncing, setSyncing] = useState(false);
-  const [syncStatus, setSyncStatus] = useState('');
-  const [syncError, setSyncError] = useState('');
-  const [hasAccounts, setHasAccounts] = useState(true);
 
+  // Global sync state — persists across navigation.
+  const syncing = useSyncStore((s) => s.syncing);
+  const syncStatus = useSyncStore((s) => s.status);
+  const syncError = useSyncStore((s) => s.error);
+  const hasAccounts = useSyncStore((s) => s.hasAccounts);
+  const startSync = useSyncStore((s) => s.startSync);
+  const clearError = useSyncStore((s) => s.clearError);
+  const refreshAccounts = useSyncStore((s) => s.refreshAccounts);
+
+  // Check for accounts on mount.
   useEffect(() => {
-    getAccounts()
-      .then((accounts) => setHasAccounts(accounts.some((a) => a.isActive)))
-      .catch(() => setHasAccounts(false));
-  }, []);
+    refreshAccounts();
+  }, [refreshAccounts]);
+
+  // Refetch stats when sync completes.
+  useEffect(() => {
+    if (!syncing && syncStatus === 'Sync complete!') {
+      refetch();
+    }
+  }, [syncing, syncStatus, refetch]);
 
   const handleQuickAction = useCallback(
-    async (actionId: string) => {
+    (actionId: string) => {
       if (actionId === 'sync-now') {
-        setSyncing(true);
-        setSyncStatus('Fetching accounts...');
-        setSyncError('');
-        try {
-          const accounts = await getAccounts();
-          const active = accounts.filter((a) => a.isActive);
-          if (active.length === 0) {
-            setSyncStatus('');
-            window.location.href = '/onboarding';
-            return;
-          }
-          const errors: string[] = [];
-          for (let i = 0; i < active.length; i++) {
-            const a = active[i]!;
-            setSyncStatus(
-              `Syncing account ${i + 1} of ${active.length}: ${a.emailAddress}...`,
-            );
-            try {
-              await startIngestion(a.id);
-            } catch (err) {
-              const msg = err instanceof Error ? err.message : String(err);
-              errors.push(`${a.emailAddress}: ${msg}`);
-              console.error(`Sync failed for ${a.emailAddress}:`, err);
-            }
-          }
-          if (errors.length > 0) {
-            setSyncError(`Sync failed for ${errors.length} account(s): ${errors[0]}`);
-          } else {
-            setSyncStatus('Sync complete!');
-            setTimeout(() => setSyncStatus(''), 3000);
-          }
-          refetch();
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          setSyncError(`Sync failed: ${msg}`);
-          console.error('Sync failed:', err);
-        } finally {
-          setSyncing(false);
-        }
+        startSync();
       }
     },
-    [refetch],
+    [startSync],
   );
 
   return (
@@ -83,7 +56,9 @@ export function CommandCenter() {
       <header className="border-b border-gray-200 bg-white px-6 py-4 dark:border-gray-700 dark:bg-gray-800">
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Command Center</h1>
+            <h1 className="text-2xl font-bold text-gray-900 dark:text-white">
+              Command Center
+            </h1>
             <p className="mt-0.5 text-sm text-gray-500 dark:text-gray-400">
               Your email intelligence dashboard
             </p>
@@ -215,7 +190,7 @@ export function CommandCenter() {
               {syncError && (
                 <button
                   type="button"
-                  onClick={() => setSyncError('')}
+                  onClick={clearError}
                   className="ml-auto font-medium underline"
                 >
                   Dismiss
@@ -228,7 +203,11 @@ export function CommandCenter() {
           <StatsCards stats={stats} isLoading={isLoading} />
 
           {/* Quick actions */}
-          <QuickActions onAction={handleQuickAction} syncing={syncing} hasAccounts={hasAccounts} />
+          <QuickActions
+            onAction={handleQuickAction}
+            syncing={syncing}
+            hasAccounts={hasAccounts}
+          />
 
           {/* Two-column layout for activity and clusters */}
           <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">

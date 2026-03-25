@@ -8,7 +8,7 @@ import {
   Navigate,
 } from '@tanstack/react-router';
 import { Layout } from './Layout';
-import { getAccounts, startIngestion } from '@emailibrium/api';
+import { useSyncStore } from '@/shared/stores/syncStore';
 
 // Lazy-loaded feature components
 const CommandCenter = lazy(() =>
@@ -50,18 +50,16 @@ const rootRoute = createRootRoute({
 function OAuthReturnHandler() {
   const params = new URLSearchParams(window.location.search);
   const status = params.get('status');
+  const startSync = useSyncStore((s) => s.startSync);
 
   useEffect(() => {
     if (status === 'connected') {
-      // Auto-start ingestion for all active accounts after OAuth success.
-      getAccounts()
-        .then((accounts) => {
-          const active = accounts.filter((a) => a.isActive);
-          return Promise.all(active.map((a) => startIngestion(a.id)));
-        })
-        .catch(() => {});
+      // Auto-start sync for all active accounts after OAuth success.
+      // The sync runs in the background via the global store — state persists
+      // across navigation so the Dashboard will show progress when it mounts.
+      startSync();
     }
-  }, [status]);
+  }, [status, startSync]);
 
   return <Navigate to="/command-center" />;
 }
