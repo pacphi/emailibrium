@@ -28,6 +28,9 @@ const RulesStudio = lazy(() =>
 const Settings = lazy(() =>
   import('@/features/settings/Settings').then((m) => ({ default: m.Settings })),
 );
+const ChatInterface = lazy(() =>
+  import('@/features/chat/ChatInterface').then((m) => ({ default: m.ChatInterface })),
+);
 const OnboardingFlow = lazy(() =>
   import('@/features/onboarding/OnboardingFlow').then((m) => ({ default: m.OnboardingFlow })),
 );
@@ -109,6 +112,16 @@ const settingsRoute = createRoute({
   ),
 });
 
+const chatRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/chat',
+  component: () => (
+    <Suspense fallback={LoadingFallback}>
+      <ChatInterface />
+    </Suspense>
+  ),
+});
+
 const onboardingRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/onboarding',
@@ -126,6 +139,7 @@ const routeTree = rootRoute.addChildren([
   insightsRoute,
   emailRoute,
   rulesRoute,
+  chatRoute,
   settingsRoute,
   onboardingRoute,
 ]);
