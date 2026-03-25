@@ -646,7 +646,7 @@ impl HybridSearch {
         // used by the vector similarity pipeline.
         let rows: Vec<(String, f64)> = sqlx::query_as(
             r#"
-            SELECT email_id, -rank AS score
+            SELECT id, -rank AS score
             FROM email_fts
             WHERE email_fts MATCH ?1
             ORDER BY rank
@@ -1040,11 +1040,11 @@ mod tests {
         .await
         .unwrap();
 
-        // Create FTS5 virtual table and sync triggers (mirrors migration 004).
+        // Create FTS5 virtual table and sync triggers (mirrors migration 005).
         sqlx::query(
             r#"
             CREATE VIRTUAL TABLE IF NOT EXISTS email_fts USING fts5(
-                email_id,
+                id,
                 subject,
                 from_addr,
                 body_text,
