@@ -13,7 +13,7 @@
 
 use axum::{
     extract::{ConnectInfo, Request},
-    http::{StatusCode, header::HeaderName},
+    http::{header::HeaderName, StatusCode},
     middleware::Next,
     response::{IntoResponse, Response},
 };

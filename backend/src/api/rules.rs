@@ -27,7 +27,10 @@ use crate::AppState;
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/", get(list_rules).post(create_rule))
-        .route("/{id}", get(get_rule).put(update_rule).delete(delete_rule_handler))
+        .route(
+            "/{id}",
+            get(get_rule).put(update_rule).delete(delete_rule_handler),
+        )
         .route("/validate", post(validate_rule))
         .route("/test", post(test_rule))
 }
@@ -313,9 +316,7 @@ async fn delete_rule_handler(
 }
 
 /// POST /api/v1/rules/validate -- validate without saving.
-async fn validate_rule(
-    Json(req): Json<ValidateRequest>,
-) -> Json<ValidationResponse> {
+async fn validate_rule(Json(req): Json<ValidateRequest>) -> Json<ValidationResponse> {
     let rule = Rule {
         id: "validation-check".to_string(),
         name: if req.name.is_empty() {
@@ -352,9 +353,7 @@ async fn validate_rule(
 }
 
 /// POST /api/v1/rules/test -- test a rule against a sample email.
-async fn test_rule(
-    Json(req): Json<TestRuleRequest>,
-) -> Json<TestResponse> {
+async fn test_rule(Json(req): Json<TestRuleRequest>) -> Json<TestResponse> {
     use crate::rules::rule_processor;
     use crate::rules::types::PendingAction;
 

@@ -113,9 +113,7 @@ pub fn parse_gmail_history(resp: &serde_json::Value) -> Result<GmailHistoryDelta
         }
 
         for label_add in &record.labels_added {
-            let entry = label_map
-                .entry(label_add.message.id.clone())
-                .or_default();
+            let entry = label_map.entry(label_add.message.id.clone()).or_default();
             for label in &label_add.label_ids {
                 if !entry.0.contains(label) {
                     entry.0.push(label.clone());

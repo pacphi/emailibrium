@@ -308,17 +308,10 @@ mod tests {
     #[async_trait]
     impl GenerativeModel for MockChatModel {
         async fn generate(&self, prompt: &str, _max_tokens: u32) -> Result<String, VectorError> {
-            Ok(format!(
-                "Mock response (prompt length: {})",
-                prompt.len()
-            ))
+            Ok(format!("Mock response (prompt length: {})", prompt.len()))
         }
 
-        async fn classify(
-            &self,
-            _text: &str,
-            categories: &[&str],
-        ) -> Result<String, VectorError> {
+        async fn classify(&self, _text: &str, categories: &[&str]) -> Result<String, VectorError> {
             Ok(categories.first().unwrap_or(&"Unknown").to_string())
         }
 
@@ -332,11 +325,7 @@ mod tests {
     }
 
     fn make_service() -> ChatService {
-        ChatService::new(
-            Duration::from_secs(3600),
-            20,
-            Arc::new(MockChatModel),
-        )
+        ChatService::new(Duration::from_secs(3600), 20, Arc::new(MockChatModel))
     }
 
     #[tokio::test]

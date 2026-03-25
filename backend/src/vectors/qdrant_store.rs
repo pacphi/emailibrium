@@ -92,12 +92,10 @@ impl QdrantVectorStore {
         let url = format!("{}/collections/{}", self.config.url, name);
 
         // Check if collection exists.
-        let resp = self
-            .client
-            .get(&url)
-            .send()
-            .await
-            .map_err(|e| VectorError::StoreFailed(format!("qdrant GET collection failed: {e}")))?;
+        let resp =
+            self.client.get(&url).send().await.map_err(|e| {
+                VectorError::StoreFailed(format!("qdrant GET collection failed: {e}"))
+            })?;
 
         if resp.status().is_success() {
             return Ok(());
@@ -117,9 +115,7 @@ impl QdrantVectorStore {
             .json(&body)
             .send()
             .await
-            .map_err(|e| {
-                VectorError::StoreFailed(format!("qdrant PUT collection failed: {e}"))
-            })?;
+            .map_err(|e| VectorError::StoreFailed(format!("qdrant PUT collection failed: {e}")))?;
 
         if !resp.status().is_success() {
             let text = resp.text().await.unwrap_or_default();
@@ -146,10 +142,7 @@ impl QdrantVectorStore {
     /// Build the Qdrant points delete URL for a collection.
     fn delete_url(&self, collection: &VectorCollection) -> String {
         let name = qdrant_collection_name(&self.config.collection_prefix, collection);
-        format!(
-            "{}/collections/{}/points/delete",
-            self.config.url, name
-        )
+        format!("{}/collections/{}/points/delete", self.config.url, name)
     }
 
     /// Convert document metadata to Qdrant payload JSON.
@@ -433,9 +426,10 @@ impl super::store::VectorStoreBackend for QdrantVectorStore {
 
     async fn health(&self) -> Result<bool, VectorError> {
         let url = format!("{}/healthz", self.config.url);
-        let resp = self.client.get(&url).send().await.map_err(|e| {
-            VectorError::StoreFailed(format!("qdrant health check failed: {e}"))
-        })?;
+        let resp =
+            self.client.get(&url).send().await.map_err(|e| {
+                VectorError::StoreFailed(format!("qdrant health check failed: {e}"))
+            })?;
         Ok(resp.status().is_success())
     }
 

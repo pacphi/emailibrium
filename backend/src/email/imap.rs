@@ -164,11 +164,7 @@ fn extract_quoted_after(s: &str, keyword: &str) -> Option<String> {
 
 fn envelope_to_message(env: ImapEnvelope) -> EmailMessage {
     let is_read = env.flags.iter().any(|f| f == "Seen");
-    let labels: Vec<String> = env
-        .flags
-        .iter()
-        .map(|f| format!("\\{f}"))
-        .collect();
+    let labels: Vec<String> = env.flags.iter().map(|f| format!("\\{f}")).collect();
 
     EmailMessage {
         id: env.uid.clone(),
@@ -368,11 +364,7 @@ impl EmailProvider for ImapProvider {
     }
 
     /// Archive a message by moving it to the archive folder.
-    async fn archive_message(
-        &self,
-        _access_token: &str,
-        id: &str,
-    ) -> Result<(), ProviderError> {
+    async fn archive_message(&self, _access_token: &str, id: &str) -> Result<(), ProviderError> {
         self.validate_config()?;
 
         // In production:
@@ -428,11 +420,7 @@ impl EmailProvider for ImapProvider {
     }
 
     /// Create a label by creating an IMAP folder (mailbox).
-    async fn create_label(
-        &self,
-        _access_token: &str,
-        name: &str,
-    ) -> Result<String, ProviderError> {
+    async fn create_label(&self, _access_token: &str, name: &str) -> Result<String, ProviderError> {
         self.validate_config()?;
 
         // In production:
@@ -656,10 +644,7 @@ Subject: Second
 
     #[test]
     fn test_extract_between() {
-        assert_eq!(
-            extract_between("UID 123 FLAGS", "UID ", " "),
-            Some("123")
-        );
+        assert_eq!(extract_between("UID 123 FLAGS", "UID ", " "), Some("123"));
         assert_eq!(extract_between("no match", "X", "Y"), None);
     }
 

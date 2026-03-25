@@ -270,17 +270,15 @@ impl PrivacyService {
         .await?;
 
         Ok(row.map(
-            |(id, ct, granted, granted_at, revoked_at, ip, ua, created)| {
-                ConsentDecision {
-                    id,
-                    consent_type: ct,
-                    granted: granted != 0,
-                    granted_at: granted_at.and_then(|s| parse_datetime(&s)),
-                    revoked_at: revoked_at.and_then(|s| parse_datetime(&s)),
-                    ip_address: ip,
-                    user_agent: ua,
-                    created_at: parse_datetime(&created).unwrap_or_else(Utc::now),
-                }
+            |(id, ct, granted, granted_at, revoked_at, ip, ua, created)| ConsentDecision {
+                id,
+                consent_type: ct,
+                granted: granted != 0,
+                granted_at: granted_at.and_then(|s| parse_datetime(&s)),
+                revoked_at: revoked_at.and_then(|s| parse_datetime(&s)),
+                ip_address: ip,
+                user_agent: ua,
+                created_at: parse_datetime(&created).unwrap_or_else(Utc::now),
             },
         ))
     }
@@ -314,17 +312,15 @@ impl PrivacyService {
         Ok(rows
             .into_iter()
             .map(
-                |(id, ct, granted, granted_at, revoked_at, ip, ua, created)| {
-                    ConsentDecision {
-                        id,
-                        consent_type: ct,
-                        granted: granted != 0,
-                        granted_at: granted_at.and_then(|s| parse_datetime(&s)),
-                        revoked_at: revoked_at.and_then(|s| parse_datetime(&s)),
-                        ip_address: ip,
-                        user_agent: ua,
-                        created_at: parse_datetime(&created).unwrap_or_else(Utc::now),
-                    }
+                |(id, ct, granted, granted_at, revoked_at, ip, ua, created)| ConsentDecision {
+                    id,
+                    consent_type: ct,
+                    granted: granted != 0,
+                    granted_at: granted_at.and_then(|s| parse_datetime(&s)),
+                    revoked_at: revoked_at.and_then(|s| parse_datetime(&s)),
+                    ip_address: ip,
+                    user_agent: ua,
+                    created_at: parse_datetime(&created).unwrap_or_else(Utc::now),
                 },
             )
             .collect())
@@ -364,10 +360,9 @@ impl PrivacyService {
         let offset = (page.saturating_sub(1)) as i64 * per_page as i64;
         let limit = per_page as i64;
 
-        let (total,): (i64,) =
-            sqlx::query_as("SELECT COUNT(*) FROM privacy_audit_log")
-                .fetch_one(&self.db.pool)
-                .await?;
+        let (total,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM privacy_audit_log")
+            .fetch_one(&self.db.pool)
+            .await?;
 
         let rows: Vec<(
             i64,
@@ -432,23 +427,30 @@ impl PrivacyService {
         let consent_decisions = self.list_consents().await?;
 
         // Export emails.
-        let email_rows: Vec<(String, Option<String>, Option<String>, Option<String>, Option<String>)> =
-            sqlx::query_as(
-                "SELECT id, from_addr, subject, received_at, category \
+        let email_rows: Vec<(
+            String,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+        )> = sqlx::query_as(
+            "SELECT id, from_addr, subject, received_at, category \
                  FROM emails ORDER BY received_at DESC",
-            )
-            .fetch_all(&self.db.pool)
-            .await?;
+        )
+        .fetch_all(&self.db.pool)
+        .await?;
 
         let emails: Vec<ExportedEmail> = email_rows
             .into_iter()
-            .map(|(id, from_addr, subject, received_at, category)| ExportedEmail {
-                id,
-                from_addr: from_addr.unwrap_or_default(),
-                subject: subject.unwrap_or_default(),
-                received_at: received_at.unwrap_or_default(),
-                category,
-            })
+            .map(
+                |(id, from_addr, subject, received_at, category)| ExportedEmail {
+                    id,
+                    from_addr: from_addr.unwrap_or_default(),
+                    subject: subject.unwrap_or_default(),
+                    received_at: received_at.unwrap_or_default(),
+                    category,
+                },
+            )
             .collect();
 
         // Collect audit summary.
@@ -504,23 +506,20 @@ impl PrivacyService {
             .await
             .unwrap_or((0,));
 
-        let (vector_count,): (i64,) =
-            sqlx::query_as("SELECT COUNT(*) FROM vector_store")
-                .fetch_one(&self.db.pool)
-                .await
-                .unwrap_or((0,));
+        let (vector_count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM vector_store")
+            .fetch_one(&self.db.pool)
+            .await
+            .unwrap_or((0,));
 
-        let (consent_count,): (i64,) =
-            sqlx::query_as("SELECT COUNT(*) FROM consent_decisions")
-                .fetch_one(&self.db.pool)
-                .await
-                .unwrap_or((0,));
+        let (consent_count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM consent_decisions")
+            .fetch_one(&self.db.pool)
+            .await
+            .unwrap_or((0,));
 
-        let (audit_count,): (i64,) =
-            sqlx::query_as("SELECT COUNT(*) FROM privacy_audit_log")
-                .fetch_one(&self.db.pool)
-                .await
-                .unwrap_or((0,));
+        let (audit_count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM privacy_audit_log")
+            .fetch_one(&self.db.pool)
+            .await
+            .unwrap_or((0,));
 
         // Delete user data (emails, vectors, consent).
         sqlx::query("DELETE FROM emails")
@@ -562,11 +561,10 @@ impl PrivacyService {
     // -- Helpers -----------------------------------------------------------
 
     async fn build_audit_summary(&self) -> Result<AuditSummary, VectorError> {
-        let (total,): (i64,) =
-            sqlx::query_as("SELECT COUNT(*) FROM privacy_audit_log")
-                .fetch_one(&self.db.pool)
-                .await
-                .unwrap_or((0,));
+        let (total,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM privacy_audit_log")
+            .fetch_one(&self.db.pool)
+            .await
+            .unwrap_or((0,));
 
         let (data_access,): (i64,) = sqlx::query_as(
             "SELECT COUNT(*) FROM privacy_audit_log WHERE event_type = 'data_access'",

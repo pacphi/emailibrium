@@ -251,12 +251,11 @@ impl OfflineQueue {
         let now = Utc::now().to_rfc3339();
 
         // Fetch current retry state.
-        let row: Option<(i64, i64)> = sqlx::query_as(
-            "SELECT retry_count, max_retries FROM sync_queue WHERE id = ?",
-        )
-        .bind(id)
-        .fetch_optional(&self.pool)
-        .await?;
+        let row: Option<(i64, i64)> =
+            sqlx::query_as("SELECT retry_count, max_retries FROM sync_queue WHERE id = ?")
+                .bind(id)
+                .fetch_optional(&self.pool)
+                .await?;
 
         let (retry_count, max_retries) = row.unwrap_or((0, 3));
         let new_retry = retry_count + 1;
@@ -335,7 +334,10 @@ impl OfflineQueue {
 // ---------------------------------------------------------------------------
 
 fn row_to_op(row: QueueRow) -> QueuedOperation {
-    let operation_type = row.2.parse::<OperationType>().unwrap_or(OperationType::Archive);
+    let operation_type = row
+        .2
+        .parse::<OperationType>()
+        .unwrap_or(OperationType::Archive);
     let status = row.5.parse::<QueueStatus>().unwrap_or(QueueStatus::Pending);
     let payload = row.4.as_deref().and_then(|s| serde_json::from_str(s).ok());
     let created_at = chrono::DateTime::parse_from_rfc3339(&row.8)
@@ -494,7 +496,10 @@ mod tests {
 
         let op = make_op("msg-1");
         let id = queue.enqueue(&op).await.unwrap();
-        queue.mark_conflict(&id, "message deleted on server").await.unwrap();
+        queue
+            .mark_conflict(&id, "message deleted on server")
+            .await
+            .unwrap();
 
         let pending = queue.list_pending("acct-1").await.unwrap();
         assert!(pending.is_empty());

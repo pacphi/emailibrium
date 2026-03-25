@@ -216,12 +216,8 @@ impl ProviderSyncService for ProviderSync {
     ) -> Result<DeltaResult, ProviderError> {
         // Try provider-specific delta APIs first, fall back to list-based.
         match self.provider_kind {
-            Some(ProviderKind::Gmail) => {
-                self.detect_delta_gmail(access_token, state).await
-            }
-            Some(ProviderKind::Outlook) => {
-                self.detect_delta_outlook(access_token, state).await
-            }
+            Some(ProviderKind::Gmail) => self.detect_delta_gmail(access_token, state).await,
+            Some(ProviderKind::Outlook) => self.detect_delta_outlook(access_token, state).await,
             _ => self.detect_delta_fallback(access_token, state).await,
         }
     }
@@ -257,8 +253,8 @@ impl ProviderSync {
             .await
             .map_err(|e| ProviderError::ParseError(e.to_string()))?;
 
-        let delta = super::delta::parse_gmail_history(&resp)
-            .map_err(|e| ProviderError::ParseError(e))?;
+        let delta =
+            super::delta::parse_gmail_history(&resp).map_err(|e| ProviderError::ParseError(e))?;
 
         // Map label changes to "updated" messages.
         let updated_ids: Vec<String> = delta
@@ -286,10 +282,8 @@ impl ProviderSync {
 
         let url = match delta_link {
             Some(link) => link.to_string(),
-            None => {
-                "https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages/delta?$top=50"
-                    .to_string()
-            }
+            None => "https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages/delta?$top=50"
+                .to_string(),
         };
 
         let resp: serde_json::Value = reqwest::Client::new()
@@ -302,8 +296,8 @@ impl ProviderSync {
             .await
             .map_err(|e| ProviderError::ParseError(e.to_string()))?;
 
-        let delta = super::delta::parse_outlook_delta(&resp)
-            .map_err(|e| ProviderError::ParseError(e))?;
+        let delta =
+            super::delta::parse_outlook_delta(&resp).map_err(|e| ProviderError::ParseError(e))?;
 
         Ok(DeltaResult {
             new_message_ids: delta.added_or_modified_ids,

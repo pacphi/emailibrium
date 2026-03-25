@@ -9,7 +9,6 @@ pub mod categorizer;
 pub mod chat;
 pub mod clustering;
 pub mod config;
-pub mod hdbscan;
 pub mod consent;
 pub mod embedding;
 pub mod encryption;
@@ -18,6 +17,7 @@ pub mod evaluation;
 pub mod ewc;
 pub mod generative;
 pub mod generative_router;
+pub mod hdbscan;
 pub mod inference_session;
 pub mod ingestion;
 pub mod insights;
@@ -99,12 +99,16 @@ impl VectorService {
             }
             "qdrant" => {
                 let qdrant_cfg = qdrant_store::QdrantConfig {
-                    url: config.store.qdrant_url.clone().unwrap_or_else(|| {
-                        "http://localhost:6333".to_string()
-                    }),
-                    collection_prefix: config.store.qdrant_collection_prefix.clone().unwrap_or_else(|| {
-                        "emailibrium".to_string()
-                    }),
+                    url: config
+                        .store
+                        .qdrant_url
+                        .clone()
+                        .unwrap_or_else(|| "http://localhost:6333".to_string()),
+                    collection_prefix: config
+                        .store
+                        .qdrant_collection_prefix
+                        .clone()
+                        .unwrap_or_else(|| "emailibrium".to_string()),
                     api_key: config.store.qdrant_api_key.clone(),
                     dimensions: config.embedding.dimensions,
                 };

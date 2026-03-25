@@ -86,9 +86,7 @@ pub fn parse_condition(json: &serde_json::Value) -> Result<RuleCondition> {
     bail!("Unable to parse condition from JSON: {json}")
 }
 
-fn parse_children(
-    obj: &serde_json::Map<String, serde_json::Value>,
-) -> Result<Vec<RuleCondition>> {
+fn parse_children(obj: &serde_json::Map<String, serde_json::Value>) -> Result<Vec<RuleCondition>> {
     let arr = obj
         .get("conditions")
         .and_then(|v| v.as_array())
@@ -96,9 +94,7 @@ fn parse_children(
     arr.iter().map(parse_condition).collect()
 }
 
-fn parse_single_child(
-    obj: &serde_json::Map<String, serde_json::Value>,
-) -> Result<RuleCondition> {
+fn parse_single_child(obj: &serde_json::Map<String, serde_json::Value>) -> Result<RuleCondition> {
     if let Some(cond) = obj.get("condition") {
         return parse_condition(cond);
     }
@@ -413,7 +409,12 @@ mod tests {
     #[test]
     fn nl_from_pattern() {
         let cond = parse_natural_language("from boss@company.com").unwrap();
-        if let RuleCondition::FieldMatch { field, operator, value } = cond {
+        if let RuleCondition::FieldMatch {
+            field,
+            operator,
+            value,
+        } = cond
+        {
             assert_eq!(field, EmailField::From);
             assert_eq!(operator, MatchOperator::Contains);
             assert_eq!(value, "boss@company.com");
@@ -427,14 +428,22 @@ mod tests {
         let cond = parse_natural_language("to team@company.com").unwrap();
         assert!(matches!(
             cond,
-            RuleCondition::FieldMatch { field: EmailField::To, .. }
+            RuleCondition::FieldMatch {
+                field: EmailField::To,
+                ..
+            }
         ));
     }
 
     #[test]
     fn nl_subject_contains() {
         let cond = parse_natural_language("subject contains URGENT").unwrap();
-        if let RuleCondition::FieldMatch { field, operator, value } = cond {
+        if let RuleCondition::FieldMatch {
+            field,
+            operator,
+            value,
+        } = cond
+        {
             assert_eq!(field, EmailField::Subject);
             assert_eq!(operator, MatchOperator::Contains);
             assert_eq!(value, "URGENT");
@@ -482,15 +491,13 @@ mod tests {
 
     #[test]
     fn nl_and_combinator() {
-        let cond =
-            parse_natural_language("from boss@co.com and subject contains review").unwrap();
+        let cond = parse_natural_language("from boss@co.com and subject contains review").unwrap();
         assert!(matches!(cond, RuleCondition::And { .. }));
     }
 
     #[test]
     fn nl_or_combinator() {
-        let cond =
-            parse_natural_language("from alice@co.com or from bob@co.com").unwrap();
+        let cond = parse_natural_language("from alice@co.com or from bob@co.com").unwrap();
         assert!(matches!(cond, RuleCondition::Or { .. }));
     }
 

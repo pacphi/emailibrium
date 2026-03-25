@@ -192,9 +192,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_reloadable_config_reload_error() {
-        let config = ReloadableConfig::new(1u32, || {
-            Err(anyhow::anyhow!("load failed"))
-        });
+        let config = ReloadableConfig::new(1u32, || Err(anyhow::anyhow!("load failed")));
         let result = config.reload().await;
         assert!(result.is_err());
         // Original value preserved.

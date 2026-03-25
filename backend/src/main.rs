@@ -256,9 +256,11 @@ async fn main() -> anyhow::Result<()> {
     if config.security.rate_limit.enabled {
         let capacity = config.security.rate_limit.burst_size as f64;
         let refill_rate = config.security.rate_limit.requests_per_second as f64;
-        let limiter = std::sync::Arc::new(
-            middleware::rate_limit::RateLimiter::new_in_memory(capacity, refill_rate, "global".to_string()),
-        );
+        let limiter = std::sync::Arc::new(middleware::rate_limit::RateLimiter::new_in_memory(
+            capacity,
+            refill_rate,
+            "global".to_string(),
+        ));
         app = app.layer(axum::Extension(limiter));
         tracing::info!(
             "Rate limiting enabled ({} req/s, burst {})",

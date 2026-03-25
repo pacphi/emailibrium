@@ -22,9 +22,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use crate::vectors::consent::{AuditPage, ConsentRecord};
-use crate::vectors::privacy::{
-    ConsentDecision, ErasureReport, PrivacyAuditPage, UserDataExport,
-};
+use crate::vectors::privacy::{ConsentDecision, ErasureReport, PrivacyAuditPage, UserDataExport};
 use crate::AppState;
 
 /// Build consent API routes.

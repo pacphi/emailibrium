@@ -406,7 +406,10 @@ async fn sync_account_reports_correct_counts() {
     let sync = ProviderSync::new(provider, 50);
     let state = make_sync_state();
 
-    let result = sync.sync_account("test-acct", "token", &state).await.unwrap();
+    let result = sync
+        .sync_account("test-acct", "token", &state)
+        .await
+        .unwrap();
     assert_eq!(result.emails_fetched, 10);
     assert_eq!(result.account_id, "test-acct");
     assert!(result.duration_ms < 5000);

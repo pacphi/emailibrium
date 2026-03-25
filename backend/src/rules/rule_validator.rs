@@ -34,7 +34,11 @@ pub struct ValidationWarning {
 
 impl std::fmt::Display for ValidationWarning {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "[{}] rule '{}': {}", self.severity, self.rule_id, self.message)
+        write!(
+            f,
+            "[{}] rule '{}': {}",
+            self.severity, self.rule_id, self.message
+        )
     }
 }
 
@@ -91,7 +95,10 @@ fn validate_basic(rule: &Rule, warnings: &mut Vec<ValidationWarning>) {
 }
 
 fn validate_contradictions(rule: &Rule, warnings: &mut Vec<ValidationWarning>) {
-    let has_archive = rule.actions.iter().any(|a| matches!(a, RuleAction::Archive));
+    let has_archive = rule
+        .actions
+        .iter()
+        .any(|a| matches!(a, RuleAction::Archive));
     let has_delete = rule.actions.iter().any(|a| matches!(a, RuleAction::Delete));
 
     if has_archive && has_delete {
@@ -126,9 +133,7 @@ fn validate_contradictions(rule: &Rule, warnings: &mut Vec<ValidationWarning>) {
             warnings.push(ValidationWarning {
                 severity: Severity::Error,
                 rule_id: rule.id.clone(),
-                message: format!(
-                    "Contradictory actions: AddLabel and RemoveLabel for '{label}'"
-                ),
+                message: format!("Contradictory actions: AddLabel and RemoveLabel for '{label}'"),
             });
         }
     }
@@ -157,10 +162,16 @@ fn validate_condition_tree(
     }
 
     match cond {
-        RuleCondition::FieldMatch { field, operator, value } => {
+        RuleCondition::FieldMatch {
+            field,
+            operator,
+            value,
+        } => {
             // Validate that numeric operators are only used with Date field.
-            if matches!(operator, MatchOperator::GreaterThan | MatchOperator::LessThan)
-                && !matches!(field, EmailField::Date)
+            if matches!(
+                operator,
+                MatchOperator::GreaterThan | MatchOperator::LessThan
+            ) && !matches!(field, EmailField::Date)
             {
                 warnings.push(ValidationWarning {
                     severity: Severity::Warning,
@@ -188,10 +199,7 @@ fn validate_condition_tree(
                 warnings.push(ValidationWarning {
                     severity: Severity::Warning,
                     rule_id: rule_id.to_string(),
-                    message: format!(
-                        "Empty value for field match on '{}'",
-                        field.as_str()
-                    ),
+                    message: format!("Empty value for field match on '{}'", field.as_str()),
                 });
             }
         }
@@ -207,9 +215,7 @@ fn validate_condition_tree(
                 warnings.push(ValidationWarning {
                     severity: Severity::Error,
                     rule_id: rule_id.to_string(),
-                    message: format!(
-                        "Semantic threshold {threshold} must be between 0.0 and 1.0"
-                    ),
+                    message: format!("Semantic threshold {threshold} must be between 0.0 and 1.0"),
                 });
             }
         }
@@ -335,11 +341,7 @@ mod tests {
     use crate::rules::types::*;
     use chrono::Utc;
 
-    fn make_rule(
-        id: &str,
-        conditions: Vec<RuleCondition>,
-        actions: Vec<RuleAction>,
-    ) -> Rule {
+    fn make_rule(id: &str, conditions: Vec<RuleCondition>, actions: Vec<RuleAction>) -> Rule {
         Rule {
             id: id.to_string(),
             name: format!("Rule {id}"),
@@ -380,8 +382,9 @@ mod tests {
             vec![RuleAction::Archive, RuleAction::Delete],
         );
         let warnings = validate_rule(&rule);
-        assert!(warnings.iter().any(|w| w.severity == Severity::Error
-            && w.message.contains("Contradictory")));
+        assert!(warnings
+            .iter()
+            .any(|w| w.severity == Severity::Error && w.message.contains("Contradictory")));
     }
 
     #[test]

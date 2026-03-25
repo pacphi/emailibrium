@@ -861,8 +861,7 @@ impl ClusterEngine {
             .collect();
 
         // Branch on algorithm selection.
-        let cluster_members: HashMap<usize, Vec<usize>> = if self.config.algorithm == "hdbscan"
-        {
+        let cluster_members: HashMap<usize, Vec<usize>> = if self.config.algorithm == "hdbscan" {
             // HDBSCAN: density-based clustering directly on raw embeddings.
             tracing::info!("Clustering algorithm: HDBSCAN");
             let hdbscan_config = super::hdbscan::HdbscanConfig {

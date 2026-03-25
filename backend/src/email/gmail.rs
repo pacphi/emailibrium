@@ -513,9 +513,7 @@ impl GmailProvider {
         start_history_id: &str,
         page_token: Option<&str>,
     ) -> Result<serde_json::Value, ProviderError> {
-        let mut url = format!(
-            "{GMAIL_API_BASE}/history?startHistoryId={start_history_id}"
-        );
+        let mut url = format!("{GMAIL_API_BASE}/history?startHistoryId={start_history_id}");
 
         if let Some(pt) = page_token {
             url.push_str(&format!("&pageToken={pt}"));
@@ -647,7 +645,11 @@ impl GmailProvider {
     ) -> Result<Vec<super::types::EmailMessage>, ProviderError> {
         use futures::stream::{self, StreamExt};
 
-        let concurrency = if max_concurrent == 0 { 10 } else { max_concurrent };
+        let concurrency = if max_concurrent == 0 {
+            10
+        } else {
+            max_concurrent
+        };
 
         let results: Vec<Result<super::types::EmailMessage, ProviderError>> =
             stream::iter(message_ids.iter())
@@ -773,12 +775,8 @@ mod tests {
         let resp = HistoryResponse {
             messages_added: vec!["msg-1".to_string(), "msg-2".to_string()],
             messages_deleted: vec!["msg-3".to_string()],
-            labels_added: vec![
-                ("msg-1".to_string(), vec!["STARRED".to_string()]),
-            ],
-            labels_removed: vec![
-                ("msg-1".to_string(), vec!["UNREAD".to_string()]),
-            ],
+            labels_added: vec![("msg-1".to_string(), vec!["STARRED".to_string()])],
+            labels_removed: vec![("msg-1".to_string(), vec!["UNREAD".to_string()])],
             new_history_id: "12345".to_string(),
         };
         assert_eq!(resp.messages_added.len(), 2);
@@ -801,7 +799,12 @@ mod tests {
             "error": { "code": 429, "message": "Rate limit exceeded" }
         });
         let err = check_error_response(&resp).unwrap_err();
-        assert!(matches!(err, ProviderError::RateLimited { retry_after_secs: 60 }));
+        assert!(matches!(
+            err,
+            ProviderError::RateLimited {
+                retry_after_secs: 60
+            }
+        ));
     }
 
     #[test]

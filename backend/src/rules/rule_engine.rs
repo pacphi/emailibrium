@@ -48,15 +48,11 @@ impl RuleEngine {
             let created_at: chrono::DateTime<Utc> = row.get("created_at");
             let updated_at: chrono::DateTime<Utc> = row.get("updated_at");
 
-            let conditions: Vec<RuleCondition> =
-                serde_json::from_str(&conditions_json).with_context(|| {
-                    format!("Failed to deserialise conditions for rule '{id}'")
-                })?;
+            let conditions: Vec<RuleCondition> = serde_json::from_str(&conditions_json)
+                .with_context(|| format!("Failed to deserialise conditions for rule '{id}'"))?;
 
-            let actions: Vec<RuleAction> =
-                serde_json::from_str(&actions_json).with_context(|| {
-                    format!("Failed to deserialise actions for rule '{id}'")
-                })?;
+            let actions: Vec<RuleAction> = serde_json::from_str(&actions_json)
+                .with_context(|| format!("Failed to deserialise actions for rule '{id}'"))?;
 
             rules.push(Rule {
                 id,
@@ -79,8 +75,8 @@ impl RuleEngine {
     pub async fn save_rule(pool: &SqlitePool, rule: &Rule) -> Result<()> {
         let conditions_json = serde_json::to_string(&rule.conditions)
             .context("Failed to serialise rule conditions")?;
-        let actions_json = serde_json::to_string(&rule.actions)
-            .context("Failed to serialise rule actions")?;
+        let actions_json =
+            serde_json::to_string(&rule.actions).context("Failed to serialise rule actions")?;
 
         sqlx::query(
             r#"
@@ -149,8 +145,7 @@ impl RuleEngine {
             Some(row) => {
                 let conditions: Vec<RuleCondition> =
                     serde_json::from_str(row.get("conditions_json"))?;
-                let actions: Vec<RuleAction> =
-                    serde_json::from_str(row.get("actions_json"))?;
+                let actions: Vec<RuleAction> = serde_json::from_str(row.get("actions_json"))?;
 
                 Ok(Some(Rule {
                     id: row.get("id"),

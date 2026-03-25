@@ -1,8 +1,6 @@
 //! Rule processor -- evaluates rules against emails and generates pending actions (R-03).
 
-use super::types::{
-    EmailField, MatchOperator, PendingAction, Rule, RuleAction, RuleCondition,
-};
+use super::types::{EmailField, MatchOperator, PendingAction, Rule, RuleAction, RuleCondition};
 use crate::email::types::EmailMessage;
 use regex::Regex;
 
@@ -15,9 +13,7 @@ pub fn evaluate_rule(rule: &Rule, email: &EmailMessage) -> bool {
     if !rule.enabled {
         return false;
     }
-    rule.conditions
-        .iter()
-        .all(|c| evaluate_condition(c, email))
+    rule.conditions.iter().all(|c| evaluate_condition(c, email))
 }
 
 /// Generate pending actions from a list of rule actions without executing them.
@@ -72,9 +68,7 @@ fn evaluate_condition(cond: &RuleCondition, email: &EmailMessage) -> bool {
         RuleCondition::And { conditions } => {
             conditions.iter().all(|c| evaluate_condition(c, email))
         }
-        RuleCondition::Or { conditions } => {
-            conditions.iter().any(|c| evaluate_condition(c, email))
-        }
+        RuleCondition::Or { conditions } => conditions.iter().any(|c| evaluate_condition(c, email)),
         RuleCondition::Not { condition } => !evaluate_condition(condition, email),
     }
 }
@@ -109,11 +103,9 @@ fn apply_operator(op: &MatchOperator, field_value: &str, match_value: &str) -> b
         MatchOperator::Equals => fv == mv,
         MatchOperator::StartsWith => fv.starts_with(&mv),
         MatchOperator::EndsWith => fv.ends_with(&mv),
-        MatchOperator::Regex => {
-            Regex::new(match_value)
-                .map(|re| re.is_match(field_value))
-                .unwrap_or(false)
-        }
+        MatchOperator::Regex => Regex::new(match_value)
+            .map(|re| re.is_match(field_value))
+            .unwrap_or(false),
         MatchOperator::GreaterThan => fv > mv,
         MatchOperator::LessThan => fv < mv,
     }
@@ -143,11 +135,7 @@ mod tests {
         }
     }
 
-    fn make_rule(
-        id: &str,
-        conditions: Vec<RuleCondition>,
-        actions: Vec<RuleAction>,
-    ) -> Rule {
+    fn make_rule(id: &str, conditions: Vec<RuleCondition>, actions: Vec<RuleAction>) -> Rule {
         Rule {
             id: id.to_string(),
             name: format!("Rule {id}"),

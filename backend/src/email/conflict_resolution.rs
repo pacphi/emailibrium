@@ -288,14 +288,9 @@ impl ConflictResolver {
 // ---------------------------------------------------------------------------
 
 fn row_to_conflict(row: ConflictRow) -> SyncConflict {
-    let local_state =
-        serde_json::from_str(&row.2).unwrap_or_else(|_| serde_json::Value::Null);
-    let remote_state =
-        serde_json::from_str(&row.3).unwrap_or_else(|_| serde_json::Value::Null);
-    let resolution = row
-        .4
-        .as_deref()
-        .and_then(|s| s.parse::<Resolution>().ok());
+    let local_state = serde_json::from_str(&row.2).unwrap_or_else(|_| serde_json::Value::Null);
+    let remote_state = serde_json::from_str(&row.3).unwrap_or_else(|_| serde_json::Value::Null);
+    let resolution = row.4.as_deref().and_then(|s| s.parse::<Resolution>().ok());
     let resolved_at = row
         .5
         .as_deref()
@@ -491,7 +486,10 @@ mod tests {
 
     #[test]
     fn test_conflict_strategy_default() {
-        assert_eq!(ConflictStrategy::default(), ConflictStrategy::LastWriterWins);
+        assert_eq!(
+            ConflictStrategy::default(),
+            ConflictStrategy::LastWriterWins
+        );
     }
 
     #[test]

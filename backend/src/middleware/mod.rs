@@ -9,5 +9,5 @@ pub mod rate_limit;
 pub mod security_headers;
 
 pub use log_scrubbing::{log_scrubbing_middleware, scrub_error_message, scrub_sensitive_data};
-pub use rate_limit::{RateLimitConfig, RateLimiter, rate_limit_middleware};
+pub use rate_limit::{rate_limit_middleware, RateLimitConfig, RateLimiter};
 pub use security_headers::security_headers_middleware;

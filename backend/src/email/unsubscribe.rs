@@ -106,9 +106,7 @@ pub fn parse_unsubscribe_header(
     header_value: &str,
     post_header: Option<&str>,
 ) -> Vec<UnsubscribeMethod> {
-    let has_post = post_header
-        .map(|v| !v.trim().is_empty())
-        .unwrap_or(false);
+    let has_post = post_header.map(|v| !v.trim().is_empty()).unwrap_or(false);
 
     let mut methods = Vec::new();
 
@@ -142,16 +140,14 @@ pub fn parse_unsubscribe_header(
 /// Parse a mailto URI, extracting the email address and optional subject.
 fn parse_mailto(mailto: &str) -> (String, Option<String>) {
     if let Some((email, query)) = mailto.split_once('?') {
-        let subject = query
-            .split('&')
-            .find_map(|param| {
-                let (key, value) = param.split_once('=')?;
-                if key.eq_ignore_ascii_case("subject") {
-                    Some(urlencoding::decode(value).unwrap_or_default().into_owned())
-                } else {
-                    None
-                }
-            });
+        let subject = query.split('&').find_map(|param| {
+            let (key, value) = param.split_once('=')?;
+            if key.eq_ignore_ascii_case("subject") {
+                Some(urlencoding::decode(value).unwrap_or_default().into_owned())
+            } else {
+                None
+            }
+        });
         (email.to_string(), subject)
     } else {
         (mailto.to_string(), None)
@@ -163,11 +159,17 @@ fn parse_mailto(mailto: &str) -> (String, Option<String>) {
 /// Preference order: HTTP POST (RFC 8058, most reliable) > HTTP GET > mailto.
 pub fn best_method(methods: &[UnsubscribeMethod]) -> Option<&UnsubscribeMethod> {
     // Prefer HttpPost first.
-    if let Some(m) = methods.iter().find(|m| matches!(m, UnsubscribeMethod::HttpPost { .. })) {
+    if let Some(m) = methods
+        .iter()
+        .find(|m| matches!(m, UnsubscribeMethod::HttpPost { .. }))
+    {
         return Some(m);
     }
     // Then HttpGet.
-    if let Some(m) = methods.iter().find(|m| matches!(m, UnsubscribeMethod::HttpGet { .. })) {
+    if let Some(m) = methods
+        .iter()
+        .find(|m| matches!(m, UnsubscribeMethod::HttpGet { .. }))
+    {
         return Some(m);
     }
     // Finally mailto.
@@ -301,10 +303,7 @@ impl UnsubscribeService {
     /// For each target, parses the List-Unsubscribe header, selects the best
     /// method, and executes it. Results are collected and an undo buffer entry
     /// is created for the batch.
-    pub async fn batch_unsubscribe(
-        &self,
-        subscriptions: Vec<SubscriptionTarget>,
-    ) -> BatchResult {
+    pub async fn batch_unsubscribe(&self, subscriptions: Vec<SubscriptionTarget>) -> BatchResult {
         let batch_id = Uuid::new_v4().to_string();
         let total = subscriptions.len();
         let mut results = Vec::with_capacity(total);
@@ -525,8 +524,7 @@ mod tests {
 
     #[test]
     fn test_parse_http_and_mailto() {
-        let header =
-            "<mailto:unsub@example.com>, <https://example.com/unsub?token=abc>";
+        let header = "<mailto:unsub@example.com>, <https://example.com/unsub?token=abc>";
         let methods = parse_unsubscribe_header(header, None);
         assert_eq!(methods.len(), 2);
         assert!(matches!(&methods[0], UnsubscribeMethod::Mailto { .. }));
@@ -536,8 +534,7 @@ mod tests {
     #[test]
     fn test_parse_http_post_with_rfc8058() {
         let header = "<https://example.com/unsub>";
-        let methods =
-            parse_unsubscribe_header(header, Some("List-Unsubscribe=One-Click"));
+        let methods = parse_unsubscribe_header(header, Some("List-Unsubscribe=One-Click"));
         assert_eq!(methods.len(), 1);
         assert!(matches!(&methods[0], UnsubscribeMethod::HttpPost { .. }));
     }
@@ -649,9 +646,7 @@ mod tests {
 
         let targets = vec![SubscriptionTarget {
             sender: "news@example.com".to_string(),
-            list_unsubscribe_header: Some(
-                "<https://example.com/unsub>".to_string(),
-            ),
+            list_unsubscribe_header: Some("<https://example.com/unsub>".to_string()),
             list_unsubscribe_post: Some("List-Unsubscribe=One-Click".to_string()),
             email_id: None,
         }];
@@ -675,9 +670,7 @@ mod tests {
 
         let targets = vec![SubscriptionTarget {
             sender: "spam@example.com".to_string(),
-            list_unsubscribe_header: Some(
-                "<mailto:unsub@spam.com>".to_string(),
-            ),
+            list_unsubscribe_header: Some("<mailto:unsub@spam.com>".to_string()),
             list_unsubscribe_post: None,
             email_id: None,
         }];
@@ -746,8 +739,7 @@ mod tests {
         let header = "<mailto:unsub@a.com?subject=unsub>, \
                        <https://a.com/unsub>, \
                        <http://fallback.com/unsub>";
-        let methods =
-            parse_unsubscribe_header(header, Some("List-Unsubscribe=One-Click"));
+        let methods = parse_unsubscribe_header(header, Some("List-Unsubscribe=One-Click"));
 
         assert_eq!(methods.len(), 3);
         assert!(matches!(&methods[0], UnsubscribeMethod::Mailto { .. }));

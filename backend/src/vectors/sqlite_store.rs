@@ -55,9 +55,7 @@ impl SqliteVectorStore {
         )
         .execute(&pool)
         .await
-        .map_err(|e| {
-            VectorError::StoreFailed(format!("sqlite index creation failed: {e}"))
-        })?;
+        .map_err(|e| VectorError::StoreFailed(format!("sqlite index creation failed: {e}")))?;
 
         // Index on collection for filtered listing.
         sqlx::query(
@@ -68,9 +66,7 @@ impl SqliteVectorStore {
         )
         .execute(&pool)
         .await
-        .map_err(|e| {
-            VectorError::StoreFailed(format!("sqlite index creation failed: {e}"))
-        })?;
+        .map_err(|e| VectorError::StoreFailed(format!("sqlite index creation failed: {e}")))?;
 
         Ok(Self { pool })
     }
@@ -148,8 +144,7 @@ fn row_to_document(
     let created_at = chrono::DateTime::parse_from_rfc3339(created_at_str)
         .ok()?
         .with_timezone(&Utc);
-    let metadata: HashMap<String, String> =
-        serde_json::from_str(metadata_json).unwrap_or_default();
+    let metadata: HashMap<String, String> = serde_json::from_str(metadata_json).unwrap_or_default();
 
     Some(VectorDocument {
         id: VectorId(uuid),
@@ -249,9 +244,9 @@ impl super::store::VectorStoreBackend for SqliteVectorStore {
             ids.push(id);
         }
 
-        tx.commit().await.map_err(|e| {
-            VectorError::StoreFailed(format!("sqlite commit failed: {e}"))
-        })?;
+        tx.commit()
+            .await
+            .map_err(|e| VectorError::StoreFailed(format!("sqlite commit failed: {e}")))?;
 
         Ok(ids)
     }
@@ -423,29 +418,23 @@ impl super::store::VectorStoreBackend for SqliteVectorStore {
         let _: (i64,) = sqlx::query_as("SELECT 1")
             .fetch_one(&self.pool)
             .await
-            .map_err(|e| {
-                VectorError::StoreFailed(format!("sqlite health check failed: {e}"))
-            })?;
+            .map_err(|e| VectorError::StoreFailed(format!("sqlite health check failed: {e}")))?;
         Ok(true)
     }
 
     async fn stats(&self) -> Result<VectorStats, VectorError> {
-        let (total,): (i64,) =
-            sqlx::query_as("SELECT COUNT(*) FROM vector_documents")
-                .fetch_one(&self.pool)
-                .await
-                .map_err(|e| {
-                    VectorError::StoreFailed(format!("sqlite stats count failed: {e}"))
-                })?;
+        let (total,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM vector_documents")
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| VectorError::StoreFailed(format!("sqlite stats count failed: {e}")))?;
         let total_vectors = total as u64;
 
         // Per-collection counts.
-        let rows: Vec<(String, i64)> = sqlx::query_as(
-            "SELECT collection, COUNT(*) FROM vector_documents GROUP BY collection",
-        )
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|e| VectorError::StoreFailed(format!("sqlite stats group failed: {e}")))?;
+        let rows: Vec<(String, i64)> =
+            sqlx::query_as("SELECT collection, COUNT(*) FROM vector_documents GROUP BY collection")
+                .fetch_all(&self.pool)
+                .await
+                .map_err(|e| VectorError::StoreFailed(format!("sqlite stats group failed: {e}")))?;
 
         let mut collections: HashMap<String, u64> = HashMap::new();
         for (coll, cnt) in rows {
@@ -456,14 +445,10 @@ impl super::store::VectorStoreBackend for SqliteVectorStore {
 
         // Get dimensions from first vector.
         let dimensions: usize = if total_vectors > 0 {
-            let (blob,): (Vec<u8>,) = sqlx::query_as(
-                "SELECT vector FROM vector_documents LIMIT 1",
-            )
-            .fetch_one(&self.pool)
-            .await
-            .map_err(|e| {
-                VectorError::StoreFailed(format!("sqlite stats dims failed: {e}"))
-            })?;
+            let (blob,): (Vec<u8>,) = sqlx::query_as("SELECT vector FROM vector_documents LIMIT 1")
+                .fetch_one(&self.pool)
+                .await
+                .map_err(|e| VectorError::StoreFailed(format!("sqlite stats dims failed: {e}")))?;
             blob.len() / 4
         } else {
             0
@@ -483,13 +468,10 @@ impl super::store::VectorStoreBackend for SqliteVectorStore {
     }
 
     async fn count(&self) -> Result<u64, VectorError> {
-        let (total,): (i64,) =
-            sqlx::query_as("SELECT COUNT(*) FROM vector_documents")
-                .fetch_one(&self.pool)
-                .await
-                .map_err(|e| {
-                    VectorError::StoreFailed(format!("sqlite count failed: {e}"))
-                })?;
+        let (total,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM vector_documents")
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| VectorError::StoreFailed(format!("sqlite count failed: {e}")))?;
         Ok(total as u64)
     }
 
@@ -514,9 +496,7 @@ impl super::store::VectorStoreBackend for SqliteVectorStore {
         .bind(offset as i64)
         .fetch_all(&self.pool)
         .await
-        .map_err(|e| {
-            VectorError::StoreFailed(format!("sqlite list_by_collection failed: {e}"))
-        })?;
+        .map_err(|e| VectorError::StoreFailed(format!("sqlite list_by_collection failed: {e}")))?;
 
         let docs: Vec<VectorDocument> = rows
             .iter()
@@ -540,11 +520,7 @@ mod tests {
             .expect("failed to create in-memory SQLite pool")
     }
 
-    fn make_doc(
-        email_id: &str,
-        vector: Vec<f32>,
-        collection: VectorCollection,
-    ) -> VectorDocument {
+    fn make_doc(email_id: &str, vector: Vec<f32>, collection: VectorCollection) -> VectorDocument {
         VectorDocument {
             id: VectorId::new(),
             email_id: email_id.to_string(),
