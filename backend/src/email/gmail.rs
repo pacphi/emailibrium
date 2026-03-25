@@ -565,30 +565,54 @@ impl EmailProvider for GmailProvider {
         use super::provider::{FolderOrLabel, MoveKind};
 
         let labels = self.list_labels(access_token).await?;
-        let system_labels = [
-            "INBOX",
-            "SENT",
-            "TRASH",
-            "SPAM",
-            "DRAFT",
+
+        // System labels that are valid move targets.
+        let movable_system = ["INBOX", "SENT", "TRASH", "SPAM", "DRAFT", "IMPORTANT"];
+        // System labels to hide (status flags, internal labels, superstars).
+        let hidden = [
             "STARRED",
             "UNREAD",
-            "IMPORTANT",
+            "CHAT",
+            "YELLOW_STAR",
+            "ORANGE_STAR",
+            "RED_STAR",
+            "PURPLE_STAR",
+            "BLUE_STAR",
+            "GREEN_STAR",
+            "RED_BANG",
+            "ORANGE_GUILLEMET",
+            "YELLOW_BANG",
+            "GREEN_CHECK",
+            "BLUE_INFO",
+            "PURPLE_QUESTION",
         ];
+
+        let friendly = |id: &str, name: &str| -> String {
+            match id {
+                "INBOX" => "Inbox".into(),
+                "SENT" => "Sent".into(),
+                "TRASH" => "Trash".into(),
+                "SPAM" => "Spam".into(),
+                "DRAFT" => "Drafts".into(),
+                "IMPORTANT" => "Important".into(),
+                _ => name.to_string(),
+            }
+        };
 
         Ok(labels
             .into_iter()
+            .filter(|(id, _)| !hidden.contains(&id.as_str()) && !id.starts_with("CATEGORY_"))
             .map(|(id, name)| {
-                let is_system = system_labels.contains(&id.as_str());
-                let kind = if is_system {
-                    MoveKind::Folder
-                } else {
-                    MoveKind::Label
-                };
+                let is_system = movable_system.contains(&id.as_str());
+                let display = friendly(&id, &name);
                 FolderOrLabel {
                     id,
-                    name,
-                    kind,
+                    name: display,
+                    kind: if is_system {
+                        MoveKind::Folder
+                    } else {
+                        MoveKind::Label
+                    },
                     is_system,
                 }
             })

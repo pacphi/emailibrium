@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
-import { X, FolderInput, Search, Plus, Tag, Inbox } from 'lucide-react';
+import { X, FolderInput, Search, Plus, Tag, Inbox, Mail } from 'lucide-react';
 import type { FolderOrLabel } from '@emailibrium/api';
 
 interface MoveDialogProps {
@@ -78,7 +78,7 @@ export function MoveDialog({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+      className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 backdrop-blur-sm"
       onClick={handleBackdropClick}
       role="dialog"
       aria-modal="true"
@@ -86,7 +86,7 @@ export function MoveDialog({
     >
       <div
         ref={dialogRef}
-        className="w-full max-w-md rounded-xl bg-white shadow-2xl dark:bg-gray-800"
+        className="w-full max-w-lg rounded-xl bg-white shadow-2xl dark:bg-gray-800"
       >
         {/* Header */}
         <div className="flex items-center justify-between border-b border-gray-200 px-4 py-3 dark:border-gray-700">
@@ -107,7 +107,8 @@ export function MoveDialog({
         </div>
 
         {/* Email subject preview */}
-        <div className="border-b border-gray-100 px-4 py-2 dark:border-gray-700">
+        <div className="flex items-center gap-2 border-b border-gray-100 px-4 py-2 dark:border-gray-700">
+          <Mail className="h-3.5 w-3.5 shrink-0 text-gray-400 dark:text-gray-500" />
           <p className="truncate text-xs text-gray-500 dark:text-gray-400">
             {emailSubject}
           </p>
@@ -129,7 +130,7 @@ export function MoveDialog({
         </div>
 
         {/* Folder/label list */}
-        <div className="max-h-64 overflow-y-auto py-1">
+        <div className="max-h-96 overflow-y-auto py-1">
           {/* System folders */}
           {systemFolders.length > 0 && (
             <div>

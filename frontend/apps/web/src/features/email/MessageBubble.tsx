@@ -23,14 +23,22 @@ function SanitizedHtml({ html }: { html: string }) {
   );
 }
 
+/** Parse "Display Name <email@example.com>" into { name, email }. */
+function parseFrom(raw: string): { name: string; email: string } {
+  const match = raw.match(/^"?(.+?)"?\s*<(.+?)>$/);
+  if (match) return { name: match[1]!, email: match[2]! };
+  return { name: '', email: raw };
+}
+
 export function MessageBubble({ email, isLatest }: MessageBubbleProps) {
   const [isExpanded, setIsExpanded] = useState(isLatest);
   const dateStr = format(new Date(email.receivedAt), 'MMM d, yyyy h:mm a');
+  const from = parseFrom(email.fromName || email.fromAddr);
 
   return (
     <article
       className="rounded-lg border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800"
-      aria-label={`Message from ${email.fromName || email.fromAddr}`}
+      aria-label={`Message from ${from.name || from.email}`}
     >
       {/* Header */}
       <button
@@ -40,18 +48,18 @@ export function MessageBubble({ email, isLatest }: MessageBubbleProps) {
         aria-expanded={isExpanded}
       >
         <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-indigo-100 text-xs font-semibold text-indigo-700 dark:bg-indigo-900 dark:text-indigo-200">
-          {(email.fromName || email.fromAddr || '?')[0]?.toUpperCase()}
+          {(from.name || from.email || '?')[0]?.toUpperCase()}
         </div>
         <div className="min-w-0 flex-1">
           <div className="flex items-baseline gap-2">
             <span className="truncate text-sm font-semibold text-gray-900 dark:text-white">
-              {email.fromName || email.fromAddr}
+              {from.name || from.email}
             </span>
-            <span className="text-xs text-gray-400 dark:text-gray-500">
-              {'<'}
-              {email.fromAddr}
-              {'>'}
-            </span>
+            {from.name && (
+              <span className="truncate text-xs text-gray-400 dark:text-gray-500">
+                {from.email}
+              </span>
+            )}
           </div>
           {!isExpanded && (
             <p className="truncate text-xs text-gray-500 dark:text-gray-400">
