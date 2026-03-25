@@ -19,6 +19,7 @@ interface EmailListProps {
   onArchiveEmail: (emailId: string) => void;
   onDeleteEmail: (emailId: string) => void;
   onMoveOpen?: (emailId: string) => void;
+  onMarkUnread?: (emailId: string) => void;
 }
 
 export function EmailList({
@@ -36,6 +37,7 @@ export function EmailList({
   hasNextPage,
   isFetchingNextPage,
   onFetchNextPage,
+  onMarkUnread,
 }: EmailListProps) {
   const parentRef = useRef<HTMLDivElement>(null);
 
@@ -149,6 +151,7 @@ export function EmailList({
                 onArchive={onArchiveEmail}
                 onDelete={onDeleteEmail}
                 onMoveOpen={onMoveOpen}
+                onMarkUnread={onMarkUnread}
               />
             </div>
           );

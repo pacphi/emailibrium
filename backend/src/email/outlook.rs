@@ -615,6 +615,31 @@ impl EmailProvider for OutlookProvider {
         Ok(())
     }
 
+    async fn mark_read(
+        &self,
+        access_token: &str,
+        message_id: &str,
+        read: bool,
+    ) -> Result<(), ProviderError> {
+        let body = serde_json::json!({ "isRead": read });
+        let resp = self
+            .http
+            .patch(format!("{GRAPH_API_BASE}/messages/{message_id}"))
+            .bearer_auth(access_token)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| ProviderError::RequestFailed(e.to_string()))?;
+
+        if !resp.status().is_success() {
+            let err_body = resp.text().await.unwrap_or_default();
+            return Err(ProviderError::RequestFailed(format!(
+                "Mark read failed: {err_body}"
+            )));
+        }
+        Ok(())
+    }
+
     async fn star_message(
         &self,
         access_token: &str,

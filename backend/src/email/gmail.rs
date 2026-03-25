@@ -660,6 +660,35 @@ impl EmailProvider for GmailProvider {
         Ok(())
     }
 
+    async fn mark_read(
+        &self,
+        access_token: &str,
+        message_id: &str,
+        read: bool,
+    ) -> Result<(), ProviderError> {
+        // Gmail: UNREAD is a label. Read = remove UNREAD; Unread = add UNREAD.
+        let body = if read {
+            serde_json::json!({ "removeLabelIds": ["UNREAD"] })
+        } else {
+            serde_json::json!({ "addLabelIds": ["UNREAD"] })
+        };
+
+        let resp: serde_json::Value = self
+            .http
+            .post(format!("{GMAIL_API_BASE}/messages/{message_id}/modify"))
+            .bearer_auth(access_token)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| ProviderError::RequestFailed(e.to_string()))?
+            .json()
+            .await
+            .map_err(|e| ProviderError::ParseError(e.to_string()))?;
+
+        check_error_response(&resp)?;
+        Ok(())
+    }
+
     async fn star_message(
         &self,
         access_token: &str,

@@ -1,5 +1,5 @@
 import { forwardRef, useState } from 'react';
-import { Star, Archive, Trash2, FolderInput, Paperclip } from 'lucide-react';
+import { Star, Archive, Trash2, FolderInput, Paperclip, MailOpen } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import type { Email } from '@emailibrium/types';
 
@@ -13,6 +13,7 @@ interface EmailListItemProps {
   onArchive: (emailId: string) => void;
   onDelete: (emailId: string) => void;
   onMoveOpen?: (emailId: string) => void;
+  onMarkUnread?: (emailId: string) => void;
 }
 
 const providerBadge: Record<string, { label: string; className: string }> = {
@@ -47,7 +48,7 @@ function getPreview(email: Email): string {
 
 export const EmailListItem = forwardRef<HTMLDivElement, EmailListItemProps>(
   function EmailListItem(
-    { email, isSelected, isChecked, onSelect, onCheck, onStar, onArchive, onDelete, onMoveOpen },
+    { email, isSelected, isChecked, onSelect, onCheck, onStar, onArchive, onDelete, onMoveOpen, onMarkUnread },
     ref,
   ) {
     const [showActions, setShowActions] = useState(false);
@@ -185,6 +186,20 @@ export const EmailListItem = forwardRef<HTMLDivElement, EmailListItemProps>(
               >
                 <Archive className="h-4 w-4" />
               </button>
+              {email.isRead && onMarkUnread && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onMarkUnread(email.id);
+                  }}
+                  className="rounded p-1 text-gray-400 hover:bg-gray-200 hover:text-gray-600 dark:hover:bg-gray-700 dark:hover:text-gray-300"
+                  aria-label="Mark as unread"
+                  title="Mark as unread"
+                >
+                  <MailOpen className="h-4 w-4" />
+                </button>
+              )}
               <button
                 type="button"
                 onClick={(e) => {

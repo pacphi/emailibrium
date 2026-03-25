@@ -32,6 +32,7 @@ export {
   getThread,
   archiveEmail,
   starEmail,
+  markEmailRead,
   deleteEmail,
   sendEmail,
   replyToEmail,

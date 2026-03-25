@@ -43,6 +43,10 @@ export async function starEmail(id: string): Promise<void> {
   await api.post(`emails/${id}/star`);
 }
 
+export async function markEmailRead(id: string, read: boolean): Promise<void> {
+  await api.post(`emails/${id}/read`, { json: { read } });
+}
+
 export async function deleteEmail(id: string): Promise<void> {
   await api.delete(`emails/${id}`);
 }

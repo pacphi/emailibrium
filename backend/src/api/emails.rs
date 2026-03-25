@@ -27,6 +27,7 @@ pub fn routes() -> Router<AppState> {
         .route("/{id}", get(get_email).delete(delete_email))
         .route("/{id}/archive", post(archive_email))
         .route("/{id}/star", post(star_email))
+        .route("/{id}/read", post(mark_read_email))
         .route("/{id}/move", post(move_email))
 }
 
@@ -351,6 +352,40 @@ async fn star_email(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     debug!(email_id = %id, starred = new_starred, "Star toggled");
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MarkReadBody {
+    pub read: bool,
+}
+
+/// POST /api/v1/emails/:id/read — mark email as read or unread.
+async fn mark_read_email(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<MarkReadBody>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    debug!(email_id = %id, read = body.read, "Marking email read/unread");
+
+    // Sync to provider (best-effort).
+    if let Ok(account_id) = get_email_account_id(&state, &id).await {
+        if let Ok((provider, token, _)) = resolve_provider_and_token(&state, &account_id).await {
+            if let Err(e) = provider.mark_read(&token, &id, body.read).await {
+                debug!(email_id = %id, "Provider mark_read failed (continuing locally): {e}");
+            }
+        }
+    }
+
+    sqlx::query("UPDATE emails SET is_read = ?1 WHERE id = ?2")
+        .bind(body.read)
+        .bind(&id)
+        .execute(&state.db.pool)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    debug!(email_id = %id, read = body.read, "Read status updated");
     Ok(StatusCode::NO_CONTENT)
 }
 

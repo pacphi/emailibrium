@@ -19,6 +19,7 @@ import {
   useBulkDelete,
   useLabelsQuery,
   useMoveEmail,
+  useMarkRead,
 } from './hooks/useEmails';
 
 // Default sidebar groups -- in production these would come from an API or store.
@@ -69,6 +70,7 @@ export function EmailClient() {
   const bulkArchiveMutation = useBulkArchive();
   const bulkDeleteMutation = useBulkDelete();
   const moveMutation = useMoveEmail();
+  const markReadMutation = useMarkRead();
 
   // Determine account ID from the first email for label fetching.
   const currentAccountId = emails.length > 0 ? emails[0]?.accountId : undefined;
@@ -96,10 +98,18 @@ export function EmailClient() {
     setMobilePanel('list');
   }, []);
 
-  const handleSelectEmail = useCallback((emailId: string) => {
-    setSelectedEmailId(emailId);
-    setMobilePanel('thread');
-  }, []);
+  const handleSelectEmail = useCallback(
+    (emailId: string) => {
+      setSelectedEmailId(emailId);
+      setMobilePanel('thread');
+      // Auto-mark as read when selecting an unread email.
+      const email = emails.find((e) => e.id === emailId);
+      if (email && !email.isRead) {
+        markReadMutation.mutate({ id: emailId, read: true });
+      }
+    },
+    [emails, markReadMutation],
+  );
 
   const handleCheckEmail = useCallback((emailId: string, checked: boolean) => {
     setCheckedIds((prev) => {
@@ -286,6 +296,7 @@ export function EmailClient() {
           onArchiveEmail={handleArchiveEmail}
           onDeleteEmail={handleDeleteEmailFromList}
           onMoveOpen={handleMoveOpen}
+          onMarkUnread={(id) => markReadMutation.mutate({ id, read: false })}
           hasNextPage={emailsQuery.hasNextPage}
           isFetchingNextPage={emailsQuery.isFetchingNextPage}
           onFetchNextPage={() => emailsQuery.fetchNextPage()}

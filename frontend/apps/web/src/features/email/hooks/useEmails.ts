@@ -13,6 +13,7 @@ import {
   bulkDelete,
   getLabels,
   moveEmail,
+  markEmailRead,
 } from '@emailibrium/api';
 import type { GetEmailsParams, SendEmailDraft, FolderOrLabel } from '@emailibrium/api';
 import type { Email, EmailThread } from '@emailibrium/types';
@@ -67,6 +68,17 @@ export function useStarEmail() {
     mutationFn: starEmail,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['emails'] });
+    },
+  });
+}
+
+export function useMarkRead() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, read }: { id: string; read: boolean }) => markEmailRead(id, read),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['emails'] });
+      queryClient.invalidateQueries({ queryKey: ['thread'] });
     },
   });
 }

@@ -150,6 +150,19 @@ pub trait EmailProvider: Send + Sync {
         ))
     }
 
+    /// Mark a message as read or unread on the provider.
+    /// Gmail: add/remove UNREAD label. Outlook: PATCH isRead.
+    async fn mark_read(
+        &self,
+        _access_token: &str,
+        _message_id: &str,
+        _read: bool,
+    ) -> Result<(), ProviderError> {
+        Err(ProviderError::ConfigError(
+            "mark_read not supported by this provider".into(),
+        ))
+    }
+
     /// Star/flag a message on the provider. Gmail: add STARRED label.
     /// Outlook: set flag.flagStatus to "flagged".
     async fn star_message(
