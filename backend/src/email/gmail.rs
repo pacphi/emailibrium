@@ -50,21 +50,36 @@ impl GmailProvider {
 
     /// Fetch the authenticated user's email address from the Gmail profile.
     pub async fn get_user_email(&self, access_token: &str) -> Result<String, ProviderError> {
-        let resp: serde_json::Value = self
+        let http_resp = self
             .http
             .get(format!("{GMAIL_API_BASE}/profile"))
             .bearer_auth(access_token)
             .send()
             .await
-            .map_err(|e| ProviderError::RequestFailed(e.to_string()))?
+            .map_err(|e| ProviderError::RequestFailed(e.to_string()))?;
+
+        let status = http_resp.status();
+        let body: serde_json::Value = http_resp
             .json()
             .await
             .map_err(|e| ProviderError::ParseError(e.to_string()))?;
 
-        resp["emailAddress"]
+        if !status.is_success() {
+            let api_error = body["error"]["message"]
+                .as_str()
+                .unwrap_or("unknown error");
+            return Err(ProviderError::RequestFailed(format!(
+                "Gmail profile API returned {status}: {api_error}"
+            )));
+        }
+
+        body["emailAddress"]
             .as_str()
             .map(|s| s.to_string())
-            .ok_or_else(|| ProviderError::ParseError("Missing emailAddress in profile".into()))
+            .ok_or_else(|| {
+                tracing::warn!("Gmail profile response missing emailAddress: {body}");
+                ProviderError::ParseError("Missing emailAddress in profile".into())
+            })
     }
 
     /// Parse a Gmail API message JSON into an EmailMessage.
