@@ -1062,7 +1062,7 @@ mod tests {
         sqlx::query(
             r#"
             CREATE TRIGGER IF NOT EXISTS emails_ai AFTER INSERT ON emails BEGIN
-                INSERT INTO email_fts(rowid, email_id, subject, from_addr, body_text, labels)
+                INSERT INTO email_fts(rowid, id, subject, from_addr, body_text, labels)
                 VALUES (new.rowid, new.id, new.subject, new.from_addr, new.body_text, new.labels);
             END
             "#,
@@ -1074,7 +1074,7 @@ mod tests {
         sqlx::query(
             r#"
             CREATE TRIGGER IF NOT EXISTS emails_ad AFTER DELETE ON emails BEGIN
-                INSERT INTO email_fts(email_fts, rowid, email_id, subject, from_addr, body_text, labels)
+                INSERT INTO email_fts(email_fts, rowid, id, subject, from_addr, body_text, labels)
                 VALUES ('delete', old.rowid, old.id, old.subject, old.from_addr, old.body_text, old.labels);
             END
             "#,
@@ -1086,9 +1086,9 @@ mod tests {
         sqlx::query(
             r#"
             CREATE TRIGGER IF NOT EXISTS emails_au AFTER UPDATE ON emails BEGIN
-                INSERT INTO email_fts(email_fts, rowid, email_id, subject, from_addr, body_text, labels)
+                INSERT INTO email_fts(email_fts, rowid, id, subject, from_addr, body_text, labels)
                 VALUES ('delete', old.rowid, old.id, old.subject, old.from_addr, old.body_text, old.labels);
-                INSERT INTO email_fts(rowid, email_id, subject, from_addr, body_text, labels)
+                INSERT INTO email_fts(rowid, id, subject, from_addr, body_text, labels)
                 VALUES (new.rowid, new.id, new.subject, new.from_addr, new.body_text, new.labels);
             END
             "#,
