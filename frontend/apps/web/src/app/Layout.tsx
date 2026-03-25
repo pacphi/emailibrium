@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { useSettings } from '../features/settings/hooks/useSettings';
 
 interface LayoutProps {
   children: ReactNode;
@@ -6,8 +7,13 @@ interface LayoutProps {
 
 /** App shell layout with sidebar navigation and main content area. */
 export function Layout({ children }: LayoutProps) {
+  const { sidebarPosition } = useSettings();
+  const isRight = sidebarPosition === 'right';
+
   return (
-    <div className="flex h-screen bg-gray-50 dark:bg-gray-900">
+    <div
+      className={`flex h-screen bg-gray-50 dark:bg-gray-900 ${isRight ? 'flex-row-reverse' : ''}`}
+    >
       <Sidebar />
       <main className="flex-1 overflow-auto">{children}</main>
     </div>
@@ -15,8 +21,13 @@ export function Layout({ children }: LayoutProps) {
 }
 
 function Sidebar() {
+  const { sidebarPosition } = useSettings();
+  const borderClass = sidebarPosition === 'right' ? 'border-l' : 'border-r';
+
   return (
-    <nav className="w-64 border-r border-gray-200 bg-white dark:bg-gray-800 dark:border-gray-700 flex flex-col">
+    <nav
+      className={`w-64 ${borderClass} border-gray-200 bg-white dark:bg-gray-800 dark:border-gray-700 flex flex-col`}
+    >
       <div className="p-4 border-b border-gray-200 dark:border-gray-700">
         <h1 className="text-xl font-bold text-indigo-600">Emailibrium</h1>
       </div>
