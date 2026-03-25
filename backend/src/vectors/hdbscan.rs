@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! HDBSCAN: Hierarchical Density-Based Spatial Clustering of Applications with Noise.
 //!
 //! Algorithm (ADR-009 alternative to GraphSAGE + KMeans++):

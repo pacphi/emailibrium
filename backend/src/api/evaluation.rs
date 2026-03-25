@@ -4,14 +4,17 @@
 //! - GET /api/v1/evaluation/clustering-quality  — silhouette + ARI on current clusters
 
 use axum::{
-    extract::{Query, State},
+    extract::{Path, Query, State},
     http::StatusCode,
-    routing::get,
+    routing::{get, post},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+use crate::vectors::evaluation::{
+    self as eval_engine, ABTest, ABTestSummary, TestStatus, VariantConfig,
+};
 use crate::vectors::metrics::{
     adjusted_rand_index, detection_metrics, euclidean_distance, generate_evaluation_report, mrr,
     ndcg_at_k, precision_at_k, recall_at_k, silhouette_score, ConfusionMatrix,
@@ -25,6 +28,11 @@ pub fn routes() -> Router<AppState> {
         .route("/search-quality", get(search_quality))
         .route("/clustering-quality", get(clustering_quality))
         .route("/report", get(evaluation_report))
+        .route("/ab-tests", get(list_ab_tests).post(create_ab_test))
+        .route("/ab-tests/{test_id}", get(get_ab_test))
+        .route("/ab-tests/{test_id}/conclude", post(conclude_ab_test))
+        .route("/ab-tests/{test_id}/observe", post(record_ab_observation))
+        .route("/ir-metrics", post(compute_ir_metrics))
 }
 
 // --- Request / Response types ---
@@ -302,4 +310,166 @@ async fn evaluation_report(
         subscription_recall: report.subscription_detection.as_ref().map(|d| d.recall),
         subscription_f1: report.subscription_detection.as_ref().map(|d| d.f1),
     }))
+}
+
+// ---------------------------------------------------------------------------
+// A/B test endpoints (wired to EvaluationEngine from vectors/evaluation.rs)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Deserialize)]
+struct CreateABTestRequest {
+    name: String,
+    variant_a: VariantConfig,
+    variant_b: VariantConfig,
+    #[serde(default = "default_traffic_split")]
+    traffic_split: f32,
+}
+
+fn default_traffic_split() -> f32 {
+    0.5
+}
+
+/// POST /api/v1/evaluation/ab-tests — create a new A/B test.
+async fn create_ab_test(
+    State(state): State<AppState>,
+    Json(req): Json<CreateABTestRequest>,
+) -> Result<Json<ABTest>, (StatusCode, String)> {
+    let engine = &state.vector_service.evaluation_engine;
+    let test = engine
+        .create_test(req.name, req.variant_a, req.variant_b, req.traffic_split)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Json(test))
+}
+
+#[derive(Debug, Deserialize)]
+struct ListABTestsQuery {
+    status: Option<String>,
+}
+
+/// GET /api/v1/evaluation/ab-tests — list all A/B tests.
+async fn list_ab_tests(
+    State(state): State<AppState>,
+    Query(params): Query<ListABTestsQuery>,
+) -> Json<Vec<ABTest>> {
+    let engine = &state.vector_service.evaluation_engine;
+    let status_filter = params.status.and_then(|s| match s.as_str() {
+        "running" => Some(TestStatus::Running),
+        "concluded" => Some(TestStatus::Concluded),
+        "cancelled" => Some(TestStatus::Cancelled),
+        _ => None,
+    });
+    Json(engine.list_tests(status_filter).await)
+}
+
+/// GET /api/v1/evaluation/ab-tests/:test_id — get a single A/B test.
+async fn get_ab_test(
+    State(state): State<AppState>,
+    Path(test_id): Path<String>,
+) -> Result<Json<ABTest>, (StatusCode, String)> {
+    let engine = &state.vector_service.evaluation_engine;
+    let test = engine
+        .get_test(&test_id)
+        .await
+        .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
+    Ok(Json(test))
+}
+
+/// POST /api/v1/evaluation/ab-tests/:test_id/conclude — conclude an A/B test.
+async fn conclude_ab_test(
+    State(state): State<AppState>,
+    Path(test_id): Path<String>,
+) -> Result<Json<ABTestSummary>, (StatusCode, String)> {
+    let engine = &state.vector_service.evaluation_engine;
+    let summary = engine
+        .conclude_test(&test_id)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Json(summary))
+}
+
+#[derive(Debug, Deserialize)]
+struct RecordObservationRequest {
+    variant: String,
+    mrr: f64,
+    precision: f64,
+    recall: f64,
+    ndcg: f64,
+}
+
+/// POST /api/v1/evaluation/ab-tests/:test_id/observe — record an observation.
+async fn record_ab_observation(
+    State(state): State<AppState>,
+    Path(test_id): Path<String>,
+    Json(req): Json<RecordObservationRequest>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    let engine = &state.vector_service.evaluation_engine;
+    engine
+        .record_observation(
+            &test_id,
+            &req.variant,
+            req.mrr,
+            req.precision,
+            req.recall,
+            req.ndcg,
+        )
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+// ---------------------------------------------------------------------------
+// Standalone IR metric computation endpoint (vectors/evaluation.rs helpers)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Deserialize)]
+struct IrMetricsRequest {
+    /// 1-based positions of relevant results.
+    #[serde(default)]
+    relevant_positions: Vec<usize>,
+    /// Number of relevant results in the top K.
+    #[serde(default)]
+    relevant_in_topk: usize,
+    /// Total number of relevant results.
+    #[serde(default)]
+    total_relevant: usize,
+    /// K value for precision/recall.
+    #[serde(default = "default_k")]
+    k: usize,
+    /// Relevance scores for nDCG (system ranking order).
+    #[serde(default)]
+    relevance_scores: Vec<f64>,
+    /// Ideal relevance scores for nDCG.
+    #[serde(default)]
+    ideal_scores: Vec<f64>,
+}
+
+fn default_k() -> usize {
+    10
+}
+
+#[derive(Debug, Serialize)]
+struct IrMetricsResponse {
+    mrr: f64,
+    precision_at_k: f64,
+    recall_at_k: f64,
+    ndcg: f64,
+}
+
+/// POST /api/v1/evaluation/ir-metrics — compute IR metrics from raw inputs.
+///
+/// Exposes the standalone `compute_mrr`, `compute_precision_at_k`,
+/// `compute_recall_at_k`, and `compute_ndcg` functions from vectors/evaluation.rs.
+async fn compute_ir_metrics(Json(req): Json<IrMetricsRequest>) -> Json<IrMetricsResponse> {
+    let mrr = eval_engine::compute_mrr(&req.relevant_positions);
+    let precision = eval_engine::compute_precision_at_k(req.relevant_in_topk, req.k);
+    let recall = eval_engine::compute_recall_at_k(req.relevant_in_topk, req.total_relevant);
+    let ndcg = eval_engine::compute_ndcg(&req.relevance_scores, &req.ideal_scores);
+
+    Json(IrMetricsResponse {
+        mrr,
+        precision_at_k: precision,
+        recall_at_k: recall,
+        ndcg,
+    })
 }

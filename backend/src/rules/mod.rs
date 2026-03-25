@@ -13,5 +13,3 @@ pub mod rule_engine;
 pub mod rule_processor;
 pub mod rule_validator;
 pub mod types;
-
-pub use types::{EmailField, MatchOperator, Rule, RuleAction, RuleCondition};

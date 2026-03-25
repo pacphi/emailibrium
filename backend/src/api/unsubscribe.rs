@@ -14,9 +14,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::email::unsubscribe::{
-    BatchResult, SubscriptionTarget, UnsubscribePreview, UnsubscribeService,
-};
+use crate::email::unsubscribe::{BatchResult, SubscriptionTarget, UnsubscribePreview};
 use crate::AppState;
 
 /// Build unsubscribe API routes.

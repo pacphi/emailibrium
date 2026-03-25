@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Per-user learning models (DDD-004, item #27).
 //!
 //! Extends the shared SONA learning engine with per-user model isolation.

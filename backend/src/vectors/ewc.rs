@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Elastic Weight Consolidation (EWC++) for preventing catastrophic forgetting (ADR-004, item #21).
 //!
 //! When the SONA learning engine updates centroids based on new user feedback,

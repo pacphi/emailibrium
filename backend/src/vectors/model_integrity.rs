@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Model integrity verification via SHA-256 checksums (ADR-013, item #32).
 //!
 //! Verifies that ONNX model files on disk have not been tampered with by

@@ -21,7 +21,9 @@ use futures::stream::Stream;
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 
-use crate::vectors::chat::{ChatResponse, ChatService, SessionSummary};
+use crate::vectors::chat::{ChatResponse, SessionSummary};
+use crate::vectors::generative_router::GenerativeRouterService;
+use crate::vectors::model_registry::ProviderType;
 use crate::vectors::models::{self, ModelStatus};
 use crate::vectors::reindex::ReindexStatus;
 use crate::AppState;
@@ -126,11 +128,55 @@ async fn chat_message(
         "Chat request"
     );
 
-    let response = chat_service
-        .chat(&req.session_id, &req.message, req.email_context)
+    // Start an inference session to track this chat request.
+    let session_mgr = &state.vector_service.inference_session_manager;
+    let model_name = state
+        .vector_service
+        .generative
+        .as_ref()
+        .map(|g| g.model_name().to_string())
+        .unwrap_or_else(|| "generative-router".to_string());
+    let provider = state
+        .vector_service
+        .generative_router
+        .active_provider()
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .unwrap_or(ProviderType::None);
+    let inf_session_id = session_mgr.start_session(&model_name, provider).await;
 
+    let audit_timer =
+        crate::vectors::audit::AuditTimer::start(&format!("{provider}"), &model_name, "chat", None);
+
+    let result = chat_service
+        .chat(&req.session_id, &req.message, req.email_context)
+        .await;
+
+    match &result {
+        Ok(response) => {
+            let approx_tokens = response.reply.len() as u32 / 4;
+            session_mgr
+                .complete_session(&inf_session_id, req.message.len() as u32 / 4, approx_tokens)
+                .await;
+            let entry = audit_timer.finish_ok(
+                Some(req.message.len() as i64 / 4),
+                Some(approx_tokens as i64),
+            );
+            if let Err(e) = state.vector_service.audit_logger.log(&entry).await {
+                tracing::warn!("Failed to write audit log: {e}");
+            }
+        }
+        Err(e) => {
+            session_mgr
+                .fail_session(&inf_session_id, e.to_string())
+                .await;
+            let entry = audit_timer.finish_error(&e.to_string());
+            if let Err(e) = state.vector_service.audit_logger.log(&entry).await {
+                tracing::warn!("Failed to write audit log: {e}");
+            }
+        }
+    }
+
+    let response = result.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     Ok(Json(response))
 }
 

@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Remote wipe API endpoints (ADR-008: Device Loss Mitigation).
 //!
 //! - POST   /api/v1/wipe/user/{user_id}        — wipe user data

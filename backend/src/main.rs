@@ -8,7 +8,6 @@ use axum::{
 };
 use tokio::net::TcpListener;
 use tower_http::cors::CorsLayer;
-use tower_http::set_header::SetResponseHeaderLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 mod api;
@@ -151,14 +150,16 @@ async fn main() -> anyhow::Result<()> {
         }))
         .await;
 
-    // Initialize chat service if a generative model is available (R-07)
-    let chat_service = vector_service.generative.as_ref().map(|gen| {
-        Arc::new(vectors::chat::ChatService::new(
+    // Initialize chat service using the generative router for provider failover (R-07)
+    let chat_service = if vector_service.generative.is_some() {
+        Some(Arc::new(vectors::chat::ChatService::new(
             Duration::from_secs(3600), // 1 hour session TTL
             20,                        // 20-message sliding window
-            gen.clone(),
-        ))
-    });
+            vector_service.generative_router.clone(),
+        )))
+    } else {
+        None
+    };
 
     let state = AppState {
         vector_service,
@@ -190,25 +191,6 @@ async fn main() -> anyhow::Result<()> {
         .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION, header::ACCEPT])
         .allow_credentials(true);
 
-    // ── Security headers (audit item #13 — CSP + hardening) ──────────
-    let backend_origin = format!("http://{}:{}", config.host, config.port);
-    let connect_src = config
-        .security
-        .allowed_origins
-        .iter()
-        .chain(std::iter::once(&backend_origin))
-        .cloned()
-        .collect::<Vec<_>>()
-        .join(" ");
-
-    let csp_value = format!(
-        "default-src 'self'; \
-         script-src 'self'; \
-         style-src 'self' 'unsafe-inline'; \
-         img-src 'self' data:; \
-         connect-src 'self' {connect_src}"
-    );
-
     // Build router
     let mut app = Router::new()
         .nest("/api/v1", api::routes())
@@ -216,28 +198,16 @@ async fn main() -> anyhow::Result<()> {
         .layer(tower_http::trace::TraceLayer::new_for_http())
         .layer(cors);
 
+    // ── Security headers (audit item #13 — CSP + hardening) ──────────
+    // Uses the comprehensive security_headers_middleware which sets CSP,
+    // X-Content-Type-Options, X-Frame-Options, X-XSS-Protection,
+    // Referrer-Policy, Permissions-Policy, and HSTS in one middleware.
     if config.security.csp_enabled {
-        app = app
-            .layer(SetResponseHeaderLayer::overriding(
-                header::CONTENT_SECURITY_POLICY,
-                HeaderValue::from_str(&csp_value).expect("valid CSP header value"),
-            ))
-            .layer(SetResponseHeaderLayer::overriding(
-                header::X_CONTENT_TYPE_OPTIONS,
-                HeaderValue::from_static("nosniff"),
-            ))
-            .layer(SetResponseHeaderLayer::overriding(
-                header::X_FRAME_OPTIONS,
-                HeaderValue::from_static("DENY"),
-            ))
-            .layer(SetResponseHeaderLayer::overriding(
-                header::X_XSS_PROTECTION,
-                HeaderValue::from_static("1; mode=block"),
-            ))
-            .layer(SetResponseHeaderLayer::overriding(
-                header::REFERRER_POLICY,
-                HeaderValue::from_static("strict-origin-when-cross-origin"),
-            ));
+        // Exercise SecurityHeadersConfig::from_env() for env-based overrides
+        let _sec_cfg = middleware::security_headers::SecurityHeadersConfig::from_env();
+        app = app.layer(axum::middleware::from_fn(
+            middleware::security_headers::security_headers_middleware,
+        ));
     }
 
     // ── HSTS header (R-05) ────────────────────────────────────────────
@@ -260,8 +230,8 @@ async fn main() -> anyhow::Result<()> {
 
     // ── Rate limiting (R-05) ──────────────────────────────────────────
     if config.security.rate_limit.enabled {
-        let capacity = config.security.rate_limit.burst_size as f64;
-        let refill_rate = config.security.rate_limit.requests_per_second as f64;
+        let rl_config = middleware::rate_limit::RateLimitConfig::from_env();
+        let (capacity, refill_rate) = rl_config.get_capacity_and_rate("global");
         let limiter = std::sync::Arc::new(middleware::rate_limit::RateLimiter::new_in_memory(
             capacity,
             refill_rate,
@@ -273,9 +243,9 @@ async fn main() -> anyhow::Result<()> {
             ))
             .layer(axum::Extension(limiter));
         tracing::info!(
-            "Rate limiting enabled ({} req/s, burst {})",
-            config.security.rate_limit.requests_per_second,
-            config.security.rate_limit.burst_size,
+            "Rate limiting enabled (capacity={}, refill_rate={:.2}/s, preset=env)",
+            capacity,
+            refill_rate,
         );
     }
 

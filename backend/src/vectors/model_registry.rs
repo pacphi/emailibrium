@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Model registry with lifecycle management (DDD-006: AI Providers, Audit Item #38).
 //!
 //! `ModelRegistry` tracks AI models through their lifecycle states:

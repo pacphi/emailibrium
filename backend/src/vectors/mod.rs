@@ -44,8 +44,12 @@ use std::sync::Arc;
 
 use crate::cache::RedisCache;
 use crate::db::Database;
+use audit::CloudApiAuditLogger;
 use config::VectorConfig;
 use embedding::EmbeddingPipeline;
+use evaluation::EvaluationEngine;
+use generative_router::GenerativeRouter;
+use inference_session::InferenceSessionManager;
 use store::VectorStoreBackend;
 
 /// Top-level vector service facade (DDD-001: EmbeddingAggregate + ClassificationAggregate).
@@ -70,6 +74,10 @@ pub struct VectorService {
     pub remote_wipe_service: Arc<remote_wipe::RemoteWipeService>,
     pub privacy_service: Arc<privacy::PrivacyService>,
     pub unsubscribe_service: Option<Arc<crate::email::unsubscribe::UnsubscribeService>>,
+    pub audit_logger: Arc<CloudApiAuditLogger>,
+    pub evaluation_engine: Arc<EvaluationEngine>,
+    pub generative_router: Arc<GenerativeRouter>,
+    pub inference_session_manager: Arc<InferenceSessionManager>,
     pub config: VectorConfig,
     pub db: Arc<Database>,
 }
@@ -290,6 +298,39 @@ impl VectorService {
             crate::email::unsubscribe::UnsubscribeService::new(),
         ));
 
+        // Initialize cloud API audit logger (ADR-008, item #39)
+        let audit_logger = Arc::new(CloudApiAuditLogger::new(db.clone()));
+        if let Err(e) = audit_logger.ensure_table().await {
+            tracing::warn!("Failed to create cloud API audit table: {e}");
+        }
+
+        // Initialize A/B evaluation engine (ADR-004, item #22)
+        let evaluation_engine = Arc::new(EvaluationEngine::new(db.clone()));
+        if let Err(e) = evaluation_engine.ensure_tables().await {
+            tracing::warn!("Failed to create evaluation tables: {e}");
+        }
+
+        // Initialize generative router with failover (DDD-006, item #38)
+        let generative_router = Arc::new(GenerativeRouter::new());
+        if let Some(ref gen) = gen_model {
+            use model_registry::ProviderType;
+            let provider_type = match config.generative.provider.as_str() {
+                "ollama" => ProviderType::Ollama,
+                "cloud" => ProviderType::OpenAi,
+                _ => ProviderType::None,
+            };
+            generative_router
+                .register(provider_type, gen.clone(), 1)
+                .await;
+            tracing::info!(
+                "Registered generative provider in router: {}",
+                config.generative.provider
+            );
+        }
+
+        // Initialize inference session manager (DDD-006, item #38)
+        let inference_session_manager = Arc::new(InferenceSessionManager::new(100));
+
         // Initialize re-index orchestrator and check for model changes
         let reindex_orchestrator = Arc::new(reindex::ReindexOrchestrator::new(db.clone()));
         if let Ok(needs_reindex) = reindex_orchestrator
@@ -323,6 +364,10 @@ impl VectorService {
             remote_wipe_service,
             privacy_service,
             unsubscribe_service,
+            audit_logger,
+            evaluation_engine,
+            generative_router,
+            inference_session_manager,
             config,
             db,
         })

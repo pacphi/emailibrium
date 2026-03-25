@@ -11,12 +11,13 @@
 use axum::{
     extract::{Path, State},
     http::StatusCode,
-    routing::{delete, get, post, put},
+    routing::{get, post},
     Json, Router,
 };
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
+use crate::rules::json_parser;
 use crate::rules::rule_engine::RuleEngine;
 use crate::rules::rule_validator::{self, Severity};
 use crate::rules::types::{Rule, RuleAction, RuleCondition};
@@ -45,12 +46,19 @@ pub struct CreateRuleRequest {
     pub name: String,
     #[serde(default)]
     pub description: String,
+    /// Raw conditions. When `natural_language` is provided this field may be
+    /// empty -- the parsed NL condition will be used instead.
+    #[serde(default)]
     pub conditions: Vec<RuleCondition>,
     pub actions: Vec<RuleAction>,
     #[serde(default)]
     pub priority: i32,
     #[serde(default = "default_enabled")]
     pub enabled: bool,
+    /// Optional natural-language condition string. When present, it is parsed
+    /// via `json_parser::parse_natural_language` and prepended to `conditions`.
+    #[serde(default)]
+    pub natural_language: Option<String>,
 }
 
 fn default_enabled() -> bool {
@@ -163,11 +171,19 @@ pub struct ErrorResponse {
 async fn list_rules(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<RuleResponse>>, (StatusCode, Json<ErrorResponse>)> {
-    let rules = RuleEngine::load_rules(&state.db.pool)
+    let loaded = RuleEngine::load_rules(&state.db.pool)
         .await
         .map_err(internal_error)?;
 
-    let responses: Vec<RuleResponse> = rules.into_iter().map(RuleResponse::from).collect();
+    let mut engine = RuleEngine::new();
+    engine.set_rules(loaded);
+
+    let responses: Vec<RuleResponse> = engine
+        .rules()
+        .iter()
+        .cloned()
+        .map(RuleResponse::from)
+        .collect();
     Ok(Json(responses))
 }
 
@@ -176,12 +192,50 @@ async fn create_rule(
     State(state): State<AppState>,
     Json(req): Json<CreateRuleRequest>,
 ) -> Result<(StatusCode, Json<RuleResponse>), (StatusCode, Json<ErrorResponse>)> {
+    // Parse conditions through the json_parser for normalisation.
+    let mut conditions = Vec::new();
+
+    // If a natural-language string is provided, parse it first.
+    if let Some(ref nl_text) = req.natural_language {
+        let nl_condition = json_parser::parse_natural_language(nl_text).map_err(|e| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: format!("Failed to parse natural language condition: {e}"),
+                }),
+            )
+        })?;
+        conditions.push(nl_condition);
+    }
+
+    // Parse each JSON-supplied condition through `parse_condition` for
+    // shorthand normalisation (e.g. loose frontend payloads).
+    for raw_cond in &req.conditions {
+        let json_val = serde_json::to_value(raw_cond).map_err(|e| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: format!("Failed to serialise condition: {e}"),
+                }),
+            )
+        })?;
+        let parsed = json_parser::parse_condition(&json_val).map_err(|e| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: format!("Failed to parse condition: {e}"),
+                }),
+            )
+        })?;
+        conditions.push(parsed);
+    }
+
     let now = Utc::now();
     let rule = Rule {
         id: RuleEngine::new_id(),
         name: req.name,
         description: req.description,
-        conditions: req.conditions,
+        conditions,
         actions: req.actions,
         priority: req.priority,
         enabled: req.enabled,
@@ -189,7 +243,7 @@ async fn create_rule(
         updated_at: now,
     };
 
-    // Validate before saving.
+    // Validate the single rule first.
     let warnings = rule_validator::validate_rule(&rule);
     if rule_validator::has_errors(&warnings) {
         let errors: Vec<String> = warnings
@@ -316,7 +370,14 @@ async fn delete_rule_handler(
 }
 
 /// POST /api/v1/rules/validate -- validate without saving.
-async fn validate_rule(Json(req): Json<ValidateRequest>) -> Json<ValidationResponse> {
+///
+/// Runs single-rule validation via `validate_rule()` and, when a database
+/// connection is available, also performs cross-rule checks (including loop
+/// detection) via `validate_rules()`.
+async fn validate_rule(
+    State(state): State<AppState>,
+    Json(req): Json<ValidateRequest>,
+) -> Json<ValidationResponse> {
     let rule = Rule {
         id: "validation-check".to_string(),
         name: if req.name.is_empty() {
@@ -333,7 +394,24 @@ async fn validate_rule(Json(req): Json<ValidateRequest>) -> Json<ValidationRespo
         updated_at: Utc::now(),
     };
 
-    let findings = rule_validator::validate_rule(&rule);
+    // Single-rule validation.
+    let mut findings = rule_validator::validate_rule(&rule);
+
+    // Cross-rule validation (loop detection, etc.) against all persisted rules.
+    if let Ok(existing_rules) = RuleEngine::load_rules(&state.db.pool).await {
+        let mut all_rules = existing_rules;
+        all_rules.push(rule);
+        let cross_findings = rule_validator::validate_rules(&all_rules);
+        // Append only findings that reference our validation-check rule or are
+        // cross-rule warnings (loop detection) to avoid duplicating per-rule
+        // findings for existing rules.
+        for f in cross_findings {
+            if f.rule_id == "validation-check" || f.message.contains("loop") {
+                findings.push(f);
+            }
+        }
+    }
+
     let errors: Vec<String> = findings
         .iter()
         .filter(|w| w.severity == Severity::Error)
@@ -353,9 +431,14 @@ async fn validate_rule(Json(req): Json<ValidateRequest>) -> Json<ValidationRespo
 }
 
 /// POST /api/v1/rules/test -- test a rule against a sample email.
-async fn test_rule(Json(req): Json<TestRuleRequest>) -> Json<TestResponse> {
+///
+/// Uses `rule_processor::process_email` to exercise the full evaluation
+/// pipeline (priority ordering, condition matching, action generation).
+async fn test_rule(
+    State(state): State<AppState>,
+    Json(req): Json<TestRuleRequest>,
+) -> Json<TestResponse> {
     use crate::rules::rule_processor;
-    use crate::rules::types::PendingAction;
 
     let now = Utc::now();
     let rule = Rule {
@@ -401,12 +484,17 @@ async fn test_rule(Json(req): Json<TestRuleRequest>) -> Json<TestResponse> {
         is_read: false,
     };
 
-    let matched = rule_processor::evaluate_rule(&rule, &email);
-    let pending: Vec<PendingAction> = if matched {
-        rule_processor::apply_actions(&rule.actions, &email.id, &rule.id, &rule.name)
-    } else {
-        vec![]
-    };
+    // Load all persisted rules and add the test rule so `process_email`
+    // evaluates the complete rule set with priority ordering.
+    let mut all_rules = RuleEngine::load_rules(&state.db.pool)
+        .await
+        .unwrap_or_default();
+    all_rules.push(rule);
+
+    // Use process_email for the full pipeline (priority sort + evaluate + actions).
+    let pending = rule_processor::process_email(&all_rules, &email);
+
+    let matched = !pending.is_empty();
 
     let action_responses: Vec<PendingActionResponse> = pending
         .iter()

@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! CLI model download support (ADR-013, ADR-011, item #33).
 //!
 //! Provides the `--download-models` CLI subcommand implementation for

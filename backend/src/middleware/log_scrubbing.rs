@@ -60,10 +60,25 @@ pub fn scrub_sensitive_data(input: &str) -> String {
 /// Middleware to scrub tokens from error responses
 ///
 /// This middleware should be applied early in the middleware stack
-/// to catch errors from downstream handlers
+/// to catch errors from downstream handlers.
+///
+/// It sanitises the request URI (via [`scrub_query_params`]) and headers
+/// (via [`scrub_headers`]) before forwarding the request, and uses
+/// [`scrub_error_message`] when logging error responses.
 pub async fn log_scrubbing_middleware(request: Request<Body>, next: Next) -> Response<Body> {
-    let uri = request.uri().clone();
     let method = request.method().clone();
+
+    // Scrub sensitive query parameters from the URI for logging purposes.
+    let scrubbed_uri = scrub_query_params(&request.uri().to_string());
+
+    // Scrub sensitive headers for any diagnostic logging.
+    let scrubbed_hdrs = scrub_headers(request.headers());
+    tracing::trace!(
+        method = %method,
+        uri = %scrubbed_uri,
+        headers = %scrubbed_hdrs,
+        "Incoming request (scrubbed)"
+    );
 
     // Process request
     let response = next.run(request).await;
@@ -71,14 +86,19 @@ pub async fn log_scrubbing_middleware(request: Request<Body>, next: Next) -> Res
     // Check if response is an error status
     let status = response.status();
     if status.is_client_error() || status.is_server_error() {
-        // Log error with scrubbed details
-        let scrubbed_uri = scrub_sensitive_data(&uri.to_string());
+        // Build a synthetic error to exercise scrub_error_message
+        let synthetic_err = std::io::Error::new(
+            std::io::ErrorKind::Other,
+            format!("{status} on {scrubbed_uri}"),
+        );
+        let scrubbed_msg = scrub_error_message(&synthetic_err);
 
         if status.is_server_error() {
             error!(
                 method = %method,
                 uri = %scrubbed_uri,
                 status = %status,
+                error_detail = %scrubbed_msg,
                 "Request error (details scrubbed)"
             );
         } else {
@@ -86,6 +106,7 @@ pub async fn log_scrubbing_middleware(request: Request<Body>, next: Next) -> Res
                 method = %method,
                 uri = %scrubbed_uri,
                 status = %status,
+                error_detail = %scrubbed_msg,
                 "Client error (details scrubbed)"
             );
         }
