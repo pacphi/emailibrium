@@ -72,12 +72,12 @@ The `make dev` target automatically exports these as `EMAILIBRIUM_GOOGLE_CLIENT_
 
 ### Google OAuth: Testing vs Production
 
-| Aspect | Testing Mode | Production Mode |
-|---|---|---|
-| **Who can sign in** | Only explicitly added test users | Any Google account |
-| **Token lifetime** | 7 days (must re-consent) | Standard (1 hour access, long-lived refresh) |
-| **Verification** | None required | Google verification required |
-| **How to publish** | N/A | OAuth consent screen > Publish App |
+| Aspect              | Testing Mode                     | Production Mode                              |
+| ------------------- | -------------------------------- | -------------------------------------------- |
+| **Who can sign in** | Only explicitly added test users | Any Google account                           |
+| **Token lifetime**  | 7 days (must re-consent)         | Standard (1 hour access, long-lived refresh) |
+| **Verification**    | None required                    | Google verification required                 |
+| **How to publish**  | N/A                              | OAuth consent screen > Publish App           |
 
 #### Publishing to Production
 
@@ -86,11 +86,11 @@ When ready to allow any Gmail user (not just test users):
 1. **OAuth consent screen > Publish App**
 2. Google requires verification based on your scopes:
 
-| Scope | Classification | Verification |
-|---|---|---|
-| `userinfo.email`, `openid` | Non-sensitive | Auto-approved |
-| `gmail.readonly` | Sensitive | 3-5 business days |
-| `gmail.modify` | Restricted | 4-6 weeks + CASA security assessment |
+| Scope                      | Classification | Verification                         |
+| -------------------------- | -------------- | ------------------------------------ |
+| `userinfo.email`, `openid` | Non-sensitive  | Auto-approved                        |
+| `gmail.readonly`           | Sensitive      | 3-5 business days                    |
+| `gmail.modify`             | Restricted     | 4-6 weeks + CASA security assessment |
 
 3. **Requirements for `gmail.modify` verification** ([full details](https://developers.google.com/identity/protocols/oauth2/production-readiness/restricted-scope-verification)):
    - Privacy policy at a public URL
@@ -107,9 +107,9 @@ When ready to allow any Gmail user (not just test users):
 oauth:
   gmail:
     scopes:
-      - "https://www.googleapis.com/auth/gmail.readonly"
-      - "https://www.googleapis.com/auth/gmail.labels"
-      - "https://www.googleapis.com/auth/userinfo.email"
+      - 'https://www.googleapis.com/auth/gmail.readonly'
+      - 'https://www.googleapis.com/auth/gmail.labels'
+      - 'https://www.googleapis.com/auth/userinfo.email'
 ```
 
 ---
@@ -171,15 +171,15 @@ The default tenant is `common`, which allows both personal Microsoft accounts an
 ```yaml
 oauth:
   outlook:
-    tenant: "common"   # "common" = any account, or a specific tenant UUID
+    tenant: 'common' # "common" = any account, or a specific tenant UUID
 ```
 
-| Tenant value | Who can sign in |
-|---|---|
-| `common` | Any Microsoft account (personal + organizational) |
-| `organizations` | Only organizational (work/school) accounts |
-| `consumers` | Only personal Microsoft accounts |
-| `{tenant-id}` | Only accounts in a specific organization |
+| Tenant value    | Who can sign in                                   |
+| --------------- | ------------------------------------------------- |
+| `common`        | Any Microsoft account (personal + organizational) |
+| `organizations` | Only organizational (work/school) accounts        |
+| `consumers`     | Only personal Microsoft accounts                  |
+| `{tenant-id}`   | Only accounts in a specific organization          |
 
 ### 6. Store Credentials
 
@@ -204,50 +204,50 @@ All OAuth settings live in `backend/config.yaml` under the `oauth` key:
 
 ```yaml
 oauth:
-  redirect_base_url: "http://localhost:8080"  # Base URL for callback
+  redirect_base_url: 'http://localhost:8080' # Base URL for callback
 
   gmail:
-    client_id_env: "EMAILIBRIUM_GOOGLE_CLIENT_ID"       # env var name
-    client_secret_env: "EMAILIBRIUM_GOOGLE_CLIENT_SECRET"
+    client_id_env: 'EMAILIBRIUM_GOOGLE_CLIENT_ID' # env var name
+    client_secret_env: 'EMAILIBRIUM_GOOGLE_CLIENT_SECRET'
     scopes:
-      - "https://www.googleapis.com/auth/gmail.modify"
-      - "https://www.googleapis.com/auth/gmail.labels"
-      - "https://www.googleapis.com/auth/userinfo.email"
-    auth_url: "https://accounts.google.com/o/oauth2/v2/auth"
-    token_url: "https://oauth2.googleapis.com/token"
+      - 'https://www.googleapis.com/auth/gmail.modify'
+      - 'https://www.googleapis.com/auth/gmail.labels'
+      - 'https://www.googleapis.com/auth/userinfo.email'
+    auth_url: 'https://accounts.google.com/o/oauth2/v2/auth'
+    token_url: 'https://oauth2.googleapis.com/token'
 
   outlook:
-    client_id_env: "EMAILIBRIUM_MICROSOFT_CLIENT_ID"
-    client_secret_env: "EMAILIBRIUM_MICROSOFT_CLIENT_SECRET"
-    tenant: "common"
+    client_id_env: 'EMAILIBRIUM_MICROSOFT_CLIENT_ID'
+    client_secret_env: 'EMAILIBRIUM_MICROSOFT_CLIENT_SECRET'
+    tenant: 'common'
     scopes:
-      - "Mail.ReadWrite"
-      - "Mail.Send"
-      - "offline_access"
-      - "User.Read"
+      - 'Mail.ReadWrite'
+      - 'Mail.Send'
+      - 'offline_access'
+      - 'User.Read'
 ```
 
 ### Environment Variables
 
-| Variable | Source | Purpose |
-|---|---|---|
-| `EMAILIBRIUM_GOOGLE_CLIENT_ID` | `secrets/dev/google_client_id` | Google OAuth Client ID |
-| `EMAILIBRIUM_GOOGLE_CLIENT_SECRET` | `secrets/dev/google_client_secret` | Google OAuth Client Secret |
-| `EMAILIBRIUM_MICROSOFT_CLIENT_ID` | `secrets/dev/microsoft_client_id` | Microsoft Application (Client) ID |
-| `EMAILIBRIUM_MICROSOFT_CLIENT_SECRET` | `secrets/dev/microsoft_client_secret` | Microsoft Client Secret Value |
-| `EMAILIBRIUM_ENCRYPTION_MASTER_PASSWORD` | `secrets/dev/oauth_encryption_key` | AES-256-GCM key for token encryption at rest |
+| Variable                                 | Source                                | Purpose                                      |
+| ---------------------------------------- | ------------------------------------- | -------------------------------------------- |
+| `EMAILIBRIUM_GOOGLE_CLIENT_ID`           | `secrets/dev/google_client_id`        | Google OAuth Client ID                       |
+| `EMAILIBRIUM_GOOGLE_CLIENT_SECRET`       | `secrets/dev/google_client_secret`    | Google OAuth Client Secret                   |
+| `EMAILIBRIUM_MICROSOFT_CLIENT_ID`        | `secrets/dev/microsoft_client_id`     | Microsoft Application (Client) ID            |
+| `EMAILIBRIUM_MICROSOFT_CLIENT_SECRET`    | `secrets/dev/microsoft_client_secret` | Microsoft Client Secret Value                |
+| `EMAILIBRIUM_ENCRYPTION_MASTER_PASSWORD` | `secrets/dev/oauth_encryption_key`    | AES-256-GCM key for token encryption at rest |
 
 These are loaded automatically by `make dev` from the `secrets/dev/` directory.
 
 ### API Endpoints
 
-| Endpoint | Method | Description |
-|---|---|---|
-| `/api/v1/auth/gmail/connect` | GET | Redirects to Google OAuth consent |
-| `/api/v1/auth/outlook/connect` | GET | Redirects to Microsoft OAuth consent |
-| `/api/v1/auth/callback` | GET | OAuth callback (handles both providers) |
-| `/api/v1/auth/accounts` | GET | List connected accounts |
-| `/api/v1/auth/accounts/:id` | DELETE | Disconnect an account |
+| Endpoint                       | Method | Description                             |
+| ------------------------------ | ------ | --------------------------------------- |
+| `/api/v1/auth/gmail/connect`   | GET    | Redirects to Google OAuth consent       |
+| `/api/v1/auth/outlook/connect` | GET    | Redirects to Microsoft OAuth consent    |
+| `/api/v1/auth/callback`        | GET    | OAuth callback (handles both providers) |
+| `/api/v1/auth/accounts`        | GET    | List connected accounts                 |
+| `/api/v1/auth/accounts/:id`    | DELETE | Disconnect an account                   |
 
 ---
 
