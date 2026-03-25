@@ -22,6 +22,8 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use crate::vectors::consent::{AuditPage, ConsentRecord};
+use crate::vectors::generative_router::GenerativeRouterService;
+use crate::vectors::model_registry::ProviderType;
 use crate::vectors::privacy::{ConsentDecision, ErasureReport, PrivacyAuditPage, UserDataExport};
 use crate::AppState;
 
@@ -139,6 +141,9 @@ async fn get_consent(
 }
 
 /// POST /api/v1/consent
+///
+/// When consent is granted for a cloud AI provider, the corresponding generative
+/// provider is re-enabled in the router so it participates in failover again.
 async fn grant_consent(
     State(state): State<AppState>,
     Json(req): Json<GrantConsentRequest>,
@@ -150,6 +155,15 @@ async fn grant_consent(
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
+    // Re-enable the provider in the generative router if it maps to a known type.
+    if let Ok(provider_type) = req.provider.parse::<ProviderType>() {
+        state
+            .vector_service
+            .generative_router
+            .enable_provider(provider_type)
+            .await;
+    }
+
     Ok(Json(GrantConsentResponse {
         provider: req.provider,
         status: "granted".to_string(),
@@ -157,6 +171,9 @@ async fn grant_consent(
 }
 
 /// DELETE /api/v1/consent/:provider
+///
+/// When consent is revoked for a cloud AI provider, the corresponding generative
+/// provider is disabled in the router so it is excluded from failover selection.
 async fn revoke_consent(
     State(state): State<AppState>,
     Path(provider): Path<String>,
@@ -167,6 +184,15 @@ async fn revoke_consent(
         .revoke_consent(&provider)
         .await
         .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+
+    // Disable the provider in the generative router if it maps to a known type.
+    if let Ok(provider_type) = provider.parse::<ProviderType>() {
+        state
+            .vector_service
+            .generative_router
+            .disable_provider(provider_type)
+            .await;
+    }
 
     Ok(Json(RevokeConsentResponse {
         provider,
@@ -216,6 +242,30 @@ async fn record_gdpr_consent(
         .record_consent(&req.consent_type, req.granted, None, None)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    // When cloud_ai consent changes, toggle cloud providers in the generative router.
+    if req.consent_type == "cloud_ai" {
+        let cloud_providers = [
+            ProviderType::OpenAi,
+            ProviderType::Anthropic,
+            ProviderType::Gemini,
+        ];
+        for pt in &cloud_providers {
+            if req.granted {
+                state
+                    .vector_service
+                    .generative_router
+                    .enable_provider(*pt)
+                    .await;
+            } else {
+                state
+                    .vector_service
+                    .generative_router
+                    .disable_provider(*pt)
+                    .await;
+            }
+        }
+    }
 
     Ok(Json(GdprConsentResponse { decision }))
 }

@@ -101,6 +101,30 @@ impl GenerativeRouter {
         let providers = self.providers.read().await;
         providers.iter().filter(|p| p.enabled).cloned().collect()
     }
+
+    /// List all registered providers with their current status.
+    pub async fn list_providers(&self) -> Vec<ProviderStatus> {
+        let providers = self.providers.read().await;
+        let mut statuses = Vec::with_capacity(providers.len());
+        for p in providers.iter() {
+            statuses.push(ProviderStatus {
+                provider_type: p.provider_type,
+                priority: p.priority,
+                enabled: p.enabled,
+                available: p.model.is_available().await,
+            });
+        }
+        statuses
+    }
+}
+
+/// Status snapshot for a registered provider.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ProviderStatus {
+    pub provider_type: ProviderType,
+    pub priority: u8,
+    pub enabled: bool,
+    pub available: bool,
 }
 
 impl Default for GenerativeRouter {
@@ -399,5 +423,57 @@ mod tests {
         assert_eq!(gen.model_name(), "generative-router");
         let result = gen.generate("test", 100).await.unwrap();
         assert_eq!(result, "routed-response");
+    }
+
+    #[tokio::test]
+    async fn test_list_providers_shows_status() {
+        let router = GenerativeRouter::new();
+        let model_a = Arc::new(MockModel::new("a", true, ""));
+        let model_b = Arc::new(MockModel::new("b", false, ""));
+
+        router.register(ProviderType::Ollama, model_a, 1).await;
+        router.register(ProviderType::OpenAi, model_b, 2).await;
+
+        let statuses = router.list_providers().await;
+        assert_eq!(statuses.len(), 2);
+        assert_eq!(statuses[0].provider_type, ProviderType::Ollama);
+        assert!(statuses[0].enabled);
+        assert!(statuses[0].available);
+        assert_eq!(statuses[1].provider_type, ProviderType::OpenAi);
+        assert!(statuses[1].enabled);
+        assert!(!statuses[1].available); // model_b is not available
+    }
+
+    #[tokio::test]
+    async fn test_disable_removes_from_best_provider() {
+        let router = GenerativeRouter::new();
+        let model = Arc::new(MockModel::new("m", true, "resp"));
+        router.register(ProviderType::OpenAi, model, 1).await;
+
+        assert_eq!(router.active_provider().await, Some(ProviderType::OpenAi));
+
+        router.disable_provider(ProviderType::OpenAi).await;
+        assert_eq!(router.active_provider().await, None);
+
+        // list_providers still shows it but disabled
+        let statuses = router.list_providers().await;
+        assert_eq!(statuses.len(), 1);
+        assert!(!statuses[0].enabled);
+    }
+
+    #[tokio::test]
+    async fn test_enable_restores_provider() {
+        let router = GenerativeRouter::new();
+        let model = Arc::new(MockModel::new("m", true, "resp"));
+        router.register(ProviderType::Anthropic, model, 1).await;
+
+        router.disable_provider(ProviderType::Anthropic).await;
+        assert!(router.active_provider().await.is_none());
+
+        router.enable_provider(ProviderType::Anthropic).await;
+        assert_eq!(
+            router.active_provider().await,
+            Some(ProviderType::Anthropic)
+        );
     }
 }

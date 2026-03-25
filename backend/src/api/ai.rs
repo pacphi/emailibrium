@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 use tracing::debug;
 
 use crate::vectors::chat::{ChatResponse, SessionSummary};
-use crate::vectors::generative_router::GenerativeRouterService;
+use crate::vectors::generative_router::{GenerativeRouterService, ProviderStatus};
 use crate::vectors::model_registry::ProviderType;
 use crate::vectors::models::{self, ModelStatus};
 use crate::vectors::reindex::ReindexStatus;
@@ -34,6 +34,9 @@ pub fn routes() -> Router<AppState> {
         .route("/models", get(list_models))
         .route("/status", get(ai_status))
         .route("/reindex-status", get(reindex_status))
+        .route("/providers", get(list_providers))
+        .route("/providers/{provider}/disable", post(disable_provider))
+        .route("/providers/{provider}/enable", post(enable_provider))
         .route("/chat", post(chat_message))
         .route("/chat/stream", post(chat_message_sse))
         .route("/chat/sessions", get(list_chat_sessions))
@@ -87,6 +90,79 @@ async fn ai_status(State(state): State<AppState>) -> Json<AiStatusResponse> {
 async fn reindex_status(State(state): State<AppState>) -> Json<ReindexStatus> {
     let status = state.vector_service.reindex_orchestrator.get_status().await;
     Json(status)
+}
+
+// ---------------------------------------------------------------------------
+// Handlers — Provider management (DDD-006)
+// ---------------------------------------------------------------------------
+
+/// Response for the provider list endpoint.
+#[derive(Debug, Serialize)]
+struct ProviderListResponse {
+    providers: Vec<ProviderStatus>,
+}
+
+/// Response for enable / disable actions.
+#[derive(Debug, Serialize)]
+struct ProviderActionResponse {
+    provider: String,
+    enabled: bool,
+}
+
+/// GET /api/v1/ai/providers — list registered providers with status.
+async fn list_providers(State(state): State<AppState>) -> Json<ProviderListResponse> {
+    let providers = state
+        .vector_service
+        .generative_router
+        .list_providers()
+        .await;
+    Json(ProviderListResponse { providers })
+}
+
+/// POST /api/v1/ai/providers/:provider/disable — disable a provider at runtime.
+async fn disable_provider(
+    State(state): State<AppState>,
+    Path(provider): Path<String>,
+) -> Result<Json<ProviderActionResponse>, (StatusCode, String)> {
+    let provider_type: ProviderType = provider
+        .parse()
+        .map_err(|e: String| (StatusCode::BAD_REQUEST, e))?;
+
+    state
+        .vector_service
+        .generative_router
+        .disable_provider(provider_type)
+        .await;
+
+    debug!(provider = %provider_type, "Provider disabled via API");
+
+    Ok(Json(ProviderActionResponse {
+        provider: provider_type.to_string(),
+        enabled: false,
+    }))
+}
+
+/// POST /api/v1/ai/providers/:provider/enable — re-enable a provider at runtime.
+async fn enable_provider(
+    State(state): State<AppState>,
+    Path(provider): Path<String>,
+) -> Result<Json<ProviderActionResponse>, (StatusCode, String)> {
+    let provider_type: ProviderType = provider
+        .parse()
+        .map_err(|e: String| (StatusCode::BAD_REQUEST, e))?;
+
+    state
+        .vector_service
+        .generative_router
+        .enable_provider(provider_type)
+        .await;
+
+    debug!(provider = %provider_type, "Provider enabled via API");
+
+    Ok(Json(ProviderActionResponse {
+        provider: provider_type.to_string(),
+        enabled: true,
+    }))
 }
 
 // ---------------------------------------------------------------------------
