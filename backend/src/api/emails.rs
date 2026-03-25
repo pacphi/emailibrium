@@ -19,6 +19,7 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/", get(list_emails))
         .route("/{id}", get(get_email))
+        .route("/thread/{thread_id}", get(get_thread))
 }
 
 #[derive(Debug, Deserialize)]
@@ -178,4 +179,90 @@ async fn get_email(
         Some(r) => Ok(Json(row_to_response(&r))),
         None => Err((StatusCode::NOT_FOUND, "Email not found".to_string())),
     }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadResponse {
+    pub thread_id: String,
+    pub emails: Vec<EmailResponse>,
+    pub subject: String,
+    pub participants: Vec<String>,
+    pub last_activity: String,
+}
+
+/// GET /api/v1/emails/thread/:thread_id
+async fn get_thread(
+    State(state): State<AppState>,
+    Path(thread_id): Path<String>,
+) -> Result<Json<ThreadResponse>, (StatusCode, String)> {
+    let sql = format!(
+        "SELECT {EMAIL_COLUMNS} FROM emails WHERE thread_id = ?1 ORDER BY received_at ASC"
+    );
+    let rows = sqlx::query(&sql)
+        .bind(&thread_id)
+        .fetch_all(&state.db.pool)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    if rows.is_empty() {
+        // Fall back: try treating thread_id as a message ID (single-message thread).
+        let single_sql = format!("SELECT {EMAIL_COLUMNS} FROM emails WHERE id = ?1");
+        let single = sqlx::query(&single_sql)
+            .bind(&thread_id)
+            .fetch_optional(&state.db.pool)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+        match single {
+            Some(r) => {
+                let email = row_to_response(&r);
+                let subject = email.subject.clone();
+                let last_activity = email.received_at.clone();
+                let mut participants = vec![email.from_addr.clone()];
+                if !email.to_addrs.is_empty() {
+                    participants.push(email.to_addrs.clone());
+                }
+                return Ok(Json(ThreadResponse {
+                    thread_id,
+                    subject,
+                    participants,
+                    last_activity,
+                    emails: vec![email],
+                }));
+            }
+            None => return Err((StatusCode::NOT_FOUND, "Thread not found".to_string())),
+        }
+    }
+
+    let emails: Vec<EmailResponse> = rows.iter().map(row_to_response).collect();
+    let subject = emails
+        .first()
+        .map(|e| e.subject.clone())
+        .unwrap_or_default();
+    let last_activity = emails
+        .last()
+        .map(|e| e.received_at.clone())
+        .unwrap_or_default();
+
+    let mut participants: Vec<String> = emails
+        .iter()
+        .flat_map(|e| {
+            let mut p = vec![e.from_addr.clone()];
+            if !e.to_addrs.is_empty() {
+                p.push(e.to_addrs.clone());
+            }
+            p
+        })
+        .collect();
+    participants.sort();
+    participants.dedup();
+
+    Ok(Json(ThreadResponse {
+        thread_id,
+        emails,
+        subject,
+        participants,
+        last_activity,
+    }))
 }
