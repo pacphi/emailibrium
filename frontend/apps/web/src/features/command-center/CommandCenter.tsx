@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useCallback } from 'react';
 import { StatsCards } from './StatsCards';
 import { QuickActions } from './QuickActions';
 import { RecentActivity } from './RecentActivity';
@@ -8,6 +8,7 @@ import { SearchResults } from './SearchResults';
 import { SyncStatusIndicator } from './SyncStatusIndicator';
 import { useStats } from './hooks/useStats';
 import { useCommandPalette } from './hooks/useCommandPalette';
+import { getAccounts, startIngestion } from '@emailibrium/api';
 
 type View = 'dashboard' | 'search';
 
@@ -15,6 +16,30 @@ export function CommandCenter() {
   const [view, setView] = useState<View>('dashboard');
   const { stats, isLoading, isError, error, refetch } = useStats();
   const { open: openPalette } = useCommandPalette();
+  const [syncing, setSyncing] = useState(false);
+
+  const handleQuickAction = useCallback(
+    async (actionId: string) => {
+      if (actionId === 'sync-now') {
+        setSyncing(true);
+        try {
+          const accounts = await getAccounts();
+          const active = accounts.filter((a) => a.isActive);
+          if (active.length === 0) {
+            window.location.href = '/onboarding';
+            return;
+          }
+          await Promise.all(active.map((a) => startIngestion(a.id)));
+          refetch();
+        } catch {
+          // ingestion may not be fully wired yet — fail silently
+        } finally {
+          setSyncing(false);
+        }
+      }
+    },
+    [refetch],
+  );
 
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
@@ -125,7 +150,7 @@ export function CommandCenter() {
           <StatsCards stats={stats} isLoading={isLoading} />
 
           {/* Quick actions */}
-          <QuickActions />
+          <QuickActions onAction={handleQuickAction} syncing={syncing} />
 
           {/* Two-column layout for activity and clusters */}
           <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">

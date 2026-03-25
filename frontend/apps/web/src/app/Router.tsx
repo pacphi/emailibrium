@@ -1,4 +1,4 @@
-import { lazy, Suspense } from 'react';
+import { lazy, Suspense, useEffect } from 'react';
 import {
   createRouter,
   createRoute,
@@ -8,6 +8,7 @@ import {
   Navigate,
 } from '@tanstack/react-router';
 import { Layout } from './Layout';
+import { getAccounts, startIngestion } from '@emailibrium/api';
 
 // Lazy-loaded feature components
 const CommandCenter = lazy(() =>
@@ -46,10 +47,29 @@ const rootRoute = createRootRoute({
   ),
 });
 
+function OAuthReturnHandler() {
+  const params = new URLSearchParams(window.location.search);
+  const status = params.get('status');
+
+  useEffect(() => {
+    if (status === 'connected') {
+      // Auto-start ingestion for all active accounts after OAuth success.
+      getAccounts()
+        .then((accounts) => {
+          const active = accounts.filter((a) => a.isActive);
+          return Promise.all(active.map((a) => startIngestion(a.id)));
+        })
+        .catch(() => {});
+    }
+  }, [status]);
+
+  return <Navigate to="/command-center" />;
+}
+
 const indexRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/',
-  component: () => <Navigate to="/command-center" />,
+  component: OAuthReturnHandler,
 });
 
 const commandCenterRoute = createRoute({

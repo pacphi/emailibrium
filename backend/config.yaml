@@ -108,6 +108,7 @@ security:
 # See docs/deployment-guide.md for setup instructions.
 oauth:
   redirect_base_url: "http://localhost:8080"
+  frontend_url: "http://localhost:3000"
   gmail:
     client_id_env: "EMAILIBRIUM_GOOGLE_CLIENT_ID"
     client_secret_env: "EMAILIBRIUM_GOOGLE_CLIENT_SECRET"

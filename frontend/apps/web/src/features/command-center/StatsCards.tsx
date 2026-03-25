@@ -1,5 +1,6 @@
-import type { ReactNode } from 'react';
+import { type ReactNode, useState, useEffect } from 'react';
 import type { AppStats } from './hooks/useStats';
+import { getAccounts } from '@emailibrium/api';
 
 interface StatCardProps {
   icon: ReactNode;
@@ -61,14 +62,30 @@ interface StatsCardsProps {
 }
 
 export function StatsCards({ stats, isLoading }: StatsCardsProps) {
+  const [accountCount, setAccountCount] = useState<number | null>(null);
+  const [accountsByProvider, setAccountsByProvider] = useState<Record<string, number>>({});
+
+  useEffect(() => {
+    getAccounts()
+      .then((accounts) => {
+        setAccountCount(accounts.length);
+        const byProvider: Record<string, number> = {};
+        for (const a of accounts) {
+          byProvider[a.provider] = (byProvider[a.provider] || 0) + 1;
+        }
+        setAccountsByProvider(byProvider);
+      })
+      .catch(() => setAccountCount(0));
+  }, []);
+
   if (isLoading) {
     return (
       <div
-        className="grid grid-cols-2 gap-4 lg:grid-cols-5"
+        className="grid grid-cols-2 gap-4 lg:grid-cols-6"
         role="status"
         aria-label="Loading statistics"
       >
-        {Array.from({ length: 5 }).map((_, i) => (
+        {Array.from({ length: 6 }).map((_, i) => (
           <StatCardSkeleton key={i} />
         ))}
       </div>
@@ -76,6 +93,11 @@ export function StatsCards({ stats, isLoading }: StatsCardsProps) {
   }
 
   const cards: StatCardProps[] = [
+    {
+      icon: <AccountsIcon />,
+      label: 'Accounts',
+      value: accountCount?.toString() ?? '0',
+    },
     {
       icon: <MailIcon />,
       label: 'Total Vectors',
@@ -103,16 +125,111 @@ export function StatsCards({ stats, isLoading }: StatsCardsProps) {
     },
   ];
 
+  const providerColors: Record<string, string> = {
+    gmail: '#EA4335',
+    outlook: '#0078D4',
+    imap: '#6B7280',
+    pop3: '#9CA3AF',
+  };
+
+  const totalAccounts = accountCount ?? 0;
+
   return (
-    <div className="grid grid-cols-2 gap-4 lg:grid-cols-5" aria-label="Email statistics">
-      {cards.map((card) => (
-        <StatCard key={card.label} {...card} />
-      ))}
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-6" aria-label="Email statistics">
+        {cards.map((card) => (
+          <StatCard key={card.label} {...card} />
+        ))}
+      </div>
+
+      {totalAccounts > 0 && Object.keys(accountsByProvider).length > 0 && (
+        <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-800">
+          <p className="text-sm font-medium text-gray-500 dark:text-gray-400 mb-3">
+            Accounts by Provider
+          </p>
+          <div className="flex items-center gap-6">
+            {/* Simple donut chart using SVG */}
+            <svg viewBox="0 0 36 36" className="h-20 w-20 flex-shrink-0">
+              {(() => {
+                const entries = Object.entries(accountsByProvider);
+                let offset = 0;
+                return entries.map(([provider, count]) => {
+                  const pct = (count / totalAccounts) * 100;
+                  const dashArray = `${pct} ${100 - pct}`;
+                  const el = (
+                    <circle
+                      key={provider}
+                      cx="18"
+                      cy="18"
+                      r="15.9155"
+                      fill="none"
+                      stroke={providerColors[provider] ?? '#6B7280'}
+                      strokeWidth="3.5"
+                      strokeDasharray={dashArray}
+                      strokeDashoffset={-offset}
+                      strokeLinecap="round"
+                    />
+                  );
+                  offset += pct;
+                  return el;
+                });
+              })()}
+              <text
+                x="18"
+                y="18"
+                textAnchor="middle"
+                dominantBaseline="central"
+                className="fill-gray-900 dark:fill-white"
+                fontSize="8"
+                fontWeight="600"
+              >
+                {totalAccounts}
+              </text>
+            </svg>
+            {/* Legend */}
+            <div className="flex flex-wrap gap-x-6 gap-y-2">
+              {Object.entries(accountsByProvider).map(([provider, count]) => (
+                <div key={provider} className="flex items-center gap-2">
+                  <span
+                    className="inline-block h-3 w-3 rounded-full"
+                    style={{ backgroundColor: providerColors[provider] ?? '#6B7280' }}
+                  />
+                  <span className="text-sm capitalize text-gray-700 dark:text-gray-300">
+                    {provider}
+                  </span>
+                  <span className="text-sm font-medium text-gray-900 dark:text-white">
+                    {count}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
 /* Inline SVG icon components to avoid external dependencies */
+
+function AccountsIcon() {
+  return (
+    <svg
+      className="h-5 w-5"
+      fill="none"
+      viewBox="0 0 24 24"
+      stroke="currentColor"
+      strokeWidth={2}
+      aria-hidden="true"
+    >
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M15 19.128a9.38 9.38 0 002.625.372 9.337 9.337 0 004.121-.952 4.125 4.125 0 00-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 018.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0111.964-3.07M12 6.375a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zm8.25 2.25a2.625 2.625 0 11-5.25 0 2.625 2.625 0 015.25 0z"
+      />
+    </svg>
+  );
+}
 
 function MailIcon() {
   return (

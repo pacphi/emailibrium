@@ -719,6 +719,9 @@ pub struct OAuthConfig {
     /// OAuth callback base URL (used to construct redirect URIs).
     #[serde(default = "default_oauth_redirect_base")]
     pub redirect_base_url: String,
+    /// Frontend URL to redirect to after OAuth completes.
+    #[serde(default = "default_oauth_frontend_url")]
+    pub frontend_url: String,
 }
 
 impl Default for OAuthConfig {
@@ -727,6 +730,7 @@ impl Default for OAuthConfig {
             gmail: GmailOAuthConfig::default(),
             outlook: OutlookOAuthConfig::default(),
             redirect_base_url: default_oauth_redirect_base(),
+            frontend_url: default_oauth_frontend_url(),
         }
     }
 }
@@ -811,6 +815,9 @@ impl OutlookOAuthConfig {
 
 fn default_oauth_redirect_base() -> String {
     "http://localhost:8080".to_string()
+}
+fn default_oauth_frontend_url() -> String {
+    "http://localhost:3000".to_string()
 }
 fn default_google_client_id_env() -> String {
     "EMAILIBRIUM_GOOGLE_CLIENT_ID".to_string()
@@ -1016,6 +1023,7 @@ mod tests {
     fn test_oauth_config_defaults() {
         let config = OAuthConfig::default();
         assert_eq!(config.redirect_base_url, "http://localhost:8080");
+        assert_eq!(config.frontend_url, "http://localhost:3000");
         assert_eq!(config.gmail.client_id_env, "EMAILIBRIUM_GOOGLE_CLIENT_ID");
         assert_eq!(
             config.gmail.client_secret_env,

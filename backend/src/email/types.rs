@@ -89,6 +89,8 @@ pub struct ConnectedAccount {
     pub status: AccountStatus,
     pub archive_strategy: String,
     pub label_prefix: String,
+    pub sync_depth: String,
+    pub sync_frequency: i32,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

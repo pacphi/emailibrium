@@ -21,6 +21,9 @@ export {
   connectImap,
   getAccounts,
   disconnectAccount,
+  updateAccount,
+  removeAccountLabels,
+  unarchiveAccount,
 } from './authApi.js';
 
 export {

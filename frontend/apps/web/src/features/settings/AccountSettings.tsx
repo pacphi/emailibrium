@@ -1,5 +1,12 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import type { ArchiveStrategy, EmailAccount } from '@emailibrium/types';
+import {
+  getAccounts,
+  disconnectAccount,
+  updateAccount,
+  removeAccountLabels,
+  unarchiveAccount,
+} from '@emailibrium/api';
 
 const ARCHIVE_OPTIONS: { value: ArchiveStrategy; label: string }[] = [
   { value: 'instant', label: 'Instant' },
@@ -26,9 +33,17 @@ interface AccountCardProps {
   account: EmailAccount;
   onUpdate: (id: string, changes: Partial<EmailAccount>) => void;
   onRemove: (id: string) => void;
+  onRemoveLabels: (id: string) => void;
+  onUnarchive: (id: string) => void;
 }
 
-function AccountCard({ account, onUpdate, onRemove }: AccountCardProps) {
+function AccountCard({
+  account,
+  onUpdate,
+  onRemove,
+  onRemoveLabels,
+  onUnarchive,
+}: AccountCardProps) {
   const [showDanger, setShowDanger] = useState(false);
 
   return (
@@ -81,7 +96,10 @@ function AccountCard({ account, onUpdate, onRemove }: AccountCardProps) {
             Sync Frequency
           </label>
           <select
-            defaultValue={5}
+            value={account.syncFrequency}
+            onChange={(e) =>
+              onUpdate(account.id, { syncFrequency: Number(e.target.value) })
+            }
             className="w-full rounded border border-gray-300 bg-white px-2 py-1.5 text-xs
               dark:bg-gray-700 dark:border-gray-600 dark:text-gray-200"
           >
@@ -140,6 +158,7 @@ function AccountCard({ account, onUpdate, onRemove }: AccountCardProps) {
           <div className="mt-3 flex flex-wrap gap-2">
             <button
               type="button"
+              onClick={() => onRemoveLabels(account.id)}
               className="px-3 py-1.5 rounded text-xs font-medium border border-red-300 text-red-700
                 hover:bg-red-50 dark:border-red-700 dark:text-red-400 dark:hover:bg-red-900/20"
             >
@@ -147,6 +166,7 @@ function AccountCard({ account, onUpdate, onRemove }: AccountCardProps) {
             </button>
             <button
               type="button"
+              onClick={() => onUnarchive(account.id)}
               className="px-3 py-1.5 rounded text-xs font-medium border border-red-300 text-red-700
                 hover:bg-red-50 dark:border-red-700 dark:text-red-400 dark:hover:bg-red-900/20"
             >
@@ -168,15 +188,52 @@ function AccountCard({ account, onUpdate, onRemove }: AccountCardProps) {
 }
 
 export function AccountSettings() {
-  // In production, accounts would come from the API via react-query.
   const [accounts, setAccounts] = useState<EmailAccount[]>([]);
+  const [loading, setLoading] = useState(true);
+  const debounceTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+
+  useEffect(() => {
+    getAccounts()
+      .then(setAccounts)
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, []);
 
   const handleUpdate = useCallback((id: string, changes: Partial<EmailAccount>) => {
     setAccounts((prev) => prev.map((a) => (a.id === id ? { ...a, ...changes } : a)));
+
+    // Debounce the API call (300ms) to avoid spamming on every keystroke.
+    clearTimeout(debounceTimers.current[id]);
+    debounceTimers.current[id] = setTimeout(() => {
+      updateAccount(id, changes).catch(() => {});
+    }, 300);
   }, []);
 
   const handleRemove = useCallback((id: string) => {
-    setAccounts((prev) => prev.filter((a) => a.id !== id));
+    if (!window.confirm('Disconnect this account and delete all local data?')) return;
+    disconnectAccount(id)
+      .then(() => setAccounts((prev) => prev.filter((a) => a.id !== id)))
+      .catch(() => {});
+  }, []);
+
+  const handleRemoveLabels = useCallback((id: string) => {
+    if (
+      !window.confirm(
+        'This will remove all Emailibrium labels from your messages. This cannot be undone. Continue?',
+      )
+    )
+      return;
+    removeAccountLabels(id).catch(() => {});
+  }, []);
+
+  const handleUnarchive = useCallback((id: string) => {
+    if (
+      !window.confirm(
+        'This will move all archived messages back to your inbox. Continue?',
+      )
+    )
+      return;
+    unarchiveAccount(id).catch(() => {});
   }, []);
 
   function handleAddAccount() {
@@ -199,7 +256,11 @@ export function AccountSettings() {
         </button>
       </div>
 
-      {accounts.length === 0 ? (
+      {loading ? (
+        <div className="text-center py-12 text-gray-500 dark:text-gray-400">
+          <p className="text-sm">Loading accounts...</p>
+        </div>
+      ) : accounts.length === 0 ? (
         <div className="text-center py-12 text-gray-500 dark:text-gray-400">
           <p className="text-sm">No accounts connected.</p>
           <button
@@ -218,6 +279,8 @@ export function AccountSettings() {
               account={account}
               onUpdate={handleUpdate}
               onRemove={handleRemove}
+              onRemoveLabels={handleRemoveLabels}
+              onUnarchive={handleUnarchive}
             />
           ))}
         </div>

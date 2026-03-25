@@ -20,8 +20,10 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::StreamExt;
-use tracing::debug;
+use tracing::{debug, info, warn};
 
+use crate::email::provider::EmailProvider;
+use crate::email::types::{ListParams, ProviderKind};
 use crate::AppState;
 
 // ---------------------------------------------------------------------------
@@ -179,10 +181,168 @@ async fn ingestion_status_sse(
     )
 }
 
-/// POST /api/v1/ingestion/start — start a new ingestion job.
+/// Sync emails from the provider API into the local `emails` table.
 ///
-/// Delegates to the real `IngestionPipeline` if available on `VectorService`,
-/// falling back to the original broadcast-only handler otherwise.
+/// Fetches messages via the provider's `list_messages` + `get_message` API,
+/// inserts new ones with `embedding_status = 'pending'` so the ingestion
+/// pipeline can process them.
+async fn sync_emails_from_provider(
+    state: &AppState,
+    account_id: &str,
+) -> Result<u64, (StatusCode, String)> {
+    // Look up the account to get provider type.
+    let accounts = state
+        .oauth_manager
+        .list_accounts()
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let account = accounts
+        .iter()
+        .find(|a| a.id == account_id)
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                format!("Account {account_id} not found"),
+            )
+        })?;
+
+    // Get access token (refresh if needed).
+    let access_token = state
+        .oauth_manager
+        .get_access_token(account_id)
+        .await
+        .map_err(|e| (StatusCode::BAD_GATEWAY, format!("Token error: {e}")))?;
+
+    let oauth = &state.vector_service.config.oauth;
+    let provider_str = account.provider.as_str();
+
+    // Build provider.
+    let provider: Box<dyn EmailProvider> = match account.provider {
+        ProviderKind::Gmail => {
+            let gmail_cfg = &oauth.gmail;
+            let client_id = std::env::var(&gmail_cfg.client_id_env).unwrap_or_default();
+            let client_secret = std::env::var(&gmail_cfg.client_secret_env).unwrap_or_default();
+            Box::new(crate::email::gmail::GmailProvider::new(
+                crate::email::types::ProviderConfig {
+                    client_id,
+                    client_secret,
+                    redirect_uri: format!("{}/api/v1/auth/callback", oauth.redirect_base_url),
+                    auth_url: gmail_cfg.auth_url.clone(),
+                    token_url: gmail_cfg.token_url.clone(),
+                    scopes: gmail_cfg.scopes.clone(),
+                },
+            ))
+        }
+        ProviderKind::Outlook => {
+            let outlook_cfg = &oauth.outlook;
+            let client_id = std::env::var(&outlook_cfg.client_id_env).unwrap_or_default();
+            let client_secret =
+                std::env::var(&outlook_cfg.client_secret_env).unwrap_or_default();
+            Box::new(crate::email::outlook::OutlookProvider::new(
+                crate::email::types::ProviderConfig {
+                    client_id,
+                    client_secret,
+                    redirect_uri: format!("{}/api/v1/auth/callback", oauth.redirect_base_url),
+                    auth_url: outlook_cfg.auth_url(),
+                    token_url: outlook_cfg.token_url(),
+                    scopes: outlook_cfg.scopes.clone(),
+                },
+            ))
+        }
+        _ => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!("Provider {provider_str} sync not yet supported"),
+            ));
+        }
+    };
+
+    // Paginate through all messages from the provider.
+    let mut inserted = 0u64;
+    let mut page_token: Option<String> = None;
+    let batch_size = 100u32;
+
+    loop {
+        let params = ListParams {
+            max_results: batch_size,
+            page_token: page_token.clone(),
+            label: None,
+            query: None,
+        };
+
+        let page = provider
+            .list_messages(&access_token, &params)
+            .await
+            .map_err(|e| {
+                (
+                    StatusCode::BAD_GATEWAY,
+                    format!("Failed to list messages: {e}"),
+                )
+            })?;
+
+        for msg in &page.messages {
+            // Insert if not already in DB (ON CONFLICT IGNORE for idempotency).
+            let result = sqlx::query(
+                r#"INSERT OR IGNORE INTO emails
+                   (id, account_id, provider, message_id, thread_id, subject,
+                    from_addr, to_addrs, received_at, body_text, labels,
+                    is_read, embedding_status)
+                   VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 'pending')"#,
+            )
+            .bind(&msg.id)
+            .bind(account_id)
+            .bind(provider_str)
+            .bind(&msg.id)
+            .bind(&msg.thread_id)
+            .bind(&msg.subject)
+            .bind(&msg.from)
+            .bind(msg.to.join(", "))
+            .bind(msg.date.to_rfc3339())
+            .bind(msg.body.as_deref().unwrap_or(&msg.snippet))
+            .bind(msg.labels.join(","))
+            .bind(msg.is_read)
+            .execute(&state.db.pool)
+            .await;
+
+            match result {
+                Ok(r) if r.rows_affected() > 0 => inserted += 1,
+                Ok(_) => {} // already exists
+                Err(e) => warn!(email_id = %msg.id, "Failed to insert email: {e}"),
+            }
+        }
+
+        // Continue to next page or break.
+        page_token = page.next_page_token;
+        if page_token.is_none() || page.messages.is_empty() {
+            break;
+        }
+    }
+
+    // Update sync state.
+    let _ = sqlx::query(
+        "UPDATE sync_state SET emails_synced = emails_synced + ?1, \
+         last_sync_at = datetime('now'), status = 'idle' WHERE account_id = ?2",
+    )
+    .bind(inserted as i64)
+    .bind(account_id)
+    .execute(&state.db.pool)
+    .await;
+
+    info!(
+        account_id = %account_id,
+        provider = %provider_str,
+        emails_synced = inserted,
+        "Email sync from provider complete"
+    );
+
+    Ok(inserted)
+}
+
+/// POST /api/v1/ingestion/start — sync from provider then run ingestion pipeline.
+///
+/// 1. Fetches emails from the provider API (Gmail/Outlook) into local DB
+/// 2. Runs the embedding + categorization pipeline on pending emails
 async fn start_ingestion(
     State(state): State<AppState>,
     Json(req): Json<StartRequest>,
@@ -195,7 +355,18 @@ async fn start_ingestion(
         "starting ingestion job"
     );
 
-    // Try the real ingestion pipeline first.
+    // Phase 0: Sync emails from the provider into local DB.
+    if account_id != "default" {
+        match sync_emails_from_provider(&state, &account_id).await {
+            Ok(n) => info!(account_id = %account_id, synced = n, "Provider sync complete"),
+            Err((status, msg)) => {
+                warn!(account_id = %account_id, "Provider sync failed ({status}): {msg}");
+                // Continue to pipeline anyway — it will process whatever is already in DB.
+            }
+        }
+    }
+
+    // Phase 1+: Run the embedding/categorization pipeline on pending emails.
     let job_id = state
         .vector_service
         .ingestion_pipeline

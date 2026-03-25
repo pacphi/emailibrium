@@ -448,6 +448,83 @@ impl EmailProvider for OutlookProvider {
         // Return the name itself as the "ID" since categories are name-based.
         Ok(name.to_string())
     }
+
+    async fn list_labels(
+        &self,
+        access_token: &str,
+    ) -> Result<Vec<(String, String)>, ProviderError> {
+        let resp: serde_json::Value = self
+            .http
+            .get(format!("{GRAPH_API_BASE}/outlook/masterCategories"))
+            .bearer_auth(access_token)
+            .send()
+            .await
+            .map_err(|e| ProviderError::RequestFailed(e.to_string()))?
+            .json()
+            .await
+            .map_err(|e| ProviderError::ParseError(e.to_string()))?;
+
+        check_graph_error(&resp)?;
+
+        let empty = Vec::new();
+        let categories = resp["value"].as_array().unwrap_or(&empty);
+        Ok(categories
+            .iter()
+            .filter_map(|c| {
+                let id = c["id"].as_str()?.to_string();
+                let name = c["displayName"].as_str()?.to_string();
+                Some((id, name))
+            })
+            .collect())
+    }
+
+    async fn delete_label(
+        &self,
+        access_token: &str,
+        label_id: &str,
+    ) -> Result<(), ProviderError> {
+        let resp = self
+            .http
+            .delete(format!(
+                "{GRAPH_API_BASE}/outlook/masterCategories/{label_id}"
+            ))
+            .bearer_auth(access_token)
+            .send()
+            .await
+            .map_err(|e| ProviderError::RequestFailed(e.to_string()))?;
+
+        if !resp.status().is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(ProviderError::RequestFailed(format!(
+                "Delete category failed: {body}"
+            )));
+        }
+        Ok(())
+    }
+
+    async fn unarchive_message(
+        &self,
+        access_token: &str,
+        id: &str,
+    ) -> Result<(), ProviderError> {
+        let body = serde_json::json!({ "destinationId": "inbox" });
+        let resp = self
+            .http
+            .post(format!("{GRAPH_API_BASE}/messages/{id}/move"))
+            .bearer_auth(access_token)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| ProviderError::RequestFailed(e.to_string()))?;
+
+        if !resp.status().is_success() {
+            let err_body = resp.text().await.unwrap_or_default();
+            return Err(ProviderError::RequestFailed(format!(
+                "Unarchive failed: {err_body}"
+            )));
+        }
+        Ok(())
+    }
 }
 
 impl OutlookProvider {

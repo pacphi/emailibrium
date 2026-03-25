@@ -488,6 +488,87 @@ impl EmailProvider for GmailProvider {
             .map(|s| s.to_string())
             .ok_or_else(|| ProviderError::ParseError("Missing label id".into()))
     }
+
+    async fn list_labels(
+        &self,
+        access_token: &str,
+    ) -> Result<Vec<(String, String)>, ProviderError> {
+        let resp: serde_json::Value = self
+            .http
+            .get(format!("{GMAIL_API_BASE}/labels"))
+            .bearer_auth(access_token)
+            .send()
+            .await
+            .map_err(|e| ProviderError::RequestFailed(e.to_string()))?
+            .json()
+            .await
+            .map_err(|e| ProviderError::ParseError(e.to_string()))?;
+
+        check_error_response(&resp)?;
+
+        let labels = resp["labels"]
+            .as_array()
+            .ok_or_else(|| ProviderError::ParseError("Missing labels array".into()))?;
+
+        Ok(labels
+            .iter()
+            .filter_map(|l| {
+                let id = l["id"].as_str()?.to_string();
+                let name = l["name"].as_str()?.to_string();
+                Some((id, name))
+            })
+            .collect())
+    }
+
+    async fn delete_label(
+        &self,
+        access_token: &str,
+        label_id: &str,
+    ) -> Result<(), ProviderError> {
+        let resp = self
+            .http
+            .delete(format!("{GMAIL_API_BASE}/labels/{label_id}"))
+            .bearer_auth(access_token)
+            .send()
+            .await
+            .map_err(|e| ProviderError::RequestFailed(e.to_string()))?;
+
+        if !resp.status().is_success() {
+            let body: serde_json::Value = resp.json().await.unwrap_or_default();
+            let msg = body["error"]["message"]
+                .as_str()
+                .unwrap_or("unknown error");
+            return Err(ProviderError::RequestFailed(format!(
+                "Delete label failed: {msg}"
+            )));
+        }
+        Ok(())
+    }
+
+    async fn unarchive_message(
+        &self,
+        access_token: &str,
+        id: &str,
+    ) -> Result<(), ProviderError> {
+        let body = serde_json::json!({
+            "addLabelIds": ["INBOX"]
+        });
+
+        let resp: serde_json::Value = self
+            .http
+            .post(format!("{GMAIL_API_BASE}/messages/{id}/modify"))
+            .bearer_auth(access_token)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| ProviderError::RequestFailed(e.to_string()))?
+            .json()
+            .await
+            .map_err(|e| ProviderError::ParseError(e.to_string()))?;
+
+        check_error_response(&resp)?;
+        Ok(())
+    }
 }
 
 impl GmailProvider {

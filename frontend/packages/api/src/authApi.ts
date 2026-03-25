@@ -20,3 +20,22 @@ export async function getAccounts(): Promise<EmailAccount[]> {
 export async function disconnectAccount(id: string): Promise<void> {
   await api.delete(`auth/accounts/${id}`);
 }
+
+export async function updateAccount(
+  id: string,
+  changes: Record<string, unknown>,
+): Promise<void> {
+  await api.patch(`auth/accounts/${id}`, { json: changes });
+}
+
+export async function removeAccountLabels(
+  id: string,
+): Promise<{ messagesProcessed: number; labelsDeleted: number }> {
+  return api.post(`auth/accounts/${id}/remove-labels`).json();
+}
+
+export async function unarchiveAccount(
+  id: string,
+): Promise<{ messagesProcessed: number }> {
+  return api.post(`auth/accounts/${id}/unarchive`).json();
+}

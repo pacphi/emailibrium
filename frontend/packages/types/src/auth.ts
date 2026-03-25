@@ -10,6 +10,7 @@ export interface EmailAccount {
   archiveStrategy: ArchiveStrategy;
   syncDepth: string;
   labelPrefix: string;
+  syncFrequency: number;
   isActive: boolean;
   lastSyncAt?: string;
   emailCount: number;

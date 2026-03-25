@@ -4,8 +4,11 @@
 //! - POST   /api/v1/auth/outlook/connect  -- initiate Outlook OAuth flow (redirect)
 //! - GET    /api/v1/auth/callback         -- OAuth callback handler
 //! - GET    /api/v1/auth/accounts         -- list connected accounts
+//! - PATCH  /api/v1/auth/accounts/:id     -- update account settings
 //! - DELETE /api/v1/auth/accounts/:id     -- disconnect account
 //! - GET    /api/v1/auth/accounts/:id/status -- account sync status
+//! - POST   /api/v1/auth/accounts/:id/remove-labels -- remove all app labels
+//! - POST   /api/v1/auth/accounts/:id/unarchive     -- unarchive all messages
 
 use axum::{
     extract::{Path, Query, State},
@@ -17,6 +20,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::email::provider::EmailProvider;
 use crate::email::types::{ProviderConfig, ProviderKind};
 use crate::AppState;
 
@@ -30,8 +34,16 @@ pub fn routes() -> Router<AppState> {
         )
         .route("/callback", get(oauth_callback))
         .route("/accounts", get(list_accounts))
-        .route("/accounts/{id}", delete(disconnect_account))
+        .route(
+            "/accounts/{id}",
+            delete(disconnect_account).patch(patch_account),
+        )
         .route("/accounts/{id}/status", get(account_status))
+        .route(
+            "/accounts/{id}/remove-labels",
+            post(remove_labels_handler),
+        )
+        .route("/accounts/{id}/unarchive", post(unarchive_handler))
 }
 
 // --- Response types ---
@@ -47,6 +59,10 @@ pub struct AccountResponse {
     pub status: String,
     pub email_count: u64,
     pub last_sync_at: Option<String>,
+    pub archive_strategy: String,
+    pub label_prefix: String,
+    pub sync_depth: String,
+    pub sync_frequency: i32,
 }
 
 #[derive(Debug, Serialize)]
@@ -65,6 +81,22 @@ pub struct OAuthCallbackParams {
     pub state: Option<String>,
     pub error: Option<String>,
     pub error_description: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateAccountRequest {
+    pub archive_strategy: Option<String>,
+    pub label_prefix: Option<String>,
+    pub sync_depth: Option<String>,
+    pub sync_frequency: Option<i32>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DangerZoneResponse {
+    pub messages_processed: u64,
+    pub labels_deleted: u64,
 }
 
 // --- Helpers ---
@@ -168,12 +200,14 @@ async fn oauth_callback(
     State(state): State<AppState>,
     Query(params): Query<OAuthCallbackParams>,
 ) -> Result<Redirect, (StatusCode, String)> {
+    let frontend_url = &state.vector_service.config.oauth.frontend_url;
+
     // Check for OAuth errors from the provider.
     if let Some(ref error) = params.error {
         let desc = params.error_description.as_deref().unwrap_or("Unknown");
         tracing::warn!("OAuth callback error: {error} - {desc}");
         return Ok(Redirect::temporary(&format!(
-            "/?error=oauth_denied&message={}",
+            "{frontend_url}/?error=oauth_denied&message={}",
             urlencoding::encode(desc)
         )));
     }
@@ -231,8 +265,14 @@ async fn oauth_callback(
         }
     };
 
-    // Persist the account.
-    let account_id = Uuid::new_v4().to_string();
+    // Reuse existing account ID if re-authenticating, otherwise create a new one.
+    let account_id = state
+        .oauth_manager
+        .find_account_id_by_email(&email)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
+
     state
         .oauth_manager
         .save_account(&account_id, provider, &email, &tokens)
@@ -261,7 +301,7 @@ async fn oauth_callback(
 
     // Redirect back to the frontend with success params.
     Ok(Redirect::temporary(&format!(
-        "/?provider={}&status=connected",
+        "{frontend_url}/?provider={}&status=connected",
         provider.as_str()
     )))
 }
@@ -295,6 +335,10 @@ async fn list_accounts(
             status: account.status.as_str().to_string(),
             email_count: sync.as_ref().map(|s| s.emails_synced).unwrap_or(0),
             last_sync_at: sync.and_then(|s| s.last_sync_at.map(|dt| dt.to_rfc3339())),
+            archive_strategy: account.archive_strategy,
+            label_prefix: account.label_prefix,
+            sync_depth: account.sync_depth,
+            sync_frequency: account.sync_frequency,
         });
     }
 
@@ -359,5 +403,233 @@ async fn account_status(
         emails_synced: sync.emails_synced,
         sync_failures: sync.sync_failures,
         last_error: sync.last_error,
+    }))
+}
+
+/// PATCH /api/v1/auth/accounts/:id
+///
+/// Update account settings (archive strategy, label prefix, sync depth, sync frequency).
+async fn patch_account(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<UpdateAccountRequest>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    Uuid::parse_str(&id).map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            "Invalid account ID format".to_string(),
+        )
+    })?;
+
+    state
+        .oauth_manager
+        .update_account_settings(
+            &id,
+            body.archive_strategy.as_deref(),
+            body.label_prefix.as_deref(),
+            body.sync_depth.as_deref(),
+            body.sync_frequency,
+        )
+        .await
+        .map_err(|e| match e {
+            crate::email::oauth::OAuthError::ValidationError(msg) => {
+                (StatusCode::UNPROCESSABLE_ENTITY, msg)
+            }
+            crate::email::oauth::OAuthError::AccountNotFound(_) => {
+                (StatusCode::NOT_FOUND, "Account not found".to_string())
+            }
+            other => (StatusCode::INTERNAL_SERVER_ERROR, other.to_string()),
+        })?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// POST /api/v1/auth/accounts/:id/remove-labels
+///
+/// Remove all Emailibrium-created labels from messages and delete label definitions.
+async fn remove_labels_handler(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<DangerZoneResponse>, (StatusCode, String)> {
+    Uuid::parse_str(&id).map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            "Invalid account ID format".to_string(),
+        )
+    })?;
+
+    // Get account info and access token.
+    let accounts = state
+        .oauth_manager
+        .list_accounts()
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let account = accounts
+        .iter()
+        .find(|a| a.id == id)
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "Account not found".to_string()))?;
+
+    let access_token = state
+        .oauth_manager
+        .get_access_token(&id)
+        .await
+        .map_err(|e| (StatusCode::BAD_GATEWAY, e.to_string()))?;
+
+    let prefix = &account.label_prefix;
+    let config = match account.provider {
+        ProviderKind::Gmail => resolve_gmail_config(&state)?,
+        ProviderKind::Outlook => resolve_outlook_config(&state)?,
+        _ => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "Unsupported provider for label operations".to_string(),
+            ))
+        }
+    };
+
+    // Build provider and list labels.
+    let labels: Vec<(String, String)> = match account.provider {
+        ProviderKind::Gmail => {
+            let gmail = crate::email::gmail::GmailProvider::new(config);
+            gmail
+                .list_labels(&access_token)
+                .await
+                .map_err(|e| (StatusCode::BAD_GATEWAY, e.to_string()))?
+        }
+        ProviderKind::Outlook => {
+            let outlook = crate::email::outlook::OutlookProvider::new(config);
+            outlook
+                .list_labels(&access_token)
+                .await
+                .map_err(|e| (StatusCode::BAD_GATEWAY, e.to_string()))?
+        }
+        _ => Vec::new(),
+    };
+
+    // Filter to labels matching the prefix and delete them.
+    let matching: Vec<_> = labels
+        .into_iter()
+        .filter(|(_, name)| name.starts_with(prefix))
+        .collect();
+    let mut labels_deleted = 0u64;
+
+    for (label_id, _name) in &matching {
+        let result = match account.provider {
+            ProviderKind::Gmail => {
+                let gmail =
+                    crate::email::gmail::GmailProvider::new(resolve_gmail_config(&state)?);
+                gmail.delete_label(&access_token, label_id).await
+            }
+            ProviderKind::Outlook => {
+                let outlook =
+                    crate::email::outlook::OutlookProvider::new(resolve_outlook_config(&state)?);
+                outlook.delete_label(&access_token, label_id).await
+            }
+            _ => Ok(()),
+        };
+        if result.is_ok() {
+            labels_deleted += 1;
+        }
+    }
+
+    tracing::info!(
+        "Removed {labels_deleted} labels with prefix '{prefix}' for account {id}"
+    );
+
+    Ok(Json(DangerZoneResponse {
+        messages_processed: 0,
+        labels_deleted,
+    }))
+}
+
+/// POST /api/v1/auth/accounts/:id/unarchive
+///
+/// Move all archived messages back to inbox.
+async fn unarchive_handler(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<DangerZoneResponse>, (StatusCode, String)> {
+    Uuid::parse_str(&id).map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            "Invalid account ID format".to_string(),
+        )
+    })?;
+
+    let accounts = state
+        .oauth_manager
+        .list_accounts()
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let account = accounts
+        .iter()
+        .find(|a| a.id == id)
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "Account not found".to_string()))?;
+
+    let access_token = state
+        .oauth_manager
+        .get_access_token(&id)
+        .await
+        .map_err(|e| (StatusCode::BAD_GATEWAY, e.to_string()))?;
+
+    let config = match account.provider {
+        ProviderKind::Gmail => resolve_gmail_config(&state)?,
+        ProviderKind::Outlook => resolve_outlook_config(&state)?,
+        _ => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "Unsupported provider for unarchive".to_string(),
+            ))
+        }
+    };
+
+    // List messages not in inbox (archived), then unarchive each.
+    let params = crate::email::types::ListParams {
+        query: Some("-in:inbox".to_string()),
+        page_token: None,
+        max_results: 500,
+        label: None,
+    };
+
+    let mut messages_processed = 0u64;
+    match account.provider {
+        ProviderKind::Gmail => {
+            let gmail = crate::email::gmail::GmailProvider::new(config);
+            if let Ok(page) = gmail.list_messages(&access_token, &params).await {
+                for msg in &page.messages {
+                    if gmail
+                        .unarchive_message(&access_token, &msg.id)
+                        .await
+                        .is_ok()
+                    {
+                        messages_processed += 1;
+                    }
+                }
+            }
+        }
+        ProviderKind::Outlook => {
+            let outlook = crate::email::outlook::OutlookProvider::new(config);
+            if let Ok(page) = outlook.list_messages(&access_token, &params).await {
+                for msg in &page.messages {
+                    if outlook
+                        .unarchive_message(&access_token, &msg.id)
+                        .await
+                        .is_ok()
+                    {
+                        messages_processed += 1;
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+
+    tracing::info!("Unarchived {messages_processed} messages for account {id}");
+
+    Ok(Json(DangerZoneResponse {
+        messages_processed,
+        labels_deleted: 0,
     }))
 }

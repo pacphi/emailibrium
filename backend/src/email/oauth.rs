@@ -18,7 +18,7 @@ use super::types::{AccountStatus, ConnectedAccount, OAuthTokens, ProviderConfig,
 const TOKEN_KEY_SALT: &[u8] = b"emailibrium-token-encryption-v1";
 const NONCE_SIZE: usize = 12;
 
-/// Row tuple for the connected_accounts query (8 String columns).
+/// Row tuple for the connected_accounts query (10 columns).
 type AccountRow = (
     String,
     String,
@@ -28,6 +28,8 @@ type AccountRow = (
     String,
     String,
     String,
+    String,
+    i32,
 );
 
 /// Row tuple for the sync_state query.
@@ -68,6 +70,9 @@ pub enum OAuthError {
 
     #[error("HTTP error: {0}")]
     HttpError(String),
+
+    #[error("Validation error: {0}")]
+    ValidationError(String),
 }
 
 /// Manages OAuth flows, token storage, and account persistence.
@@ -219,6 +224,16 @@ impl OAuthManager {
         })
     }
 
+    /// Look up an existing account ID by email address, if one exists.
+    pub async fn find_account_id_by_email(&self, email: &str) -> Result<Option<String>, OAuthError> {
+        let row: Option<(String,)> =
+            sqlx::query_as("SELECT id FROM connected_accounts WHERE email_address = ?1")
+                .bind(email)
+                .fetch_optional(&self.pool)
+                .await?;
+        Ok(row.map(|(id,)| id))
+    }
+
     /// Persist a connected account with encrypted tokens.
     pub async fn save_account(
         &self,
@@ -240,7 +255,7 @@ impl OAuthManager {
              (id, provider, email_address, encrypted_access_token, encrypted_refresh_token, \
               token_expires_at, status) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'connected') \
-             ON CONFLICT(id) DO UPDATE SET \
+             ON CONFLICT(email_address) DO UPDATE SET \
                 encrypted_access_token = ?4, \
                 encrypted_refresh_token = ?5, \
                 token_expires_at = ?6, \
@@ -331,7 +346,7 @@ impl OAuthManager {
     pub async fn list_accounts(&self) -> Result<Vec<ConnectedAccount>, OAuthError> {
         let rows: Vec<AccountRow> = sqlx::query_as(
             "SELECT id, provider, email_address, status, archive_strategy, \
-                 label_prefix, created_at, updated_at \
+                 label_prefix, created_at, updated_at, sync_depth, sync_frequency \
                  FROM connected_accounts ORDER BY created_at DESC",
         )
         .fetch_all(&self.pool)
@@ -364,6 +379,8 @@ impl OAuthManager {
                     status,
                     archive_strategy: r.4,
                     label_prefix: r.5,
+                    sync_depth: r.8,
+                    sync_frequency: r.9,
                     created_at,
                     updated_at,
                 })
@@ -371,6 +388,62 @@ impl OAuthManager {
             .collect();
 
         Ok(accounts)
+    }
+
+    /// Update account settings (archive strategy, label prefix, sync depth, sync frequency).
+    pub async fn update_account_settings(
+        &self,
+        account_id: &str,
+        archive_strategy: Option<&str>,
+        label_prefix: Option<&str>,
+        sync_depth: Option<&str>,
+        sync_frequency: Option<i32>,
+    ) -> Result<(), OAuthError> {
+        // Validate inputs.
+        if let Some(s) = archive_strategy {
+            if !["instant", "delayed", "manual"].contains(&s) {
+                return Err(OAuthError::ValidationError(format!("Invalid archive_strategy: {s}")));
+            }
+        }
+        if let Some(d) = sync_depth {
+            if !["7d", "30d", "90d", "365d", "all"].contains(&d) {
+                return Err(OAuthError::ValidationError(format!("Invalid sync_depth: {d}")));
+            }
+        }
+        if let Some(f) = sync_frequency {
+            if ![1, 5, 15, 60].contains(&f) {
+                return Err(OAuthError::ValidationError(format!("Invalid sync_frequency: {f}")));
+            }
+        }
+        if let Some(lp) = label_prefix {
+            if lp.len() > 20 {
+                return Err(OAuthError::ValidationError(
+                    "label_prefix must be 20 characters or fewer".into(),
+                ));
+            }
+        }
+
+        let rows = sqlx::query(
+            "UPDATE connected_accounts SET \
+                archive_strategy = COALESCE(?1, archive_strategy), \
+                label_prefix = COALESCE(?2, label_prefix), \
+                sync_depth = COALESCE(?3, sync_depth), \
+                sync_frequency = COALESCE(?4, sync_frequency), \
+                updated_at = datetime('now') \
+             WHERE id = ?5",
+        )
+        .bind(archive_strategy)
+        .bind(label_prefix)
+        .bind(sync_depth)
+        .bind(sync_frequency)
+        .bind(account_id)
+        .execute(&self.pool)
+        .await?;
+
+        if rows.rows_affected() == 0 {
+            return Err(OAuthError::AccountNotFound(account_id.to_string()));
+        }
+        Ok(())
     }
 
     /// Disconnect an account (soft-delete: sets status to disconnected, clears tokens).

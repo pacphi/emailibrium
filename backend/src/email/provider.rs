@@ -80,4 +80,36 @@ pub trait EmailProvider: Send + Sync {
 
     /// Create a label/category in the provider if it doesn't exist.
     async fn create_label(&self, access_token: &str, name: &str) -> Result<String, ProviderError>;
+
+    /// List all labels/categories. Returns `Vec<(id, name)>`.
+    async fn list_labels(
+        &self,
+        _access_token: &str,
+    ) -> Result<Vec<(String, String)>, ProviderError> {
+        Err(ProviderError::ConfigError(
+            "list_labels not supported by this provider".into(),
+        ))
+    }
+
+    /// Delete a label/category definition by ID.
+    async fn delete_label(
+        &self,
+        _access_token: &str,
+        _label_id: &str,
+    ) -> Result<(), ProviderError> {
+        Err(ProviderError::ConfigError(
+            "delete_label not supported by this provider".into(),
+        ))
+    }
+
+    /// Move a message back to the inbox (undo archive).
+    async fn unarchive_message(
+        &self,
+        _access_token: &str,
+        _id: &str,
+    ) -> Result<(), ProviderError> {
+        Err(ProviderError::ConfigError(
+            "unarchive not supported by this provider".into(),
+        ))
+    }
 }

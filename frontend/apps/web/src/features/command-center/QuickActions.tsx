@@ -11,9 +11,10 @@ interface QuickAction {
 
 interface QuickActionsProps {
   onAction?: (actionId: string) => void;
+  syncing?: boolean;
 }
 
-export function QuickActions({ onAction }: QuickActionsProps) {
+export function QuickActions({ onAction, syncing }: QuickActionsProps) {
   const actions: QuickAction[] = [
     {
       id: 'clean-inbox',
@@ -52,9 +53,9 @@ export function QuickActions({ onAction }: QuickActionsProps) {
     },
     {
       id: 'sync-now',
-      label: 'Sync Now',
-      description: 'Fetch latest emails',
-      icon: <RefreshIcon />,
+      label: syncing ? 'Syncing...' : 'Sync Now',
+      description: syncing ? 'In progress' : 'Fetch latest emails',
+      icon: <RefreshIcon spinning={syncing} />,
     },
   ];
 
@@ -185,10 +186,10 @@ function PlusIcon() {
   );
 }
 
-function RefreshIcon() {
+function RefreshIcon({ spinning }: { spinning?: boolean }) {
   return (
     <svg
-      className="h-5 w-5"
+      className={`h-5 w-5 ${spinning ? 'animate-spin' : ''}`}
       fill="none"
       viewBox="0 0 24 24"
       stroke="currentColor"
