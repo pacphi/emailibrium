@@ -154,9 +154,15 @@ build: ## Build everything
 	@$(MAKE) -C $(FRONTEND_DIR) build
 
 .PHONY: dev
-dev: ## Start full stack dev servers (native)
+dev: ## Start full stack dev servers (native, loads secrets/dev/ as env vars)
 	@echo "$(GREEN)Backend: http://localhost:8080  Frontend: http://localhost:3000$(RESET)"
-	@trap 'kill 0' INT TERM EXIT; \
+	@export EMAILIBRIUM_GOOGLE_CLIENT_ID="$$(cat secrets/dev/google_client_id 2>/dev/null)" \
+		EMAILIBRIUM_GOOGLE_CLIENT_SECRET="$$(cat secrets/dev/google_client_secret 2>/dev/null)" \
+		EMAILIBRIUM_MICROSOFT_CLIENT_ID="$$(cat secrets/dev/microsoft_client_id 2>/dev/null)" \
+		EMAILIBRIUM_MICROSOFT_CLIENT_SECRET="$$(cat secrets/dev/microsoft_client_secret 2>/dev/null)" \
+		JWT_SECRET="$$(cat secrets/dev/jwt_secret 2>/dev/null)" \
+		EMAILIBRIUM_ENCRYPTION_MASTER_PASSWORD="$$(cat secrets/dev/oauth_encryption_key 2>/dev/null)"; \
+		trap 'kill 0' INT TERM EXIT; \
 		$(MAKE) -C $(BACKEND_DIR) dev & \
 		$(MAKE) -C $(FRONTEND_DIR) dev & \
 		wait
