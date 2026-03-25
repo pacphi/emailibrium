@@ -6,6 +6,7 @@ import type { SidebarGroup } from './EmailSidebar';
 import { EmailList } from './EmailList';
 import { ThreadView } from './ThreadView';
 import { ComposeEmail } from './ComposeEmail';
+import { MoveDialog } from './MoveDialog';
 import {
   useEmailsQuery,
   useThreadQuery,
@@ -134,21 +135,31 @@ export function EmailClient() {
     [deleteMutation, selectedEmailId],
   );
 
-  const handleMoveEmail = useCallback(
-    (emailId: string, targetId: string, kind: 'folder' | 'label') => {
-      const email = emails.find((e) => e.id === emailId);
-      if (!email) return;
+  // Move dialog state.
+  const [moveDialogEmailId, setMoveDialogEmailId] = useState<string | null>(null);
+  const moveDialogEmail = moveDialogEmailId
+    ? emails.find((e) => e.id === moveDialogEmailId)
+    : null;
+
+  const handleMoveOpen = useCallback((emailId: string) => {
+    setMoveDialogEmailId(emailId);
+  }, []);
+
+  const handleMoveConfirm = useCallback(
+    (targetId: string, kind: 'folder' | 'label') => {
+      if (!moveDialogEmail) return;
       moveMutation.mutate({
-        id: emailId,
-        accountId: email.accountId,
+        id: moveDialogEmail.id,
+        accountId: moveDialogEmail.accountId,
         targetId,
         kind,
       });
-      if (kind === 'folder' && selectedEmailId === emailId) {
+      if (kind === 'folder' && selectedEmailId === moveDialogEmail.id) {
         setSelectedEmailId(null);
       }
+      setMoveDialogEmailId(null);
     },
-    [emails, moveMutation, selectedEmailId],
+    [moveDialogEmail, moveMutation, selectedEmailId],
   );
 
   // Thread-level actions
@@ -276,8 +287,7 @@ export function EmailClient() {
           onStarEmail={handleStarEmail}
           onArchiveEmail={handleArchiveEmail}
           onDeleteEmail={handleDeleteEmailFromList}
-          availableLabels={labelsQuery.data}
-          onMoveEmail={handleMoveEmail}
+          onMoveOpen={handleMoveOpen}
         />
       </div>
 
@@ -308,6 +318,15 @@ export function EmailClient() {
         isOpen={isComposeOpen}
         onClose={() => setIsComposeOpen(false)}
         accounts={accounts}
+      />
+
+      {/* Move to folder dialog */}
+      <MoveDialog
+        isOpen={moveDialogEmailId !== null}
+        emailSubject={moveDialogEmail?.subject ?? ''}
+        labels={labelsQuery.data ?? []}
+        onMove={handleMoveConfirm}
+        onClose={() => setMoveDialogEmailId(null)}
       />
     </div>
   );
