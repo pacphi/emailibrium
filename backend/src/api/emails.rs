@@ -21,12 +21,13 @@ use crate::AppState;
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/", get(list_emails))
+        // Static paths before dynamic /{id} to avoid matching "labels" or "thread" as an id.
+        .route("/labels", get(list_account_labels))
+        .route("/thread/{thread_id}", get(get_thread))
         .route("/{id}", get(get_email).delete(delete_email))
         .route("/{id}/archive", post(archive_email))
         .route("/{id}/star", post(star_email))
         .route("/{id}/move", post(move_email))
-        .route("/labels", get(list_account_labels))
-        .route("/thread/{thread_id}", get(get_thread))
 }
 
 #[derive(Debug, Deserialize)]
