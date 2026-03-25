@@ -308,12 +308,13 @@ async fn sync_emails_from_provider(
 
         for msg in &page.messages {
             // Insert if not already in DB (ON CONFLICT IGNORE for idempotency).
+            let is_starred = msg.labels.iter().any(|l| l == "STARRED");
             let result = sqlx::query(
                 r#"INSERT OR IGNORE INTO emails
                    (id, account_id, provider, message_id, thread_id, subject,
                     from_addr, to_addrs, received_at, body_text, labels,
-                    is_read, embedding_status)
-                   VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 'pending')"#,
+                    is_read, is_starred, embedding_status)
+                   VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, 'pending')"#,
             )
             .bind(&msg.id)
             .bind(account_id)
@@ -327,6 +328,7 @@ async fn sync_emails_from_provider(
             .bind(msg.body.as_deref().unwrap_or(&msg.snippet))
             .bind(msg.labels.join(","))
             .bind(msg.is_read)
+            .bind(is_starred)
             .execute(&state.db.pool)
             .await;
 
