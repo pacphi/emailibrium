@@ -33,12 +33,17 @@ const providerBadge: Record<string, { label: string; className: string }> = {
 
 function getInitials(name?: string, email?: string): string {
   const source = name || email || '?';
-  return source
+  // Split into words, extract first alphanumeric char from each.
+  const chars = source
     .split(/[\s@.]+/)
     .filter(Boolean)
-    .slice(0, 2)
-    .map((s) => s[0]?.toUpperCase() ?? '')
-    .join('');
+    .map((w) => {
+      const match = w.match(/[A-Za-z0-9]/);
+      return match ? match[0].toUpperCase() : '';
+    })
+    .filter(Boolean);
+  // Use up to 2 characters; if only one word, use single char.
+  return chars.slice(0, 2).join('') || '?';
 }
 
 function getPreview(email: Email): string {
@@ -129,6 +134,12 @@ export const EmailListItem = forwardRef<HTMLDivElement, EmailListItemProps>(
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <span
+              className={`inline-flex h-4 w-4 shrink-0 items-center justify-center rounded text-[10px] font-bold ${badge.className}`}
+              title={email.provider}
+            >
+              {badge.label}
+            </span>
+            <span
               className={`truncate text-sm ${
                 !email.isRead
                   ? 'font-semibold text-gray-900 dark:text-white'
@@ -136,12 +147,6 @@ export const EmailListItem = forwardRef<HTMLDivElement, EmailListItemProps>(
               }`}
             >
               {email.fromName || email.fromAddr}
-            </span>
-            <span
-              className={`inline-flex h-4 w-4 items-center justify-center rounded text-[10px] font-bold ${badge.className}`}
-              title={email.provider}
-            >
-              {badge.label}
             </span>
           </div>
           <div className="flex items-center gap-1">
