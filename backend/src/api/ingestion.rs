@@ -237,8 +237,7 @@ async fn sync_emails_from_provider(
         ProviderKind::Outlook => {
             let outlook_cfg = &oauth.outlook;
             let client_id = std::env::var(&outlook_cfg.client_id_env).unwrap_or_default();
-            let client_secret =
-                std::env::var(&outlook_cfg.client_secret_env).unwrap_or_default();
+            let client_secret = std::env::var(&outlook_cfg.client_secret_env).unwrap_or_default();
             Box::new(crate::email::outlook::OutlookProvider::new(
                 crate::email::types::ProviderConfig {
                     client_id,

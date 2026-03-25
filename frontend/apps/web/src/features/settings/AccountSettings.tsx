@@ -97,9 +97,7 @@ function AccountCard({
           </label>
           <select
             value={account.syncFrequency}
-            onChange={(e) =>
-              onUpdate(account.id, { syncFrequency: Number(e.target.value) })
-            }
+            onChange={(e) => onUpdate(account.id, { syncFrequency: Number(e.target.value) })}
             className="w-full rounded border border-gray-300 bg-white px-2 py-1.5 text-xs
               dark:bg-gray-700 dark:border-gray-600 dark:text-gray-200"
           >
@@ -227,11 +225,7 @@ export function AccountSettings() {
   }, []);
 
   const handleUnarchive = useCallback((id: string) => {
-    if (
-      !window.confirm(
-        'This will move all archived messages back to your inbox. Continue?',
-      )
-    )
+    if (!window.confirm('This will move all archived messages back to your inbox. Continue?'))
       return;
     unarchiveAccount(id).catch(() => {});
   }, []);

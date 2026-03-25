@@ -48,7 +48,18 @@ function getPreview(email: Email): string {
 }
 
 export const EmailListItem = forwardRef<HTMLDivElement, EmailListItemProps>(function EmailListItem(
-  { email, isSelected, isChecked, availableLabels, onSelect, onCheck, onStar, onArchive, onDelete, onMove },
+  {
+    email,
+    isSelected,
+    isChecked,
+    availableLabels,
+    onSelect,
+    onCheck,
+    onStar,
+    onArchive,
+    onDelete,
+    onMove,
+  },
   ref,
 ) {
   const [showActions, setShowActions] = useState(false);

@@ -148,9 +148,7 @@ export function useMoveEmail() {
     }) => moveEmail(id, body),
     onMutate: async ({ id }) => {
       await queryClient.cancelQueries({ queryKey: ['emails'] });
-      const prev = queryClient.getQueryData<{ emails: Email[]; total: number }>([
-        'emails',
-      ]);
+      const prev = queryClient.getQueryData<{ emails: Email[]; total: number }>(['emails']);
       if (prev) {
         queryClient.setQueryData(['emails'], {
           emails: prev.emails.filter((e) => e.id !== id),

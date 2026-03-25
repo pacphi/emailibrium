@@ -197,9 +197,7 @@ export function StatsCards({ stats, isLoading }: StatsCardsProps) {
                   <span className="text-sm capitalize text-gray-700 dark:text-gray-300">
                     {provider}
                   </span>
-                  <span className="text-sm font-medium text-gray-900 dark:text-white">
-                    {count}
-                  </span>
+                  <span className="text-sm font-medium text-gray-900 dark:text-white">{count}</span>
                 </div>
               ))}
             </div>

@@ -122,21 +122,14 @@ pub trait EmailProvider: Send + Sync {
     }
 
     /// Move a message back to the inbox (undo archive).
-    async fn unarchive_message(
-        &self,
-        _access_token: &str,
-        _id: &str,
-    ) -> Result<(), ProviderError> {
+    async fn unarchive_message(&self, _access_token: &str, _id: &str) -> Result<(), ProviderError> {
         Err(ProviderError::ConfigError(
             "unarchive not supported by this provider".into(),
         ))
     }
 
     /// List all available folders and labels for the account.
-    async fn list_folders(
-        &self,
-        _access_token: &str,
-    ) -> Result<Vec<FolderOrLabel>, ProviderError> {
+    async fn list_folders(&self, _access_token: &str) -> Result<Vec<FolderOrLabel>, ProviderError> {
         Err(ProviderError::ConfigError(
             "list_folders not supported by this provider".into(),
         ))

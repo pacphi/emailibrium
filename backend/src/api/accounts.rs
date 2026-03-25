@@ -39,10 +39,7 @@ pub fn routes() -> Router<AppState> {
             delete(disconnect_account).patch(patch_account),
         )
         .route("/accounts/{id}/status", get(account_status))
-        .route(
-            "/accounts/{id}/remove-labels",
-            post(remove_labels_handler),
-        )
+        .route("/accounts/{id}/remove-labels", post(remove_labels_handler))
         .route("/accounts/{id}/unarchive", post(unarchive_handler))
 }
 
@@ -517,8 +514,7 @@ async fn remove_labels_handler(
     for (label_id, _name) in &matching {
         let result = match account.provider {
             ProviderKind::Gmail => {
-                let gmail =
-                    crate::email::gmail::GmailProvider::new(resolve_gmail_config(&state)?);
+                let gmail = crate::email::gmail::GmailProvider::new(resolve_gmail_config(&state)?);
                 gmail.delete_label(&access_token, label_id).await
             }
             ProviderKind::Outlook => {
@@ -533,9 +529,7 @@ async fn remove_labels_handler(
         }
     }
 
-    tracing::info!(
-        "Removed {labels_deleted} labels with prefix '{prefix}' for account {id}"
-    );
+    tracing::info!("Removed {labels_deleted} labels with prefix '{prefix}' for account {id}");
 
     Ok(Json(DangerZoneResponse {
         messages_processed: 0,

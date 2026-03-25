@@ -225,7 +225,10 @@ impl OAuthManager {
     }
 
     /// Look up an existing account ID by email address, if one exists.
-    pub async fn find_account_id_by_email(&self, email: &str) -> Result<Option<String>, OAuthError> {
+    pub async fn find_account_id_by_email(
+        &self,
+        email: &str,
+    ) -> Result<Option<String>, OAuthError> {
         let row: Option<(String,)> =
             sqlx::query_as("SELECT id FROM connected_accounts WHERE email_address = ?1")
                 .bind(email)
@@ -402,17 +405,23 @@ impl OAuthManager {
         // Validate inputs.
         if let Some(s) = archive_strategy {
             if !["instant", "delayed", "manual"].contains(&s) {
-                return Err(OAuthError::ValidationError(format!("Invalid archive_strategy: {s}")));
+                return Err(OAuthError::ValidationError(format!(
+                    "Invalid archive_strategy: {s}"
+                )));
             }
         }
         if let Some(d) = sync_depth {
             if !["7d", "30d", "90d", "365d", "all"].contains(&d) {
-                return Err(OAuthError::ValidationError(format!("Invalid sync_depth: {d}")));
+                return Err(OAuthError::ValidationError(format!(
+                    "Invalid sync_depth: {d}"
+                )));
             }
         }
         if let Some(f) = sync_frequency {
             if ![1, 5, 15, 60].contains(&f) {
-                return Err(OAuthError::ValidationError(format!("Invalid sync_frequency: {f}")));
+                return Err(OAuthError::ValidationError(format!(
+                    "Invalid sync_frequency: {f}"
+                )));
             }
         }
         if let Some(lp) = label_prefix {

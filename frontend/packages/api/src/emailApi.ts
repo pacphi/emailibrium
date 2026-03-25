@@ -70,9 +70,7 @@ export interface FolderOrLabel {
 }
 
 export async function getLabels(accountId: string): Promise<FolderOrLabel[]> {
-  return api
-    .get('emails/labels', { searchParams: { accountId } })
-    .json<FolderOrLabel[]>();
+  return api.get('emails/labels', { searchParams: { accountId } }).json<FolderOrLabel[]>();
 }
 
 export async function moveEmail(

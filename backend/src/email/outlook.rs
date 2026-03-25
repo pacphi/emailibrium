@@ -478,11 +478,7 @@ impl EmailProvider for OutlookProvider {
             .collect())
     }
 
-    async fn delete_label(
-        &self,
-        access_token: &str,
-        label_id: &str,
-    ) -> Result<(), ProviderError> {
+    async fn delete_label(&self, access_token: &str, label_id: &str) -> Result<(), ProviderError> {
         let resp = self
             .http
             .delete(format!(
@@ -502,11 +498,7 @@ impl EmailProvider for OutlookProvider {
         Ok(())
     }
 
-    async fn unarchive_message(
-        &self,
-        access_token: &str,
-        id: &str,
-    ) -> Result<(), ProviderError> {
+    async fn unarchive_message(&self, access_token: &str, id: &str) -> Result<(), ProviderError> {
         let body = serde_json::json!({ "destinationId": "inbox" });
         let resp = self
             .http

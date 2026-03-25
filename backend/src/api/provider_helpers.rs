@@ -106,7 +106,10 @@ pub async fn resolve_provider_and_token(
         _ => {
             return Err((
                 StatusCode::BAD_REQUEST,
-                format!("Provider {} not supported for this operation", account.provider.as_str()),
+                format!(
+                    "Provider {} not supported for this operation",
+                    account.provider.as_str()
+                ),
             ));
         }
     };

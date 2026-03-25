@@ -203,9 +203,8 @@ async fn get_thread(
     State(state): State<AppState>,
     Path(thread_id): Path<String>,
 ) -> Result<Json<ThreadResponse>, (StatusCode, String)> {
-    let sql = format!(
-        "SELECT {EMAIL_COLUMNS} FROM emails WHERE thread_id = ?1 ORDER BY received_at ASC"
-    );
+    let sql =
+        format!("SELECT {EMAIL_COLUMNS} FROM emails WHERE thread_id = ?1 ORDER BY received_at ASC");
     let rows = sqlx::query(&sql)
         .bind(&thread_id)
         .fetch_all(&state.db.pool)
@@ -279,12 +278,11 @@ async fn get_email_account_id(
     state: &AppState,
     email_id: &str,
 ) -> Result<String, (StatusCode, String)> {
-    let row: Option<(String,)> =
-        sqlx::query_as("SELECT account_id FROM emails WHERE id = ?1")
-            .bind(email_id)
-            .fetch_optional(&state.db.pool)
-            .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let row: Option<(String,)> = sqlx::query_as("SELECT account_id FROM emails WHERE id = ?1")
+        .bind(email_id)
+        .fetch_optional(&state.db.pool)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     row.map(|(aid,)| aid)
         .ok_or_else(|| (StatusCode::NOT_FOUND, "Email not found".to_string()))
 }
@@ -326,12 +324,11 @@ async fn star_email(
     debug!(email_id = %id, "Toggling star");
 
     // Determine new starred state from local DB.
-    let current: Option<(bool,)> =
-        sqlx::query_as("SELECT is_starred FROM emails WHERE id = ?1")
-            .bind(&id)
-            .fetch_optional(&state.db.pool)
-            .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let current: Option<(bool,)> = sqlx::query_as("SELECT is_starred FROM emails WHERE id = ?1")
+        .bind(&id)
+        .fetch_optional(&state.db.pool)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     let new_starred = !current
         .ok_or_else(|| (StatusCode::NOT_FOUND, "Email not found".to_string()))?
         .0;
@@ -464,7 +461,8 @@ async fn move_email(
                     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
             if let Some((labels,)) = current {
-                let mut label_set: Vec<&str> = labels.split(',').filter(|s| !s.is_empty()).collect();
+                let mut label_set: Vec<&str> =
+                    labels.split(',').filter(|s| !s.is_empty()).collect();
                 if !label_set.iter().any(|l| *l == body.target_id) {
                     label_set.push(&body.target_id);
                 }

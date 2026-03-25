@@ -65,9 +65,7 @@ impl GmailProvider {
             .map_err(|e| ProviderError::ParseError(e.to_string()))?;
 
         if !status.is_success() {
-            let api_error = body["error"]["message"]
-                .as_str()
-                .unwrap_or("unknown error");
+            let api_error = body["error"]["message"].as_str().unwrap_or("unknown error");
             return Err(ProviderError::RequestFailed(format!(
                 "Gmail profile API returned {status}: {api_error}"
             )));
@@ -520,11 +518,7 @@ impl EmailProvider for GmailProvider {
             .collect())
     }
 
-    async fn delete_label(
-        &self,
-        access_token: &str,
-        label_id: &str,
-    ) -> Result<(), ProviderError> {
+    async fn delete_label(&self, access_token: &str, label_id: &str) -> Result<(), ProviderError> {
         let resp = self
             .http
             .delete(format!("{GMAIL_API_BASE}/labels/{label_id}"))
@@ -535,9 +529,7 @@ impl EmailProvider for GmailProvider {
 
         if !resp.status().is_success() {
             let body: serde_json::Value = resp.json().await.unwrap_or_default();
-            let msg = body["error"]["message"]
-                .as_str()
-                .unwrap_or("unknown error");
+            let msg = body["error"]["message"].as_str().unwrap_or("unknown error");
             return Err(ProviderError::RequestFailed(format!(
                 "Delete label failed: {msg}"
             )));
@@ -545,11 +537,7 @@ impl EmailProvider for GmailProvider {
         Ok(())
     }
 
-    async fn unarchive_message(
-        &self,
-        access_token: &str,
-        id: &str,
-    ) -> Result<(), ProviderError> {
+    async fn unarchive_message(&self, access_token: &str, id: &str) -> Result<(), ProviderError> {
         let body = serde_json::json!({
             "addLabelIds": ["INBOX"]
         });
@@ -578,7 +566,14 @@ impl EmailProvider for GmailProvider {
 
         let labels = self.list_labels(access_token).await?;
         let system_labels = [
-            "INBOX", "SENT", "TRASH", "SPAM", "DRAFT", "STARRED", "UNREAD", "IMPORTANT",
+            "INBOX",
+            "SENT",
+            "TRASH",
+            "SPAM",
+            "DRAFT",
+            "STARRED",
+            "UNREAD",
+            "IMPORTANT",
         ];
 
         Ok(labels
