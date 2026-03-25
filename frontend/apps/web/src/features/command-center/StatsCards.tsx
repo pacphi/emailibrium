@@ -119,7 +119,7 @@ export function StatsCards({ stats, isLoading }: StatsCardsProps) {
       value: totalEmailCount.toLocaleString(),
     },
     {
-      icon: <MailIcon />,
+      icon: <VectorIcon />,
       label: 'Total Vectors',
       value: stats?.totalVectors?.toLocaleString() ?? '0',
     },
@@ -229,6 +229,25 @@ export function StatsCards({ stats, isLoading }: StatsCardsProps) {
 }
 
 /* Inline SVG icon components to avoid external dependencies */
+
+function VectorIcon() {
+  return (
+    <svg
+      className="h-5 w-5"
+      fill="none"
+      viewBox="0 0 24 24"
+      stroke="currentColor"
+      strokeWidth={2}
+      aria-hidden="true"
+    >
+      <circle cx="6" cy="6" r="2" />
+      <circle cx="18" cy="8" r="2" />
+      <circle cx="12" cy="18" r="2" />
+      <circle cx="18" cy="18" r="2" />
+      <path strokeLinecap="round" d="M7.5 7.5l3 8.5M16 9.5l-2.5 7M16.5 9l-9 8" />
+    </svg>
+  );
+}
 
 function EmailCountIcon() {
   return (
