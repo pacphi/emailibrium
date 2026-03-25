@@ -330,7 +330,7 @@ impl OAuthManager {
         .ok_or_else(|| OAuthError::AccountNotFound(account_id.to_string()))?;
 
         // Check if token is expired (or will expire within 60s).
-        let is_expired = row.1.as_deref().map_or(false, |exp| {
+        let is_expired = row.1.as_deref().is_some_and(|exp| {
             chrono::DateTime::parse_from_rfc3339(exp)
                 .map(|dt| dt < Utc::now() + Duration::seconds(60))
                 .unwrap_or(false)
