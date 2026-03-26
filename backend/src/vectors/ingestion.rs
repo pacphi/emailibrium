@@ -760,7 +760,11 @@ impl IngestionPipelineHandle {
             );
 
             let gen_ref = self.generative.as_deref();
-            match self.categorizer.categorize_with_fallback(&text, &email.from_addr, gen_ref).await {
+            match self
+                .categorizer
+                .categorize_with_fallback(&text, &email.from_addr, gen_ref)
+                .await
+            {
                 Ok(result) => {
                     if let Err(err) = self
                         .update_category(

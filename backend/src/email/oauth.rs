@@ -504,9 +504,9 @@ impl OAuthManager {
             }
         }
         if let Some(f) = sync_frequency {
-            if ![1, 5, 15, 60].contains(&f) {
+            if !(60..=86400).contains(&f) {
                 return Err(OAuthError::ValidationError(format!(
-                    "Invalid sync_frequency: {f}"
+                    "sync_frequency must be between 60 and 86400 seconds, got: {f}"
                 )));
             }
         }

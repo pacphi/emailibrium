@@ -27,6 +27,7 @@ pub mod labels;
 pub mod oauth;
 pub mod offline_queue;
 pub mod outlook;
+pub mod poll_scheduler;
 pub mod provider;
 pub mod sync;
 pub mod sync_scheduler;

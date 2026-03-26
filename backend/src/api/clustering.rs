@@ -30,12 +30,14 @@ pub fn routes() -> Router<AppState> {
 // --- Response types ---
 
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ClusterListResponse {
     pub clusters: Vec<ClusterSummary>,
     pub total: usize,
 }
 
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ClusterSummary {
     pub id: String,
     pub name: String,
@@ -46,6 +48,7 @@ pub struct ClusterSummary {
 }
 
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ClusterDetailResponse {
     pub id: String,
     pub name: String,

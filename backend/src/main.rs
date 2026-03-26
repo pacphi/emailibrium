@@ -35,6 +35,8 @@ pub struct AppState {
     /// Chat service for AI-assisted email conversations (R-07).
     /// `None` when no generative model is configured.
     pub chat_service: Option<Arc<vectors::chat::ChatService>>,
+    /// Background poll scheduler for periodic email sync.
+    pub poll_scheduler: Option<email::poll_scheduler::PollSchedulerHandle>,
 }
 
 #[tokio::main]
@@ -230,9 +232,46 @@ async fn main() -> anyhow::Result<()> {
         db,
         redis,
         ingestion_broadcast: api::ingestion::IngestionBroadcast::default(),
-        oauth_manager,
+        oauth_manager: oauth_manager.clone(),
         event_bus,
         chat_service,
+        poll_scheduler: None, // Initialized below after state creation.
+    };
+
+    // Start the background email poll scheduler.
+    // The sync closure bridges the poll scheduler (lib crate) to the ingestion
+    // code (binary crate) by capturing `state` and calling the same flow as
+    // POST /api/v1/ingestion/start.
+    let sync_state = state.clone();
+    let sync_fn: email::poll_scheduler::SyncAccountFn = std::sync::Arc::new(move |account_id| {
+        let s = sync_state.clone();
+        Box::pin(async move {
+            // Phase 0: Sync from provider.
+            let synced = api::ingestion::sync_emails_from_provider(&s, &account_id)
+                .await
+                .map_err(|(_status, msg)| msg)?;
+
+            // Phase 1+: Run ingestion pipeline on pending emails.
+            if synced > 0 {
+                if let Err(e) = s
+                    .vector_service
+                    .ingestion_pipeline
+                    .start_ingestion(&account_id)
+                    .await
+                {
+                    tracing::warn!(
+                        account_id = %account_id,
+                        "Poll scheduler: ingestion pipeline failed: {e}"
+                    );
+                }
+            }
+            Ok(synced)
+        })
+    });
+    let poll_handle = email::poll_scheduler::start(oauth_manager, sync_fn);
+    let state = AppState {
+        poll_scheduler: Some(poll_handle),
+        ..state
     };
 
     // ── CORS middleware (audit item #6) ────────────────────────────────

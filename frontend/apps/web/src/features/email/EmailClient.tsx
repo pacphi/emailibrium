@@ -10,11 +10,7 @@ import { ThreadView } from './ThreadView';
 import { ComposeEmail } from './ComposeEmail';
 import { MoveDialog } from './MoveDialog';
 import { useQuery } from '@tanstack/react-query';
-import {
-  getAllLabels,
-  getEnrichedCategories,
-  getEmailCounts,
-} from '@emailibrium/api';
+import { getAllLabels, getEnrichedCategories, getEmailCounts } from '@emailibrium/api';
 import {
   useEmailsQuery,
   useThreadQuery,
@@ -64,7 +60,6 @@ export function EmailClient() {
     () => emailsQuery.data?.pages.flatMap((p) => p.emails) ?? [],
     [emailsQuery.data?.pages],
   );
-
 
   const filteredEmails = useMemo(() => {
     if (!searchText.trim()) return emails;
@@ -130,8 +125,6 @@ export function EmailClient() {
     refetchInterval: 30_000,
   });
 
-
-
   // Build sidebar groups dynamically from enriched categories + labels.
   const groupsWithCounts = useMemo(() => {
     const enriched = [...(enrichedQuery.data ?? [])].sort((a, b) => a.name.localeCompare(b.name));
@@ -147,11 +140,10 @@ export function EmailClient() {
 
     // Categories from enriched endpoint (dynamic grouping from backend).
     for (const cat of enriched) {
-      const lower = cat.name.toLowerCase();
-      const icon = cat.group === 'subscription' ? 'subscription' as const : 'category' as const;
+      const icon = cat.group === 'subscription' ? ('subscription' as const) : ('category' as const);
       const prefix = cat.group === 'subscription' ? 'sub-' : 'cat-';
       groups.push({
-        id: `${prefix}${lower}`,
+        id: `${prefix}${cat.name}`,
         label: cat.name,
         icon,
         unreadCount: cat.unreadCount,

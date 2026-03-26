@@ -35,12 +35,16 @@ export function useStats() {
   const health = useHealthQuery();
   const stats = useStatsQuery();
 
+  // Use the most recent dataUpdatedAt from either query as "last updated".
+  const dataUpdatedAt = Math.max(stats.dataUpdatedAt ?? 0, health.dataUpdatedAt ?? 0);
+
   return {
     health: health.data,
     stats: stats.data,
     isLoading: health.isLoading || stats.isLoading,
     isError: health.isError || stats.isError,
     error: health.error ?? stats.error,
+    dataUpdatedAt: dataUpdatedAt > 0 ? dataUpdatedAt : undefined,
     refetch: () => {
       health.refetch();
       stats.refetch();

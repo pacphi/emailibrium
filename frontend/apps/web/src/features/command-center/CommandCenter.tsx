@@ -1,4 +1,6 @@
 import { useState, useCallback, useEffect } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { getClusters, getEnrichedCategories } from '@emailibrium/api';
 import { StatsCards } from './StatsCards';
 import { QuickActions } from './QuickActions';
 import { RecentActivity } from './RecentActivity';
@@ -14,8 +16,23 @@ type View = 'dashboard' | 'search';
 
 export function CommandCenter() {
   const [view, setView] = useState<View>('dashboard');
-  const { stats, isLoading, isError, error, refetch } = useStats();
+  const { stats, isLoading, isError, error, refetch, dataUpdatedAt } = useStats();
   const { open: openPalette } = useCommandPalette();
+
+  // Fetch topic clusters for the visualization panel.
+  const clustersQuery = useQuery({
+    queryKey: ['clusters'],
+    queryFn: () => getClusters(),
+    staleTime: 60_000,
+    refetchInterval: 120_000,
+  });
+
+  // Fetch enriched categories to power "Recent Activity" with real data.
+  const categoriesQuery = useQuery({
+    queryKey: ['categories-enriched-cc'],
+    queryFn: () => getEnrichedCategories(),
+    staleTime: 30_000,
+  });
 
   // Global sync state — persists across navigation.
   const syncing = useSyncStore((s) => s.syncing);
@@ -59,6 +76,17 @@ export function CommandCenter() {
             <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Command Center</h1>
             <p className="mt-0.5 text-sm text-gray-500 dark:text-gray-400">
               Your email intelligence dashboard
+              {dataUpdatedAt && (
+                <span className="ml-2 text-xs text-gray-400 dark:text-gray-500">
+                  &middot; Updated{' '}
+                  {new Date(dataUpdatedAt).toLocaleString(undefined, {
+                    month: 'short',
+                    day: 'numeric',
+                    hour: 'numeric',
+                    minute: '2-digit',
+                  })}
+                </span>
+              )}
             </p>
           </div>
           <div className="flex items-center gap-3">
@@ -205,8 +233,11 @@ export function CommandCenter() {
 
           {/* Two-column layout for activity and clusters */}
           <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-            <RecentActivity />
-            <ClusterVisualization isLoading={isLoading} />
+            <RecentActivity categories={categoriesQuery.data} />
+            <ClusterVisualization
+              clusters={clustersQuery.data}
+              isLoading={clustersQuery.isLoading}
+            />
           </div>
         </div>
       )}

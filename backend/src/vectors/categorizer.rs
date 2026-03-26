@@ -13,12 +13,12 @@ use tokio::sync::RwLock;
 
 use tracing::{debug, warn};
 
-use crate::db::Database;
 use super::embedding::EmbeddingPipeline;
 use super::error::VectorError;
 use super::generative::{GenerativeModel, RuleBasedClassifier};
 use super::store::VectorStoreBackend;
 use super::types::*;
+use crate::db::Database;
 
 /// Compute the cosine similarity between two vectors.
 ///
@@ -331,12 +331,11 @@ impl VectorCategorizer {
     /// Returns the number of centroids loaded.
     pub async fn load_centroids_from_db(&self, db: &Database) -> Result<usize, VectorError> {
         type CentroidRow = (String, Vec<u8>, i64);
-        let rows: Vec<CentroidRow> = sqlx::query_as(
-            "SELECT category, vector_data, dimensions FROM category_centroids",
-        )
-        .fetch_all(&db.pool)
-        .await
-        .map_err(VectorError::DatabaseError)?;
+        let rows: Vec<CentroidRow> =
+            sqlx::query_as("SELECT category, vector_data, dimensions FROM category_centroids")
+                .fetch_all(&db.pool)
+                .await
+                .map_err(VectorError::DatabaseError)?;
 
         let mut centroids = self.centroids.write().await;
         for (cat_name, blob, dims) in &rows {
@@ -361,16 +360,46 @@ impl VectorCategorizer {
     /// Only seeds categories not already present. Returns count of newly seeded centroids.
     pub async fn seed_initial_centroids(&self, db: &Database) -> Result<usize, VectorError> {
         let canonical_texts: &[(EmailCategory, &str)] = &[
-            (EmailCategory::Work, "meeting agenda project deadline task assignment quarterly review standup sprint"),
-            (EmailCategory::Personal, "family dinner birthday party vacation photos kids school"),
-            (EmailCategory::Finance, "invoice payment receipt bank statement transaction balance transfer"),
-            (EmailCategory::Shopping, "order confirmation shipping tracking delivery purchase cart"),
-            (EmailCategory::Social, "friend request connection invitation post shared liked commented"),
-            (EmailCategory::Newsletter, "weekly digest newsletter edition roundup curated stories subscribe"),
-            (EmailCategory::Marketing, "special offer discount sale promotion limited time deal coupon"),
-            (EmailCategory::Notification, "alert notification update system automated service status"),
-            (EmailCategory::Alerts, "security warning urgent action required password reset suspicious"),
-            (EmailCategory::Promotions, "exclusive offer flash sale clearance reward points loyalty"),
+            (
+                EmailCategory::Work,
+                "meeting agenda project deadline task assignment quarterly review standup sprint",
+            ),
+            (
+                EmailCategory::Personal,
+                "family dinner birthday party vacation photos kids school",
+            ),
+            (
+                EmailCategory::Finance,
+                "invoice payment receipt bank statement transaction balance transfer",
+            ),
+            (
+                EmailCategory::Shopping,
+                "order confirmation shipping tracking delivery purchase cart",
+            ),
+            (
+                EmailCategory::Social,
+                "friend request connection invitation post shared liked commented",
+            ),
+            (
+                EmailCategory::Newsletter,
+                "weekly digest newsletter edition roundup curated stories subscribe",
+            ),
+            (
+                EmailCategory::Marketing,
+                "special offer discount sale promotion limited time deal coupon",
+            ),
+            (
+                EmailCategory::Notification,
+                "alert notification update system automated service status",
+            ),
+            (
+                EmailCategory::Alerts,
+                "security warning urgent action required password reset suspicious",
+            ),
+            (
+                EmailCategory::Promotions,
+                "exclusive offer flash sale clearance reward points loyalty",
+            ),
         ];
 
         let mut seeded = 0usize;
@@ -385,7 +414,7 @@ impl VectorCategorizer {
                     let _ = sqlx::query(
                         "INSERT OR IGNORE INTO category_centroids (category, vector_data, dimensions, email_count, feedback_count, last_updated) VALUES (?, ?, ?, 0, 0, datetime('now'))",
                     )
-                    .bind(&category.to_string())
+                    .bind(category.to_string())
                     .bind(&blob)
                     .bind(vector.len() as i64)
                     .execute(&db.pool)

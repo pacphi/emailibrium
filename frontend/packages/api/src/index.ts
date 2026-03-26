@@ -87,5 +87,7 @@ export {
 
 export { recordConsent, getConsents, requestDataExport, requestDataErase } from './consentApi.js';
 
+export { getClusters } from './clusterApi.js';
+
 export { submitFeedback } from './learningApi.js';
 export type { FeedbackPayload, FeedbackAction } from './learningApi.js';

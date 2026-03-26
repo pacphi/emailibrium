@@ -1,6 +1,7 @@
 import { type ReactNode, useState, useEffect } from 'react';
 import type { AppStats } from './hooks/useStats';
-import { getAccounts, getEmails } from '@emailibrium/api';
+import { getAccounts, getEmailCounts } from '@emailibrium/api';
+import type { EmailCounts } from '@emailibrium/api';
 
 /** Map backend index type identifiers to human-friendly display names. */
 function formatIndexType(raw?: string): string {
@@ -32,7 +33,12 @@ function StatCard({ icon, label, value, trend }: StatCardProps) {
         </div>
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm text-gray-500 dark:text-gray-400">{label}</p>
-          <p className="truncate text-2xl font-semibold text-gray-900 dark:text-white" title={String(value)}>{value}</p>
+          <p
+            className="truncate text-2xl font-semibold text-gray-900 dark:text-white"
+            title={String(value)}
+          >
+            {value}
+          </p>
         </div>
       </div>
       {trend && (
@@ -78,7 +84,7 @@ interface StatsCardsProps {
 export function StatsCards({ stats, isLoading }: StatsCardsProps) {
   const [accountCount, setAccountCount] = useState<number | null>(null);
   const [accountsByProvider, setAccountsByProvider] = useState<Record<string, number>>({});
-  const [totalEmailCount, setTotalEmailCount] = useState<number>(0);
+  const [emailCounts, setEmailCounts] = useState<EmailCounts | null>(null);
 
   useEffect(() => {
     getAccounts()
@@ -92,16 +98,16 @@ export function StatsCards({ stats, isLoading }: StatsCardsProps) {
       })
       .catch(() => setAccountCount(0));
 
-    getEmails({ limit: 1 })
-      .then((res) => setTotalEmailCount(res.total))
+    getEmailCounts()
+      .then((counts) => setEmailCounts(counts))
       .catch(() => {});
   }, []);
 
-  // Refresh email count periodically (every 10s) to reflect sync progress.
+  // Refresh email counts periodically (every 10s) to reflect sync progress.
   useEffect(() => {
     const interval = setInterval(() => {
-      getEmails({ limit: 1 })
-        .then((res) => setTotalEmailCount(res.total))
+      getEmailCounts()
+        .then((counts) => setEmailCounts(counts))
         .catch(() => {});
     }, 10_000);
     return () => clearInterval(interval);
@@ -110,11 +116,11 @@ export function StatsCards({ stats, isLoading }: StatsCardsProps) {
   if (isLoading) {
     return (
       <div
-        className="grid grid-cols-2 gap-4 lg:grid-cols-7"
+        className="grid grid-cols-2 gap-4 lg:grid-cols-4 xl:grid-cols-8"
         role="status"
         aria-label="Loading statistics"
       >
-        {Array.from({ length: 7 }).map((_, i) => (
+        {Array.from({ length: 8 }).map((_, i) => (
           <StatCardSkeleton key={i} />
         ))}
       </div>
@@ -130,7 +136,12 @@ export function StatsCards({ stats, isLoading }: StatsCardsProps) {
     {
       icon: <EmailCountIcon />,
       label: 'Emails',
-      value: totalEmailCount.toLocaleString(),
+      value: (emailCounts?.total ?? 0).toLocaleString(),
+    },
+    {
+      icon: <UnreadIcon />,
+      label: 'Unread',
+      value: (emailCounts?.unread ?? 0).toLocaleString(),
     },
     {
       icon: <VectorIcon />,
@@ -170,7 +181,10 @@ export function StatsCards({ stats, isLoading }: StatsCardsProps) {
 
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-7" aria-label="Email statistics">
+      <div
+        className="grid grid-cols-2 gap-4 lg:grid-cols-4 xl:grid-cols-8"
+        aria-label="Email statistics"
+      >
         {cards.map((card) => (
           <StatCard key={card.label} {...card} />
         ))}
@@ -243,6 +257,26 @@ export function StatsCards({ stats, isLoading }: StatsCardsProps) {
 }
 
 /* Inline SVG icon components to avoid external dependencies */
+
+function UnreadIcon() {
+  return (
+    <svg
+      className="h-5 w-5"
+      fill="none"
+      viewBox="0 0 24 24"
+      stroke="currentColor"
+      strokeWidth={2}
+      aria-hidden="true"
+    >
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M2.25 13.5h3.86a2.25 2.25 0 012.012 1.244l.256.512a2.25 2.25 0 002.013 1.244h3.218a2.25 2.25 0 002.013-1.244l.256-.512a2.25 2.25 0 012.013-1.244h3.859"
+      />
+      <circle cx="18" cy="5" r="3" fill="currentColor" />
+    </svg>
+  );
+}
 
 function VectorIcon() {
   return (

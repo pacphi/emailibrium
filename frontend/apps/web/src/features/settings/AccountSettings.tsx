@@ -23,10 +23,11 @@ const SYNC_DEPTH_OPTIONS = [
 ];
 
 const SYNC_FREQ_OPTIONS = [
-  { value: 1, label: '1 min' },
-  { value: 5, label: '5 min' },
-  { value: 15, label: '15 min' },
-  { value: 60, label: '1 hour' },
+  { value: 60, label: '1 min' },
+  { value: 120, label: '2 min' },
+  { value: 300, label: '5 min' },
+  { value: 900, label: '15 min' },
+  { value: 3600, label: '1 hour' },
 ];
 
 interface AccountCardProps {

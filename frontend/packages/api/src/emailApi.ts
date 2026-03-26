@@ -4,6 +4,7 @@ import { api } from './client.js';
 export interface GetEmailsParams {
   accountId?: string;
   category?: string;
+  label?: string;
   isRead?: boolean;
   isStarred?: boolean;
   limit?: number;

@@ -125,7 +125,7 @@ async fn list_emails(
         where_parts.push("account_id = ?".to_string());
     }
     if params.category.is_some() {
-        where_parts.push("category = ?".to_string());
+        where_parts.push("category = ? COLLATE NOCASE".to_string());
     }
     if params.label.is_some() {
         where_parts.push("(',' || labels || ',') LIKE '%,' || ? || ',%'".to_string());
@@ -655,7 +655,11 @@ async fn list_all_labels(
     let mut agg: HashMap<String, LabelAgg> = HashMap::new();
 
     for (labels_csv, account_id, is_read) in &rows {
-        for label in labels_csv.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
+        for label in labels_csv
+            .split(',')
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+        {
             let key = label.to_uppercase();
             let entry = agg.entry(key).or_insert_with(|| LabelAgg {
                 display_name: to_title_case(label),
@@ -672,9 +676,19 @@ async fn list_all_labels(
     }
 
     const SYSTEM_LABELS: &[&str] = &[
-        "INBOX", "SENT", "TRASH", "SPAM", "STARRED", "DRAFT", "IMPORTANT",
-        "UNREAD", "CATEGORY_SOCIAL", "CATEGORY_PROMOTIONS", "CATEGORY_UPDATES",
-        "CATEGORY_FORUMS", "CATEGORY_PERSONAL",
+        "INBOX",
+        "SENT",
+        "TRASH",
+        "SPAM",
+        "STARRED",
+        "DRAFT",
+        "IMPORTANT",
+        "UNREAD",
+        "CATEGORY_SOCIAL",
+        "CATEGORY_PROMOTIONS",
+        "CATEGORY_UPDATES",
+        "CATEGORY_FORUMS",
+        "CATEGORY_PERSONAL",
     ];
 
     let mut result: Vec<AggregatedLabel> = agg

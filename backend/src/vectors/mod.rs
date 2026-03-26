@@ -194,12 +194,10 @@ impl VectorService {
 
         // Load category centroids from DB, seed if empty (ADR-004)
         match categorizer.load_centroids_from_db(&db).await {
-            Ok(0) => {
-                match categorizer.seed_initial_centroids(&db).await {
-                    Ok(seeded) => tracing::info!("Seeded {seeded} initial category centroids"),
-                    Err(e) => tracing::warn!("Failed to seed category centroids: {e}"),
-                }
-            }
+            Ok(0) => match categorizer.seed_initial_centroids(&db).await {
+                Ok(seeded) => tracing::info!("Seeded {seeded} initial category centroids"),
+                Err(e) => tracing::warn!("Failed to seed category centroids: {e}"),
+            },
             Ok(loaded) => tracing::info!("Loaded {loaded} category centroids from database"),
             Err(e) => tracing::warn!("Failed to load category centroids: {e}"),
         }
@@ -255,12 +253,11 @@ impl VectorService {
         // ingestion run re-processes them. This handles in-memory store restarts.
         let store_count = store.count().await.unwrap_or(0);
         if store_count == 0 {
-            let (embedded_in_db,): (i64,) = sqlx::query_as(
-                "SELECT COUNT(*) FROM emails WHERE embedding_status = 'embedded'",
-            )
-            .fetch_one(&db.pool)
-            .await
-            .unwrap_or((0,));
+            let (embedded_in_db,): (i64,) =
+                sqlx::query_as("SELECT COUNT(*) FROM emails WHERE embedding_status = 'embedded'")
+                    .fetch_one(&db.pool)
+                    .await
+                    .unwrap_or((0,));
 
             if embedded_in_db > 0 {
                 let reset = sqlx::query(
@@ -291,33 +288,34 @@ impl VectorService {
         );
 
         // Initialize generative model based on config (ADR-012)
-        let gen_model: Option<Arc<dyn generative::GenerativeModel>> =
-            match config.generative.provider.as_str() {
-                "ollama" => Some(Arc::new(generative::OllamaGenerativeModel::new(
-                    &config.generative.ollama,
-                ))),
-                "cloud" => match generative::CloudGenerativeModel::new(&config.generative.cloud) {
-                    Ok(model) => Some(Arc::new(model)),
-                    Err(e) => {
-                        tracing::warn!(
-                            "Cloud generative model init failed: {e}, falling back to none"
-                        );
-                        None
-                    }
-                },
-                "builtin" => {
-                    tracing::info!("Generative provider: builtin (rule-based classification in backend, LLM via frontend per ADR-021)");
+        let gen_model: Option<Arc<dyn generative::GenerativeModel>> = match config
+            .generative
+            .provider
+            .as_str()
+        {
+            "ollama" => Some(Arc::new(generative::OllamaGenerativeModel::new(
+                &config.generative.ollama,
+            ))),
+            "cloud" => match generative::CloudGenerativeModel::new(&config.generative.cloud) {
+                Ok(model) => Some(Arc::new(model)),
+                Err(e) => {
+                    tracing::warn!("Cloud generative model init failed: {e}, falling back to none");
                     None
                 }
-                "none" => None,
-                _ => {
-                    tracing::warn!(
-                        "Unknown generative provider '{}', defaulting to none",
-                        config.generative.provider
-                    );
-                    None
-                }
-            };
+            },
+            "builtin" => {
+                tracing::info!("Generative provider: builtin (rule-based classification in backend, LLM via frontend per ADR-021)");
+                None
+            }
+            "none" => None,
+            _ => {
+                tracing::warn!(
+                    "Unknown generative provider '{}', defaulting to none",
+                    config.generative.provider
+                );
+                None
+            }
+        };
 
         // Inject generative model into ingestion pipeline for categorize_with_fallback (DEFECT-2)
         ingestion_pipeline.set_generative(gen_model.clone());

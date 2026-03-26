@@ -105,12 +105,7 @@ impl GmailProvider {
         // Resolve label IDs to human-readable names where possible.
         let labels: Vec<String> = raw_label_ids
             .iter()
-            .map(|lid| {
-                label_map
-                    .get(lid)
-                    .cloned()
-                    .unwrap_or_else(|| lid.clone())
-            })
+            .map(|lid| label_map.get(lid).cloned().unwrap_or_else(|| lid.clone()))
             .collect();
 
         let is_read = !labels.contains(&"UNREAD".to_string());

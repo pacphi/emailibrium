@@ -140,6 +140,8 @@ pub fn routes() -> Router<AppState> {
         .route("/resume-checkpoint", post(resume_from_checkpoint))
         .route("/checkpoint", get(get_checkpoint))
         .route("/embedding-status", get(embedding_status))
+        .route("/poll-status", get(poll_status))
+        .route("/poll-toggle", post(poll_toggle))
 }
 
 // ---------------------------------------------------------------------------
@@ -183,10 +185,13 @@ async fn ingestion_status_sse(
 
 /// Sync emails from the provider API into the local `emails` table.
 ///
-/// Fetches messages via the provider's `list_messages` + `get_message` API,
-/// inserts new ones with `embedding_status = 'pending'` so the ingestion
-/// pipeline can process them.
-async fn sync_emails_from_provider(
+/// Two modes:
+/// - **Full sync** (onboarding): No `history_id` in `sync_state` — paginates
+///   through all messages. This is what happens on first account connection.
+/// - **Incremental sync** (polling): Has `history_id` — uses Gmail's
+///   `history.list` or Outlook's delta query to fetch only changed messages.
+///   Dramatically faster for routine new-mail checks.
+pub async fn sync_emails_from_provider(
     state: &AppState,
     account_id: &str,
 ) -> Result<u64, (StatusCode, String)> {
@@ -257,15 +262,62 @@ async fn sync_emails_from_provider(
         }
     };
 
+    // Check sync_state for an existing history_id (incremental sync marker).
+    let sync_row: Option<(Option<String>,)> =
+        sqlx::query_as("SELECT history_id FROM sync_state WHERE account_id = ?")
+            .bind(account_id)
+            .fetch_optional(&state.db.pool)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let history_id = sync_row.and_then(|(h,)| h);
+
+    // ── Incremental sync path ────────────────────────────────────────────
+    // If we have a history_id from a previous sync, use the provider's delta
+    // API to fetch only new/changed messages instead of re-listing everything.
+    if let Some(ref hid) = history_id {
+        info!(
+            account_id = %account_id,
+            provider = %provider_str,
+            history_id = %hid,
+            "Starting incremental sync (delta)"
+        );
+
+        let delta_result = incremental_sync_delta(
+            state,
+            account_id,
+            provider_str,
+            &*provider,
+            &access_token,
+            hid,
+        )
+        .await;
+
+        match delta_result {
+            Ok(count) => return Ok(count),
+            Err(e) => {
+                // Delta failed (e.g. expired history_id). Clear it and fall
+                // through to full sync below.
+                warn!(
+                    account_id = %account_id,
+                    "Incremental sync failed ({e}), falling back to full sync"
+                );
+                let _ = sqlx::query("UPDATE sync_state SET history_id = NULL WHERE account_id = ?")
+                    .bind(account_id)
+                    .execute(&state.db.pool)
+                    .await;
+            }
+        }
+    }
+
+    // ── Full sync path (onboarding) ──────────────────────────────────────
     info!(
         account_id = %account_id,
         provider = %provider_str,
-        "Starting email sync from provider"
+        "Starting full sync (onboarding)"
     );
 
-    // Paginate through all messages from the provider.
     let mut inserted = 0u64;
-    let mut skipped = 0u64;
     let mut page_num = 0u64;
     let mut page_token: Option<String> = None;
     let batch_size = 100u32;
@@ -307,52 +359,13 @@ async fn sync_emails_from_provider(
         );
 
         for msg in &page.messages {
-            // Upsert: insert new emails or update existing ones with body_html.
-            let is_starred = msg.labels.iter().any(|l| l == "STARRED");
-            let has_attachments = false; // Attachment metadata populated separately
-            let result = sqlx::query(
-                r#"INSERT INTO emails
-                   (id, account_id, provider, message_id, thread_id, subject,
-                    from_addr, to_addrs, received_at, body_text, body_html, labels,
-                    is_read, is_starred, has_attachments, embedding_status)
-                   VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, 'pending')
-                   ON CONFLICT(id) DO UPDATE SET
-                    body_html = CASE WHEN length(excluded.body_html) > 0 THEN excluded.body_html ELSE emails.body_html END,
-                    body_text = CASE WHEN length(excluded.body_text) > 0 THEN excluded.body_text ELSE emails.body_text END,
-                    labels = excluded.labels,
-                    is_read = excluded.is_read,
-                    is_starred = excluded.is_starred"#,
-            )
-            .bind(&msg.id)
-            .bind(account_id)
-            .bind(provider_str)
-            .bind(&msg.id)
-            .bind(&msg.thread_id)
-            .bind(&msg.subject)
-            .bind(&msg.from)
-            .bind(msg.to.join(", "))
-            .bind(msg.date.to_rfc3339())
-            .bind(msg.body.as_deref().unwrap_or(&msg.snippet))
-            .bind(msg.body_html.as_deref().unwrap_or(""))
-            .bind(msg.labels.join(","))
-            .bind(msg.is_read)
-            .bind(is_starred)
-            .bind(has_attachments)
-            .execute(&state.db.pool)
-            .await;
-
-            match result {
-                Ok(r) if r.rows_affected() > 0 => inserted += 1,
-                Ok(_) => skipped += 1,
-                Err(e) => warn!(email_id = %msg.id, "Failed to upsert email: {e}"),
-            }
+            inserted += upsert_email(state, account_id, provider_str, msg).await;
         }
 
         debug!(
             account_id = %account_id,
             page = page_num,
-            new = inserted,
-            duplicates = skipped,
+            inserted = inserted,
             "Page processed"
         );
 
@@ -363,24 +376,267 @@ async fn sync_emails_from_provider(
         }
     }
 
-    // Update sync state.
-    let _ = sqlx::query(
-        "UPDATE sync_state SET emails_synced = emails_synced + ?1, \
-         last_sync_at = datetime('now'), status = 'idle' WHERE account_id = ?2",
-    )
-    .bind(inserted as i64)
-    .bind(account_id)
-    .execute(&state.db.pool)
-    .await;
+    // After full sync, capture the provider's current history marker so the
+    // next sync can use the incremental (delta) path.
+    let new_history_id = fetch_provider_history_id(provider_str, &*provider, &access_token).await;
+
+    // Update sync state with count + history marker.
+    if let Some(ref hid) = new_history_id {
+        let _ = sqlx::query(
+            "UPDATE sync_state SET emails_synced = emails_synced + ?1, history_id = ?2, \
+             last_sync_at = datetime('now'), status = 'idle' WHERE account_id = ?3",
+        )
+        .bind(inserted as i64)
+        .bind(hid)
+        .bind(account_id)
+        .execute(&state.db.pool)
+        .await;
+    } else {
+        let _ = sqlx::query(
+            "UPDATE sync_state SET emails_synced = emails_synced + ?1, \
+             last_sync_at = datetime('now'), status = 'idle' WHERE account_id = ?2",
+        )
+        .bind(inserted as i64)
+        .bind(account_id)
+        .execute(&state.db.pool)
+        .await;
+    }
 
     info!(
         account_id = %account_id,
         provider = %provider_str,
         emails_synced = inserted,
-        "Email sync from provider complete"
+        has_history_id = new_history_id.is_some(),
+        "Full sync complete — future syncs will use incremental delta"
     );
 
     Ok(inserted)
+}
+
+// ---------------------------------------------------------------------------
+// Incremental sync helpers
+// ---------------------------------------------------------------------------
+
+/// Perform an incremental sync using the provider's delta API.
+///
+/// Only fetches messages that changed since `history_id`. Returns the count
+/// of new/updated emails upserted, or an error string if delta detection fails.
+async fn incremental_sync_delta(
+    state: &AppState,
+    account_id: &str,
+    provider_str: &str,
+    provider: &dyn EmailProvider,
+    access_token: &str,
+    history_id: &str,
+) -> Result<u64, String> {
+    // Call the appropriate delta API based on provider type.
+    let delta = match provider_str {
+        "gmail" => {
+            let url = format!(
+                "https://gmail.googleapis.com/gmail/v1/users/me/history?startHistoryId={history_id}"
+            );
+            let resp: serde_json::Value = reqwest::Client::new()
+                .get(&url)
+                .bearer_auth(access_token)
+                .send()
+                .await
+                .map_err(|e| e.to_string())?
+                .json()
+                .await
+                .map_err(|e| e.to_string())?;
+
+            let gmail_delta =
+                crate::email::delta::parse_gmail_history(&resp).map_err(|e| e.to_string())?;
+
+            // Map Gmail delta to a common shape.
+            let updated_ids: Vec<String> = gmail_delta
+                .label_changes
+                .iter()
+                .map(|lc| lc.message_id.clone())
+                .collect();
+            crate::email::sync::DeltaResult {
+                new_message_ids: gmail_delta.added_message_ids,
+                updated_message_ids: updated_ids,
+                deleted_message_ids: gmail_delta.deleted_message_ids,
+                new_history_id: gmail_delta.new_history_id,
+            }
+        }
+        "outlook" => {
+            let url = format!(
+                "https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages/delta?$deltatoken={history_id}"
+            );
+            let resp: serde_json::Value = reqwest::Client::new()
+                .get(&url)
+                .bearer_auth(access_token)
+                .send()
+                .await
+                .map_err(|e| e.to_string())?
+                .json()
+                .await
+                .map_err(|e| e.to_string())?;
+
+            let outlook_delta =
+                crate::email::delta::parse_outlook_delta(&resp).map_err(|e| e.to_string())?;
+            crate::email::sync::DeltaResult {
+                new_message_ids: outlook_delta.added_or_modified_ids,
+                updated_message_ids: Vec::new(),
+                deleted_message_ids: outlook_delta.deleted_ids,
+                new_history_id: outlook_delta.delta_link,
+            }
+        }
+        _ => return Err(format!("Incremental sync not supported for {provider_str}")),
+    };
+
+    let new_ids = &delta.new_message_ids;
+    let updated_ids = &delta.updated_message_ids;
+    let deleted_ids = &delta.deleted_message_ids;
+    let total_changes = new_ids.len() + updated_ids.len() + deleted_ids.len();
+
+    info!(
+        account_id = %account_id,
+        new = new_ids.len(),
+        updated = updated_ids.len(),
+        deleted = deleted_ids.len(),
+        "Incremental sync: {total_changes} changes detected"
+    );
+
+    if total_changes == 0 {
+        // No changes — just advance the history marker.
+        if let Some(ref new_hid) = delta.new_history_id {
+            let _ = sqlx::query(
+                "UPDATE sync_state SET history_id = ?, last_sync_at = datetime('now'), \
+                 status = 'idle' WHERE account_id = ?",
+            )
+            .bind(new_hid)
+            .bind(account_id)
+            .execute(&state.db.pool)
+            .await;
+        }
+        return Ok(0);
+    }
+
+    // Fetch full details for new + updated messages.
+    let mut inserted = 0u64;
+    for msg_id in new_ids.iter().chain(updated_ids.iter()) {
+        match provider.get_message(access_token, msg_id).await {
+            Ok(msg) => {
+                inserted += upsert_email(state, account_id, provider_str, &msg).await;
+            }
+            Err(e) => {
+                warn!(email_id = %msg_id, "Incremental sync: failed to fetch message: {e}");
+            }
+        }
+    }
+
+    // Handle remote deletions.
+    for msg_id in deleted_ids {
+        let _ = sqlx::query("DELETE FROM emails WHERE id = ? AND account_id = ?")
+            .bind(msg_id)
+            .bind(account_id)
+            .execute(&state.db.pool)
+            .await;
+    }
+
+    // Update sync state with new history marker.
+    if let Some(ref new_hid) = delta.new_history_id {
+        let _ = sqlx::query(
+            "UPDATE sync_state SET emails_synced = emails_synced + ?1, history_id = ?2, \
+             last_sync_at = datetime('now'), status = 'idle' WHERE account_id = ?3",
+        )
+        .bind(inserted as i64)
+        .bind(new_hid)
+        .bind(account_id)
+        .execute(&state.db.pool)
+        .await;
+    }
+
+    info!(
+        account_id = %account_id,
+        provider = %provider_str,
+        new_emails = inserted,
+        deleted = deleted_ids.len(),
+        "Incremental sync complete"
+    );
+
+    Ok(inserted)
+}
+
+/// Upsert a single email message into the local DB. Returns 1 if inserted, 0 otherwise.
+async fn upsert_email(
+    state: &AppState,
+    account_id: &str,
+    provider_str: &str,
+    msg: &crate::email::types::EmailMessage,
+) -> u64 {
+    let is_starred = msg.labels.iter().any(|l| l == "STARRED");
+    let has_attachments = false;
+    let result = sqlx::query(
+        r#"INSERT INTO emails
+           (id, account_id, provider, message_id, thread_id, subject,
+            from_addr, to_addrs, received_at, body_text, body_html, labels,
+            is_read, is_starred, has_attachments, embedding_status)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, 'pending')
+           ON CONFLICT(id) DO UPDATE SET
+            body_html = CASE WHEN length(excluded.body_html) > 0 THEN excluded.body_html ELSE emails.body_html END,
+            body_text = CASE WHEN length(excluded.body_text) > 0 THEN excluded.body_text ELSE emails.body_text END,
+            labels = excluded.labels,
+            is_read = excluded.is_read,
+            is_starred = excluded.is_starred"#,
+    )
+    .bind(&msg.id)
+    .bind(account_id)
+    .bind(provider_str)
+    .bind(&msg.id)
+    .bind(&msg.thread_id)
+    .bind(&msg.subject)
+    .bind(&msg.from)
+    .bind(msg.to.join(", "))
+    .bind(msg.date.to_rfc3339())
+    .bind(msg.body.as_deref().unwrap_or(&msg.snippet))
+    .bind(msg.body_html.as_deref().unwrap_or(""))
+    .bind(msg.labels.join(","))
+    .bind(msg.is_read)
+    .bind(is_starred)
+    .bind(has_attachments)
+    .execute(&state.db.pool)
+    .await;
+
+    match result {
+        Ok(r) if r.rows_affected() > 0 => 1,
+        Ok(_) => 0,
+        Err(e) => {
+            warn!(email_id = %msg.id, "Failed to upsert email: {e}");
+            0
+        }
+    }
+}
+
+/// Fetch the provider's current history/delta marker after a full sync.
+/// For Gmail, this calls the profile endpoint to get the current `historyId`.
+/// For Outlook, the delta link is only available during delta queries, so we
+/// return None (Outlook incremental sync starts after the first delta call).
+async fn fetch_provider_history_id(
+    provider_str: &str,
+    _provider: &dyn EmailProvider,
+    access_token: &str,
+) -> Option<String> {
+    match provider_str {
+        "gmail" => {
+            // Call the Gmail profile endpoint to get the current historyId.
+            let resp = reqwest::Client::new()
+                .get("https://gmail.googleapis.com/gmail/v1/users/me/profile")
+                .bearer_auth(access_token)
+                .send()
+                .await
+                .ok()?
+                .json::<serde_json::Value>()
+                .await
+                .ok()?;
+
+            resp["historyId"].as_str().map(|s| s.to_string())
+        }
+        _ => None,
+    }
 }
 
 /// POST /api/v1/ingestion/start — sync from provider then run ingestion pipeline.
@@ -670,6 +926,46 @@ async fn embedding_status(
             stale: stale_str,
         },
     }))
+}
+
+// ---------------------------------------------------------------------------
+// Poll scheduler endpoints
+// ---------------------------------------------------------------------------
+
+/// GET /api/v1/ingestion/poll-status — current state of the background poller.
+async fn poll_status(
+    State(state): State<AppState>,
+) -> Result<Json<crate::email::poll_scheduler::PollStatus>, (StatusCode, String)> {
+    match &state.poll_scheduler {
+        Some(handle) => Ok(Json(handle.status().await)),
+        None => Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Poll scheduler not initialized".to_string(),
+        )),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PollToggleRequest {
+    pub enabled: bool,
+}
+
+/// POST /api/v1/ingestion/poll-toggle — enable or disable background polling.
+async fn poll_toggle(
+    State(state): State<AppState>,
+    Json(req): Json<PollToggleRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    match &state.poll_scheduler {
+        Some(handle) => {
+            handle.set_enabled(req.enabled).await;
+            info!(enabled = req.enabled, "Poll scheduler toggled");
+            Ok(Json(serde_json::json!({ "enabled": req.enabled })))
+        }
+        None => Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Poll scheduler not initialized".to_string(),
+        )),
+    }
 }
 
 // ---------------------------------------------------------------------------

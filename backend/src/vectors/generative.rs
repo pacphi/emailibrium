@@ -105,8 +105,7 @@ impl RuleBasedClassifier {
         {
             return Some("Finance".into());
         }
-        if lower.contains("unsubscribe") || lower.contains("opt out") || lower.contains("opt-out")
-        {
+        if lower.contains("unsubscribe") || lower.contains("opt out") || lower.contains("opt-out") {
             return Some("Marketing".into());
         }
         if lower.contains("meeting")
