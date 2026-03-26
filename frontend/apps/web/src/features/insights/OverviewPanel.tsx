@@ -14,6 +14,7 @@ import {
 } from 'recharts';
 import type { InboxReport } from '@emailibrium/types';
 import { HealthScoreGauge } from './components/HealthScoreGauge';
+import { useTemporalInsights } from './hooks/useInsights';
 
 interface OverviewPanelProps {
   report: InboxReport | undefined;
@@ -50,22 +51,6 @@ function buildCategoryData(breakdown: Record<string, number> | undefined) {
   })).filter((d) => d.value > 0);
 }
 
-function generateVolumeData(): Array<{ date: string; received: number; processed: number }> {
-  const data: Array<{ date: string; received: number; processed: number }> = [];
-  const now = new Date();
-  for (let i = 29; i >= 0; i--) {
-    const d = new Date(now);
-    d.setDate(d.getDate() - i);
-    const received = Math.floor(Math.random() * 40) + 10;
-    data.push({
-      date: d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
-      received,
-      processed: Math.floor(received * (0.6 + Math.random() * 0.35)),
-    });
-  }
-  return data;
-}
-
 function computeHealthScore(report: InboxReport | undefined): number {
   if (!report) return 0;
   const { totalEmails, subscriptionCount, estimatedReadingHours } = report;
@@ -94,12 +79,16 @@ function PanelSkeleton() {
 
 export function OverviewPanel({ report, isLoading }: OverviewPanelProps) {
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
+  const { data: temporal } = useTemporalInsights();
 
   if (isLoading) return <PanelSkeleton />;
 
   const healthScore = computeHealthScore(report);
   const categoryData = buildCategoryData(report?.categoryBreakdown);
-  const volumeData = generateVolumeData();
+  const volumeData = temporal?.dailyVolume.slice(-30).map(d => ({
+    date: d.date.slice(5),
+    received: d.count,
+  })) ?? [];
   const topSenders = (report?.topSenders ?? []).slice(0, 8);
 
   return (
@@ -218,24 +207,12 @@ export function OverviewPanel({ report, isLoading }: OverviewPanelProps) {
                 dot={false}
                 name="Received"
               />
-              <Line
-                type="monotone"
-                dataKey="processed"
-                stroke="#22c55e"
-                strokeWidth={2}
-                dot={false}
-                name="Processed"
-              />
             </LineChart>
           </ResponsiveContainer>
           <div className="mt-2 flex gap-4 text-xs text-gray-500 dark:text-gray-400">
             <span className="flex items-center gap-1.5">
               <span className="inline-block h-2 w-4 rounded bg-indigo-500" />
               Received
-            </span>
-            <span className="flex items-center gap-1.5">
-              <span className="inline-block h-2 w-4 rounded bg-green-500" />
-              Processed
             </span>
           </div>
         </div>

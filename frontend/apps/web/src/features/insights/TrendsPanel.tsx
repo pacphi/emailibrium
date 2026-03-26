@@ -1,4 +1,3 @@
-import { useMemo } from 'react';
 import {
   LineChart,
   Line,
@@ -10,6 +9,7 @@ import {
   ResponsiveContainer,
 } from 'recharts';
 import type { InboxReport } from '@emailibrium/types';
+import { useTemporalInsights } from './hooks/useInsights';
 
 interface TrendsPanelProps {
   report: InboxReport | undefined;
@@ -26,58 +26,6 @@ const CATEGORY_COLORS: Record<string, string> = {
   Marketing: '#f97316',
   Notifications: '#64748b',
 };
-
-const DAYS_OF_WEEK = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-const HOURS = Array.from({ length: 24 }, (_, i) => i);
-
-function generateVolumeData90(): Array<{ date: string; volume: number }> {
-  const data: Array<{ date: string; volume: number }> = [];
-  const now = new Date();
-  for (let i = 89; i >= 0; i--) {
-    const d = new Date(now);
-    d.setDate(d.getDate() - i);
-    data.push({
-      date: d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
-      volume: Math.floor(Math.random() * 50) + 5,
-    });
-  }
-  return data;
-}
-
-function generateCategoryOverTime(
-  breakdown: Record<string, number> | undefined,
-): Array<Record<string, number | string>> {
-  const categories = Object.keys(breakdown ?? {});
-  const data: Array<Record<string, number | string>> = [];
-  const now = new Date();
-  for (let i = 89; i >= 0; i--) {
-    const d = new Date(now);
-    d.setDate(d.getDate() - i);
-    const entry: Record<string, number | string> = {
-      date: d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
-    };
-    for (const cat of categories) {
-      const base = (breakdown?.[cat] ?? 0) / 90;
-      entry[cat] = Math.max(0, Math.round(base + (Math.random() - 0.5) * base * 2));
-    }
-    data.push(entry);
-  }
-  return data;
-}
-
-function generateDayOfWeekData(): Array<{ day: string; count: number }> {
-  return DAYS_OF_WEEK.map((day) => ({
-    day,
-    count: Math.floor(Math.random() * 80) + 20,
-  }));
-}
-
-function generateHourOfDayData(): Array<{ hour: string; count: number }> {
-  return HOURS.map((h) => ({
-    hour: `${h.toString().padStart(2, '0')}:00`,
-    count: Math.floor(Math.random() * 30 + (h >= 8 && h <= 18 ? 40 : 5)),
-  }));
-}
 
 function ChartCard({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -99,17 +47,37 @@ function PanelSkeleton() {
 }
 
 export function TrendsPanel({ report, isLoading }: TrendsPanelProps) {
-  const volumeData = useMemo(generateVolumeData90, []);
-  const categoryData = useMemo(
-    () => generateCategoryOverTime(report?.categoryBreakdown),
-    [report?.categoryBreakdown],
-  );
-  const dayData = useMemo(generateDayOfWeekData, []);
-  const hourData = useMemo(generateHourOfDayData, []);
+  const { data: temporal, isLoading: temporalLoading } = useTemporalInsights();
 
   const categories = Object.keys(report?.categoryBreakdown ?? {});
 
-  if (isLoading) return <PanelSkeleton />;
+  const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+  const volumeData = temporal?.dailyVolume.map(d => ({
+    date: d.date.slice(5),
+    volume: d.count,
+  })) ?? [];
+
+  const dayData = temporal?.dayOfWeek.map(d => ({
+    day: dayNames[d.day] ?? `Day ${d.day}`,
+    count: d.count,
+  })) ?? [];
+
+  const hourData = temporal?.hourOfDay.map(d => ({
+    hour: `${String(d.hour).padStart(2, '0')}:00`,
+    count: d.count,
+  })) ?? [];
+
+  const categoryData = temporal?.dailyVolume.map(d => {
+    const dayCategories = temporal.categoryDaily.filter(cd => cd.date === d.date);
+    const row: Record<string, string | number> = { date: d.date.slice(5) };
+    for (const cat of categories) {
+      row[cat] = dayCategories.find(cd => cd.category === cat)?.count ?? 0;
+    }
+    return row;
+  }) ?? [];
+
+  if (isLoading || temporalLoading) return <PanelSkeleton />;
 
   return (
     <div className="space-y-6">

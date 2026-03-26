@@ -45,7 +45,7 @@ function SubscriptionRow({
   item: SubscriptionInsight;
   onUnsubscribe?: (id: string) => void;
 }) {
-  const readRate = 0; // API does not expose read rate yet; default to 0
+  const readRate = item.readRate ?? 0;
   const actionLabel =
     item.suggestedAction === 'unsubscribe'
       ? 'Unsubscribe'

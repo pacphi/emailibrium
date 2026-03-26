@@ -26,6 +26,7 @@ export interface SubscriptionInsight {
   hasUnsubscribe: boolean;
   category: SubscriptionCategory;
   suggestedAction: SuggestedAction;
+  readRate?: number;
 }
 
 export interface InboxReport {
@@ -34,4 +35,33 @@ export interface InboxReport {
   topSenders: Array<{ sender: string; count: number }>;
   subscriptionCount: number;
   estimatedReadingHours: number;
+  readRate?: number;
+}
+
+export interface DailyCount {
+  date: string;
+  count: number;
+}
+
+export interface CategoryDailyCount {
+  date: string;
+  category: string;
+  count: number;
+}
+
+export interface DayOfWeekCount {
+  day: number;
+  count: number;
+}
+
+export interface HourOfDayCount {
+  hour: number;
+  count: number;
+}
+
+export interface TemporalInsights {
+  dailyVolume: DailyCount[];
+  categoryDaily: CategoryDailyCount[];
+  dayOfWeek: DayOfWeekCount[];
+  hourOfDay: HourOfDayCount[];
 }

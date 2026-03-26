@@ -16,6 +16,11 @@ export type {
   SuggestedAction,
   SubscriptionInsight,
   InboxReport,
+  DailyCount,
+  CategoryDailyCount,
+  DayOfWeekCount,
+  HourOfDayCount,
+  TemporalInsights,
 } from './insights.js';
 
 export type { IngestionPhase, IngestionProgress } from './ingestion.js';

@@ -100,6 +100,8 @@ pub struct SubscriptionInsight {
     pub has_unsubscribe: bool,
     pub category: SubscriptionCategory,
     pub suggested_action: SuggestedAction,
+    /// Per-sender read rate (0.0 to 1.0).
+    pub read_rate: f64,
 }
 
 /// Insight about a recurring sender.
@@ -119,6 +121,8 @@ pub struct InboxReport {
     pub top_senders: Vec<(String, u64)>,
     pub subscription_count: u64,
     pub estimated_reading_hours: f32,
+    /// Overall read rate (0.0 to 1.0).
+    pub read_rate: f64,
 }
 
 // ---------------------------------------------------------------------------
@@ -211,6 +215,16 @@ impl InsightEngine {
             let suggested_action =
                 suggest_action(&frequency, &category, email_count, has_unsubscribe);
 
+            // Per-sender read rate
+            let read_rate_row: (f64,) = sqlx::query_as(
+                "SELECT COALESCE(CAST(COUNT(CASE WHEN is_read THEN 1 END) AS FLOAT) \
+                 / NULLIF(COUNT(*), 0), 0.0) as read_rate FROM emails WHERE from_addr = ?",
+            )
+            .bind(sender)
+            .fetch_one(&self.db.pool)
+            .await
+            .map_err(VectorError::DatabaseError)?;
+
             insights.push(SubscriptionInsight {
                 sender_address: sender.clone(),
                 sender_domain: domain,
@@ -221,6 +235,7 @@ impl InsightEngine {
                 has_unsubscribe,
                 category,
                 suggested_action,
+                read_rate: read_rate_row.0,
             });
         }
 
@@ -348,12 +363,23 @@ impl InsightEngine {
         // Estimated reading hours: ~30 seconds per email (conservative)
         let estimated_reading_hours = total_emails as f32 * 30.0 / 3600.0;
 
+        // Overall read rate
+        let read_rate_row: (f64,) = sqlx::query_as(
+            "SELECT COALESCE(CAST(COUNT(CASE WHEN is_read THEN 1 END) AS FLOAT) \
+             / NULLIF(COUNT(*), 0), 0.0) as read_rate FROM emails",
+        )
+        .fetch_one(&self.db.pool)
+        .await
+        .map_err(VectorError::DatabaseError)?;
+        let read_rate = read_rate_row.0;
+
         Ok(InboxReport {
             total_emails,
             category_breakdown,
             top_senders,
             subscription_count,
             estimated_reading_hours,
+            read_rate,
         })
     }
 }

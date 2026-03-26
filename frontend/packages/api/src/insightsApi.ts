@@ -1,4 +1,4 @@
-import type { SubscriptionInsight, InboxReport } from '@emailibrium/types';
+import type { SubscriptionInsight, InboxReport, TemporalInsights } from '@emailibrium/types';
 import { api } from './client.js';
 
 export async function getSubscriptions(): Promise<SubscriptionInsight[]> {
@@ -11,4 +11,8 @@ export async function getRecurringSenders(): Promise<SubscriptionInsight[]> {
 
 export async function getInboxReport(): Promise<InboxReport> {
   return api.get('insights/report').json<InboxReport>();
+}
+
+export async function getTemporalInsights(): Promise<TemporalInsights> {
+  return api.get('insights/temporal').json<TemporalInsights>();
 }

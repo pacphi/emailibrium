@@ -41,7 +41,7 @@ function buildClusters(senders: SubscriptionInsight[]): TopicCluster[] {
         .sort((a, b) => b.emailCount - a.emailCount)
         .slice(0, 3)
         .map((i) => i.senderAddress),
-      sampleSubjects: items.slice(0, 3).map((i) => `${i.senderDomain} updates`),
+      sampleSubjects: items.slice(0, 3).map((i) => i.senderAddress),
       isPinned: false,
     };
   });
