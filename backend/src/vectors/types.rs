@@ -145,6 +145,7 @@ pub struct CategoryCentroid {
 
 /// Health status of the vector service.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct HealthStatus {
     pub status: String,
     pub store_healthy: bool,
@@ -154,6 +155,7 @@ pub struct HealthStatus {
 
 /// Statistics about the vector store.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct VectorStats {
     pub total_vectors: u64,
     pub collections: HashMap<String, u64>,

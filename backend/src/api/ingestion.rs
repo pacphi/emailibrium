@@ -476,18 +476,9 @@ async fn start_ingestion(
             }
         }
 
-        // Broadcast: complete.
-        let _ = bg_state.ingestion_broadcast.send(IngestionProgress {
-            job_id: bg_job_id.clone(),
-            total: synced_count,
-            processed: synced_count,
-            embedded: 0,
-            categorized: 0,
-            failed: 0,
-            phase: IngestionPhase::Complete,
-            eta_seconds: None,
-            emails_per_second: 0.0,
-        });
+        // Progress broadcasting is handled by the inner ingestion pipeline.
+        // Do not broadcast a premature Complete event here.
+        info!(job_id = %bg_job_id, "Ingestion pipeline dispatched for account {bg_account_id}");
     });
 
     Ok(Json(JobResponse {

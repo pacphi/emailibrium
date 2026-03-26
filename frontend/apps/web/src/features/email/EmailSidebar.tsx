@@ -4,7 +4,7 @@ import { Inbox, Tag, Hash, Bell, ChevronDown, ChevronRight } from 'lucide-react'
 export interface SidebarGroup {
   id: string;
   label: string;
-  icon: 'inbox' | 'category' | 'topic' | 'subscription';
+  icon: 'inbox' | 'category' | 'topic' | 'subscription' | 'label';
   unreadCount?: number;
   children?: SidebarGroup[];
 }
@@ -20,6 +20,7 @@ const iconMap = {
   category: Tag,
   topic: Hash,
   subscription: Bell,
+  label: Tag,
 } as const;
 
 function SidebarItem({
@@ -106,6 +107,7 @@ export function EmailSidebar({ groups, activeGroupId, onGroupSelect }: EmailSide
   const categoryGroups = groups.filter((g) => g.icon === 'category');
   const topicGroups = groups.filter((g) => g.icon === 'topic');
   const subscriptionGroups = groups.filter((g) => g.icon === 'subscription');
+  const labelGroups = groups.filter((g) => g.icon === 'label');
 
   return (
     <nav
@@ -160,6 +162,22 @@ export function EmailSidebar({ groups, activeGroupId, onGroupSelect }: EmailSide
         <div className="mt-4">
           <CollapsibleSection title="Subscriptions" defaultOpen={false}>
             {subscriptionGroups.map((group) => (
+              <SidebarItem
+                key={group.id}
+                group={group}
+                isActive={activeGroupId === group.id}
+                onSelect={onGroupSelect}
+                depth={1}
+              />
+            ))}
+          </CollapsibleSection>
+        </div>
+      )}
+
+      {labelGroups.length > 0 && (
+        <div className="mt-4">
+          <CollapsibleSection title="Labels" defaultOpen={false}>
+            {labelGroups.map((group) => (
               <SidebarItem
                 key={group.id}
                 group={group}

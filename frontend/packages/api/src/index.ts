@@ -48,8 +48,18 @@ export {
   getAttachments,
   getAttachmentDownloadUrl,
   getAttachmentsZipUrl,
+  getAllLabels,
+  getEnrichedCategories,
+  getEmailCounts,
 } from './emailApi.js';
-export type { GetEmailsParams, SendEmailDraft, FolderOrLabel } from './emailApi.js';
+export type {
+  GetEmailsParams,
+  SendEmailDraft,
+  FolderOrLabel,
+  AggregatedLabel,
+  EnrichedCategory,
+  EmailCounts,
+} from './emailApi.js';
 
 export {
   getRules,

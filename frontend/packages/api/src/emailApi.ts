@@ -82,6 +82,46 @@ export async function getLabels(accountId: string): Promise<FolderOrLabel[]> {
   return api.get('emails/labels', { searchParams: { accountId } }).json<FolderOrLabel[]>();
 }
 
+// --- Gap 4: Cross-account label aggregation ---
+
+export interface AggregatedLabel {
+  name: string;
+  kind: string;
+  isSystem: boolean;
+  emailCount: number;
+  unreadCount: number;
+  accountIds: string[];
+}
+
+export async function getAllLabels(): Promise<AggregatedLabel[]> {
+  return api.get('emails/labels/all').json<AggregatedLabel[]>();
+}
+
+// --- Gap 5: Enriched categories ---
+
+export interface EnrichedCategory {
+  name: string;
+  group: string;
+  emailCount: number;
+  unreadCount: number;
+}
+
+export async function getEnrichedCategories(): Promise<EnrichedCategory[]> {
+  return api.get('emails/categories/enriched').json<EnrichedCategory[]>();
+}
+
+// --- Gap 6: Accurate email counts ---
+
+export interface EmailCounts {
+  total: number;
+  unread: number;
+  byCategory: Array<{ category: string; total: number; unread: number }>;
+}
+
+export async function getEmailCounts(): Promise<EmailCounts> {
+  return api.get('emails/counts').json<EmailCounts>();
+}
+
 export async function moveEmail(
   id: string,
   body: { accountId: string; targetId: string; kind: 'folder' | 'label' },

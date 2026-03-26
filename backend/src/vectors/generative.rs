@@ -65,6 +65,37 @@ impl RuleBasedClassifier {
         if domain.contains("substack.com") || domain.contains("medium.com") {
             return Some("Newsletter".into());
         }
+        if domain.contains("slack.com") || domain.contains("discord.com") {
+            return Some("Notification".into());
+        }
+        if domain.contains("twitter.com")
+            || domain.contains("x.com")
+            || domain.contains("instagram.com")
+            || domain.contains("tiktok.com")
+        {
+            return Some("Social".into());
+        }
+        if domain.contains("shopify.com") {
+            return Some("Shopping".into());
+        }
+        if domain.contains("mint.com") || domain.contains("venmo.com") {
+            return Some("Finance".into());
+        }
+        if domain.contains("mailchimp.com")
+            || domain.contains("sendgrid.net")
+            || domain.contains("constantcontact.com")
+        {
+            return Some("Marketing".into());
+        }
+
+        // --- Sender prefix rules ---
+        let local_part = from_addr.split('@').next().unwrap_or("");
+        if local_part == "noreply" || local_part == "no-reply" {
+            return Some("Notification".into());
+        }
+        if local_part.contains("newsletter") || local_part.contains("digest") {
+            return Some("Newsletter".into());
+        }
 
         // --- Keyword-based rules ---
         if lower.contains("invoice")
@@ -74,7 +105,8 @@ impl RuleBasedClassifier {
         {
             return Some("Finance".into());
         }
-        if lower.contains("unsubscribe") || lower.contains("opt out") || lower.contains("opt-out") {
+        if lower.contains("unsubscribe") || lower.contains("opt out") || lower.contains("opt-out")
+        {
             return Some("Marketing".into());
         }
         if lower.contains("meeting")
@@ -96,8 +128,37 @@ impl RuleBasedClassifier {
         if lower.contains("promotion") || lower.contains("% off") || lower.contains("sale ends") {
             return Some("Promotions".into());
         }
+        if lower.contains("your order") || lower.contains("track your package") {
+            return Some("Shopping".into());
+        }
+        if lower.contains("security alert")
+            || lower.contains("unusual sign-in")
+            || lower.contains("verify your")
+        {
+            return Some("Alerts".into());
+        }
+        if lower.contains("weekly report") || lower.contains("monthly summary") {
+            return Some("Work".into());
+        }
+        if lower.contains("you're invited") || lower.contains("rsvp") {
+            return Some("Personal".into());
+        }
 
         None
+    }
+
+    /// Map Gmail built-in category labels to EmailCategory names.
+    /// Called from the labels aggregation endpoint; will also be wired into sync.
+    #[allow(dead_code)]
+    pub fn category_from_gmail_label(label: &str) -> Option<String> {
+        match label {
+            "CATEGORY_SOCIAL" => Some("Social".into()),
+            "CATEGORY_PROMOTIONS" => Some("Promotions".into()),
+            "CATEGORY_UPDATES" => Some("Notification".into()),
+            "CATEGORY_FORUMS" => Some("Social".into()),
+            "CATEGORY_PERSONAL" => Some("Personal".into()),
+            _ => None,
+        }
     }
 }
 

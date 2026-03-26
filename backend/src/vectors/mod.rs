@@ -192,6 +192,18 @@ impl VectorService {
             config.categorizer.confidence_threshold,
         ));
 
+        // Load category centroids from DB, seed if empty (ADR-004)
+        match categorizer.load_centroids_from_db(&db).await {
+            Ok(0) => {
+                match categorizer.seed_initial_centroids(&db).await {
+                    Ok(seeded) => tracing::info!("Seeded {seeded} initial category centroids"),
+                    Err(e) => tracing::warn!("Failed to seed category centroids: {e}"),
+                }
+            }
+            Ok(loaded) => tracing::info!("Loaded {loaded} category centroids from database"),
+            Err(e) => tracing::warn!("Failed to load category centroids: {e}"),
+        }
+
         // Initialize hybrid search
         let hybrid_search = Arc::new(search::HybridSearch::new(
             store.clone(),
@@ -238,18 +250,45 @@ impl VectorService {
             }
         }
 
+        // Detect stale embedding status: if the vector store is empty but the DB
+        // has emails marked as 'embedded', reset them to 'pending' so the next
+        // ingestion run re-processes them. This handles in-memory store restarts.
+        let store_count = store.count().await.unwrap_or(0);
+        if store_count == 0 {
+            let (embedded_in_db,): (i64,) = sqlx::query_as(
+                "SELECT COUNT(*) FROM emails WHERE embedding_status = 'embedded'",
+            )
+            .fetch_one(&db.pool)
+            .await
+            .unwrap_or((0,));
+
+            if embedded_in_db > 0 {
+                let reset = sqlx::query(
+                    "UPDATE emails SET embedding_status = 'pending' WHERE embedding_status = 'embedded'",
+                )
+                .execute(&db.pool)
+                .await
+                .map(|r| r.rows_affected())
+                .unwrap_or(0);
+                tracing::info!(
+                    "Vector store empty but {embedded_in_db} emails marked as embedded — \
+                     reset {reset} to pending for re-embedding on next sync"
+                );
+            }
+        }
+
         // Initialize quantization engine
         let quantization_engine = Arc::new(quantization::QuantizationEngine::new(
             config.quantization.clone(),
         ));
 
-        // Initialize ingestion pipeline
-        let ingestion_pipeline = Arc::new(ingestion::IngestionPipeline::new(
+        // Initialize ingestion pipeline (generative model injected after init below)
+        let mut ingestion_pipeline = ingestion::IngestionPipeline::new(
             embedding.clone(),
             store.clone(),
             categorizer.clone(),
             db.clone(),
-        ));
+        );
 
         // Initialize generative model based on config (ADR-012)
         let gen_model: Option<Arc<dyn generative::GenerativeModel>> =
@@ -266,8 +305,23 @@ impl VectorService {
                         None
                     }
                 },
-                _ => None,
+                "builtin" => {
+                    tracing::info!("Generative provider: builtin (rule-based classification in backend, LLM via frontend per ADR-021)");
+                    None
+                }
+                "none" => None,
+                _ => {
+                    tracing::warn!(
+                        "Unknown generative provider '{}', defaulting to none",
+                        config.generative.provider
+                    );
+                    None
+                }
             };
+
+        // Inject generative model into ingestion pipeline for categorize_with_fallback (DEFECT-2)
+        ingestion_pipeline.set_generative(gen_model.clone());
+        let ingestion_pipeline = Arc::new(ingestion_pipeline);
 
         // Initialize consent manager
         let consent_manager = Arc::new(consent::ConsentManager::new(db.clone()));
@@ -308,6 +362,7 @@ impl VectorService {
             let provider_type = match config.generative.provider.as_str() {
                 "ollama" => ProviderType::Ollama,
                 "cloud" => ProviderType::OpenAi,
+                "builtin" | "none" => ProviderType::None,
                 _ => ProviderType::None,
             };
             generative_router

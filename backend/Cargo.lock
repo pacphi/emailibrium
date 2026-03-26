@@ -1487,6 +1487,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "criterion",
+ "emailibrium",
  "fastembed",
  "figment",
  "futures",

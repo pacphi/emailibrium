@@ -9,6 +9,12 @@ import { groupByDomain } from './utils/groupBySender';
 import { ThreadView } from './ThreadView';
 import { ComposeEmail } from './ComposeEmail';
 import { MoveDialog } from './MoveDialog';
+import { useQuery } from '@tanstack/react-query';
+import {
+  getAllLabels,
+  getEnrichedCategories,
+  getEmailCounts,
+} from '@emailibrium/api';
 import {
   useEmailsQuery,
   useThreadQuery,
@@ -19,26 +25,17 @@ import {
   useForwardEmail,
   useBulkArchive,
   useBulkDelete,
-  useCategoriesQuery,
   useLabelsQuery,
   useMoveEmail,
   useMarkRead,
 } from './hooks/useEmails';
 
-const SUBSCRIPTION_CATEGORIES = new Set([
-  'newsletters',
-  'marketing',
-  'promotions',
-  'updates',
-  'digests',
-]);
-const TOPIC_CATEGORIES = new Set(['projects', 'travel', 'events', 'meetings']);
-
-function groupToQueryParam(groupId: string): { category?: string } {
+function groupToQueryParam(groupId: string): { category?: string; label?: string } {
   if (groupId === 'inbox') return {};
   if (groupId.startsWith('cat-')) return { category: groupId.replace('cat-', '') };
   if (groupId.startsWith('topic-')) return { category: groupId.replace('topic-', '') };
   if (groupId.startsWith('sub-')) return { category: groupId.replace('sub-', '') };
+  if (groupId.startsWith('label-')) return { label: groupId.replace('label-', '') };
   return {};
 }
 
@@ -67,7 +64,7 @@ export function EmailClient() {
     () => emailsQuery.data?.pages.flatMap((p) => p.emails) ?? [],
     [emailsQuery.data?.pages],
   );
-  const totalEmails = emailsQuery.data?.pages[0]?.total ?? 0;
+
 
   const filteredEmails = useMemo(() => {
     if (!searchText.trim()) return emails;
@@ -111,50 +108,68 @@ export function EmailClient() {
   const currentAccountId = emails.length > 0 ? emails[0]?.accountId : undefined;
   const labelsQuery = useLabelsQuery(currentAccountId);
 
-  // Fetch real categories from the database.
-  const categoriesQuery = useCategoriesQuery();
-  const categoriesData = categoriesQuery.data?.categories;
+  // Fetch enriched categories with group assignments and counts (Gap 5 + Gap 6).
+  const enrichedQuery = useQuery({
+    queryKey: ['categories-enriched'],
+    queryFn: () => getEnrichedCategories(),
+    staleTime: 30_000,
+  });
 
-  // Build sidebar groups dynamically from real category data.
-  const sidebarGroups = useMemo(() => {
-    const cats = categoriesData ?? [];
-    const groups: SidebarGroup[] = [{ id: 'inbox', label: 'Inbox', icon: 'inbox', unreadCount: 0 }];
+  // Fetch aggregated labels across all accounts (Gap 1 + Gap 4).
+  const allLabelsQuery = useQuery({
+    queryKey: ['labels-all'],
+    queryFn: () => getAllLabels(),
+    staleTime: 30_000,
+  });
 
-    for (const cat of cats) {
-      const lower = cat.toLowerCase();
-      if (SUBSCRIPTION_CATEGORIES.has(lower)) {
-        groups.push({ id: `sub-${lower}`, label: cat, icon: 'subscription', unreadCount: 0 });
-      } else if (TOPIC_CATEGORIES.has(lower)) {
-        groups.push({ id: `topic-${lower}`, label: cat, icon: 'topic', unreadCount: 0 });
-      } else {
-        groups.push({ id: `cat-${lower}`, label: cat, icon: 'category', unreadCount: 0 });
-      }
+  // Fetch accurate counts (Gap 6).
+  const countsQuery = useQuery({
+    queryKey: ['email-counts'],
+    queryFn: () => getEmailCounts(),
+    staleTime: 10_000,
+    refetchInterval: 30_000,
+  });
+
+
+
+  // Build sidebar groups dynamically from enriched categories + labels.
+  const groupsWithCounts = useMemo(() => {
+    const enriched = [...(enrichedQuery.data ?? [])].sort((a, b) => a.name.localeCompare(b.name));
+    const labels = (allLabelsQuery.data ?? [])
+      .filter((l) => !l.isSystem && l.emailCount > 0)
+      .sort((a, b) => a.name.localeCompare(b.name));
+    const counts = countsQuery.data;
+    const inboxUnread = counts?.unread ?? 0;
+
+    const groups: SidebarGroup[] = [
+      { id: 'inbox', label: 'Inbox', icon: 'inbox', unreadCount: inboxUnread },
+    ];
+
+    // Categories from enriched endpoint (dynamic grouping from backend).
+    for (const cat of enriched) {
+      const lower = cat.name.toLowerCase();
+      const icon = cat.group === 'subscription' ? 'subscription' as const : 'category' as const;
+      const prefix = cat.group === 'subscription' ? 'sub-' : 'cat-';
+      groups.push({
+        id: `${prefix}${lower}`,
+        label: cat.name,
+        icon,
+        unreadCount: cat.unreadCount,
+      });
+    }
+
+    // Provider labels (Gap 1 — works without AI, separate section).
+    for (const label of labels) {
+      groups.push({
+        id: `label-${label.name}`,
+        label: label.name,
+        icon: 'label',
+        unreadCount: label.unreadCount,
+      });
     }
 
     return groups;
-  }, [categoriesData]);
-
-  // Compute counts per group. Inbox shows total email count.
-  const groupsWithCounts = useMemo(() => {
-    const counts: Record<string, number> = { inbox: totalEmails };
-    for (const email of emails) {
-      if (email.category && email.category !== 'Uncategorized') {
-        const lower = email.category.toLowerCase();
-        // Increment count for whichever prefix this category uses in sidebarGroups.
-        for (const prefix of ['cat-', 'topic-', 'sub-']) {
-          const key = `${prefix}${lower}`;
-          if (sidebarGroups.some((g) => g.id === key)) {
-            counts[key] = (counts[key] ?? 0) + 1;
-            break;
-          }
-        }
-      }
-    }
-    return sidebarGroups.map((g) => ({
-      ...g,
-      unreadCount: counts[g.id] ?? 0,
-    }));
-  }, [emails, sidebarGroups, totalEmails]);
+  }, [enrichedQuery.data, allLabelsQuery.data, countsQuery.data]);
 
   const domainGroups = useMemo(
     () => (isGrouped ? groupByDomain(filteredEmails) : []),
@@ -431,7 +446,7 @@ export function EmailClient() {
               Groups
             </button>
             <h2 className="text-sm font-semibold text-gray-900 dark:text-white">
-              {sidebarGroups.find((g) => g.id === activeGroup)?.label ?? 'Inbox'}
+              {groupsWithCounts.find((g: SidebarGroup) => g.id === activeGroup)?.label ?? 'Inbox'}
             </h2>
             <button
               type="button"

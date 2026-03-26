@@ -2,6 +2,20 @@ import { type ReactNode, useState, useEffect } from 'react';
 import type { AppStats } from './hooks/useStats';
 import { getAccounts, getEmails } from '@emailibrium/api';
 
+/** Map backend index type identifiers to human-friendly display names. */
+function formatIndexType(raw?: string): string {
+  if (!raw) return 'N/A';
+  const map: Record<string, string> = {
+    ruvector_hnsw: 'HNSW',
+    hnsw: 'HNSW',
+    flat: 'Flat',
+    memory: 'In-Memory',
+    sqlite: 'SQLite',
+    qdrant: 'Qdrant',
+  };
+  return map[raw] ?? raw;
+}
+
 interface StatCardProps {
   icon: ReactNode;
   label: string;
@@ -18,7 +32,7 @@ function StatCard({ icon, label, value, trend }: StatCardProps) {
         </div>
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm text-gray-500 dark:text-gray-400">{label}</p>
-          <p className="text-2xl font-semibold text-gray-900 dark:text-white">{value}</p>
+          <p className="truncate text-2xl font-semibold text-gray-900 dark:text-white" title={String(value)}>{value}</p>
         </div>
       </div>
       {trend && (
@@ -141,7 +155,7 @@ export function StatsCards({ stats, isLoading }: StatsCardsProps) {
     {
       icon: <ZapIcon />,
       label: 'Index Type',
-      value: stats?.indexType ?? 'N/A',
+      value: formatIndexType(stats?.indexType),
     },
   ];
 

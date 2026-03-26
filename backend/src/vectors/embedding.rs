@@ -50,17 +50,20 @@ pub trait EmbeddingModel: Send + Sync {
 }
 
 // ---------------------------------------------------------------------------
-// MockEmbeddingModel
+// MockEmbeddingModel (test-only — never available in production builds)
 // ---------------------------------------------------------------------------
 
 /// Deterministic mock embedding model that derives vectors from a text hash.
 ///
-/// Intended for development and testing only. Activated by setting
-/// `embedding.provider = "mock"` in configuration.
+/// Gated behind `#[cfg(any(test, feature = "test-vectors"))]` to prevent
+/// accidental use in production. Mock vectors are meaningless for real
+/// search/classification.
+#[cfg(any(test, feature = "test-vectors"))]
 pub struct MockEmbeddingModel {
     dims: usize,
 }
 
+#[cfg(any(test, feature = "test-vectors"))]
 impl MockEmbeddingModel {
     pub fn new(dims: usize) -> Self {
         Self { dims }
@@ -90,6 +93,7 @@ impl MockEmbeddingModel {
     }
 }
 
+#[cfg(any(test, feature = "test-vectors"))]
 #[async_trait]
 impl EmbeddingModel for MockEmbeddingModel {
     async fn embed(&self, text: &str) -> Result<Vec<f32>, VectorError> {
@@ -785,15 +789,28 @@ impl EmbeddingPipeline {
             "onnx" => match OnnxEmbeddingModel::new(&config.onnx) {
                 Ok(model) => providers.push(Arc::new(model)),
                 Err(e) => {
-                    warn!(
-                        "Failed to initialize ONNX embedding model: {e}. \
-                         Falling back to mock for development."
+                    tracing::error!(
+                        "ONNX embedding model initialization failed: {e}. \
+                         No embedding provider available. \
+                         Ensure the model can be downloaded or is cached locally."
                     );
-                    providers.push(Arc::new(MockEmbeddingModel::new(config.dimensions)));
+                    return Err(VectorError::EmbeddingFailed(format!(
+                        "ONNX model initialization failed: {e}. \
+                         No fallback provider available in production."
+                    )));
                 }
             },
+            #[cfg(any(test, feature = "test-vectors"))]
             "mock" => {
                 providers.push(Arc::new(MockEmbeddingModel::new(config.dimensions)));
+            }
+            #[cfg(not(any(test, feature = "test-vectors")))]
+            "mock" => {
+                return Err(VectorError::ConfigError(
+                    "Mock embedding provider is not available in production builds. \
+                     Use 'onnx', 'ollama', 'cloud', or 'cohere'."
+                        .to_string(),
+                ));
             }
             "ollama" => {
                 providers.push(Arc::new(OllamaEmbeddingModel::new(

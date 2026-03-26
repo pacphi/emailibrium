@@ -22,8 +22,11 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/", get(list_emails))
         // Static paths before dynamic /{id} to avoid matching "labels" or "thread" as an id.
+        .route("/labels/all", get(list_all_labels))
         .route("/labels", get(list_account_labels))
+        .route("/categories/enriched", get(list_enriched_categories))
         .route("/categories", get(list_categories))
+        .route("/counts", get(email_counts))
         .route("/thread/{thread_id}", get(get_thread))
         .nest("/{id}/attachments", super::attachments::routes())
         .route("/{id}", get(get_email).delete(delete_email))
@@ -38,6 +41,7 @@ pub fn routes() -> Router<AppState> {
 pub struct ListEmailsParams {
     pub account_id: Option<String>,
     pub category: Option<String>,
+    pub label: Option<String>,
     pub is_read: Option<bool>,
     pub is_starred: Option<bool>,
     pub limit: Option<i64>,
@@ -123,6 +127,9 @@ async fn list_emails(
     if params.category.is_some() {
         where_parts.push("category = ?".to_string());
     }
+    if params.label.is_some() {
+        where_parts.push("(',' || labels || ',') LIKE '%,' || ? || ',%'".to_string());
+    }
     if params.is_read.is_some() {
         where_parts.push("is_read = ?".to_string());
     }
@@ -142,6 +149,9 @@ async fn list_emails(
         count_q = count_q.bind(v);
     }
     if let Some(ref v) = params.category {
+        count_q = count_q.bind(v);
+    }
+    if let Some(ref v) = params.label {
         count_q = count_q.bind(v);
     }
     if let Some(v) = params.is_read {
@@ -164,6 +174,9 @@ async fn list_emails(
         query = query.bind(v);
     }
     if let Some(ref v) = params.category {
+        query = query.bind(v);
+    }
+    if let Some(ref v) = params.label {
         query = query.bind(v);
     }
     if let Some(v) = params.is_read {
@@ -566,4 +579,227 @@ async fn move_email(
 
     debug!(email_id = %id, "Email moved");
     Ok(StatusCode::NO_CONTENT)
+}
+
+// ---------------------------------------------------------------------------
+// Gap 4: Cross-account label aggregation
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AggregatedLabel {
+    pub name: String,
+    pub kind: String,
+    pub is_system: bool,
+    pub email_count: u64,
+    pub unread_count: u64,
+    pub account_ids: Vec<String>,
+}
+
+/// Convert a label string to Title Case for display.
+/// "NEWSLETTERS" → "Newsletters", "$FINANCE" → "Finance", "CATEGORY_SOCIAL" → "Social"
+fn to_title_case(s: &str) -> String {
+    // Strip leading special chars and known prefixes.
+    let cleaned = s
+        .trim_start_matches('$')
+        .strip_prefix("CATEGORY_")
+        .unwrap_or(s.trim_start_matches('$'));
+
+    if cleaned.is_empty() {
+        return s.to_string();
+    }
+
+    // If already mixed case (e.g. "Newsletters"), keep as-is.
+    let has_lower = cleaned.chars().any(|c| c.is_lowercase());
+    if has_lower {
+        return cleaned.to_string();
+    }
+
+    // ALL CAPS → Title Case
+    let mut result = String::with_capacity(cleaned.len());
+    let mut capitalize_next = true;
+    for ch in cleaned.chars() {
+        if ch == '_' || ch == '-' {
+            result.push(' ');
+            capitalize_next = true;
+        } else if capitalize_next {
+            result.extend(ch.to_uppercase());
+            capitalize_next = false;
+        } else {
+            result.extend(ch.to_lowercase());
+        }
+    }
+    result
+}
+
+/// GET /api/v1/emails/labels/all — aggregate labels across all accounts.
+async fn list_all_labels(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<AggregatedLabel>>, (StatusCode, String)> {
+    let rows: Vec<(String, String, bool)> = sqlx::query_as(
+        "SELECT labels, account_id, is_read FROM emails WHERE labels IS NOT NULL AND labels != ''",
+    )
+    .fetch_all(&state.db.pool)
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    use std::collections::HashMap;
+
+    struct LabelAgg {
+        display_name: String,
+        email_count: u64,
+        unread_count: u64,
+        account_ids: std::collections::HashSet<String>,
+    }
+
+    let mut agg: HashMap<String, LabelAgg> = HashMap::new();
+
+    for (labels_csv, account_id, is_read) in &rows {
+        for label in labels_csv.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
+            let key = label.to_uppercase();
+            let entry = agg.entry(key).or_insert_with(|| LabelAgg {
+                display_name: to_title_case(label),
+                email_count: 0,
+                unread_count: 0,
+                account_ids: std::collections::HashSet::new(),
+            });
+            entry.email_count += 1;
+            if !is_read {
+                entry.unread_count += 1;
+            }
+            entry.account_ids.insert(account_id.clone());
+        }
+    }
+
+    const SYSTEM_LABELS: &[&str] = &[
+        "INBOX", "SENT", "TRASH", "SPAM", "STARRED", "DRAFT", "IMPORTANT",
+        "UNREAD", "CATEGORY_SOCIAL", "CATEGORY_PROMOTIONS", "CATEGORY_UPDATES",
+        "CATEGORY_FORUMS", "CATEGORY_PERSONAL",
+    ];
+
+    let mut result: Vec<AggregatedLabel> = agg
+        .into_iter()
+        .map(|(key, a)| {
+            let is_system = SYSTEM_LABELS.contains(&key.as_str());
+            AggregatedLabel {
+                name: a.display_name,
+                kind: "label".to_string(),
+                is_system,
+                email_count: a.email_count,
+                unread_count: a.unread_count,
+                account_ids: a.account_ids.into_iter().collect(),
+            }
+        })
+        .collect();
+
+    result.sort_by(|a, b| b.email_count.cmp(&a.email_count));
+    Ok(Json(result))
+}
+
+// ---------------------------------------------------------------------------
+// Gap 5: Enriched categories
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnrichedCategory {
+    pub name: String,
+    pub group: String,
+    pub email_count: u64,
+    pub unread_count: u64,
+}
+
+fn categorize_group(category: &str) -> &'static str {
+    match category.to_lowercase().as_str() {
+        "newsletter" | "marketing" | "promotions" => "subscription",
+        _ => "category",
+    }
+}
+
+/// GET /api/v1/emails/categories/enriched — categories with group and counts.
+async fn list_enriched_categories(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<EnrichedCategory>>, (StatusCode, String)> {
+    let rows: Vec<(String, i64, i64)> = sqlx::query_as(
+        "SELECT category, COUNT(*) as total, \
+         SUM(CASE WHEN is_read = 0 THEN 1 ELSE 0 END) as unread \
+         FROM emails \
+         WHERE category IS NOT NULL AND category != 'Uncategorized' \
+         GROUP BY category ORDER BY total DESC",
+    )
+    .fetch_all(&state.db.pool)
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let enriched = rows
+        .into_iter()
+        .map(|(name, total, unread)| EnrichedCategory {
+            group: categorize_group(&name).to_string(),
+            name,
+            email_count: total as u64,
+            unread_count: unread as u64,
+        })
+        .collect();
+
+    Ok(Json(enriched))
+}
+
+// ---------------------------------------------------------------------------
+// Gap 6: Accurate email counts
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EmailCounts {
+    pub total: u64,
+    pub unread: u64,
+    pub by_category: Vec<CategoryCount>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CategoryCount {
+    pub category: String,
+    pub total: u64,
+    pub unread: u64,
+}
+
+/// GET /api/v1/emails/counts — accurate total, unread, and per-category counts.
+async fn email_counts(
+    State(state): State<AppState>,
+) -> Result<Json<EmailCounts>, (StatusCode, String)> {
+    // Total and unread
+    let (total, unread): (i64, i64) = sqlx::query_as(
+        "SELECT COALESCE(COUNT(*), 0), \
+         COALESCE(SUM(CASE WHEN is_read = 0 THEN 1 ELSE 0 END), 0) \
+         FROM emails",
+    )
+    .fetch_one(&state.db.pool)
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    // Per-category
+    let cat_rows: Vec<(String, i64, i64)> = sqlx::query_as(
+        "SELECT COALESCE(category, 'Uncategorized'), COUNT(*), \
+         SUM(CASE WHEN is_read = 0 THEN 1 ELSE 0 END) \
+         FROM emails GROUP BY category ORDER BY COUNT(*) DESC",
+    )
+    .fetch_all(&state.db.pool)
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let by_category = cat_rows
+        .into_iter()
+        .map(|(cat, t, u)| CategoryCount {
+            category: cat,
+            total: t as u64,
+            unread: u as u64,
+        })
+        .collect();
+
+    Ok(Json(EmailCounts {
+        total: total as u64,
+        unread: unread as u64,
+        by_category,
+    }))
 }

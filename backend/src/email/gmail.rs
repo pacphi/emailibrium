@@ -81,12 +81,19 @@ impl GmailProvider {
     }
 
     /// Parse a Gmail API message JSON into an EmailMessage.
-    fn parse_message(msg: &serde_json::Value) -> Result<EmailMessage, ProviderError> {
+    ///
+    /// `label_map` resolves Gmail label IDs (e.g. `Label_356207...`) to
+    /// human-readable names (e.g. "Receipts"). Pass an empty map to skip
+    /// resolution — system labels like INBOX/UNREAD are kept as-is.
+    fn parse_message(
+        msg: &serde_json::Value,
+        label_map: &std::collections::HashMap<String, String>,
+    ) -> Result<EmailMessage, ProviderError> {
         let id = msg["id"].as_str().unwrap_or_default().to_string();
         let thread_id = msg["threadId"].as_str().map(|s| s.to_string());
         let snippet = msg["snippet"].as_str().unwrap_or_default().to_string();
 
-        let labels: Vec<String> = msg["labelIds"]
+        let raw_label_ids: Vec<String> = msg["labelIds"]
             .as_array()
             .map(|arr| {
                 arr.iter()
@@ -94,6 +101,17 @@ impl GmailProvider {
                     .collect()
             })
             .unwrap_or_default();
+
+        // Resolve label IDs to human-readable names where possible.
+        let labels: Vec<String> = raw_label_ids
+            .iter()
+            .map(|lid| {
+                label_map
+                    .get(lid)
+                    .cloned()
+                    .unwrap_or_else(|| lid.clone())
+            })
+            .collect();
 
         let is_read = !labels.contains(&"UNREAD".to_string());
 
@@ -403,6 +421,16 @@ impl EmailProvider for GmailProvider {
 
         use futures::StreamExt;
 
+        // Fetch label ID→name mapping so custom labels display human-readable names.
+        let label_map: std::sync::Arc<std::collections::HashMap<String, String>> =
+            match self.list_labels(access_token).await {
+                Ok(pairs) => std::sync::Arc::new(pairs.into_iter().collect()),
+                Err(e) => {
+                    tracing::warn!("Failed to fetch Gmail label names: {e}. Labels will show IDs.");
+                    std::sync::Arc::new(std::collections::HashMap::new())
+                }
+            };
+
         let token = access_token.to_string();
         let http = self.http.clone();
         let results: Vec<Result<EmailMessage, ProviderError>> =
@@ -410,6 +438,7 @@ impl EmailProvider for GmailProvider {
                 .map(|msg_id| {
                     let t = token.clone();
                     let h = http.clone();
+                    let lm = label_map.clone();
                     async move {
                         let full: serde_json::Value = h
                             .get(format!("{GMAIL_API_BASE}/messages/{msg_id}?format=full"))
@@ -421,7 +450,7 @@ impl EmailProvider for GmailProvider {
                             .await
                             .map_err(|e| ProviderError::ParseError(e.to_string()))?;
                         check_error_response(&full)?;
-                        Self::parse_message(&full)
+                        Self::parse_message(&full, &lm)
                     }
                 })
                 .buffer_unordered(5)
@@ -457,7 +486,7 @@ impl EmailProvider for GmailProvider {
             .map_err(|e| ProviderError::ParseError(e.to_string()))?;
 
         check_error_response(&resp)?;
-        Self::parse_message(&resp)
+        Self::parse_message(&resp, &std::collections::HashMap::new())
     }
 
     async fn archive_message(&self, access_token: &str, id: &str) -> Result<(), ProviderError> {
@@ -1008,7 +1037,7 @@ impl GmailProvider {
                             .map_err(|e| ProviderError::ParseError(e.to_string()))?;
 
                         check_error_response(&resp)?;
-                        Self::parse_message(&resp)
+                        Self::parse_message(&resp, &std::collections::HashMap::new())
                     }
                 })
                 .buffer_unordered(concurrency)
@@ -1190,7 +1219,7 @@ mod tests {
                 ]
             }
         });
-        let email = GmailProvider::parse_message(&msg).unwrap();
+        let email = GmailProvider::parse_message(&msg, &std::collections::HashMap::new()).unwrap();
         assert_eq!(email.id, "abc123");
         assert_eq!(email.thread_id, Some("thread-1".to_string()));
         assert_eq!(email.from, "sender@test.com");
@@ -1209,7 +1238,7 @@ mod tests {
             "internalDate": "1700000000000",
             "payload": { "headers": [] }
         });
-        let email = GmailProvider::parse_message(&msg).unwrap();
+        let email = GmailProvider::parse_message(&msg, &std::collections::HashMap::new()).unwrap();
         assert!(email.is_read); // No UNREAD label
     }
 
@@ -1224,7 +1253,7 @@ mod tests {
                 ]
             }
         });
-        let email = GmailProvider::parse_message(&msg).unwrap();
+        let email = GmailProvider::parse_message(&msg, &std::collections::HashMap::new()).unwrap();
         assert_eq!(email.to.len(), 3);
     }
 
@@ -1381,7 +1410,7 @@ mod tests {
                 ]
             }
         });
-        let email = GmailProvider::parse_message(&msg).unwrap();
+        let email = GmailProvider::parse_message(&msg, &std::collections::HashMap::new()).unwrap();
         assert_eq!(email.body, Some("Hello".to_string()));
         assert!(email.body_html.is_some());
         // Sanitizer should preserve <p> tags.

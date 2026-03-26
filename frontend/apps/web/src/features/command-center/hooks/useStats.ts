@@ -26,8 +26,8 @@ export function useStatsQuery() {
   return useQuery<VectorStats>({
     queryKey: ['stats'],
     queryFn: () => getStats(),
-    staleTime: 60_000,
-    refetchInterval: 120_000,
+    staleTime: 10_000,
+    refetchInterval: 30_000,
   });
 }
 

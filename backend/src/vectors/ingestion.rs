@@ -200,6 +200,7 @@ pub struct IngestionPipeline {
     store: Arc<dyn VectorStoreBackend>,
     categorizer: Arc<VectorCategorizer>,
     db: Arc<Database>,
+    generative: Option<Arc<dyn crate::vectors::generative::GenerativeModel>>,
     progress_tx: broadcast::Sender<IngestionProgress>,
     state: Arc<RwLock<IngestionState>>,
     resume_notify: Arc<Notify>,
@@ -219,6 +220,7 @@ impl IngestionPipeline {
             store,
             categorizer,
             db,
+            generative: None,
             progress_tx,
             state: Arc::new(RwLock::new(IngestionState {
                 current_job: None,
@@ -226,6 +228,14 @@ impl IngestionPipeline {
             })),
             resume_notify: Arc::new(Notify::new()),
         }
+    }
+
+    /// Set the generative model for classification fallback (ADR-012).
+    pub fn set_generative(
+        &mut self,
+        gen: Option<Arc<dyn crate::vectors::generative::GenerativeModel>>,
+    ) {
+        self.generative = gen;
     }
 
     /// Subscribe to progress updates (for SSE streaming).
@@ -271,6 +281,7 @@ impl IngestionPipeline {
             store: self.store.clone(),
             categorizer: self.categorizer.clone(),
             db: self.db.clone(),
+            generative: self.generative.clone(),
             progress_tx: self.progress_tx.clone(),
             state: self.state.clone(),
             resume_notify: self.resume_notify.clone(),
@@ -419,6 +430,7 @@ impl IngestionPipeline {
             store: self.store.clone(),
             categorizer: self.categorizer.clone(),
             db: self.db.clone(),
+            generative: self.generative.clone(),
             progress_tx: self.progress_tx.clone(),
             state: self.state.clone(),
             resume_notify: self.resume_notify.clone(),
@@ -476,6 +488,7 @@ struct IngestionPipelineHandle {
     store: Arc<dyn VectorStoreBackend>,
     categorizer: Arc<VectorCategorizer>,
     db: Arc<Database>,
+    generative: Option<Arc<dyn crate::vectors::generative::GenerativeModel>>,
     progress_tx: broadcast::Sender<IngestionProgress>,
     state: Arc<RwLock<IngestionState>>,
     resume_notify: Arc<Notify>,
@@ -746,7 +759,8 @@ impl IngestionPipelineHandle {
                 &email.body_text,
             );
 
-            match self.categorizer.categorize(&text).await {
+            let gen_ref = self.generative.as_deref();
+            match self.categorizer.categorize_with_fallback(&text, &email.from_addr, gen_ref).await {
                 Ok(result) => {
                     if let Err(err) = self
                         .update_category(
@@ -772,12 +786,25 @@ impl IngestionPipelineHandle {
 
         self.broadcast_progress(&job_id).await;
 
-        // Phase 4-5: Clustering + Analyzing (placeholder phases, see ADR-006)
+        // Phase 4: Clustering (ADR-009)
         self.update_phase(IngestionPhase::Clustering).await;
         self.broadcast_progress(&job_id).await;
+        // TODO: Wire ClusterEngine::recluster() here when cluster_engine is plumbed
+        // into IngestionPipelineHandle. Requires minimum 50 embedded emails.
+        let embedded_count = {
+            let state = self.state.read().await;
+            state.current_job.as_ref().map(|j| j.embedded).unwrap_or(0)
+        };
+        if embedded_count >= 50 {
+            info!(job_id = %job_id, embedded = embedded_count, "Clustering phase: sufficient emails for clustering (not yet wired)");
+        } else {
+            debug!(job_id = %job_id, embedded = embedded_count, "Clustering phase: skipped (< 50 embedded emails)");
+        }
 
+        // Phase 5: Analyzing
         self.update_phase(IngestionPhase::Analyzing).await;
         self.broadcast_progress(&job_id).await;
+        // TODO: Wire InsightEngine for subscription detection and temporal analysis
 
         // Complete
         self.update_phase(IngestionPhase::Complete).await;

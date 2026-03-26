@@ -89,6 +89,7 @@ criterion = { version = "0.5", features = ["async_tokio"] }
 tempfile = "3"
 tokio-test = "0.4"
 axum-test = "16"
+emailibrium = { path = ".", features = ["test-vectors"] }
 
 [[bench]]
 name = "vector_benchmarks"

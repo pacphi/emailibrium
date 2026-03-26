@@ -13,6 +13,7 @@ use tokio::sync::RwLock;
 
 use tracing::{debug, warn};
 
+use crate::db::Database;
 use super::embedding::EmbeddingPipeline;
 use super::error::VectorError;
 use super::generative::{GenerativeModel, RuleBasedClassifier};
@@ -325,11 +326,108 @@ impl VectorCategorizer {
     pub fn feedback_count(&self) -> u32 {
         self.feedback_count.load(Ordering::Relaxed)
     }
+
+    /// Load category centroids from the database (ADR-004).
+    /// Returns the number of centroids loaded.
+    pub async fn load_centroids_from_db(&self, db: &Database) -> Result<usize, VectorError> {
+        type CentroidRow = (String, Vec<u8>, i64);
+        let rows: Vec<CentroidRow> = sqlx::query_as(
+            "SELECT category, vector_data, dimensions FROM category_centroids",
+        )
+        .fetch_all(&db.pool)
+        .await
+        .map_err(VectorError::DatabaseError)?;
+
+        let mut centroids = self.centroids.write().await;
+        for (cat_name, blob, dims) in &rows {
+            if let Some(category) = parse_email_category(cat_name) {
+                let vector = bytes_to_f32_vec(blob, *dims as usize);
+                centroids.insert(
+                    category,
+                    CategoryCentroid {
+                        category,
+                        vector,
+                        email_count: 1,
+                        last_updated: chrono::Utc::now(),
+                    },
+                );
+            }
+        }
+        let count = centroids.len();
+        Ok(count)
+    }
+
+    /// Seed initial centroids by embedding canonical category descriptions.
+    /// Only seeds categories not already present. Returns count of newly seeded centroids.
+    pub async fn seed_initial_centroids(&self, db: &Database) -> Result<usize, VectorError> {
+        let canonical_texts: &[(EmailCategory, &str)] = &[
+            (EmailCategory::Work, "meeting agenda project deadline task assignment quarterly review standup sprint"),
+            (EmailCategory::Personal, "family dinner birthday party vacation photos kids school"),
+            (EmailCategory::Finance, "invoice payment receipt bank statement transaction balance transfer"),
+            (EmailCategory::Shopping, "order confirmation shipping tracking delivery purchase cart"),
+            (EmailCategory::Social, "friend request connection invitation post shared liked commented"),
+            (EmailCategory::Newsletter, "weekly digest newsletter edition roundup curated stories subscribe"),
+            (EmailCategory::Marketing, "special offer discount sale promotion limited time deal coupon"),
+            (EmailCategory::Notification, "alert notification update system automated service status"),
+            (EmailCategory::Alerts, "security warning urgent action required password reset suspicious"),
+            (EmailCategory::Promotions, "exclusive offer flash sale clearance reward points loyalty"),
+        ];
+
+        let mut seeded = 0usize;
+        let mut centroids = self.centroids.write().await;
+        for (category, text) in canonical_texts {
+            if centroids.contains_key(category) {
+                continue;
+            }
+            match self.embedding.embed(text).await {
+                Ok(vector) => {
+                    let blob = f32_vec_to_bytes(&vector);
+                    let _ = sqlx::query(
+                        "INSERT OR IGNORE INTO category_centroids (category, vector_data, dimensions, email_count, feedback_count, last_updated) VALUES (?, ?, ?, 0, 0, datetime('now'))",
+                    )
+                    .bind(&category.to_string())
+                    .bind(&blob)
+                    .bind(vector.len() as i64)
+                    .execute(&db.pool)
+                    .await;
+
+                    centroids.insert(
+                        *category,
+                        CategoryCentroid {
+                            category: *category,
+                            vector,
+                            email_count: 0,
+                            last_updated: chrono::Utc::now(),
+                        },
+                    );
+                    seeded += 1;
+                }
+                Err(e) => {
+                    warn!(category = %category, "Failed to seed centroid: {e}");
+                }
+            }
+        }
+        Ok(seeded)
+    }
 }
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// Deserialise a little-endian byte blob into a `Vec<f32>`.
+fn bytes_to_f32_vec(bytes: &[u8], dims: usize) -> Vec<f32> {
+    bytes
+        .chunks_exact(4)
+        .take(dims)
+        .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+        .collect()
+}
+
+/// Serialise a `Vec<f32>` into a little-endian byte blob.
+fn f32_vec_to_bytes(vec: &[f32]) -> Vec<u8> {
+    vec.iter().flat_map(|f| f.to_le_bytes()).collect()
+}
 
 /// Parse a category name string into an `EmailCategory`.
 fn parse_email_category(name: &str) -> Option<EmailCategory> {
