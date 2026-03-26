@@ -134,11 +134,19 @@ export function SendersPanel({ senders, isLoading }: SendersPanelProps) {
 
   if (isLoading) return <PanelSkeleton />;
 
+  // Hide categories when embeddings aren't active (all unknown/uncategorized).
+  const hasRealCategories =
+    senders?.some(
+      (s) =>
+        s.category !== 'unknown' &&
+        s.category.toLowerCase() !== 'uncategorized',
+    ) ?? false;
+
   const headers: Array<{ field: SortField; label: string }> = [
     { field: 'sender', label: 'Sender' },
     { field: 'emailCount', label: 'Emails' },
     { field: 'frequency', label: 'Avg Interval' },
-    { field: 'category', label: 'Category' },
+    ...(hasRealCategories ? [{ field: 'category' as SortField, label: 'Category' }] : []),
     { field: 'lastSeen', label: 'Last Email' },
   ];
 
@@ -169,10 +177,10 @@ export function SendersPanel({ senders, isLoading }: SendersPanelProps) {
         />
       </div>
 
-      {/* Table */}
-      <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white shadow-sm dark:border-gray-700 dark:bg-gray-800">
+      {/* Table with sticky header and scrollable body */}
+      <div className="max-h-[70vh] overflow-auto rounded-xl border border-gray-200 bg-white shadow-sm dark:border-gray-700 dark:bg-gray-800">
         <table className="w-full min-w-[640px]">
-          <thead>
+          <thead className="sticky top-0 z-10 bg-white dark:bg-gray-800">
             <tr className="border-b border-gray-200 dark:border-gray-700">
               {headers.map(({ field, label }) => (
                 <th
@@ -189,7 +197,7 @@ export function SendersPanel({ senders, isLoading }: SendersPanelProps) {
           <tbody>
             {filtered.length === 0 && (
               <tr>
-                <td colSpan={5} className="px-5 py-12 text-center text-sm text-gray-400">
+                <td colSpan={headers.length} className="px-5 py-12 text-center text-sm text-gray-400">
                   {search ? 'No senders match your search.' : 'No sender data available.'}
                 </td>
               </tr>
@@ -211,11 +219,13 @@ export function SendersPanel({ senders, isLoading }: SendersPanelProps) {
                 <td className="px-5 py-3 text-sm text-gray-600 dark:text-gray-300">
                   {computeAvgInterval(sender.frequency)}
                 </td>
-                <td className="px-5 py-3">
-                  <span className="inline-flex rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium capitalize text-gray-700 dark:bg-gray-700 dark:text-gray-300">
-                    {sender.category}
-                  </span>
-                </td>
+                {hasRealCategories && (
+                  <td className="px-5 py-3">
+                    <span className="inline-flex rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium capitalize text-gray-700 dark:bg-gray-700 dark:text-gray-300">
+                      {sender.category}
+                    </span>
+                  </td>
+                )}
                 <td className="px-5 py-3 text-sm text-gray-500 dark:text-gray-400">
                   {new Date(sender.lastSeen).toLocaleDateString()}
                 </td>

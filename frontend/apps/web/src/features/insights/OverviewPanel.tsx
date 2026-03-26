@@ -84,12 +84,24 @@ export function OverviewPanel({ report, isLoading }: OverviewPanelProps) {
   if (isLoading) return <PanelSkeleton />;
 
   const healthScore = computeHealthScore(report);
-  const categoryData = buildCategoryData(report?.categoryBreakdown);
+  const rawCategoryData = buildCategoryData(report?.categoryBreakdown);
+  // Hide category breakdown when embeddings aren't active (all Uncategorized).
+  const hasRealCategories = rawCategoryData.some(
+    (d) => d.name !== 'Uncategorized' && d.name !== 'unknown',
+  );
+  const categoryData = hasRealCategories ? rawCategoryData : [];
   const volumeData = temporal?.dailyVolume.slice(-30).map(d => ({
     date: d.date.slice(5),
     received: d.count,
   })) ?? [];
-  const topSenders = (report?.topSenders ?? []).slice(0, 8);
+  const topSenders = (report?.topSenders ?? []).slice(0, 8).map((s) => {
+    // Strip email address from "Display Name <email>" format, show just the name.
+    const match = s.sender.match(/^"?(.+?)"?\s*<.+>$/);
+    const name = match?.[1] ?? s.sender.replace(/<.*>/, '').trim();
+    // Fall back to domain if name is empty
+    const label = name || s.sender.split('@')[0] || s.sender;
+    return { sender: label, count: s.count };
+  });
 
   return (
     <div className="space-y-6">
@@ -117,7 +129,9 @@ export function OverviewPanel({ report, isLoading }: OverviewPanelProps) {
             )}
           </h3>
           {categoryData.length === 0 ? (
-            <p className="py-12 text-center text-sm text-gray-400">No category data available</p>
+            <p className="py-12 text-center text-sm text-gray-400">
+              Enable embeddings to see category breakdown
+            </p>
           ) : (
             <ResponsiveContainer width="100%" height={240}>
               <PieChart>
@@ -223,17 +237,14 @@ export function OverviewPanel({ report, isLoading }: OverviewPanelProps) {
           {topSenders.length === 0 ? (
             <p className="py-12 text-center text-sm text-gray-400">No sender data available</p>
           ) : (
-            <ResponsiveContainer width="100%" height={240}>
-              <BarChart data={topSenders} layout="vertical" margin={{ left: 80 }}>
+            <ResponsiveContainer width="100%" height={280}>
+              <BarChart data={topSenders} layout="vertical" margin={{ left: 10 }}>
                 <XAxis type="number" tick={{ fontSize: 11 }} />
                 <YAxis
                   type="category"
                   dataKey="sender"
-                  tick={{ fontSize: 11 }}
-                  width={80}
-                  tickFormatter={(val: string) =>
-                    val.length > 16 ? `${val.slice(0, 14)}...` : val
-                  }
+                  tick={{ fontSize: 12 }}
+                  width={160}
                 />
                 <Tooltip
                   contentStyle={{

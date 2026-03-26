@@ -19,7 +19,10 @@ use super::store::VectorStoreBackend;
 // ---------------------------------------------------------------------------
 
 /// Detected recurrence pattern for a subscription.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+///
+/// Serializes as a simple lowercase string for the frontend
+/// (e.g., "daily", "weekly", "irregular").
+#[derive(Debug, Clone, PartialEq)]
 pub enum RecurrencePattern {
     Daily,
     Weekly,
@@ -27,6 +30,19 @@ pub enum RecurrencePattern {
     Monthly,
     Quarterly,
     Irregular { avg_interval_days: f32 },
+}
+
+impl serde::Serialize for RecurrencePattern {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(match self {
+            Self::Daily => "daily",
+            Self::Weekly => "weekly",
+            Self::BiWeekly => "biweekly",
+            Self::Monthly => "monthly",
+            Self::Quarterly => "quarterly",
+            Self::Irregular { .. } => "irregular",
+        })
+    }
 }
 
 impl std::fmt::Display for RecurrencePattern {
@@ -46,6 +62,7 @@ impl std::fmt::Display for RecurrencePattern {
 
 /// Category of a detected subscription.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum SubscriptionCategory {
     Newsletter,
     Marketing,
@@ -70,6 +87,7 @@ impl std::fmt::Display for SubscriptionCategory {
 
 /// Suggested action for a subscription.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum SuggestedAction {
     Keep,
     Unsubscribe,
@@ -90,6 +108,7 @@ impl std::fmt::Display for SuggestedAction {
 
 /// Insight about a detected subscription.
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SubscriptionInsight {
     pub sender_address: String,
     pub sender_domain: String,
@@ -106,6 +125,7 @@ pub struct SubscriptionInsight {
 
 /// Insight about a recurring sender.
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RecurringSenderInsight {
     pub sender: String,
     pub email_count: u64,
@@ -113,12 +133,20 @@ pub struct RecurringSenderInsight {
     pub category: String,
 }
 
+/// A top sender entry for the inbox report.
+#[derive(Debug, Clone, Serialize)]
+pub struct TopSender {
+    pub sender: String,
+    pub count: u64,
+}
+
 /// Aggregated inbox report.
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct InboxReport {
     pub total_emails: u64,
     pub category_breakdown: HashMap<String, u64>,
-    pub top_senders: Vec<(String, u64)>,
+    pub top_senders: Vec<TopSender>,
     pub subscription_count: u64,
     pub estimated_reading_hours: f32,
     /// Overall read rate (0.0 to 1.0).
@@ -342,9 +370,12 @@ impl InsightEngine {
         .await
         .map_err(VectorError::DatabaseError)?;
 
-        let top_senders: Vec<(String, u64)> = senders
+        let top_senders: Vec<TopSender> = senders
             .into_iter()
-            .map(|(addr, cnt)| (addr.unwrap_or_default(), cnt as u64))
+            .map(|(addr, cnt)| TopSender {
+                sender: addr.unwrap_or_default(),
+                count: cnt as u64,
+            })
             .collect();
 
         // Subscription count (senders with 3+ emails)
@@ -467,63 +498,14 @@ fn classify_frequency(intervals: &[f32]) -> RecurrencePattern {
     }
 }
 
-/// Classify subscription category based on domain patterns.
-fn classify_subscription_category(domain: &str, has_unsubscribe: bool) -> SubscriptionCategory {
-    let domain_lower = domain.to_lowercase();
-
-    // Social platforms
-    if domain_lower.contains("facebook")
-        || domain_lower.contains("twitter")
-        || domain_lower.contains("linkedin")
-        || domain_lower.contains("instagram")
-        || domain_lower.contains("reddit")
-    {
-        return SubscriptionCategory::Social;
-    }
-
-    // Receipt/transactional
-    if domain_lower.contains("receipt")
-        || domain_lower.contains("invoice")
-        || domain_lower.contains("order")
-        || domain_lower.contains("paypal")
-        || domain_lower.contains("stripe")
-        || domain_lower.contains("square")
-    {
-        return SubscriptionCategory::Receipt;
-    }
-
-    // Notification services
-    if domain_lower.contains("notification")
-        || domain_lower.contains("alert")
-        || domain_lower.contains("noreply")
-        || domain_lower.contains("no-reply")
-    {
-        return SubscriptionCategory::Notification;
-    }
-
-    // Marketing patterns
-    if domain_lower.contains("marketing")
-        || domain_lower.contains("promo")
-        || domain_lower.contains("deals")
-        || domain_lower.contains("offer")
-    {
-        return SubscriptionCategory::Marketing;
-    }
-
-    // Newsletter patterns
-    if domain_lower.contains("newsletter")
-        || domain_lower.contains("digest")
-        || domain_lower.contains("weekly")
-        || domain_lower.contains("substack")
-    {
-        return SubscriptionCategory::Newsletter;
-    }
-
-    // If it has unsubscribe but no other signal, likely newsletter/marketing
-    if has_unsubscribe {
-        return SubscriptionCategory::Newsletter;
-    }
-
+/// Classify subscription category.
+///
+/// Returns `Unknown` unless the embedding pipeline has categorized the
+/// sender's emails. Domain-based heuristics were removed because they
+/// produced unreliable results.
+fn classify_subscription_category(_domain: &str, _has_unsubscribe: bool) -> SubscriptionCategory {
+    // Category is determined by the embedding pipeline, not heuristics.
+    // The frontend hides the category column when all values are "unknown".
     SubscriptionCategory::Unknown
 }
 
@@ -678,38 +660,24 @@ mod tests {
         assert_eq!(report.total_emails, 10);
         assert!(report.top_senders.len() <= 10);
         // alice has 5 emails, should be first
-        assert_eq!(report.top_senders[0].0, "alice@example.com");
-        assert_eq!(report.top_senders[0].1, 5);
+        assert_eq!(report.top_senders[0].sender, "alice@example.com");
+        assert_eq!(report.top_senders[0].count, 5);
         // Subscription count: senders with 3+ emails = alice (5) + bob (3) = 2
         assert_eq!(report.subscription_count, 2);
         assert!(report.estimated_reading_hours > 0.0);
     }
 
     #[tokio::test]
-    async fn test_subscription_category_classification() {
+    async fn test_subscription_category_always_unknown_without_embeddings() {
+        // Category classification is deferred to the embedding pipeline.
+        // Without embeddings, all categories should be Unknown.
         assert_eq!(
             classify_subscription_category("facebook.com", false),
-            SubscriptionCategory::Social
+            SubscriptionCategory::Unknown
         );
         assert_eq!(
-            classify_subscription_category("paypal.com", false),
-            SubscriptionCategory::Receipt
-        );
-        assert_eq!(
-            classify_subscription_category("noreply.example.com", false),
-            SubscriptionCategory::Notification
-        );
-        assert_eq!(
-            classify_subscription_category("newsletter.example.com", false),
-            SubscriptionCategory::Newsletter
-        );
-        assert_eq!(
-            classify_subscription_category("marketing.example.com", false),
-            SubscriptionCategory::Marketing
-        );
-        assert_eq!(
-            classify_subscription_category("example.com", true),
-            SubscriptionCategory::Newsletter
+            classify_subscription_category("newsletter.example.com", true),
+            SubscriptionCategory::Unknown
         );
         assert_eq!(
             classify_subscription_category("example.com", false),

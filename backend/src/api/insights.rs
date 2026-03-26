@@ -58,7 +58,7 @@ pub struct HourOfDayCount {
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/subscriptions", get(subscriptions))
-        .route("/recurring", get(recurring))
+        .route("/recurring-senders", get(recurring))
         .route("/report", get(report))
         .route("/temporal", get(temporal_insights))
 }
@@ -80,15 +80,18 @@ async fn subscriptions(
 /// GET /api/v1/insights/recurring
 async fn recurring(
     State(state): State<AppState>,
-) -> Result<Json<Vec<crate::vectors::insights::RecurringSenderInsight>>, (StatusCode, String)> {
+) -> Result<Json<Vec<crate::vectors::insights::SubscriptionInsight>>, (StatusCode, String)> {
     let engine = InsightEngine::new(state.db.clone(), state.vector_service.store.clone());
 
-    let senders = engine
-        .analyze_recurring_senders()
+    // Reuse the subscription detection which returns full SubscriptionInsight
+    // (senderAddress, senderDomain, frequency, lastSeen, etc.) — matching
+    // what the frontend SendersPanel and TopicsPanel expect.
+    let subs = engine
+        .detect_subscriptions()
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    Ok(Json(senders))
+    Ok(Json(subs))
 }
 
 /// GET /api/v1/insights/report
