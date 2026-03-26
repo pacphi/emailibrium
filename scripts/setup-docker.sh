@@ -115,7 +115,7 @@ echo ""
 # ─── Start services ─────────────────────────────────────────────────────────
 
 read -rp "${BOLD}Start services now? (docker compose up -d) [y/N]: ${RESET}" start_choice
-if [[ "${start_choice,,}" == "y" ]]; then
+if [[ "$(echo "$start_choice" | tr '[:upper:]' '[:lower:]')" == "y" ]]; then
   echo ""
   echo "  Starting services..."
   (cd "$PROJECT_ROOT" && docker compose up -d)
