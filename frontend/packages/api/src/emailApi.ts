@@ -74,6 +74,10 @@ export interface FolderOrLabel {
   isSystem: boolean;
 }
 
+export async function getCategories(): Promise<{ categories: string[] }> {
+  return api.get('emails/categories').json<{ categories: string[] }>();
+}
+
 export async function getLabels(accountId: string): Promise<FolderOrLabel[]> {
   return api.get('emails/labels', { searchParams: { accountId } }).json<FolderOrLabel[]>();
 }

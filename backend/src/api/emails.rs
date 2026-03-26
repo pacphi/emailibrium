@@ -23,6 +23,7 @@ pub fn routes() -> Router<AppState> {
         .route("/", get(list_emails))
         // Static paths before dynamic /{id} to avoid matching "labels" or "thread" as an id.
         .route("/labels", get(list_account_labels))
+        .route("/categories", get(list_categories))
         .route("/thread/{thread_id}", get(get_thread))
         .nest("/{id}/attachments", super::attachments::routes())
         .route("/{id}", get(get_email).delete(delete_email))
@@ -447,6 +448,28 @@ async fn delete_email(
     }
     debug!(email_id = %id, "Email deleted");
     Ok(StatusCode::NO_CONTENT)
+}
+
+// --- Categories endpoint ---
+
+#[derive(Debug, Serialize)]
+pub struct CategoriesResponse {
+    pub categories: Vec<String>,
+}
+
+/// GET /api/v1/emails/categories — list distinct email categories.
+async fn list_categories(
+    State(state): State<AppState>,
+) -> Result<Json<CategoriesResponse>, (StatusCode, String)> {
+    let rows: Vec<(String,)> = sqlx::query_as(
+        "SELECT DISTINCT category FROM emails WHERE category IS NOT NULL AND category != 'Uncategorized' ORDER BY category",
+    )
+    .fetch_all(&state.db.pool)
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let categories = rows.into_iter().map(|(c,)| c).collect();
+    Ok(Json(CategoriesResponse { categories }))
 }
 
 // --- Labels / Move endpoints ---

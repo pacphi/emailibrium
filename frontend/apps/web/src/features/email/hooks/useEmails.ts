@@ -11,6 +11,7 @@ import {
   forwardEmail,
   bulkArchive,
   bulkDelete,
+  getCategories,
   getLabels,
   moveEmail,
   markEmailRead,
@@ -142,6 +143,14 @@ export function useBulkDelete() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['emails'] });
     },
+  });
+}
+
+export function useCategoriesQuery() {
+  return useQuery<{ categories: string[] }>({
+    queryKey: ['email-categories'],
+    queryFn: () => getCategories(),
+    staleTime: 300_000,
   });
 }
 

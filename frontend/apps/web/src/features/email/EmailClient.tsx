@@ -19,23 +19,18 @@ import {
   useForwardEmail,
   useBulkArchive,
   useBulkDelete,
+  useCategoriesQuery,
   useLabelsQuery,
   useMoveEmail,
   useMarkRead,
 } from './hooks/useEmails';
 
-// Default sidebar groups -- in production these would come from an API or store.
-const defaultGroups: SidebarGroup[] = [
-  { id: 'inbox', label: 'Inbox', icon: 'inbox', unreadCount: 0 },
-  { id: 'cat-personal', label: 'Personal', icon: 'category', unreadCount: 0 },
-  { id: 'cat-work', label: 'Work', icon: 'category', unreadCount: 0 },
-  { id: 'cat-finance', label: 'Finance', icon: 'category', unreadCount: 0 },
-  { id: 'cat-shopping', label: 'Shopping', icon: 'category', unreadCount: 0 },
-  { id: 'topic-projects', label: 'Projects', icon: 'topic', unreadCount: 0 },
-  { id: 'topic-travel', label: 'Travel', icon: 'topic', unreadCount: 0 },
-  { id: 'sub-newsletters', label: 'Newsletters', icon: 'subscription', unreadCount: 0 },
-  { id: 'sub-marketing', label: 'Marketing', icon: 'subscription', unreadCount: 0 },
-];
+const SUBSCRIPTION_CATEGORIES = new Set([
+  'newsletters', 'marketing', 'promotions', 'updates', 'digests',
+]);
+const TOPIC_CATEGORIES = new Set([
+  'projects', 'travel', 'events', 'meetings',
+]);
 
 function groupToQueryParam(groupId: string): { category?: string } {
   if (groupId === 'inbox') return {};
@@ -55,6 +50,8 @@ export function EmailClient() {
   const [isGrouped, setIsGrouped] = useState(false);
   const [expandedDomains, setExpandedDomains] = useState<Set<string>>(new Set());
   const [expandedSenders, setExpandedSenders] = useState<Set<string>>(new Set());
+  const [searchText, setSearchText] = useState('');
+  const [searchField, setSearchField] = useState<'from' | 'to' | 'cc' | 'subject' | 'body'>('from');
 
   const queryParams = useMemo(() => {
     const base = groupToQueryParam(activeGroup);
@@ -69,6 +66,28 @@ export function EmailClient() {
     [emailsQuery.data?.pages],
   );
   const totalEmails = emailsQuery.data?.pages[0]?.total ?? 0;
+
+  const filteredEmails = useMemo(() => {
+    if (!searchText.trim()) return emails;
+    const needle = searchText.toLowerCase();
+    return emails.filter((email) => {
+      switch (searchField) {
+        case 'from':
+          return email.fromAddr.toLowerCase().includes(needle) ||
+                 (email.fromName?.toLowerCase().includes(needle) ?? false);
+        case 'to':
+          return email.toAddrs.toLowerCase().includes(needle);
+        case 'cc':
+          return (email.ccAddrs?.toLowerCase().includes(needle) ?? false);
+        case 'subject':
+          return email.subject.toLowerCase().includes(needle);
+        case 'body':
+          return (email.bodyText?.toLowerCase().includes(needle) ?? false);
+        default:
+          return true;
+      }
+    });
+  }, [emails, searchText, searchField]);
 
   const selectedEmail = emails.find((e) => e.id === selectedEmailId) ?? null;
   const threadId = selectedEmail?.threadId ?? null;
@@ -88,24 +107,55 @@ export function EmailClient() {
   const currentAccountId = emails.length > 0 ? emails[0]?.accountId : undefined;
   const labelsQuery = useLabelsQuery(currentAccountId);
 
+  // Fetch real categories from the database.
+  const categoriesQuery = useCategoriesQuery();
+  const categories = categoriesQuery.data?.categories ?? [];
+
+  // Build sidebar groups dynamically from real category data.
+  const sidebarGroups = useMemo(() => {
+    const groups: SidebarGroup[] = [
+      { id: 'inbox', label: 'Inbox', icon: 'inbox', unreadCount: 0 },
+    ];
+
+    for (const cat of categories) {
+      const lower = cat.toLowerCase();
+      if (SUBSCRIPTION_CATEGORIES.has(lower)) {
+        groups.push({ id: `sub-${lower}`, label: cat, icon: 'subscription', unreadCount: 0 });
+      } else if (TOPIC_CATEGORIES.has(lower)) {
+        groups.push({ id: `topic-${lower}`, label: cat, icon: 'topic', unreadCount: 0 });
+      } else {
+        groups.push({ id: `cat-${lower}`, label: cat, icon: 'category', unreadCount: 0 });
+      }
+    }
+
+    return groups;
+  }, [categories]);
+
   // Compute counts per group. Inbox shows total email count.
   const groupsWithCounts = useMemo(() => {
     const counts: Record<string, number> = { inbox: totalEmails };
     for (const email of emails) {
       if (email.category && email.category !== 'Uncategorized') {
-        const key = `cat-${email.category.toLowerCase()}`;
-        counts[key] = (counts[key] ?? 0) + 1;
+        const lower = email.category.toLowerCase();
+        // Increment count for whichever prefix this category uses in sidebarGroups.
+        for (const prefix of ['cat-', 'topic-', 'sub-']) {
+          const key = `${prefix}${lower}`;
+          if (sidebarGroups.some((g) => g.id === key)) {
+            counts[key] = (counts[key] ?? 0) + 1;
+            break;
+          }
+        }
       }
     }
-    return defaultGroups.map((g) => ({
+    return sidebarGroups.map((g) => ({
       ...g,
       unreadCount: counts[g.id] ?? 0,
     }));
-  }, [emails]);
+  }, [emails, sidebarGroups, totalEmails]);
 
   const domainGroups = useMemo(
-    () => (isGrouped ? groupByDomain(emails) : []),
-    [isGrouped, emails],
+    () => (isGrouped ? groupByDomain(filteredEmails) : []),
+    [isGrouped, filteredEmails],
   );
 
   const toggleDomainExpand = useCallback((domain: string) => {
@@ -380,7 +430,7 @@ export function EmailClient() {
               Groups
             </button>
             <h2 className="text-sm font-semibold text-gray-900 dark:text-white">
-              {defaultGroups.find((g) => g.id === activeGroup)?.label ?? 'Inbox'}
+              {sidebarGroups.find((g) => g.id === activeGroup)?.label ?? 'Inbox'}
             </h2>
             <button
               type="button"
@@ -424,6 +474,41 @@ export function EmailClient() {
               Grouped
             </button>
           </div>
+          {/* Search filter bar */}
+          <div className="flex items-center gap-2 px-3 pb-2">
+            <select
+              value={searchField}
+              onChange={(e) => setSearchField(e.target.value as typeof searchField)}
+              className="rounded-md border border-gray-300 bg-white px-2 py-1 text-xs text-gray-700 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200"
+              aria-label="Search field"
+            >
+              <option value="from">From</option>
+              <option value="to">To</option>
+              <option value="cc">CC</option>
+              <option value="subject">Subject</option>
+              <option value="body">Body</option>
+            </select>
+            <div className="relative flex-1">
+              <input
+                type="text"
+                value={searchText}
+                onChange={(e) => setSearchText(e.target.value)}
+                placeholder={`Filter by ${searchField}...`}
+                className="w-full rounded-md border border-gray-300 bg-white px-3 py-1 text-xs text-gray-700 placeholder-gray-400 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200 dark:placeholder-gray-500"
+                aria-label="Filter emails"
+              />
+              {searchText && (
+                <button
+                  type="button"
+                  onClick={() => setSearchText('')}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+                  aria-label="Clear search"
+                >
+                  ×
+                </button>
+              )}
+            </div>
+          </div>
         </div>
         {isGrouped ? (
           <GroupedEmailList
@@ -454,7 +539,7 @@ export function EmailClient() {
           />
         ) : (
           <EmailList
-            emails={emails}
+            emails={filteredEmails}
             selectedEmailId={selectedEmailId}
             checkedEmailIds={checkedIds}
             isLoading={emailsQuery.isLoading}

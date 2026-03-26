@@ -37,6 +37,7 @@ export {
   sendEmail,
   replyToEmail,
   forwardEmail,
+  getCategories,
   getLabels,
   moveEmail,
   getAttachments,

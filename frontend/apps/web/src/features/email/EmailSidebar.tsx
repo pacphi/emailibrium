@@ -63,7 +63,7 @@ function SidebarItem({
             }
           `}
         >
-          {group.unreadCount > 999 ? '999+' : group.unreadCount}
+          {group.unreadCount.toLocaleString()}
         </span>
       )}
     </button>
