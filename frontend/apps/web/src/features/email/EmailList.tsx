@@ -63,24 +63,19 @@ export function EmailList({
   }, [emailListDensity, virtualizer]);
 
   // Infinite scroll: load more when last few items are visible.
+  const virtualItems = virtualizer.getVirtualItems();
+  const lastItemIndex = virtualItems.at(-1)?.index;
   useEffect(() => {
-    const lastItem = virtualizer.getVirtualItems().at(-1);
-    if (!lastItem) return;
+    if (lastItemIndex == null) return;
     if (
-      lastItem.index >= emails.length - 5 &&
+      lastItemIndex >= emails.length - 5 &&
       hasNextPage &&
       !isFetchingNextPage &&
       onFetchNextPage
     ) {
       onFetchNextPage();
     }
-  }, [
-    virtualizer.getVirtualItems(),
-    emails.length,
-    hasNextPage,
-    isFetchingNextPage,
-    onFetchNextPage,
-  ]);
+  }, [lastItemIndex, emails.length, hasNextPage, isFetchingNextPage, onFetchNextPage]);
 
   const handleKeyNavigation = useCallback(
     (e: React.KeyboardEvent) => {

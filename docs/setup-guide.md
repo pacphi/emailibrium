@@ -71,6 +71,53 @@ OAuth requires registering apps with Google and Microsoft.
 
 OAuth is optional for initial development. You can skip it and configure later.
 
+## AI Configuration
+
+Emailibrium uses AI for email classification and smart features. It works out of the box with zero configuration.
+
+### Default Setup (Recommended)
+
+The default configuration uses:
+- **Embedding**: ONNX Runtime (`all-MiniLM-L6-v2`) — runs locally, downloads ~23 MB on first use
+- **Classification**: Built-in LLM (`qwen2.5-0.5b-q4km`) — runs locally, downloads ~350 MB on first use
+
+No API keys, no external services, no data leaves your machine.
+
+### Pre-download Models (Optional)
+
+To avoid the first-use download delay:
+
+```bash
+make download-models
+```
+
+Or download individually:
+```bash
+# ONNX embedding model (23 MB)
+cd backend && cargo run -- --download-models
+
+# GGUF LLM model (350 MB)
+npx tsx scripts/models.ts download --default
+```
+
+### Check Your Configuration
+
+```bash
+make diagnose
+```
+
+Shows embedding status, LLM model status, Ollama availability, and cloud API keys.
+
+### Alternative Providers
+
+| Want | Set | Notes |
+|------|-----|-------|
+| No AI (fastest) | `EMAILIBRIUM_GENERATIVE_PROVIDER=none` | Rule-based only |
+| Ollama (larger models) | `EMAILIBRIUM_GENERATIVE_PROVIDER=ollama` | Requires `ollama serve` |
+| Cloud (GPT-4o, Claude) | `EMAILIBRIUM_GENERATIVE_PROVIDER=cloud` | Requires API key |
+
+See [Configuration Reference](configuration-reference.md) for all options.
+
 ## Step 2: AI Providers
 
 Emailibrium supports a tiered AI architecture. Configure providers with:

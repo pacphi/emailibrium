@@ -254,17 +254,11 @@ impl VectorService {
         // Initialize generative model based on config (ADR-012)
         let gen_model: Option<Arc<dyn generative::GenerativeModel>> =
             match config.generative.provider.as_str() {
-                "ollama" => {
-                    tracing::info!("Generative AI: using Ollama (local)");
-                    Some(Arc::new(generative::OllamaGenerativeModel::new(
-                        &config.generative.ollama,
-                    )))
-                }
+                "ollama" => Some(Arc::new(generative::OllamaGenerativeModel::new(
+                    &config.generative.ollama,
+                ))),
                 "cloud" => match generative::CloudGenerativeModel::new(&config.generative.cloud) {
-                    Ok(model) => {
-                        tracing::info!("Generative AI: using cloud provider");
-                        Some(Arc::new(model))
-                    }
+                    Ok(model) => Some(Arc::new(model)),
                     Err(e) => {
                         tracing::warn!(
                             "Cloud generative model init failed: {e}, falling back to none"
@@ -272,10 +266,7 @@ impl VectorService {
                         None
                     }
                 },
-                _ => {
-                    tracing::info!("Generative AI: disabled (rule-based fallback only)");
-                    None
-                }
+                _ => None,
             };
 
         // Initialize consent manager

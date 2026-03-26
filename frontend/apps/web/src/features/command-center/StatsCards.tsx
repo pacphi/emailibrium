@@ -287,7 +287,6 @@ function AccountsIcon() {
   );
 }
 
-
 function InboxIcon() {
   return (
     <svg

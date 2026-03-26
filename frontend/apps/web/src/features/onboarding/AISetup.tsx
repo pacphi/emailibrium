@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 
-type AiTier = 'onnx' | 'ollama' | 'cloud';
+type AiTier = 'onnx' | 'builtin' | 'ollama' | 'cloud';
 type CloudProvider = 'openai' | 'anthropic' | 'gemini';
 
 interface AiSetupState {
@@ -18,7 +18,7 @@ interface AISetupProps {
 export type { AiTier, AiSetupState };
 
 export function AISetup({ onContinue, onSkip }: AISetupProps) {
-  const [tier, setTier] = useState<AiTier>('onnx');
+  const [tier, setTier] = useState<AiTier>('builtin');
   const [ollamaStatus, setOllamaStatus] = useState<'checking' | 'connected' | 'unavailable'>(
     'checking',
   );
@@ -101,22 +101,62 @@ export function AISetup({ onContinue, onSkip }: AISetupProps) {
               <span className="text-sm font-semibold text-gray-900 dark:text-gray-100">
                 Local AI (ONNX)
               </span>
-              <span className="inline-flex items-center rounded-full bg-green-100 px-2 py-0.5 text-[10px] font-medium text-green-700 dark:bg-green-900/30 dark:text-green-400">
-                Default
-              </span>
               <span className="inline-flex items-center gap-1 rounded-full bg-green-100 px-2 py-0.5 text-[10px] font-medium text-green-700 dark:bg-green-900/30 dark:text-green-400">
                 <span className="w-1.5 h-1.5 rounded-full bg-green-500" aria-hidden="true" />
                 Ready
               </span>
             </div>
             <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-              Runs entirely on your machine. No API keys, no data leaves your device. Handles email
-              classification, search, and smart organization.
+              Embeddings only, rule-based classification. No download needed.
             </p>
           </div>
         </button>
 
-        {/* Tier 2: Ollama (Local LLM) */}
+        {/* Tier 2: Built-in LLM */}
+        <button
+          type="button"
+          onClick={() => setTier('builtin')}
+          className={`w-full flex items-start gap-4 p-4 rounded-lg border-2 text-left transition-all ${
+            tier === 'builtin'
+              ? 'border-indigo-500 bg-indigo-50 dark:bg-indigo-900/20 dark:border-indigo-400'
+              : 'border-gray-200 bg-white hover:border-gray-300 dark:bg-gray-800 dark:border-gray-700 dark:hover:border-gray-600'
+          }`}
+          aria-pressed={tier === 'builtin'}
+        >
+          <div className="shrink-0 mt-0.5">
+            <span
+              className="flex items-center justify-center w-8 h-8 rounded-full bg-purple-100 dark:bg-purple-900/30"
+              aria-hidden="true"
+            >
+              <svg
+                viewBox="0 0 20 20"
+                fill="currentColor"
+                className="w-5 h-5 text-purple-600 dark:text-purple-400"
+              >
+                <path
+                  fillRule="evenodd"
+                  d="M10 1a.75.75 0 01.75.75v1.5a.75.75 0 01-1.5 0v-1.5A.75.75 0 0110 1zM5.05 3.05a.75.75 0 011.06 0l1.062 1.06A.75.75 0 116.11 5.173L5.05 4.11a.75.75 0 010-1.06zm9.9 0a.75.75 0 010 1.06l-1.06 1.062a.75.75 0 01-1.062-1.061l1.061-1.06a.75.75 0 011.06 0zM10 7a3 3 0 100 6 3 3 0 000-6zm-6.25 3a.75.75 0 01-.75.75H1.5a.75.75 0 010-1.5H3a.75.75 0 01.75.75zm14.5 0a.75.75 0 01-.75.75h-1.5a.75.75 0 010-1.5H17a.75.75 0 01.75.75zm-11.09 4.828a.75.75 0 01-1.06 1.06L5.05 14.95a.75.75 0 011.06-1.06l1.06 1.06zm7.14-1.06a.75.75 0 011.06 0l1.06 1.06a.75.75 0 01-1.06 1.061l-1.06-1.06a.75.75 0 010-1.061zM10 17a.75.75 0 01.75.75v1.5a.75.75 0 01-1.5 0v-1.5A.75.75 0 0110 17z"
+                  clipRule="evenodd"
+                />
+              </svg>
+            </span>
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-semibold text-gray-900 dark:text-gray-100">
+                Local AI + Built-in LLM
+              </span>
+              <span className="inline-flex items-center rounded-full bg-green-100 px-2 py-0.5 text-[10px] font-medium text-green-700 dark:bg-green-900/30 dark:text-green-400">
+                Recommended
+              </span>
+            </div>
+            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+              Embeddings + local email classification. Downloads a small AI model (~350 MB).
+            </p>
+          </div>
+        </button>
+
+        {/* Tier 3: Ollama (Local LLM) */}
         <button
           type="button"
           onClick={() => setTier('ollama')}
@@ -221,7 +261,7 @@ export function AISetup({ onContinue, onSkip }: AISetupProps) {
           </div>
         </button>
 
-        {/* Tier 3: Cloud AI */}
+        {/* Tier 4: Cloud AI */}
         <div>
           <button
             type="button"

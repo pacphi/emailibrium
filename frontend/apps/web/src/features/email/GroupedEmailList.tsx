@@ -97,24 +97,19 @@ export function GroupedEmailList({
   }, [emailListDensity, virtualizer]);
 
   // Infinite scroll: load more when near the bottom of the virtual list
+  const virtualItems = virtualizer.getVirtualItems();
+  const lastItemIndex = virtualItems.at(-1)?.index;
   useEffect(() => {
-    const lastItem = virtualizer.getVirtualItems().at(-1);
-    if (!lastItem) return;
+    if (lastItemIndex == null) return;
     if (
-      lastItem.index >= flatItems.length - 5 &&
+      lastItemIndex >= flatItems.length - 5 &&
       hasNextPage &&
       !isFetchingNextPage &&
       onFetchNextPage
     ) {
       onFetchNextPage();
     }
-  }, [
-    virtualizer.getVirtualItems(),
-    flatItems.length,
-    hasNextPage,
-    isFetchingNextPage,
-    onFetchNextPage,
-  ]);
+  }, [lastItemIndex, flatItems.length, hasNextPage, isFetchingNextPage, onFetchNextPage]);
 
   if (isLoading) {
     return (

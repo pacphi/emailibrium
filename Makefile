@@ -60,6 +60,8 @@ help:
 	@echo "  setup-ai               - Configure AI providers"
 	@echo "  setup-docker           - Set up Docker environment"
 	@echo "  setup-validate         - Validate entire setup"
+	@echo "  download-models        - Download AI models (ONNX + GGUF)"
+	@echo "  diagnose               - Show AI configuration diagnostics"
 	@echo ""
 	@echo "$(BOLD)$(BLUE)═══ Install & Build ═════════════════════════════════════════════════$(RESET)"
 	@echo "  install                - Install all dependencies (backend + frontend)"
@@ -138,6 +140,68 @@ setup-docker: ## Set up Docker environment
 .PHONY: setup-validate
 setup-validate: ## Validate entire setup
 	@bash scripts/setup-validate.sh
+
+.PHONY: download-models
+download-models: ## Download AI models (ONNX embedding + GGUF LLM)
+	@echo "$(BOLD)$(BLUE)Downloading AI models...$(RESET)"
+	@echo "$(GREEN)Step 1:$(RESET) ONNX embedding model"
+	@cd $(BACKEND_DIR) && cargo run -- --download-models 2>/dev/null || echo "  $(YELLOW)Backend not built. Run 'make build' first.$(RESET)"
+	@echo "$(GREEN)Step 2:$(RESET) GGUF LLM model (qwen2.5-0.5b-q4km)"
+	@cd $(FRONTEND_DIR)/apps/web && npx tsx ../../../scripts/models.ts download --default 2>/dev/null || echo "  $(YELLOW)Frontend not installed. Run 'make install' first.$(RESET)"
+	@echo "$(GREEN)Done.$(RESET) Models cached for offline use."
+
+.PHONY: diagnose
+diagnose: ## Show AI configuration diagnostics
+	@echo "$(BOLD)$(BLUE)Emailibrium AI Diagnostics$(RESET)"
+	@echo "────────────────────────────────────────"
+	@echo ""
+	@echo "$(BOLD)Embedding:$(RESET)"
+	@if [[ -d "$(BACKEND_DIR)/.fastembed_cache" ]]; then \
+		echo "  Provider: ONNX (all-MiniLM-L6-v2)"; \
+		echo "  Status:   $(GREEN)cached$(RESET) ($$(du -sh $(BACKEND_DIR)/.fastembed_cache 2>/dev/null | cut -f1))"; \
+	else \
+		echo "  Provider: ONNX (all-MiniLM-L6-v2)"; \
+		echo "  Status:   $(YELLOW)not cached (downloads on first use)$(RESET)"; \
+	fi
+	@echo ""
+	@echo "$(BOLD)Generative (LLM):$(RESET)"
+	@CACHE="$$HOME/.emailibrium/models/llm"; \
+	if [[ -d "$$CACHE" ]] && find "$$CACHE" -name "*.gguf" -print -quit 2>/dev/null | grep -q .; then \
+		MODEL=$$(find "$$CACHE" -name "*.gguf" -print -quit 2>/dev/null | xargs basename); \
+		SIZE=$$(du -sh "$$CACHE" 2>/dev/null | cut -f1); \
+		echo "  Provider: builtin ($$MODEL)"; \
+		echo "  Status:   $(GREEN)cached$(RESET) ($$SIZE)"; \
+	else \
+		echo "  Provider: builtin (qwen2.5-0.5b-q4km)"; \
+		echo "  Status:   $(YELLOW)not cached$(RESET)"; \
+		echo "  Fix:      make download-models"; \
+	fi
+	@echo ""
+	@echo "$(BOLD)Ollama:$(RESET)"
+	@if command -v ollama &>/dev/null && ollama list &>/dev/null 2>&1; then \
+		echo "  Status: $(GREEN)running$(RESET)"; \
+	elif command -v ollama &>/dev/null; then \
+		echo "  Status: $(YELLOW)installed but not running$(RESET)"; \
+	else \
+		echo "  Status: not installed (optional)"; \
+	fi
+	@echo ""
+	@echo "$(BOLD)Cloud APIs:$(RESET)"
+	@for var in EMAILIBRIUM_OPENAI_API_KEY EMAILIBRIUM_ANTHROPIC_API_KEY EMAILIBRIUM_GEMINI_API_KEY; do \
+		name=$$(echo "$$var" | sed 's/EMAILIBRIUM_//;s/_API_KEY//'); \
+		if [[ -n "$${!var:-}" ]]; then \
+			echo "  $$name: $(GREEN)configured$(RESET)"; \
+		else \
+			echo "  $$name: not configured"; \
+		fi; \
+	done
+	@echo ""
+	@echo "$(BOLD)Database:$(RESET)"
+	@if [[ -f "$(BACKEND_DIR)/emailibrium-dev.db" ]]; then \
+		echo "  Status: $(GREEN)exists$(RESET) ($$(du -sh $(BACKEND_DIR)/emailibrium-dev.db 2>/dev/null | cut -f1))"; \
+	else \
+		echo "  Status: not created yet (created on first run)"; \
+	fi
 
 # ============================================================================
 # Install & Build

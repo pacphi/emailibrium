@@ -11,7 +11,9 @@ import {
 } from './groupBySender';
 
 /** Helper to create a minimal Email fixture with sensible defaults. */
-function makeEmail(overrides: Partial<Email> & Pick<Email, 'id' | 'fromAddr' | 'receivedAt'>): Email {
+function makeEmail(
+  overrides: Partial<Email> & Pick<Email, 'id' | 'fromAddr' | 'receivedAt'>,
+): Email {
   return {
     accountId: 'acc-1',
     provider: 'gmail',
@@ -92,9 +94,24 @@ describe('extractDomain', () => {
 describe('resolveDisplayName', () => {
   it('picks the most common fromName', () => {
     const emails: Email[] = [
-      makeEmail({ id: '1', fromAddr: 'a@b.com', fromName: 'Alice', receivedAt: '2024-01-03T00:00:00Z' }),
-      makeEmail({ id: '2', fromAddr: 'a@b.com', fromName: 'Alice B', receivedAt: '2024-01-02T00:00:00Z' }),
-      makeEmail({ id: '3', fromAddr: 'a@b.com', fromName: 'Alice', receivedAt: '2024-01-01T00:00:00Z' }),
+      makeEmail({
+        id: '1',
+        fromAddr: 'a@b.com',
+        fromName: 'Alice',
+        receivedAt: '2024-01-03T00:00:00Z',
+      }),
+      makeEmail({
+        id: '2',
+        fromAddr: 'a@b.com',
+        fromName: 'Alice B',
+        receivedAt: '2024-01-02T00:00:00Z',
+      }),
+      makeEmail({
+        id: '3',
+        fromAddr: 'a@b.com',
+        fromName: 'Alice',
+        receivedAt: '2024-01-01T00:00:00Z',
+      }),
     ];
     expect(resolveDisplayName(emails)).toBe('Alice');
   });
@@ -109,16 +126,36 @@ describe('resolveDisplayName', () => {
 
   it('tie-breaks by picking the name on the most recent email', () => {
     const emails: Email[] = [
-      makeEmail({ id: '1', fromAddr: 'x@y.com', fromName: 'Beta', receivedAt: '2024-06-02T00:00:00Z' }),
-      makeEmail({ id: '2', fromAddr: 'x@y.com', fromName: 'Alpha', receivedAt: '2024-06-01T00:00:00Z' }),
+      makeEmail({
+        id: '1',
+        fromAddr: 'x@y.com',
+        fromName: 'Beta',
+        receivedAt: '2024-06-02T00:00:00Z',
+      }),
+      makeEmail({
+        id: '2',
+        fromAddr: 'x@y.com',
+        fromName: 'Alpha',
+        receivedAt: '2024-06-01T00:00:00Z',
+      }),
     ];
     expect(resolveDisplayName(emails)).toBe('Beta');
   });
 
   it('ignores empty-string fromName values', () => {
     const emails: Email[] = [
-      makeEmail({ id: '1', fromAddr: 'x@y.com', fromName: '  ', receivedAt: '2024-01-02T00:00:00Z' }),
-      makeEmail({ id: '2', fromAddr: 'x@y.com', fromName: 'Real Name', receivedAt: '2024-01-01T00:00:00Z' }),
+      makeEmail({
+        id: '1',
+        fromAddr: 'x@y.com',
+        fromName: '  ',
+        receivedAt: '2024-01-02T00:00:00Z',
+      }),
+      makeEmail({
+        id: '2',
+        fromAddr: 'x@y.com',
+        fromName: 'Real Name',
+        receivedAt: '2024-01-01T00:00:00Z',
+      }),
     ];
     expect(resolveDisplayName(emails)).toBe('Real Name');
   });
@@ -172,9 +209,24 @@ describe('groupByDomain', () => {
 
   it('sorts sender groups within a domain A-Z by displayName', () => {
     const emails: Email[] = [
-      makeEmail({ id: '1', fromAddr: 'zoe@corp.com', fromName: 'Zoe', receivedAt: '2024-01-03T00:00:00Z' }),
-      makeEmail({ id: '2', fromAddr: 'alice@corp.com', fromName: 'Alice', receivedAt: '2024-01-02T00:00:00Z' }),
-      makeEmail({ id: '3', fromAddr: 'mike@corp.com', fromName: 'Mike', receivedAt: '2024-01-01T00:00:00Z' }),
+      makeEmail({
+        id: '1',
+        fromAddr: 'zoe@corp.com',
+        fromName: 'Zoe',
+        receivedAt: '2024-01-03T00:00:00Z',
+      }),
+      makeEmail({
+        id: '2',
+        fromAddr: 'alice@corp.com',
+        fromName: 'Alice',
+        receivedAt: '2024-01-02T00:00:00Z',
+      }),
+      makeEmail({
+        id: '3',
+        fromAddr: 'mike@corp.com',
+        fromName: 'Mike',
+        receivedAt: '2024-01-01T00:00:00Z',
+      }),
     ];
     const domains = groupByDomain(emails);
     const senderNames = domains[0]!.senderGroups.map((g) => g.displayName);
@@ -267,16 +319,20 @@ describe('flattenGroups', () => {
   });
 
   it('shows emails when domain and sender are both expanded', () => {
-    const items = flattenGroups(
-      [domainTest],
-      new Set(['test.com']),
-      new Set(['alice@test.com']),
-    );
+    const items = flattenGroups([domainTest], new Set(['test.com']), new Set(['alice@test.com']));
     expect(items).toHaveLength(4); // domain + sender + 2 emails
     expect(items[0]).toEqual({ type: 'domain-header', domain: domainTest });
     expect(items[1]).toEqual({ type: 'sender-header', group: senderAlice, domain: 'test.com' });
-    expect(items[2]).toEqual({ type: 'email', email: senderAlice.emails[0], groupKey: 'alice@test.com' });
-    expect(items[3]).toEqual({ type: 'email', email: senderAlice.emails[1], groupKey: 'alice@test.com' });
+    expect(items[2]).toEqual({
+      type: 'email',
+      email: senderAlice.emails[0],
+      groupKey: 'alice@test.com',
+    });
+    expect(items[3]).toEqual({
+      type: 'email',
+      email: senderAlice.emails[1],
+      groupKey: 'alice@test.com',
+    });
   });
 
   it('handles mixed collapse state across domains', () => {
@@ -290,7 +346,11 @@ describe('flattenGroups', () => {
     expect(items[0]).toEqual({ type: 'domain-header', domain: domainTest });
     expect(items[1]).toEqual({ type: 'domain-header', domain: domainOther });
     expect(items[2]).toEqual({ type: 'sender-header', group: senderBob, domain: 'other.com' });
-    expect(items[3]).toEqual({ type: 'email', email: senderBob.emails[0], groupKey: 'bob@other.com' });
+    expect(items[3]).toEqual({
+      type: 'email',
+      email: senderBob.emails[0],
+      groupKey: 'bob@other.com',
+    });
   });
 
   it('returns empty array for empty input', () => {

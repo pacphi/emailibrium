@@ -176,23 +176,51 @@ Uses the Cohere embed API v2 (`embed-english-v3.0` by default).
 | `quantization.binary_threshold`   | u64    | `1000000` | `EMAILIBRIUM_QUANTIZATION_BINARY_THRESHOLD`   | Vector count threshold to activate binary quantization (~32x compression)       |
 | `quantization.hysteresis_percent` | f32    | `0.10`    | `EMAILIBRIUM_QUANTIZATION_HYSTERESIS_PERCENT` | Hysteresis percentage to prevent thrashing near tier boundaries (0.10 = 10%)    |
 
-### Generative AI (`generative.*`) -- ADR-012
+## Generative AI (ADR-012, ADR-021)
 
-Controls the generative LLM used for classification fallback and chat features.
+Controls email classification and chat. Default provider is `builtin` — a small language model that runs locally with no external service.
 
-| Key                                      | Type   | Default                                     | Env Override                                         | Description                                        |
-| ---------------------------------------- | ------ | ------------------------------------------- | ---------------------------------------------------- | -------------------------------------------------- |
-| `generative.provider`                    | String | `none`                                      | `EMAILIBRIUM_GENERATIVE_PROVIDER`                    | Provider selection: `none`, `ollama`, or `cloud`   |
-| `generative.ollama.base_url`             | String | `http://localhost:11434`                    | `EMAILIBRIUM_GENERATIVE_OLLAMA_BASE_URL`             | Ollama API base URL                                |
-| `generative.ollama.classification_model` | String | `llama3.2:1b`                               | `EMAILIBRIUM_GENERATIVE_OLLAMA_CLASSIFICATION_MODEL` | Model for classification prompts                   |
-| `generative.ollama.chat_model`           | String | `llama3.2:3b`                               | `EMAILIBRIUM_GENERATIVE_OLLAMA_CHAT_MODEL`           | Model for chat / free-form generation              |
-| `generative.cloud.provider`              | String | `openai`                                    | `EMAILIBRIUM_GENERATIVE_CLOUD_PROVIDER`              | Cloud provider: `openai`, `anthropic`, or `gemini` |
-| `generative.cloud.api_key_env`           | String | `EMAILIBRIUM_CLOUD_API_KEY`                 | `EMAILIBRIUM_GENERATIVE_CLOUD_API_KEY_ENV`           | Env var name holding the cloud API key             |
-| `generative.cloud.model`                 | String | `gpt-4o-mini`                               | `EMAILIBRIUM_GENERATIVE_CLOUD_MODEL`                 | Cloud model identifier                             |
-| `generative.cloud.base_url`              | String | `https://api.openai.com`                    | `EMAILIBRIUM_GENERATIVE_CLOUD_BASE_URL`              | Cloud provider API base URL                        |
-| `generative.cloud.gemini.api_key_env`    | String | `EMAILIBRIUM_GEMINI_API_KEY`                | `EMAILIBRIUM_GENERATIVE_CLOUD_GEMINI_API_KEY_ENV`    | Gemini API key env var                             |
-| `generative.cloud.gemini.model`          | String | `gemini-2.0-flash`                          | `EMAILIBRIUM_GENERATIVE_CLOUD_GEMINI_MODEL`          | Gemini model identifier                            |
-| `generative.cloud.gemini.base_url`       | String | `https://generativelanguage.googleapis.com` | `EMAILIBRIUM_GENERATIVE_CLOUD_GEMINI_BASE_URL`       | Gemini API base URL                                |
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `generative.provider` | string | `"builtin"` | Provider: `builtin`, `none`, `ollama`, `cloud` |
+| `generative.builtin.model_id` | string | `"qwen2.5-0.5b-q4km"` | GGUF model identifier |
+| `generative.builtin.context_size` | integer | `2048` | Context window in tokens |
+| `generative.builtin.gpu_layers` | integer | `99` | GPU layer offload (0=CPU, 99=all) |
+| `generative.builtin.idle_timeout_secs` | integer | `300` | Seconds before unloading idle model |
+| `generative.builtin.cache_dir` | string | `~/.emailibrium/models/llm` | Model cache directory |
+| `generative.ollama.base_url` | string | `"http://localhost:11434"` | Ollama API URL |
+| `generative.ollama.classification_model` | string | `"llama3.2:1b"` | Model for classification |
+| `generative.ollama.chat_model` | string | `"llama3.2:3b"` | Model for chat |
+| `generative.cloud.provider` | string | `"openai"` | Cloud provider: `openai`, `anthropic`, `gemini` |
+| `generative.cloud.model` | string | `"gpt-4o-mini"` | Cloud model identifier |
+| `generative.cloud.api_key_env` | string | `"EMAILIBRIUM_CLOUD_API_KEY"` | Environment variable for API key |
+
+### Provider Tiers
+
+| Tier | Provider | What It Does | Requirements |
+|------|----------|-------------|--------------|
+| **0** | `none` | Rule-based keyword heuristics only | Nothing |
+| **0.5** | `builtin` (default) | Local LLM via llama.cpp + ONNX embeddings | ~350 MB model download |
+| **1** | `ollama` | Local Ollama server + ONNX embeddings | Ollama installed and running |
+| **2** | `cloud` | Cloud LLM API + optional cloud embeddings | API key + consent |
+
+### Environment Variable Overrides
+
+```bash
+EMAILIBRIUM_GENERATIVE_PROVIDER=builtin   # or: none, ollama, cloud
+EMAILIBRIUM_GENERATIVE_BUILTIN_MODEL_ID=qwen2.5-0.5b-q4km
+EMAILIBRIUM_GENERATIVE_BUILTIN_GPU_LAYERS=0  # CPU only
+```
+
+### Available Built-in Models
+
+| Model ID | Size | RAM | Quality | Use Case |
+|----------|------|-----|---------|----------|
+| `qwen2.5-0.5b-q4km` | 350 MB | ~500 MB | Good | Classification (default) |
+| `smollm2-360m-q4km` | 250 MB | ~400 MB | Adequate | Ultra-light classification |
+| `smollm2-1.7b-q4km` | 1 GB | ~1.5 GB | Better | Classification + basic chat |
+| `llama3.2-3b-q4km` | 1.8 GB | ~2.5 GB | Good | High-quality chat |
+| `phi3.5-mini-q4km` | 2.3 GB | ~3 GB | Best | Best quality, higher resources |
 
 ### OAuth (`oauth.*`) -- DDD-005
 

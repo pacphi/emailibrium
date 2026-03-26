@@ -90,10 +90,11 @@ export function OverviewPanel({ report, isLoading }: OverviewPanelProps) {
     (d) => d.name !== 'Uncategorized' && d.name !== 'unknown',
   );
   const categoryData = hasRealCategories ? rawCategoryData : [];
-  const volumeData = temporal?.dailyVolume.slice(-30).map(d => ({
-    date: d.date.slice(5),
-    received: d.count,
-  })) ?? [];
+  const volumeData =
+    temporal?.dailyVolume.slice(-30).map((d) => ({
+      date: d.date.slice(5),
+      received: d.count,
+    })) ?? [];
   const topSenders = (report?.topSenders ?? []).slice(0, 8).map((s) => {
     // Strip email address from "Display Name <email>" format, show just the name.
     const match = s.sender.match(/^"?(.+?)"?\s*<.+>$/);
@@ -240,12 +241,7 @@ export function OverviewPanel({ report, isLoading }: OverviewPanelProps) {
             <ResponsiveContainer width="100%" height={280}>
               <BarChart data={topSenders} layout="vertical" margin={{ left: 10 }}>
                 <XAxis type="number" tick={{ fontSize: 11 }} />
-                <YAxis
-                  type="category"
-                  dataKey="sender"
-                  tick={{ fontSize: 12 }}
-                  width={160}
-                />
+                <YAxis type="category" dataKey="sender" tick={{ fontSize: 12 }} width={160} />
                 <Tooltip
                   contentStyle={{
                     border: '1px solid #e5e7eb',

@@ -2,6 +2,7 @@ import { useRef, useEffect, useCallback } from 'react';
 import { MessageSquare, Trash2, Loader2, Square } from 'lucide-react';
 import type { RuleSuggestion } from '@emailibrium/types';
 import { useCreateRule } from '@/features/rules/hooks/useRules';
+import { useGenerativeRouter } from '../../services/ai/useGenerativeRouter';
 import { useChat } from './hooks/useChat';
 import { ChatMessage } from './ChatMessage';
 import { ChatInput } from './ChatInput';
@@ -15,6 +16,7 @@ export function ChatInterface() {
   const { messages, isLoading, streamingEnabled, sendMessage, stopStreaming, clearHistory } =
     useChat();
   const createRule = useCreateRule();
+  const router = useGenerativeRouter();
   const scrollRef = useRef<HTMLDivElement>(null);
 
   // Auto-scroll to bottom when new messages arrive
@@ -54,6 +56,11 @@ export function ChatInterface() {
         <div className="flex items-center gap-2">
           <MessageSquare className="h-5 w-5 text-indigo-500" aria-hidden="true" />
           <h2 className="text-sm font-semibold text-gray-900 dark:text-white">Email Assistant</h2>
+          {router.provider === 'builtin' && (
+            <span className="rounded-full bg-emerald-100 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400">
+              Powered by built-in AI (local)
+            </span>
+          )}
           {streamingEnabled && (
             <span className="rounded-full bg-green-100 px-1.5 py-0.5 text-[10px] font-medium text-green-700 dark:bg-green-900/30 dark:text-green-400">
               Live
@@ -125,6 +132,12 @@ export function ChatInterface() {
           </div>
         )}
       </div>
+
+      {/* AI chat integration point:
+       * When router.provider !== 'none', router.chat() can be used for AI-powered
+       * responses. It accepts Message[] and returns a Completion with
+       * { content, finishReason, usage }. When the router provider is
+       * 'builtin', inference runs entirely on-device. */}
 
       {/* Input */}
       <ChatInput onSend={sendMessage} disabled={isLoading && !isStreaming} />

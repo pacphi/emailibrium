@@ -1,5 +1,13 @@
 import { useState } from 'react';
-import { ChevronRight, ChevronDown, Archive, Trash2, FolderInput, MailOpen, Mail } from 'lucide-react';
+import {
+  ChevronRight,
+  ChevronDown,
+  Archive,
+  Trash2,
+  FolderInput,
+  MailOpen,
+  Mail,
+} from 'lucide-react';
 
 interface SenderGroupHeaderProps {
   displayName: string;
@@ -104,9 +112,7 @@ export function SenderGroupHeader({
           {displayName || fromAddr}
         </span>
         {displayName && fromAddr && (
-          <span className="truncate text-xs text-gray-500 dark:text-gray-400">
-            {fromAddr}
-          </span>
+          <span className="truncate text-xs text-gray-500 dark:text-gray-400">{fromAddr}</span>
         )}
       </div>
 
@@ -119,7 +125,10 @@ export function SenderGroupHeader({
           {unreadCount > 0 && onBulkMarkRead && (
             <button
               type="button"
-              onClick={(e) => { e.stopPropagation(); onBulkMarkRead(); }}
+              onClick={(e) => {
+                e.stopPropagation();
+                onBulkMarkRead();
+              }}
               className="rounded p-1 text-gray-400 hover:bg-gray-200 hover:text-gray-600 dark:hover:bg-gray-700 dark:hover:text-gray-300"
               aria-label={`Mark all read from ${displayName}`}
               title="Mark all read"
@@ -130,7 +139,10 @@ export function SenderGroupHeader({
           {unreadCount === 0 && onBulkMarkUnread && (
             <button
               type="button"
-              onClick={(e) => { e.stopPropagation(); onBulkMarkUnread(); }}
+              onClick={(e) => {
+                e.stopPropagation();
+                onBulkMarkUnread();
+              }}
               className="rounded p-1 text-gray-400 hover:bg-gray-200 hover:text-gray-600 dark:hover:bg-gray-700 dark:hover:text-gray-300"
               aria-label={`Mark all unread from ${displayName}`}
               title="Mark all unread"
@@ -141,7 +153,10 @@ export function SenderGroupHeader({
           {onBulkArchive && (
             <button
               type="button"
-              onClick={(e) => { e.stopPropagation(); onBulkArchive(); }}
+              onClick={(e) => {
+                e.stopPropagation();
+                onBulkArchive();
+              }}
               className="rounded p-1 text-gray-400 hover:bg-gray-200 hover:text-gray-600 dark:hover:bg-gray-700 dark:hover:text-gray-300"
               aria-label={`Archive all from ${displayName}`}
               title="Archive all"
@@ -152,7 +167,10 @@ export function SenderGroupHeader({
           {onBulkDelete && (
             <button
               type="button"
-              onClick={(e) => { e.stopPropagation(); onBulkDelete(); }}
+              onClick={(e) => {
+                e.stopPropagation();
+                onBulkDelete();
+              }}
               className="rounded p-1 text-gray-400 hover:bg-red-100 hover:text-red-600 dark:hover:bg-red-900/30 dark:hover:text-red-400"
               aria-label={`Delete all from ${displayName}`}
               title="Delete all"
@@ -163,7 +181,10 @@ export function SenderGroupHeader({
           {onBulkMove && (
             <button
               type="button"
-              onClick={(e) => { e.stopPropagation(); onBulkMove(); }}
+              onClick={(e) => {
+                e.stopPropagation();
+                onBulkMove();
+              }}
               className="rounded p-1 text-gray-400 hover:bg-gray-200 hover:text-gray-600 dark:hover:bg-gray-700 dark:hover:text-gray-300"
               aria-label={`Move all from ${displayName}`}
               title="Move all"

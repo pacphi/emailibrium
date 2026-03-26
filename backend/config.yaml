@@ -45,6 +45,24 @@ search:
   max_limit: 100
   similarity_threshold: 0.5
 
+# Generative AI (ADR-012, ADR-021)
+generative:
+  provider: "builtin"  # builtin | none | ollama | cloud
+  builtin:
+    model_id: "qwen2.5-0.5b-q4km"
+    context_size: 2048
+    gpu_layers: 99       # 0 = CPU only, 99 = offload all to Metal/CUDA
+    idle_timeout_secs: 300
+    # cache_dir: "~/.emailibrium/models/llm"  # override if needed
+  # ollama:
+  #   base_url: "http://localhost:11434"
+  #   classification_model: "llama3.2:1b"
+  #   chat_model: "llama3.2:3b"
+  # cloud:
+  #   provider: "openai"    # openai | anthropic | gemini
+  #   model: "gpt-4o-mini"
+  #   api_key_env: "EMAILIBRIUM_CLOUD_API_KEY"
+
 # Encryption (ADR-008)
 encryption:
   enabled: false

@@ -56,10 +56,7 @@ export function MoveDialog({
     () =>
       labels
         .filter((l) => l.isSystem && l.kind === 'folder')
-        .filter(
-          (l) =>
-            !search || l.name.toLowerCase().includes(search.toLowerCase()),
-        ),
+        .filter((l) => !search || l.name.toLowerCase().includes(search.toLowerCase())),
     [labels, search],
   );
 
@@ -67,10 +64,7 @@ export function MoveDialog({
     () =>
       labels
         .filter((l) => !l.isSystem)
-        .filter(
-          (l) =>
-            !search || l.name.toLowerCase().includes(search.toLowerCase()),
-        ),
+        .filter((l) => !search || l.name.toLowerCase().includes(search.toLowerCase())),
     [labels, search],
   );
 
@@ -92,9 +86,7 @@ export function MoveDialog({
         <div className="flex items-center justify-between border-b border-gray-200 px-4 py-3 dark:border-gray-700">
           <div className="flex items-center gap-2">
             <FolderInput className="h-5 w-5 text-indigo-600 dark:text-indigo-400" />
-            <h2 className="text-sm font-semibold text-gray-900 dark:text-white">
-              Move to folder
-            </h2>
+            <h2 className="text-sm font-semibold text-gray-900 dark:text-white">Move to folder</h2>
           </div>
           <button
             type="button"
@@ -109,9 +101,7 @@ export function MoveDialog({
         {/* Email subject preview */}
         <div className="flex items-center gap-2 border-b border-gray-100 px-4 py-2 dark:border-gray-700">
           <Mail className="h-3.5 w-3.5 shrink-0 text-gray-400 dark:text-gray-500" />
-          <p className="truncate text-xs text-gray-500 dark:text-gray-400">
-            {emailSubject}
-          </p>
+          <p className="truncate text-xs text-gray-500 dark:text-gray-400">{emailSubject}</p>
         </div>
 
         {/* Search */}
@@ -183,9 +173,7 @@ export function MoveDialog({
           {/* Empty state */}
           {systemFolders.length === 0 && customLabels.length === 0 && (
             <div className="px-4 py-6 text-center text-sm text-gray-400">
-              {search
-                ? 'No matching folders or labels'
-                : 'No folders available'}
+              {search ? 'No matching folders or labels' : 'No folders available'}
             </div>
           )}
         </div>

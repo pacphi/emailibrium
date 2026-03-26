@@ -130,6 +130,69 @@ async fn main() -> anyhow::Result<()> {
     let vector_service =
         Arc::new(vectors::VectorService::new(config.clone(), db.clone(), redis.clone()).await?);
 
+    // ── Log AI configuration status ────────────────────────────────────
+    tracing::info!(
+        "Embedding: {} ({})",
+        config.embedding.provider,
+        config.embedding.model,
+    );
+
+    match config.generative.provider.as_str() {
+        "builtin" => {
+            let model = &config.generative.builtin.model_id;
+            let cache_dir = &config.generative.builtin.cache_dir;
+            let gpu = config.generative.builtin.gpu_layers;
+
+            // Check if model is cached
+            let cache_path = std::path::Path::new(cache_dir);
+            let cached = cache_path.exists()
+                && std::fs::read_dir(cache_path)
+                    .map(|entries| {
+                        entries
+                            .flatten()
+                            .any(|e| e.path().extension().is_some_and(|ext| ext == "gguf"))
+                    })
+                    .unwrap_or(false);
+
+            if cached {
+                tracing::info!(
+                    "Generative: builtin ({}, gpu_layers={}) — model cached",
+                    model,
+                    gpu,
+                );
+            } else {
+                tracing::info!(
+                    "Generative: builtin ({}) — model not cached, will download on first use",
+                    model,
+                );
+                tracing::info!("  Tip: run 'make download-models' to pre-download");
+            }
+        }
+        "ollama" => {
+            tracing::info!(
+                "Generative: Ollama ({}/{})",
+                config.generative.ollama.classification_model,
+                config.generative.ollama.chat_model,
+            );
+        }
+        "cloud" => {
+            tracing::info!(
+                "Generative: cloud/{} ({})",
+                config.generative.cloud.provider,
+                config.generative.cloud.model,
+            );
+        }
+        "none" => {
+            tracing::info!("Generative: disabled (rule-based fallback only)");
+        }
+        other => {
+            tracing::warn!(
+                "Generative: unknown provider '{}', falling back to rule-based",
+                other,
+            );
+        }
+    }
+
     // Initialize OAuth manager for email account connections (DDD-005)
     let oauth_manager = Arc::new(email::oauth::OAuthManager::new(
         db.pool.clone(),

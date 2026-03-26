@@ -1,5 +1,10 @@
 import { useQuery } from '@tanstack/react-query';
-import { getSubscriptions, getRecurringSenders, getInboxReport, getTemporalInsights } from '@emailibrium/api';
+import {
+  getSubscriptions,
+  getRecurringSenders,
+  getInboxReport,
+  getTemporalInsights,
+} from '@emailibrium/api';
 import type { SubscriptionInsight, InboxReport, TemporalInsights } from '@emailibrium/types';
 
 export function useInboxReport() {

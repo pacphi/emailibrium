@@ -6,6 +6,9 @@ database_url: "sqlite:emailibrium-dev.db?mode=rwc"
 embedding:
   provider: "onnx"
 
+generative:
+  provider: "builtin"
+
 encryption:
   enabled: false
 

@@ -56,6 +56,8 @@ impl std::fmt::Display for ModelState {
 pub enum ProviderType {
     /// ONNX Runtime (local, default).
     Onnx,
+    /// Built-in local LLM (Tier 0.5, ADR-021).
+    BuiltIn,
     /// Ollama local inference server.
     Ollama,
     /// OpenAI cloud API.
@@ -74,6 +76,7 @@ impl std::fmt::Display for ProviderType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Onnx => write!(f, "onnx"),
+            Self::BuiltIn => write!(f, "builtin"),
             Self::Ollama => write!(f, "ollama"),
             Self::OpenAi => write!(f, "openai"),
             Self::Anthropic => write!(f, "anthropic"),
@@ -90,6 +93,7 @@ impl std::str::FromStr for ProviderType {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "onnx" => Ok(Self::Onnx),
+            "builtin" => Ok(Self::BuiltIn),
             "ollama" => Ok(Self::Ollama),
             "openai" => Ok(Self::OpenAi),
             "anthropic" => Ok(Self::Anthropic),

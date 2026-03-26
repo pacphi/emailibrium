@@ -137,9 +137,7 @@ export function SendersPanel({ senders, isLoading }: SendersPanelProps) {
   // Hide categories when embeddings aren't active (all unknown/uncategorized).
   const hasRealCategories =
     senders?.some(
-      (s) =>
-        s.category !== 'unknown' &&
-        s.category.toLowerCase() !== 'uncategorized',
+      (s) => s.category !== 'unknown' && s.category.toLowerCase() !== 'uncategorized',
     ) ?? false;
 
   const headers: Array<{ field: SortField; label: string }> = [
@@ -197,7 +195,10 @@ export function SendersPanel({ senders, isLoading }: SendersPanelProps) {
           <tbody>
             {filtered.length === 0 && (
               <tr>
-                <td colSpan={headers.length} className="px-5 py-12 text-center text-sm text-gray-400">
+                <td
+                  colSpan={headers.length}
+                  className="px-5 py-12 text-center text-sm text-gray-400"
+                >
                   {search ? 'No senders match your search.' : 'No sender data available.'}
                 </td>
               </tr>

@@ -113,13 +113,14 @@ export function EmailClient() {
 
   // Fetch real categories from the database.
   const categoriesQuery = useCategoriesQuery();
-  const categories = categoriesQuery.data?.categories ?? [];
+  const categoriesData = categoriesQuery.data?.categories;
 
   // Build sidebar groups dynamically from real category data.
   const sidebarGroups = useMemo(() => {
+    const cats = categoriesData ?? [];
     const groups: SidebarGroup[] = [{ id: 'inbox', label: 'Inbox', icon: 'inbox', unreadCount: 0 }];
 
-    for (const cat of categories) {
+    for (const cat of cats) {
       const lower = cat.toLowerCase();
       if (SUBSCRIPTION_CATEGORIES.has(lower)) {
         groups.push({ id: `sub-${lower}`, label: cat, icon: 'subscription', unreadCount: 0 });
@@ -131,7 +132,7 @@ export function EmailClient() {
     }
 
     return groups;
-  }, [categories]);
+  }, [categoriesData]);
 
   // Compute counts per group. Inbox shows total email count.
   const groupsWithCounts = useMemo(() => {

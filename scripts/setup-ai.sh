@@ -90,9 +90,39 @@ fi
 
 echo ""
 
-# ─── Step 2: Ollama (local LLM) ─────────────────────────────────────────────
+# ─── Step 2: Built-in Local LLM (ADR-021) ──────────────────────────────────
 
-echo "${BOLD}${BLUE}Step 2: Ollama (local LLM, optional)${RESET}"
+echo "${BOLD}${BLUE}Step 2: Built-in Local LLM (default generative provider)${RESET}"
+echo "  A small language model (~350 MB) runs locally for email classification."
+echo "  No API key needed. No external service needed."
+echo "  Default model: Qwen 2.5 0.5B (Q4_K_M quantization)"
+echo ""
+
+BUILTIN_CACHE="$HOME/.emailibrium/models/llm"
+if [[ -d "$BUILTIN_CACHE" ]] && find "$BUILTIN_CACHE" -name "*.gguf" -print -quit 2>/dev/null | grep -q .; then
+  echo "  ${GREEN}[cached]${RESET}  GGUF model found in $BUILTIN_CACHE"
+else
+  echo "  ${YELLOW}[not cached]${RESET} Model will download on first classification request (~350 MB)"
+  echo ""
+  read -rp "  Download the default model now? [Y/n]: " builtin_choice
+  builtin_choice="${builtin_choice:-y}"
+  if [[ "${builtin_choice,,}" == "y" ]]; then
+    if command -v npx &>/dev/null; then
+      echo "  Downloading qwen2.5-0.5b-q4km..."
+      (cd "$PROJECT_ROOT" && npx tsx scripts/models.ts download --default) || {
+        echo "  ${YELLOW}Download failed. Model will download on first use.${RESET}"
+      }
+    else
+      echo "  ${YELLOW}npx not found. Model will download on first backend request.${RESET}"
+    fi
+  fi
+fi
+
+echo ""
+
+# ─── Step 3: Ollama (local LLM) ─────────────────────────────────────────────
+
+echo "${BOLD}${BLUE}Step 3: Ollama (local LLM, optional)${RESET}"
 echo "  Ollama provides local LLM inference without cloud API keys."
 echo ""
 
@@ -119,9 +149,9 @@ fi
 
 echo ""
 
-# ─── Step 3: Cloud providers ────────────────────────────────────────────────
+# ─── Step 4: Cloud providers ────────────────────────────────────────────────
 
-echo "${BOLD}${BLUE}Step 3: Cloud AI Providers (optional)${RESET}"
+echo "${BOLD}${BLUE}Step 4: Cloud AI Providers (optional)${RESET}"
 echo "  API keys are stored in .env.local (gitignored)."
 echo "  Press Enter to skip any provider."
 echo ""
@@ -188,7 +218,12 @@ fi
 echo ""
 echo "────────────────────────────────────────"
 echo "${BOLD}AI Provider Summary:${RESET}"
-echo "  ${GREEN}ONNX${RESET}      Default embedding (always available, no key needed)"
+echo "  ${GREEN}ONNX${RESET}        Default embedding (always available, no key needed)"
+if [[ -d "$BUILTIN_CACHE" ]] && find "$BUILTIN_CACHE" -name "*.gguf" -print -quit 2>/dev/null | grep -q .; then
+  echo "  ${GREEN}Built-in${RESET}    Local LLM (model cached)"
+else
+  echo "  ${YELLOW}Built-in${RESET}    Local LLM (downloads on first use)"
+fi
 if command -v ollama &>/dev/null; then
   echo "  ${GREEN}Ollama${RESET}    Local LLM (installed)"
 else
@@ -203,5 +238,5 @@ for provider in OpenAI Anthropic Gemini Cohere; do
   fi
 done
 echo ""
-echo "Tip: Set EMAILIBRIUM_EMBEDDING_PROVIDER=ollama|openai|cohere in .env.local"
-echo "     to override the default ONNX embedding provider."
+echo "Tip: Set EMAILIBRIUM_GENERATIVE_PROVIDER=ollama|cloud in .env.local"
+echo "     to override the default built-in LLM provider."

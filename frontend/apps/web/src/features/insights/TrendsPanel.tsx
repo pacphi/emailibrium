@@ -53,29 +53,33 @@ export function TrendsPanel({ report, isLoading }: TrendsPanelProps) {
 
   const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
-  const volumeData = temporal?.dailyVolume.map(d => ({
-    date: d.date.slice(5),
-    volume: d.count,
-  })) ?? [];
+  const volumeData =
+    temporal?.dailyVolume.map((d) => ({
+      date: d.date.slice(5),
+      volume: d.count,
+    })) ?? [];
 
-  const dayData = temporal?.dayOfWeek.map(d => ({
-    day: dayNames[d.day] ?? `Day ${d.day}`,
-    count: d.count,
-  })) ?? [];
+  const dayData =
+    temporal?.dayOfWeek.map((d) => ({
+      day: dayNames[d.day] ?? `Day ${d.day}`,
+      count: d.count,
+    })) ?? [];
 
-  const hourData = temporal?.hourOfDay.map(d => ({
-    hour: `${String(d.hour).padStart(2, '0')}:00`,
-    count: d.count,
-  })) ?? [];
+  const hourData =
+    temporal?.hourOfDay.map((d) => ({
+      hour: `${String(d.hour).padStart(2, '0')}:00`,
+      count: d.count,
+    })) ?? [];
 
-  const categoryData = temporal?.dailyVolume.map(d => {
-    const dayCategories = temporal.categoryDaily.filter(cd => cd.date === d.date);
-    const row: Record<string, string | number> = { date: d.date.slice(5) };
-    for (const cat of categories) {
-      row[cat] = dayCategories.find(cd => cd.category === cat)?.count ?? 0;
-    }
-    return row;
-  }) ?? [];
+  const categoryData =
+    temporal?.dailyVolume.map((d) => {
+      const dayCategories = temporal.categoryDaily.filter((cd) => cd.date === d.date);
+      const row: Record<string, string | number> = { date: d.date.slice(5) };
+      for (const cat of categories) {
+        row[cat] = dayCategories.find((cd) => cd.category === cat)?.count ?? 0;
+      }
+      return row;
+    }) ?? [];
 
   if (isLoading || temporalLoading) return <PanelSkeleton />;
 

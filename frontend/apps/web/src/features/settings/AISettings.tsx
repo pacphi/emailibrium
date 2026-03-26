@@ -1,6 +1,7 @@
 import { useSettings, type LlmProvider } from './hooks/useSettings';
 import { useQuery } from '@tanstack/react-query';
 import { useState, useMemo } from 'react';
+import { ModelDownloadProgress } from './components/ModelDownloadProgress';
 
 // ---------------------------------------------------------------------------
 // Embedding models grouped by provider
@@ -96,7 +97,12 @@ const LLM_PROVIDERS: {
   {
     value: 'none',
     label: 'None (Rule-based)',
-    description: 'Keyword and domain heuristics only — no LLM needed. Maximum privacy.',
+    description: 'Keyword and domain heuristics only — no AI model. Fastest, but less accurate.',
+  },
+  {
+    value: 'builtin',
+    label: 'Built-in (Local)',
+    description: 'Run a small LLM locally — no external service needed. Downloads a ~350 MB model.',
     badge: 'Default',
   },
   {
@@ -114,6 +120,33 @@ const LLM_PROVIDERS: {
 
 const LLM_MODELS: Record<LlmProvider, LlmModelOption[]> = {
   none: [],
+  builtin: [
+    {
+      value: 'qwen2.5-0.5b-q4km',
+      label: 'Qwen 2.5 0.5B',
+      description: 'Fast classification (0.5B params, ~350 MB)',
+    },
+    {
+      value: 'smollm2-360m-q4km',
+      label: 'SmolLM2 360M',
+      description: 'Ultra-light classification (360M params, ~250 MB)',
+    },
+    {
+      value: 'smollm2-1.7b-q4km',
+      label: 'SmolLM2 1.7B',
+      description: 'Better quality + basic chat (1.7B params, ~1 GB)',
+    },
+    {
+      value: 'llama3.2-3b-q4km',
+      label: 'Llama 3.2 3B',
+      description: 'High-quality chat (3B params, ~1.8 GB)',
+    },
+    {
+      value: 'phi3.5-mini-q4km',
+      label: 'Phi 3.5 mini',
+      description: 'Best quality, higher resources (3.8B params, ~2.3 GB)',
+    },
+  ],
   local: [
     { value: 'llama3.2:1b', label: 'Llama 3.2 1B', description: 'Fast classification (1B params)' },
     { value: 'llama3.2:3b', label: 'Llama 3.2 3B', description: 'Better quality chat (3B params)' },
@@ -427,6 +460,14 @@ export function AISettings() {
           placeholder="sk-ant-..."
           helpText="Required for Claude models. Stored locally, never sent to Emailibrium servers."
         />
+      )}
+      {llmProvider === 'builtin' && (
+        <div className="space-y-2 max-w-sm">
+          <ModelDownloadProgress modelId={llmModel || 'qwen2.5-0.5b-q4km'} />
+          <p className="text-xs text-gray-500 dark:text-gray-400">
+            Model runs entirely on your machine. No data leaves your device.
+          </p>
+        </div>
       )}
       {llmProvider === 'local' && (
         <div className="space-y-2">

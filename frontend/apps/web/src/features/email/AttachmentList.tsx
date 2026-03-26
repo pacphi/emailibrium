@@ -19,8 +19,7 @@ function getFileIcon(contentType: string) {
   if (contentType.startsWith('audio/')) return FileAudio;
   if (contentType.startsWith('video/')) return FileVideo;
   if (contentType === 'application/pdf') return FileText;
-  if (contentType.includes('spreadsheet') || contentType.includes('excel'))
-    return FileSpreadsheet;
+  if (contentType.includes('spreadsheet') || contentType.includes('excel')) return FileSpreadsheet;
   if (
     contentType.includes('zip') ||
     contentType.includes('compressed') ||

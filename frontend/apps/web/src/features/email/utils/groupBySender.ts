@@ -26,10 +26,23 @@ export function normalizeGroupKey(fromAddr: string): string {
 // Known compound TLDs that require 3 parts to identify the registrable domain
 // e.g. "co.uk" means "acme.co.uk" not "co.uk" is the root
 const COMPOUND_TLDS = new Set([
-  'co.uk', 'co.nz', 'co.za', 'co.in', 'co.jp', 'co.kr',
-  'com.au', 'com.br', 'com.mx', 'com.ar', 'com.cn',
-  'org.uk', 'net.uk', 'gov.uk', 'ac.uk',
-  'org.au', 'net.au',
+  'co.uk',
+  'co.nz',
+  'co.za',
+  'co.in',
+  'co.jp',
+  'co.kr',
+  'com.au',
+  'com.br',
+  'com.mx',
+  'com.ar',
+  'com.cn',
+  'org.uk',
+  'net.uk',
+  'gov.uk',
+  'ac.uk',
+  'org.au',
+  'net.au',
 ]);
 
 /**
@@ -168,9 +181,7 @@ export function groupByDomain(emails: Email[]): DomainGroup[] {
   const domainMap = new Map<string, SenderGroup[]>();
 
   for (const [key, groupEmails] of senderMap) {
-    groupEmails.sort(
-      (a, b) => new Date(b.receivedAt).getTime() - new Date(a.receivedAt).getTime(),
-    );
+    groupEmails.sort((a, b) => new Date(b.receivedAt).getTime() - new Date(a.receivedAt).getTime());
 
     const mostRecent = groupEmails[0]!;
     const cleanEmail = parseFromAddr(mostRecent.fromAddr).email;
@@ -209,9 +220,7 @@ export function groupByDomain(emails: Email[]): DomainGroup[] {
     });
   }
 
-  domains.sort((a, b) =>
-    a.domain.localeCompare(b.domain, undefined, { sensitivity: 'base' }),
-  );
+  domains.sort((a, b) => a.domain.localeCompare(b.domain, undefined, { sensitivity: 'base' }));
 
   return domains;
 }

@@ -562,9 +562,12 @@ fn default_cache_ttl_secs() -> u64 {
 /// Configuration for the generative AI subsystem.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GenerativeConfig {
-    /// Provider selection: "none" | "ollama" | "cloud".
+    /// Provider selection: "builtin" | "none" | "ollama" | "cloud".
     #[serde(default = "default_gen_provider")]
     pub provider: String,
+    /// Built-in local LLM settings (Tier 0.5, ADR-021).
+    #[serde(default)]
+    pub builtin: BuiltInLlmConfig,
     /// Ollama-specific settings (Tier 1).
     #[serde(default)]
     pub ollama: OllamaGenerativeConfig,
@@ -577,8 +580,41 @@ impl Default for GenerativeConfig {
     fn default() -> Self {
         Self {
             provider: default_gen_provider(),
+            builtin: BuiltInLlmConfig::default(),
             ollama: OllamaGenerativeConfig::default(),
             cloud: CloudGenerativeConfig::default(),
+        }
+    }
+}
+
+/// Built-in local LLM settings (Tier 0.5, ADR-021).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BuiltInLlmConfig {
+    /// Model identifier from the GGUF manifest.
+    #[serde(default = "default_builtin_model")]
+    pub model_id: String,
+    /// Context window size in tokens.
+    #[serde(default = "default_builtin_context_size")]
+    pub context_size: u32,
+    /// Number of layers to offload to GPU (0 = CPU only, 99 = all).
+    #[serde(default = "default_builtin_gpu_layers")]
+    pub gpu_layers: u32,
+    /// Seconds of inactivity before unloading the model to free RAM.
+    #[serde(default = "default_builtin_idle_timeout")]
+    pub idle_timeout_secs: u64,
+    /// Directory for cached GGUF model files.
+    #[serde(default = "default_builtin_cache_dir")]
+    pub cache_dir: String,
+}
+
+impl Default for BuiltInLlmConfig {
+    fn default() -> Self {
+        Self {
+            model_id: default_builtin_model(),
+            context_size: default_builtin_context_size(),
+            gpu_layers: default_builtin_gpu_layers(),
+            idle_timeout_secs: default_builtin_idle_timeout(),
+            cache_dir: default_builtin_cache_dir(),
         }
     }
 }
@@ -664,7 +700,23 @@ impl Default for GeminiGenerativeConfig {
 }
 
 fn default_gen_provider() -> String {
-    "none".to_string()
+    "builtin".to_string()
+}
+
+fn default_builtin_model() -> String {
+    "qwen2.5-0.5b-q4km".to_string()
+}
+fn default_builtin_context_size() -> u32 {
+    2048
+}
+fn default_builtin_gpu_layers() -> u32 {
+    99
+}
+fn default_builtin_idle_timeout() -> u64 {
+    300
+}
+fn default_builtin_cache_dir() -> String {
+    "~/.emailibrium/models/llm".to_string()
 }
 fn default_ollama_gen_url() -> String {
     "http://localhost:11434".to_string()
@@ -967,7 +1019,14 @@ mod tests {
     #[test]
     fn test_generative_config_defaults() {
         let config = GenerativeConfig::default();
-        assert_eq!(config.provider, "none");
+        assert_eq!(config.provider, "builtin");
+        // Built-in LLM sub-config (ADR-021)
+        assert_eq!(config.builtin.model_id, "qwen2.5-0.5b-q4km");
+        assert_eq!(config.builtin.context_size, 2048);
+        assert_eq!(config.builtin.gpu_layers, 99);
+        assert_eq!(config.builtin.idle_timeout_secs, 300);
+        assert_eq!(config.builtin.cache_dir, "~/.emailibrium/models/llm");
+        // Ollama sub-config
         assert_eq!(config.ollama.base_url, "http://localhost:11434");
         assert_eq!(config.ollama.classification_model, "llama3.2:1b");
         assert_eq!(config.ollama.chat_model, "llama3.2:3b");
@@ -1016,7 +1075,7 @@ mod tests {
     #[test]
     fn test_vector_config_includes_generative() {
         let config = VectorConfig::default();
-        assert_eq!(config.generative.provider, "none");
+        assert_eq!(config.generative.provider, "builtin");
     }
 
     #[test]

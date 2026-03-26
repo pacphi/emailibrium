@@ -43,6 +43,20 @@ Emailibrium uses [figment](https://docs.rs/figment) for layered configuration. S
 3. **`config.local.yaml`** -- local overrides (gitignored)
 4. **Environment variables** -- prefixed with `EMAILIBRIUM_`, underscores map to nesting
 
+### AI Model Pre-download
+
+For production deployments, pre-download models during the build phase to avoid runtime downloads:
+
+```bash
+# During Docker build or deployment setup:
+make download-models
+
+# Or in Dockerfile:
+RUN cargo run --release -- --download-models
+```
+
+The built-in LLM model (~350 MB) is cached in `~/.emailibrium/models/llm/`. Include this directory in your persistent volume.
+
 ### Key Configuration Options
 
 ```yaml

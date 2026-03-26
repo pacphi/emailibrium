@@ -58,9 +58,7 @@ function Sidebar() {
     >
       {/* Header */}
       <div className="flex items-center justify-between p-3 border-b border-gray-200 dark:border-gray-700">
-        {!collapsed && (
-          <h1 className="text-lg font-bold text-indigo-600">Emailibrium</h1>
-        )}
+        {!collapsed && <h1 className="text-lg font-bold text-indigo-600">Emailibrium</h1>}
         <button
           type="button"
           onClick={() => setCollapsed(!collapsed)}
@@ -68,11 +66,7 @@ function Sidebar() {
           title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
           aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
         >
-          {collapsed ? (
-            <ChevronRight className="h-4 w-4" />
-          ) : (
-            <ChevronLeft className="h-4 w-4" />
-          )}
+          {collapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
         </button>
       </div>
 
@@ -110,16 +104,10 @@ function NavItem({ href, label, icon: Icon, collapsed, needsLlm, disabled }: Nav
     return (
       <div
         className={`flex items-center gap-3 rounded-md text-sm font-medium text-gray-400 dark:text-gray-600 cursor-not-allowed ${collapsed ? 'justify-center px-2 py-2' : 'px-3 py-2'}`}
-        title={
-          needsLlm
-            ? `${label} — Configure an LLM provider in Settings > AI / LLM`
-            : label
-        }
+        title={needsLlm ? `${label} — Configure an LLM provider in Settings > AI / LLM` : label}
       >
         <Icon className="h-4 w-4 shrink-0" />
-        {!collapsed && (
-          <span className="flex-1 truncate">{label}</span>
-        )}
+        {!collapsed && <span className="flex-1 truncate">{label}</span>}
         {!collapsed && needsLlm && (
           <span className="text-[10px] font-normal bg-gray-100 dark:bg-gray-700 px-1.5 py-0.5 rounded text-gray-400 dark:text-gray-500">
             LLM

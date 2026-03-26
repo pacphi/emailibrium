@@ -20,6 +20,8 @@ function aiTierLabel(aiSetup: AiSetupState | null): string {
   switch (aiSetup.tier) {
     case 'onnx':
       return 'Local AI ready (ONNX)';
+    case 'builtin':
+      return 'Local AI + Built-in LLM ready';
     case 'ollama':
       return aiSetup.ollamaStatus === 'connected' ? 'Ollama connected' : 'Ollama selected';
     case 'cloud':
@@ -76,6 +78,7 @@ export function SetupComplete({
   const aiConfigured =
     !aiSetup ||
     aiSetup.tier === 'onnx' ||
+    aiSetup.tier === 'builtin' ||
     aiSetup.ollamaStatus === 'connected' ||
     aiSetup.tier === 'cloud';
   const hasAmber = !emailConfigured;

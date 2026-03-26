@@ -8,6 +8,7 @@ import { Step4Rules } from './Step4Rules';
 import { CleanupProgress } from './CleanupProgress';
 import type { CleanupAction, CleanupState } from './CleanupProgress';
 import type { Cluster } from '@emailibrium/types';
+import { useGenerativeRouter } from '../../services/ai/useGenerativeRouter';
 
 const stepLabels: Record<WizardStep, string> = {
   1: 'Connect & Ingest',
@@ -89,6 +90,7 @@ function StepIndicator({ currentStep, onStepClick }: StepIndicatorProps) {
 
 export function InboxCleaner() {
   const wizard = useInboxCleaner();
+  const router = useGenerativeRouter();
   const [ingestionJobId, setIngestionJobId] = useState<string | null>(null);
   const [showCleanupProgress, setShowCleanupProgress] = useState(false);
   const [cleanupActions, setCleanupActions] = useState<CleanupAction[]>([]);
@@ -182,7 +184,19 @@ export function InboxCleaner() {
         <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
           Analyze and clean your inbox in four steps.
         </p>
+        {router.provider === 'builtin' && (
+          <span className="mt-1 inline-block rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-medium text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400">
+            Powered by built-in AI (local)
+          </span>
+        )}
       </div>
+
+      {/* AI-powered classification integration point:
+       * When router.provider !== 'none', use router.classify() to get
+       * AI-powered email classification during ingestion (Step 1) or
+       * subscription categorisation (Step 2). The classify call accepts
+       * { subject, sender, bodyPreview, categories } and returns
+       * { category, confidence, reasoning }. */}
 
       {/* Step indicator */}
       <StepIndicator currentStep={wizard.currentStep} onStepClick={wizard.goToStep} />

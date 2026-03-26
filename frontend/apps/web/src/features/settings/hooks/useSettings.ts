@@ -3,7 +3,7 @@ import { persist, createJSONStorage } from 'zustand/middleware';
 export type Theme = 'light' | 'dark' | 'system';
 export type SidebarPosition = 'left' | 'right';
 export type EmailListDensity = 'compact' | 'comfortable' | 'spacious';
-export type LlmProvider = 'none' | 'local' | 'openai' | 'anthropic';
+export type LlmProvider = 'none' | 'builtin' | 'local' | 'openai' | 'anthropic';
 
 export interface SettingsState {
   // General
@@ -14,6 +14,10 @@ export interface SettingsState {
   // AI / LLM
   embeddingModel: string;
   llmProvider: LlmProvider;
+  builtInLlmModel: string;
+  builtInLlmIdleTimeout: number;
+  builtInLlmMaxContext: number;
+  builtInLlmTemperature: number;
   openaiApiKey: string;
   anthropicApiKey: string;
   ollamaBaseUrl: string;
@@ -37,6 +41,10 @@ export interface SettingsState {
   setSyncFrequencyMinutes: (minutes: number) => void;
   setEmbeddingModel: (model: string) => void;
   setLlmProvider: (provider: LlmProvider) => void;
+  setBuiltInLlmModel: (model: string) => void;
+  setBuiltInLlmIdleTimeout: (timeout: number) => void;
+  setBuiltInLlmMaxContext: (context: number) => void;
+  setBuiltInLlmTemperature: (temp: number) => void;
   setOpenaiApiKey: (key: string) => void;
   setAnthropicApiKey: (key: string) => void;
   setOllamaBaseUrl: (url: string) => void;
@@ -57,7 +65,11 @@ const DEFAULT_STATE = {
   notificationsEnabled: true,
   syncFrequencyMinutes: 5,
   embeddingModel: 'all-MiniLM-L6-v2',
-  llmProvider: 'none' as LlmProvider,
+  llmProvider: 'builtin' as LlmProvider,
+  builtInLlmModel: 'qwen2.5-0.5b-q4km',
+  builtInLlmIdleTimeout: 300,
+  builtInLlmMaxContext: 2048,
+  builtInLlmTemperature: 0.7,
   openaiApiKey: '',
   anthropicApiKey: '',
   ollamaBaseUrl: 'http://localhost:11434',
@@ -87,6 +99,10 @@ export const useSettings = create<SettingsState>()(
       setSyncFrequencyMinutes: (minutes) => set({ syncFrequencyMinutes: minutes }),
       setEmbeddingModel: (model) => set({ embeddingModel: model }),
       setLlmProvider: (provider) => set({ llmProvider: provider }),
+      setBuiltInLlmModel: (model) => set({ builtInLlmModel: model }),
+      setBuiltInLlmIdleTimeout: (timeout) => set({ builtInLlmIdleTimeout: timeout }),
+      setBuiltInLlmMaxContext: (context) => set({ builtInLlmMaxContext: context }),
+      setBuiltInLlmTemperature: (temp) => set({ builtInLlmTemperature: temp }),
       setOpenaiApiKey: (key) => set({ openaiApiKey: key }),
       setAnthropicApiKey: (key) => set({ anthropicApiKey: key }),
       setOllamaBaseUrl: (url) => set({ ollamaBaseUrl: url }),
@@ -110,6 +126,10 @@ export const useSettings = create<SettingsState>()(
         syncFrequencyMinutes: state.syncFrequencyMinutes,
         embeddingModel: state.embeddingModel,
         llmProvider: state.llmProvider,
+        builtInLlmModel: state.builtInLlmModel,
+        builtInLlmIdleTimeout: state.builtInLlmIdleTimeout,
+        builtInLlmMaxContext: state.builtInLlmMaxContext,
+        builtInLlmTemperature: state.builtInLlmTemperature,
         openaiApiKey: state.openaiApiKey,
         anthropicApiKey: state.anthropicApiKey,
         ollamaBaseUrl: state.ollamaBaseUrl,
