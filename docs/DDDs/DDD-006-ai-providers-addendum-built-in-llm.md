@@ -1,11 +1,11 @@
 # DDD-006 Addendum: Built-in Local LLM Provider
 
-| Field   | Value                              |
-| ------- | ---------------------------------- |
-| Status  | Proposed                           |
-| Date    | 2026-03-26                         |
-| Type    | Addendum to DDD-006 (AI Providers) |
-| ADR     | ADR-021 (Built-in Local LLM)       |
+| Field  | Value                              |
+| ------ | ---------------------------------- |
+| Status | Proposed                           |
+| Date   | 2026-03-26                         |
+| Type   | Addendum to DDD-006 (AI Providers) |
+| ADR    | ADR-021 (Built-in Local LLM)       |
 
 ## Overview
 
@@ -55,12 +55,12 @@ enum ProviderTier {
 
 **ModelManifest value object — add fields:**
 
-| Field | Type | Description |
-| ----- | ---- | ----------- |
-| format | ModelFormat | Onnx, Gguf [NEW] |
-| quantization_level | Option\<String\> | e.g., "Q4_K_M", "Q8_0", "FP16" [NEW] |
-| ram_estimate_bytes | u64 | Estimated RAM usage when loaded [NEW] |
-| hardware_requirements | Vec\<String\> | e.g., ["metal", "cuda", "cpu"] [NEW] |
+| Field                 | Type             | Description                           |
+| --------------------- | ---------------- | ------------------------------------- |
+| format                | ModelFormat      | Onnx, Gguf [NEW]                      |
+| quantization_level    | Option\<String\> | e.g., "Q4_K_M", "Q8_0", "FP16" [NEW]  |
+| ram_estimate_bytes    | u64              | Estimated RAM usage when loaded [NEW] |
+| hardware_requirements | Vec\<String\>    | e.g., ["metal", "cuda", "cpu"] [NEW]  |
 
 **ModelFormat enum (new):**
 
@@ -89,13 +89,13 @@ enum ModelCapability {
 
 **Default GGUF model manifest entries:**
 
-| model_id | model_name | format | quantization | dimensions | size_bytes | sha256 | download_url |
-| -------- | ---------- | ------ | ------------ | ---------- | ---------- | ------ | ------------ |
-| qwen2.5-0.5b-q4km | Qwen2.5-0.5B-Instruct Q4_K_M | Gguf | Q4_K_M | N/A | ~350 MB | (pinned) | HF Hub |
-| smollm2-360m-q4km | SmolLM2-360M-Instruct Q4_K_M | Gguf | Q4_K_M | N/A | ~250 MB | (pinned) | HF Hub |
-| smollm2-1.7b-q4km | SmolLM2-1.7B-Instruct Q4_K_M | Gguf | Q4_K_M | N/A | ~1 GB | (pinned) | HF Hub |
-| llama3.2-3b-q4km | Llama-3.2-3B-Instruct Q4_K_M | Gguf | Q4_K_M | N/A | ~1.8 GB | (pinned) | HF Hub |
-| phi3.5-mini-q4km | Phi-3.5-mini-instruct Q4_K_M | Gguf | Q4_K_M | N/A | ~2.3 GB | (pinned) | HF Hub |
+| model_id          | model_name                   | format | quantization | dimensions | size_bytes | sha256   | download_url |
+| ----------------- | ---------------------------- | ------ | ------------ | ---------- | ---------- | -------- | ------------ |
+| qwen2.5-0.5b-q4km | Qwen2.5-0.5B-Instruct Q4_K_M | Gguf   | Q4_K_M       | N/A        | ~350 MB    | (pinned) | HF Hub       |
+| smollm2-360m-q4km | SmolLM2-360M-Instruct Q4_K_M | Gguf   | Q4_K_M       | N/A        | ~250 MB    | (pinned) | HF Hub       |
+| smollm2-1.7b-q4km | SmolLM2-1.7B-Instruct Q4_K_M | Gguf   | Q4_K_M       | N/A        | ~1 GB      | (pinned) | HF Hub       |
+| llama3.2-3b-q4km  | Llama-3.2-3B-Instruct Q4_K_M | Gguf   | Q4_K_M       | N/A        | ~1.8 GB    | (pinned) | HF Hub       |
+| phi3.5-mini-q4km  | Phi-3.5-mini-instruct Q4_K_M | Gguf   | Q4_K_M       | N/A        | ~2.3 GB    | (pinned) | HF Hub       |
 
 ### InferenceSessionAggregate — Extended
 
@@ -163,14 +163,14 @@ The `enum` values for `category` are dynamically populated from the user's confi
 
 Wraps `node-llama-cpp` behind the `GenerativeModel` trait defined in DDD-006.
 
-| Domain Method | node-llama-cpp Operation |
-| ------------- | ------------------------ |
-| `classify(prompt)` | `session.prompt(prompt, { grammar: jsonSchema })` with structured output |
-| `chat(messages)` | `LlamaChatSession` with conversation history, streaming tokens |
-| `is_available()` | Model file exists at expected path + `verified == true` in ModelRegistry |
-| `load()` | `getLlama() → loadModel({ modelPath }) → createContext()` |
-| `unload()` | `model.dispose()` — releases native memory |
-| `get_hardware_info()` | `llama.getGpuDeviceNames()`, `llama.getGpuVramState()` |
+| Domain Method         | node-llama-cpp Operation                                                 |
+| --------------------- | ------------------------------------------------------------------------ |
+| `classify(prompt)`    | `session.prompt(prompt, { grammar: jsonSchema })` with structured output |
+| `chat(messages)`      | `LlamaChatSession` with conversation history, streaming tokens           |
+| `is_available()`      | Model file exists at expected path + `verified == true` in ModelRegistry |
+| `load()`              | `getLlama() → loadModel({ modelPath }) → createContext()`                |
+| `unload()`            | `model.dispose()` — releases native memory                               |
+| `get_hardware_info()` | `llama.getGpuDeviceNames()`, `llama.getGpuVramState()`                   |
 
 **Isolation guarantees:**
 
@@ -183,21 +183,21 @@ Wraps `node-llama-cpp` behind the `GenerativeModel` trait defined in DDD-006.
 
 ## New Domain Events
 
-| Event | Fields | Published When |
-| ----- | ------ | -------------- |
-| BuiltInLlmModelSelected | model_id, format, quantization, estimated_ram | User selects a GGUF model in settings |
-| BuiltInLlmLoaded | model_id, hardware_backend, load_time_ms, ram_used_bytes | Model loaded into memory |
-| BuiltInLlmUnloaded | model_id, session_duration_ms, total_requests | Model unloaded (idle timeout or explicit) |
-| BuiltInLlmHardwareDetected | backends: Vec\<HardwareBackend\>, selected: HardwareBackend | Hardware probed at startup |
+| Event                      | Fields                                                      | Published When                            |
+| -------------------------- | ----------------------------------------------------------- | ----------------------------------------- |
+| BuiltInLlmModelSelected    | model_id, format, quantization, estimated_ram               | User selects a GGUF model in settings     |
+| BuiltInLlmLoaded           | model_id, hardware_backend, load_time_ms, ram_used_bytes    | Model loaded into memory                  |
+| BuiltInLlmUnloaded         | model_id, session_duration_ms, total_requests               | Model unloaded (idle timeout or explicit) |
+| BuiltInLlmHardwareDetected | backends: Vec\<HardwareBackend\>, selected: HardwareBackend | Hardware probed at startup                |
 
 ### Event Consumers
 
-| Event | Consumed By | Purpose |
-| ----- | ----------- | ------- |
-| BuiltInLlmModelSelected | ModelRegistry | Triggers download if not cached |
-| BuiltInLlmLoaded | Email Intelligence | Built-in generative now available for classification |
-| BuiltInLlmUnloaded | Email Intelligence | Falls back to rule-based until next request triggers reload |
-| BuiltInLlmHardwareDetected | Settings UI | Displays hardware info and performance estimate |
+| Event                      | Consumed By        | Purpose                                                     |
+| -------------------------- | ------------------ | ----------------------------------------------------------- |
+| BuiltInLlmModelSelected    | ModelRegistry      | Triggers download if not cached                             |
+| BuiltInLlmLoaded           | Email Intelligence | Built-in generative now available for classification        |
+| BuiltInLlmUnloaded         | Email Intelligence | Falls back to rule-based until next request triggers reload |
+| BuiltInLlmHardwareDetected | Settings UI        | Displays hardware info and performance estimate             |
 
 ---
 
@@ -251,29 +251,29 @@ enum HardwareBackend {
 
 ### GenerativeModelInfo (new)
 
-| Field | Type | Description |
-| ----- | ---- | ----------- |
-| model_id | ModelId | Model identifier |
-| format | ModelFormat | Gguf |
-| quantization | String | e.g., "Q4_K_M" |
-| context_length | u32 | Max tokens in context window |
-| ram_estimate | u64 | Estimated RAM in bytes |
-| hardware_backend | HardwareBackend | Active hardware acceleration |
-| supports_grammar | bool | Whether structured output is available |
-| tok_per_sec_estimate | f32 | Estimated generation speed |
+| Field                | Type            | Description                            |
+| -------------------- | --------------- | -------------------------------------- |
+| model_id             | ModelId         | Model identifier                       |
+| format               | ModelFormat     | Gguf                                   |
+| quantization         | String          | e.g., "Q4_K_M"                         |
+| context_length       | u32             | Max tokens in context window           |
+| ram_estimate         | u64             | Estimated RAM in bytes                 |
+| hardware_backend     | HardwareBackend | Active hardware acceleration           |
+| supports_grammar     | bool            | Whether structured output is available |
+| tok_per_sec_estimate | f32             | Estimated generation speed             |
 
 ---
 
 ## Configuration Mapping — Additions
 
-| YAML Path | Aggregate | Description |
-| --------- | --------- | ----------- |
-| `ai.generative.builtin.*` | ProviderConfig, ModelRegistry | Built-in LLM settings [NEW] |
-| `ai.generative.builtin.model` | ProviderConfig | Selected GGUF model ID |
-| `ai.generative.builtin.idle_timeout_secs` | InferenceSession | Seconds before unloading idle model (default: 300) |
-| `ai.generative.builtin.max_context_tokens` | InferenceSession | Max context window for inference (default: 2048) |
-| `ai.generative.builtin.temperature` | InferenceSession | Sampling temperature for chat (default: 0.7) |
-| `ai.models.llm_cache_dir` | ModelRegistry | GGUF model cache directory (default: `~/.emailibrium/models/llm/`) |
+| YAML Path                                  | Aggregate                     | Description                                                        |
+| ------------------------------------------ | ----------------------------- | ------------------------------------------------------------------ |
+| `ai.generative.builtin.*`                  | ProviderConfig, ModelRegistry | Built-in LLM settings [NEW]                                        |
+| `ai.generative.builtin.model`              | ProviderConfig                | Selected GGUF model ID                                             |
+| `ai.generative.builtin.idle_timeout_secs`  | InferenceSession              | Seconds before unloading idle model (default: 300)                 |
+| `ai.generative.builtin.max_context_tokens` | InferenceSession              | Max context window for inference (default: 2048)                   |
+| `ai.generative.builtin.temperature`        | InferenceSession              | Sampling temperature for chat (default: 0.7)                       |
+| `ai.models.llm_cache_dir`                  | ModelRegistry                 | GGUF model cache directory (default: `~/.emailibrium/models/llm/`) |
 
 Environment variable overrides: `EMAILIBRIUM_AI__GENERATIVE__BUILTIN__MODEL=qwen2.5-0.5b-q4km`
 
@@ -299,14 +299,14 @@ AI Providers ──[Published Language]──> Settings UI
 
 ## Ubiquitous Language — Additions
 
-| Term | Definition |
-| ---- | ---------- |
-| **Built-in LLM** | A small language model (0.5B-3.8B parameters) that runs in-process via node-llama-cpp, requiring no external service. Tier 0.5 in the provider hierarchy. |
-| **GGUF** | The model file format used by llama.cpp. A single binary file containing model weights, tokenizer, and metadata. The standard format for local LLM inference. |
+| Term                               | Definition                                                                                                                                                                      |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Built-in LLM**                   | A small language model (0.5B-3.8B parameters) that runs in-process via node-llama-cpp, requiring no external service. Tier 0.5 in the provider hierarchy.                       |
+| **GGUF**                           | The model file format used by llama.cpp. A single binary file containing model weights, tokenizer, and metadata. The standard format for local LLM inference.                   |
 | **Grammar-constrained generation** | A technique where the LLM's token sampling is restricted by a formal grammar (JSON schema), guaranteeing that the output is valid structured data. Eliminates parsing failures. |
-| **Hardware backend** | The compute accelerator used for inference: Metal (macOS GPU), CUDA (NVIDIA GPU), Vulkan (cross-platform GPU), or CPU (software fallback). Detected automatically. |
-| **Idle timeout** | The period after which an unused built-in LLM session is closed to free RAM. The model is reloaded on the next inference request. |
-| **Lazy download** | Model download triggered by the first inference request rather than by explicit user action. Provides a seamless experience at the cost of a one-time delay. |
+| **Hardware backend**               | The compute accelerator used for inference: Metal (macOS GPU), CUDA (NVIDIA GPU), Vulkan (cross-platform GPU), or CPU (software fallback). Detected automatically.              |
+| **Idle timeout**                   | The period after which an unused built-in LLM session is closed to free RAM. The model is reloaded on the next inference request.                                               |
+| **Lazy download**                  | Model download triggered by the first inference request rather than by explicit user action. Provides a seamless experience at the cost of a one-time delay.                    |
 
 ---
 

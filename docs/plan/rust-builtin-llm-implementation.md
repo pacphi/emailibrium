@@ -109,7 +109,7 @@ This plan implements the ADR-021 addendum (Rust backend LLM). It adds `llama-cpp
 
 - [ ] **RBL-2.02**: Memory checks
   - Before loading model, check available memory via `sysinfo` crate (optional dep)
-  - Warn if RAM < model's estimate * 1.2
+  - Warn if RAM < model's estimate \* 1.2
   - Refuse to load if RAM < model's estimate
   - Log memory usage after load
   - **File:** `backend/src/vectors/builtin_llm.rs`
@@ -145,45 +145,45 @@ This plan implements the ADR-021 addendum (Rust backend LLM). It adds `llama-cpp
 
 ### New Files
 
-| File | Sprint | Purpose |
-|------|--------|---------|
-| `backend/src/vectors/builtin_llm.rs` | RBL-1 | BuiltInGenerativeModel implementation |
-| `backend/src/vectors/gguf_download.rs` | RBL-1 | GGUF manifest + HuggingFace download |
+| File                                   | Sprint | Purpose                               |
+| -------------------------------------- | ------ | ------------------------------------- |
+| `backend/src/vectors/builtin_llm.rs`   | RBL-1  | BuiltInGenerativeModel implementation |
+| `backend/src/vectors/gguf_download.rs` | RBL-1  | GGUF manifest + HuggingFace download  |
 
 ### Modified Files
 
-| File | Sprint | Changes |
-|------|--------|---------|
-| `backend/Cargo.toml` | RBL-1 | Add llama-cpp-2, hf-hub, builtin-llm feature |
-| `backend/src/vectors/model_registry.rs` | RBL-1 | Add `BuiltIn` to ProviderType |
-| `backend/src/vectors/config.rs` | RBL-1 | Add BuiltInLlmConfig |
-| `backend/src/vectors/mod.rs` | RBL-1 | Register new modules, wire startup |
-| `backend/config.yaml` | RBL-1 | Document builtin provider option |
-| `backend/src/main.rs` | RBL-2 | CLI flag for LLM download |
-| `backend/src/api/ai.rs` | RBL-2 | SSE streaming integration |
-| `frontend/.../generative-router.ts` | RBL-2 | Route builtin to backend API |
+| File                                    | Sprint | Changes                                      |
+| --------------------------------------- | ------ | -------------------------------------------- |
+| `backend/Cargo.toml`                    | RBL-1  | Add llama-cpp-2, hf-hub, builtin-llm feature |
+| `backend/src/vectors/model_registry.rs` | RBL-1  | Add `BuiltIn` to ProviderType                |
+| `backend/src/vectors/config.rs`         | RBL-1  | Add BuiltInLlmConfig                         |
+| `backend/src/vectors/mod.rs`            | RBL-1  | Register new modules, wire startup           |
+| `backend/config.yaml`                   | RBL-1  | Document builtin provider option             |
+| `backend/src/main.rs`                   | RBL-2  | CLI flag for LLM download                    |
+| `backend/src/api/ai.rs`                 | RBL-2  | SSE streaming integration                    |
+| `frontend/.../generative-router.ts`     | RBL-2  | Route builtin to backend API                 |
 
 ---
 
 ## 4. Risk Assessment
 
-| Risk | Impact | Mitigation |
-|------|--------|------------|
-| llama-cpp-2 API breaks with upstream llama.cpp | Medium | Pin crate version; update on minor releases only |
-| CMake build fails on some systems | Low | Feature-gated; CPU fallback; documented prerequisites |
-| GBNF grammar edge cases | Low | Hand-written grammar is simple; test with all model variants |
-| Model download slow on first run | Low | CLI pre-download; progress logging; lazy loading |
+| Risk                                           | Impact | Mitigation                                                   |
+| ---------------------------------------------- | ------ | ------------------------------------------------------------ |
+| llama-cpp-2 API breaks with upstream llama.cpp | Medium | Pin crate version; update on minor releases only             |
+| CMake build fails on some systems              | Low    | Feature-gated; CPU fallback; documented prerequisites        |
+| GBNF grammar edge cases                        | Low    | Hand-written grammar is simple; test with all model variants |
+| Model download slow on first run               | Low    | CLI pre-download; progress logging; lazy loading             |
 
 ---
 
 ## 5. Success Criteria
 
-| Metric | Target |
-|--------|--------|
-| `cargo build` without feature | No regression (same build time) |
-| `cargo build --features builtin-llm` | < 6 min clean build |
-| Classification latency (CPU) | < 3 seconds per email |
-| Classification latency (Metal) | < 1 second per email |
-| RAM overhead (0.5B model) | < 400 MB (Rust, no Node.js VM) |
-| Concurrent requests | 4+ simultaneous classifications |
-| Frontend API calls | Zero changes to existing fetch calls |
+| Metric                               | Target                               |
+| ------------------------------------ | ------------------------------------ |
+| `cargo build` without feature        | No regression (same build time)      |
+| `cargo build --features builtin-llm` | < 6 min clean build                  |
+| Classification latency (CPU)         | < 3 seconds per email                |
+| Classification latency (Metal)       | < 1 second per email                 |
+| RAM overhead (0.5B model)            | < 400 MB (Rust, no Node.js VM)       |
+| Concurrent requests                  | 4+ simultaneous classifications      |
+| Frontend API calls                   | Zero changes to existing fetch calls |

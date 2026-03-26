@@ -260,56 +260,56 @@ This plan can begin after LLM Sprint 1 (ONNX Embedding Default) from `llm-implem
 
 ### New Files
 
-| File | Sprint | Purpose |
-| ---- | ------ | ------- |
-| `src/services/ai/hardware-detector.ts` | BL-1 | Hardware backend detection |
-| `src/services/ai/built-in-llm-adapter.ts` | BL-1 | node-llama-cpp wrapper |
-| `src/services/ai/model-manifest.ts` | BL-2 | GGUF model definitions |
-| `src/services/ai/model-downloader.ts` | BL-2 | GGUF download + verify |
-| `src/services/ai/model-cache.ts` | BL-2 | Cache management |
-| `src/services/ai/built-in-llm-manager.ts` | BL-2 | Orchestrator |
-| `src/features/settings/components/ModelDownloadProgress.tsx` | BL-3 | Download progress UI |
-| `scripts/models.ts` | BL-2 | CLI model commands |
-| `tests/services/ai/built-in-llm-adapter.test.ts` | BL-1 | Unit tests |
-| `tests/services/ai/model-management.test.ts` | BL-2 | Integration tests |
-| `tests/e2e/settings-builtin-llm.test.ts` | BL-3 | UI tests |
-| `tests/benchmarks/built-in-llm-bench.ts` | BL-4 | Performance benchmarks |
-| `tests/e2e/built-in-llm-full.test.ts` | BL-4 | Full E2E tests |
+| File                                                         | Sprint | Purpose                    |
+| ------------------------------------------------------------ | ------ | -------------------------- |
+| `src/services/ai/hardware-detector.ts`                       | BL-1   | Hardware backend detection |
+| `src/services/ai/built-in-llm-adapter.ts`                    | BL-1   | node-llama-cpp wrapper     |
+| `src/services/ai/model-manifest.ts`                          | BL-2   | GGUF model definitions     |
+| `src/services/ai/model-downloader.ts`                        | BL-2   | GGUF download + verify     |
+| `src/services/ai/model-cache.ts`                             | BL-2   | Cache management           |
+| `src/services/ai/built-in-llm-manager.ts`                    | BL-2   | Orchestrator               |
+| `src/features/settings/components/ModelDownloadProgress.tsx` | BL-3   | Download progress UI       |
+| `scripts/models.ts`                                          | BL-2   | CLI model commands         |
+| `tests/services/ai/built-in-llm-adapter.test.ts`             | BL-1   | Unit tests                 |
+| `tests/services/ai/model-management.test.ts`                 | BL-2   | Integration tests          |
+| `tests/e2e/settings-builtin-llm.test.ts`                     | BL-3   | UI tests                   |
+| `tests/benchmarks/built-in-llm-bench.ts`                     | BL-4   | Performance benchmarks     |
+| `tests/e2e/built-in-llm-full.test.ts`                        | BL-4   | Full E2E tests             |
 
 ### Modified Files
 
-| File | Sprint | Changes |
-| ---- | ------ | ------- |
-| `frontend/apps/web/package.json` | BL-1 | Add node-llama-cpp dependency |
-| `frontend/apps/web/src/features/settings/hooks/useSettings.ts` | BL-3 | Add builtin LLM settings |
-| `frontend/apps/web/src/features/settings/AISettings.tsx` | BL-3 | Add "Built-in (Local)" provider |
-| `frontend/apps/web/src/features/onboarding/AISetup.tsx` | BL-3 | Add built-in LLM onboarding option |
-| Provider routing logic | BL-3 | Route to BuiltInLlmAdapter |
+| File                                                           | Sprint | Changes                            |
+| -------------------------------------------------------------- | ------ | ---------------------------------- |
+| `frontend/apps/web/package.json`                               | BL-1   | Add node-llama-cpp dependency      |
+| `frontend/apps/web/src/features/settings/hooks/useSettings.ts` | BL-3   | Add builtin LLM settings           |
+| `frontend/apps/web/src/features/settings/AISettings.tsx`       | BL-3   | Add "Built-in (Local)" provider    |
+| `frontend/apps/web/src/features/onboarding/AISetup.tsx`        | BL-3   | Add built-in LLM onboarding option |
+| Provider routing logic                                         | BL-3   | Route to BuiltInLlmAdapter         |
 
 ---
 
 ## 4. Risk Assessment
 
-| Risk | Impact | Mitigation |
-| ---- | ------ | ---------- |
-| node-llama-cpp native compilation fails on user machines | High | Ship prebuilt binaries; document build prereqs; fall back to rule-based |
-| 0.5B model quality insufficient for classification | Medium | Allow upgrade to 1.7B or 3B models; grammar constraints improve accuracy |
-| ~500 MB RAM overhead on memory-constrained systems | Medium | Idle timeout unloading; memory check before load; smaller model options |
-| GGUF model format changes break compatibility | Low | Pin node-llama-cpp version; pin model versions in manifest |
-| Electron packaging breaks native bindings | Medium | Test on all platforms in BL-4; use electron-rebuild |
-| Model download fails (network issues, HF rate limits) | Low | Resume support; retry logic; pre-download via CLI |
+| Risk                                                     | Impact | Mitigation                                                               |
+| -------------------------------------------------------- | ------ | ------------------------------------------------------------------------ |
+| node-llama-cpp native compilation fails on user machines | High   | Ship prebuilt binaries; document build prereqs; fall back to rule-based  |
+| 0.5B model quality insufficient for classification       | Medium | Allow upgrade to 1.7B or 3B models; grammar constraints improve accuracy |
+| ~500 MB RAM overhead on memory-constrained systems       | Medium | Idle timeout unloading; memory check before load; smaller model options  |
+| GGUF model format changes break compatibility            | Low    | Pin node-llama-cpp version; pin model versions in manifest               |
+| Electron packaging breaks native bindings                | Medium | Test on all platforms in BL-4; use electron-rebuild                      |
+| Model download fails (network issues, HF rate limits)    | Low    | Resume support; retry logic; pre-download via CLI                        |
 
 ---
 
 ## 5. Success Criteria
 
-| Metric | Target |
-| ------ | ------ |
-| Classification accuracy (vs rule-based) | ≥ 20% improvement on ambiguous emails |
-| Classification latency (CPU) | < 3 seconds per email |
-| Classification latency (Metal) | < 1 second per email |
-| Model download time (100 Mbps) | < 30 seconds for default model |
-| Cold start (model load) | < 5 seconds |
-| RAM overhead (0.5B model loaded) | < 600 MB |
-| User can classify emails without Ollama/cloud | Yes |
-| Structured JSON output validity | 100% (grammar-enforced) |
+| Metric                                        | Target                                |
+| --------------------------------------------- | ------------------------------------- |
+| Classification accuracy (vs rule-based)       | ≥ 20% improvement on ambiguous emails |
+| Classification latency (CPU)                  | < 3 seconds per email                 |
+| Classification latency (Metal)                | < 1 second per email                  |
+| Model download time (100 Mbps)                | < 30 seconds for default model        |
+| Cold start (model load)                       | < 5 seconds                           |
+| RAM overhead (0.5B model loaded)              | < 600 MB                              |
+| User can classify emails without Ollama/cloud | Yes                                   |
+| Structured JSON output validity               | 100% (grammar-enforced)               |

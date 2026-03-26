@@ -27,7 +27,17 @@ export default defineConfig({
   build: {
     sourcemap: true,
     rolldownOptions: {
-      external: ['node-llama-cpp', 'ipull', 'fs', 'fs/promises', 'path', 'os', 'child_process', 'worker_threads', 'crypto'],
+      external: [
+        'node-llama-cpp',
+        'ipull',
+        'fs',
+        'fs/promises',
+        'path',
+        'os',
+        'child_process',
+        'worker_threads',
+        'crypto',
+      ],
       output: {
         manualChunks(id: string) {
           if (id.includes('node_modules/react-dom') || id.includes('node_modules/react/')) {

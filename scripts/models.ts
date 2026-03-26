@@ -36,12 +36,12 @@ function formatBytes(bytes: number): string {
 function printUsage(): void {
   console.log(
     'Usage: npx tsx scripts/models.ts <command> [args]\n\n' +
-    'Commands:\n' +
-    '  list                  Show available models with download status\n' +
-    '  download <model-id>   Download a specific model\n' +
-    '  download --default    Download the default model\n' +
-    '  delete <model-id>     Delete a cached model\n' +
-    '  info <model-id>       Show detailed model info',
+      'Commands:\n' +
+      '  list                  Show available models with download status\n' +
+      '  download <model-id>   Download a specific model\n' +
+      '  download --default    Download the default model\n' +
+      '  delete <model-id>     Delete a cached model\n' +
+      '  info <model-id>       Show detailed model info',
   );
 }
 
@@ -65,9 +65,7 @@ async function cmdList(): Promise<void> {
 
   const { totalBytes, models } = await getCacheSize();
   const cacheDir = await getCacheDir();
-  console.log(
-    `\nCache: ${cacheDir} (${models.length} model(s), ${formatBytes(totalBytes)} total)`,
-  );
+  console.log(`\nCache: ${cacheDir} (${models.length} model(s), ${formatBytes(totalBytes)} total)`);
 }
 
 async function cmdDownload(modelIdOrFlag: string): Promise<void> {
@@ -146,7 +144,8 @@ async function cmdInfo(modelId: string): Promise<void> {
     // hardware detection may fail without node-llama-cpp
   }
 
-  console.log(`
+  console.log(
+    `
 Model:          ${manifest.displayName}
 ID:             ${manifest.modelId}
 Repository:     ${manifest.repo}
@@ -159,23 +158,37 @@ Default:        ${manifest.isDefault ? 'yes' : 'no'}
 Cached:         ${cached ? 'yes' : 'no'}
 Hardware:       ${hwLine}
 Description:    ${manifest.description}
-`.trim());
+`.trim(),
+  );
 }
 
 async function main(): Promise<void> {
   const [command, arg] = process.argv.slice(2);
-  if (!command) { printUsage(); process.exit(1); }
+  if (!command) {
+    printUsage();
+    process.exit(1);
+  }
 
   switch (command) {
-    case 'list': return cmdList();
+    case 'list':
+      return cmdList();
     case 'download':
-      if (!arg) { console.error('Error: specify a model ID or --default'); process.exit(1); }
+      if (!arg) {
+        console.error('Error: specify a model ID or --default');
+        process.exit(1);
+      }
       return cmdDownload(arg);
     case 'delete':
-      if (!arg) { console.error('Error: specify a model ID'); process.exit(1); }
+      if (!arg) {
+        console.error('Error: specify a model ID');
+        process.exit(1);
+      }
       return cmdDelete(arg);
     case 'info':
-      if (!arg) { console.error('Error: specify a model ID'); process.exit(1); }
+      if (!arg) {
+        console.error('Error: specify a model ID');
+        process.exit(1);
+      }
       return cmdInfo(arg);
     default:
       console.error(`Error: unknown command "${command}"`);

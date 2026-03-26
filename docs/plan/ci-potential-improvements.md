@@ -62,7 +62,7 @@ Add a CI step that validates the model manifest entries (model IDs, HuggingFace 
 # In .github/workflows/ci.yml, under frontend-quality job
 - name: Security audit (including native deps)
   run: cd frontend && pnpm audit --audit-level moderate
-  continue-on-error: true  # Advisory — don't block CI for moderate findings
+  continue-on-error: true # Advisory — don't block CI for moderate findings
 ```
 
 **Why:** `pnpm audit` catches known vulnerabilities in the dependency tree. `continue-on-error: true` ensures it's informational, not blocking (native packages often have unresolved advisories).
@@ -80,7 +80,7 @@ For weekly or nightly CI runs, cache the default GGUF model to enable real infer
 name: Nightly LLM Smoke Test
 on:
   schedule:
-    - cron: '0 4 * * 1'  # Monday 4 AM UTC
+    - cron: '0 4 * * 1' # Monday 4 AM UTC
   workflow_dispatch: {}
 
 jobs:
@@ -193,12 +193,12 @@ docker build -t emailibrium-backend .
 
 ## Implementation Priority
 
-| # | Improvement | Priority | Effort | When |
-|---|------------|----------|--------|------|
-| 1 | `make test-ai` target | High | 5 min | Now |
-| 2 | Manifest validation in CI | High | 10 min | Now |
-| 3 | Native dep security audit | Medium | 10 min | Before release |
-| 4 | Nightly LLM smoke test | Low | 30 min | After RBL-1 |
-| 5 | CI summary with AI status | Low | 5 min | Now |
-| 6 | Backend `test-llm` target | Medium | 5 min | During RBL-1 |
-| 7 | Docker multi-stage LLM | Low | 1 hour | During RBL-2 |
+| #   | Improvement               | Priority | Effort | When           |
+| --- | ------------------------- | -------- | ------ | -------------- |
+| 1   | `make test-ai` target     | High     | 5 min  | Now            |
+| 2   | Manifest validation in CI | High     | 10 min | Now            |
+| 3   | Native dep security audit | Medium   | 10 min | Before release |
+| 4   | Nightly LLM smoke test    | Low      | 30 min | After RBL-1    |
+| 5   | CI summary with AI status | Low      | 5 min  | Now            |
+| 6   | Backend `test-llm` target | Medium   | 5 min  | During RBL-1   |
+| 7   | Docker multi-stage LLM    | Low      | 1 hour | During RBL-2   |

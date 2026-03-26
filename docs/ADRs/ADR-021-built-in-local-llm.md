@@ -9,11 +9,11 @@
 
 The tiered AI provider architecture (ADR-012) defines three tiers:
 
-| Tier | Embedding | Generative | External Deps |
-| ---- | --------- | ---------- | ------------- |
-| 0 | ONNX (fastembed) | None (rule-based) | None |
-| 1 | ONNX | Ollama | Ollama daemon |
-| 2 | Cloud | Cloud LLM | API key |
+| Tier | Embedding        | Generative        | External Deps |
+| ---- | ---------------- | ----------------- | ------------- |
+| 0    | ONNX (fastembed) | None (rule-based) | None          |
+| 1    | ONNX             | Ollama            | Ollama daemon |
+| 2    | Cloud            | Cloud LLM         | API key       |
 
 Embedding has a zero-config, built-in option (ONNX via fastembed) that runs entirely in-process with no external dependencies. Generative does not — the jump from "None (rule-based)" to "Ollama" requires users to install a separate application, pull a multi-GB model, and keep a daemon running. This creates a gap:
 
@@ -33,15 +33,15 @@ ONNX Runtime can technically run generative models, but:
 
 ### Why node-llama-cpp?
 
-| Criterion | node-llama-cpp | Transformers.js | WebLLM |
-| --------- | -------------- | --------------- | ------ |
-| Performance | Native C++ (llama.cpp) | WASM (slower) | WebGPU only |
-| Model format | GGUF (broadest availability) | ONNX (limited for gen) | MLC (requires compilation) |
-| Hardware accel | Metal, CUDA, Vulkan (auto) | WebGPU only | WebGPU only |
-| Electron support | First-class + @electron/llm | Works | Renderer only |
-| Structured JSON | Built-in grammar enforcement | Manual parsing | Manual |
-| Chat templates | Automatic Jinja2 | Manual | Automatic |
-| Model download API | Built-in CLI + programmatic | First-use auto-download | Manual |
+| Criterion          | node-llama-cpp               | Transformers.js         | WebLLM                     |
+| ------------------ | ---------------------------- | ----------------------- | -------------------------- |
+| Performance        | Native C++ (llama.cpp)       | WASM (slower)           | WebGPU only                |
+| Model format       | GGUF (broadest availability) | ONNX (limited for gen)  | MLC (requires compilation) |
+| Hardware accel     | Metal, CUDA, Vulkan (auto)   | WebGPU only             | WebGPU only                |
+| Electron support   | First-class + @electron/llm  | Works                   | Renderer only              |
+| Structured JSON    | Built-in grammar enforcement | Manual parsing          | Manual                     |
+| Chat templates     | Automatic Jinja2             | Manual                  | Automatic                  |
+| Model download API | Built-in CLI + programmatic  | First-use auto-download | Manual                     |
 
 ## Decision
 
@@ -49,12 +49,12 @@ ONNX Runtime can technically run generative models, but:
 
 Insert a new tier between Tier 0 and Tier 1 in the provider hierarchy:
 
-| Tier | Name | Embedding | Generative | External Deps |
-| ---- | ---- | --------- | ---------- | ------------- |
-| 0 | Zero-config | ONNX (fastembed) | None (rule-based) | None |
+| Tier    | Name             | Embedding            | Generative                | External Deps                  |
+| ------- | ---------------- | -------------------- | ------------------------- | ------------------------------ |
+| 0       | Zero-config      | ONNX (fastembed)     | None (rule-based)         | None                           |
 | **0.5** | **Built-in LLM** | **ONNX (fastembed)** | **node-llama-cpp (GGUF)** | **None (model auto-download)** |
-| 1 | Local Enhanced | ONNX | Ollama | Ollama daemon |
-| 2 | Cloud Opt-in | Cloud | Cloud LLM | API key |
+| 1       | Local Enhanced   | ONNX                 | Ollama                    | Ollama daemon                  |
+| 2       | Cloud Opt-in     | Cloud                | Cloud LLM                 | API key                        |
 
 ### 2. Use node-llama-cpp as the Runtime
 
@@ -67,26 +67,26 @@ Add `node-llama-cpp` (v3.x) as an optional dependency in the frontend/Electron l
 
 ### 3. Default Model: Qwen2.5-0.5B-Instruct (GGUF Q4_K_M)
 
-| Property | Value |
-| -------- | ----- |
-| Model | Qwen2.5-0.5B-Instruct |
-| Parameters | 0.5B |
-| Quantization | Q4_K_M |
-| Disk size | ~350 MB |
-| RAM usage | ~500 MB |
-| CPU speed | 20-40 tok/s |
-| Metal speed | 40-80 tok/s |
-| Primary use | Email classification (structured JSON output) |
+| Property      | Value                                         |
+| ------------- | --------------------------------------------- |
+| Model         | Qwen2.5-0.5B-Instruct                         |
+| Parameters    | 0.5B                                          |
+| Quantization  | Q4_K_M                                        |
+| Disk size     | ~350 MB                                       |
+| RAM usage     | ~500 MB                                       |
+| CPU speed     | 20-40 tok/s                                   |
+| Metal speed   | 40-80 tok/s                                   |
+| Primary use   | Email classification (structured JSON output) |
 | Secondary use | Basic chat (acceptable quality for email Q&A) |
 
 Alternative models available via Settings:
 
-| Model | Disk | RAM | Use Case |
-| ----- | ---- | --- | -------- |
-| SmolLM2-360M-Instruct | ~250 MB | ~400 MB | Ultra-lightweight classification only |
-| SmolLM2-1.7B-Instruct | ~1 GB | ~1.5 GB | Better classification + basic chat |
-| Llama-3.2-3B-Instruct | ~1.8 GB | ~2.5 GB | High-quality chat + classification |
-| Phi-3.5-mini-instruct (3.8B) | ~2.3 GB | ~3 GB | Best quality, higher resource usage |
+| Model                        | Disk    | RAM     | Use Case                              |
+| ---------------------------- | ------- | ------- | ------------------------------------- |
+| SmolLM2-360M-Instruct        | ~250 MB | ~400 MB | Ultra-lightweight classification only |
+| SmolLM2-1.7B-Instruct        | ~1 GB   | ~1.5 GB | Better classification + basic chat    |
+| Llama-3.2-3B-Instruct        | ~1.8 GB | ~2.5 GB | High-quality chat + classification    |
+| Phi-3.5-mini-instruct (3.8B) | ~2.3 GB | ~3 GB   | Best quality, higher resource usage   |
 
 ### 4. Model Lifecycle: Pre-download and Cache
 
@@ -116,6 +116,7 @@ Models follow the same lifecycle as ONNX embedding models (DDD-006 ModelRegistry
 ```
 
 When "Built-in (Local)" is selected:
+
 - Show model selector dropdown (Qwen2.5-0.5B default, with alternatives)
 - Show download status/progress if model not yet cached
 - Show model size and estimated RAM usage
@@ -125,11 +126,11 @@ When "Built-in (Local)" is selected:
 
 The `BuiltInLlmAdapter` implements the same `GenerativeModel` trait from DDD-006:
 
-| Domain Method | node-llama-cpp Operation |
-| ------------- | ------------------------ |
+| Domain Method      | node-llama-cpp Operation                               |
+| ------------------ | ------------------------------------------------------ |
 | `classify(prompt)` | `session.prompt()` with JSON schema grammar constraint |
-| `chat(messages)` | `LlamaChatSession` with message history |
-| `is_available()` | Model file exists + verified + loadable |
+| `chat(messages)`   | `LlamaChatSession` with message history                |
+| `is_available()`   | Model file exists + verified + loadable                |
 
 **Fallback chain update:**
 
@@ -171,13 +172,13 @@ The JSON schema is enforced at the token generation level — the model physical
 
 ### Alternatives Considered
 
-| Alternative | Why Rejected |
-| ----------- | ------------ |
-| Transformers.js for generation | WASM-based, 3-5x slower on CPU than native llama.cpp. Limited ONNX model availability for generation. |
-| WebLLM / MLC-LLM | WebGPU-only, no Node.js main process support, requires model compilation to MLC format. |
-| Raw onnxruntime-node for generation | No generation loop, tokenizer, or chat template support in JavaScript. Would require building onnxruntime-genai equivalent from scratch. |
-| Ollama as default (lower Tier 1 friction) | Still requires separate install + daemon. Cannot be fully in-process. Does not solve the zero-config gap. |
-| Wait for @electron/llm to mature | Experimental, not production-ready. Built on node-llama-cpp anyway — adopting the base library now provides an upgrade path. |
+| Alternative                               | Why Rejected                                                                                                                             |
+| ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| Transformers.js for generation            | WASM-based, 3-5x slower on CPU than native llama.cpp. Limited ONNX model availability for generation.                                    |
+| WebLLM / MLC-LLM                          | WebGPU-only, no Node.js main process support, requires model compilation to MLC format.                                                  |
+| Raw onnxruntime-node for generation       | No generation loop, tokenizer, or chat template support in JavaScript. Would require building onnxruntime-genai equivalent from scratch. |
+| Ollama as default (lower Tier 1 friction) | Still requires separate install + daemon. Cannot be fully in-process. Does not solve the zero-config gap.                                |
+| Wait for @electron/llm to mature          | Experimental, not production-ready. Built on node-llama-cpp anyway — adopting the base library now provides an upgrade path.             |
 
 ## References
 

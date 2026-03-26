@@ -10,6 +10,7 @@
 ADR-021 introduced Tier 0.5 (built-in local LLM) via `node-llama-cpp` in the frontend/Electron layer. However, the Emailibrium frontend runs as a Vite-bundled browser app in development, and `node-llama-cpp` requires a Node.js runtime (native C++ bindings). Vite's bundler resolves `ipull` (a node-llama-cpp dependency) to its browser entry point, which lacks the required exports, causing build failures.
 
 The Rust backend at `:8080` already has:
+
 1. A `GenerativeModel` trait with `generate()`, `classify()`, `model_name()`, `is_available()`
 2. A `GenerativeRouter` with priority-based failover across providers
 3. A `ProviderType` enum (Onnx, Ollama, OpenAi, Anthropic, Gemini, RuleBased, None)
@@ -28,12 +29,12 @@ Add `llama-cpp-2` (Rust bindings for llama.cpp) as an optional dependency behind
 
 ### 2. Why `llama-cpp-2` Over Alternatives
 
-| Crate | Grammar | Library-friendly | Dependencies | Verdict |
-|-------|---------|------------------|-------------|---------|
-| `llama-cpp-2` | GBNF built-in | Yes | Minimal (C++ build) | **Selected** |
-| `candle` | None | Yes | Minimal (pure Rust) | No grammar support |
-| `mistral.rs` | GBNF + JSON Schema | No (server-oriented) | Heavy | Overkill |
-| `kalosm` | Yes | Yes | Heavy (voice, image) | Too many deps |
+| Crate         | Grammar            | Library-friendly     | Dependencies         | Verdict            |
+| ------------- | ------------------ | -------------------- | -------------------- | ------------------ |
+| `llama-cpp-2` | GBNF built-in      | Yes                  | Minimal (C++ build)  | **Selected**       |
+| `candle`      | None               | Yes                  | Minimal (pure Rust)  | No grammar support |
+| `mistral.rs`  | GBNF + JSON Schema | No (server-oriented) | Heavy                | Overkill           |
+| `kalosm`      | Yes                | Yes                  | Heavy (voice, image) | Too many deps      |
 
 ### 3. Architecture
 
@@ -52,13 +53,13 @@ The frontend makes the same API calls it already does. No browser-side LLM infer
 
 ```yaml
 generative:
-  provider: "builtin"          # NEW value alongside "none", "ollama", "cloud"
+  provider: 'builtin' # NEW value alongside "none", "ollama", "cloud"
   builtin:
-    model_id: "qwen2.5-0.5b-q4km"
+    model_id: 'qwen2.5-0.5b-q4km'
     context_size: 2048
-    gpu_layers: 99             # offload all to Metal/CUDA; 0 = CPU only
+    gpu_layers: 99 # offload all to Metal/CUDA; 0 = CPU only
     idle_timeout_secs: 300
-    cache_dir: "~/.emailibrium/models/llm"
+    cache_dir: '~/.emailibrium/models/llm'
 ```
 
 ### 5. Feature-Gated Build
@@ -112,6 +113,7 @@ Categories are injected dynamically into the `cat-val` rule at classification ti
 ### Relationship to Frontend Implementation
 
 The frontend `node-llama-cpp` code from BL-1 through BL-4 remains intact for future Electron packaging. It serves as:
+
 1. Reference implementation for the Rust-side port
 2. The actual runtime when the app ships as Electron (direct in-process inference)
 3. A working test bed for model selection, download UX, and progress tracking
