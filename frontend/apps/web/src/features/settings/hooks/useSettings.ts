@@ -119,7 +119,18 @@ export const useSettings = create<SettingsState>()(
     }),
     {
       name: 'emailibrium-settings',
+      version: 1,
       storage: createJSONStorage(() => localStorage),
+      migrate: (persisted: unknown, version: number) => {
+        const state = persisted as Record<string, unknown>;
+        if (version === 0) {
+          // Ensure llmProvider defaults to 'builtin' for users with older persisted state
+          if (!state.llmProvider || state.llmProvider === 'none') {
+            state.llmProvider = 'builtin';
+          }
+        }
+        return state as unknown as SettingsState;
+      },
       partialize: (state) => ({
         defaultComposeAccountId: state.defaultComposeAccountId,
         notificationsEnabled: state.notificationsEnabled,
