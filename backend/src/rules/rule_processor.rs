@@ -129,6 +129,7 @@ mod tests {
             subject: "Quarterly Budget Review".to_string(),
             snippet: "Please review...".to_string(),
             body: Some("Please review the attached budget.".to_string()),
+            body_html: None,
             labels: vec!["inbox".to_string(), "important".to_string()],
             date: Utc::now(),
             is_read: false,

@@ -13,6 +13,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 mod api;
 mod cache;
 pub mod config;
+pub mod content;
 mod db;
 pub mod email;
 pub mod events;

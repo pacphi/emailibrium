@@ -5,6 +5,7 @@
 //! extraction concern; the [`ContentPipeline`] facade composes them.
 
 pub mod attachment_extractor;
+pub mod email_sanitizer;
 pub mod html_extractor;
 pub mod image_analyzer;
 pub mod jobs;

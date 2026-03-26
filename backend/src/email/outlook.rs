@@ -117,7 +117,19 @@ impl OutlookProvider {
             labels.push("STARRED".to_string());
         }
 
-        let body = msg["body"]["content"].as_str().map(|s| s.to_string());
+        // Extract body based on contentType from the Graph API.
+        let content_type = msg["body"]["contentType"].as_str().unwrap_or("text");
+        let raw_content = msg["body"]["content"].as_str().map(|s| s.to_string());
+
+        let (body, body_html) = match content_type.to_lowercase().as_str() {
+            "html" => (
+                None,
+                raw_content.map(|html| {
+                    crate::content::email_sanitizer::sanitize_email_html(&html)
+                }),
+            ),
+            _ => (raw_content, None),
+        };
 
         Ok(EmailMessage {
             id,
@@ -127,6 +139,7 @@ impl OutlookProvider {
             subject,
             snippet,
             body,
+            body_html,
             labels,
             date,
             is_read,
@@ -930,7 +943,7 @@ mod tests {
             "isRead": false,
             "receivedDateTime": "2024-01-15T10:30:00Z",
             "categories": ["Important", "Work"],
-            "body": { "content": "<p>Full body</p>" }
+            "body": { "contentType": "html", "content": "<p>Full body</p>" }
         });
         let email = OutlookProvider::parse_message(&msg).unwrap();
         assert_eq!(email.id, "AAMkAG1");
@@ -941,7 +954,10 @@ mod tests {
         assert_eq!(email.to.len(), 2);
         assert!(!email.is_read);
         assert_eq!(email.labels, vec!["Important", "Work"]);
-        assert_eq!(email.body, Some("<p>Full body</p>".to_string()));
+        // HTML content goes to body_html, body is None.
+        assert!(email.body.is_none());
+        assert!(email.body_html.is_some());
+        assert!(email.body_html.unwrap().contains("<p>Full body</p>"));
     }
 
     #[test]
@@ -983,5 +999,59 @@ mod tests {
         let provider = OutlookProvider::new(test_config());
         let result = rt.block_on(provider.create_label("token", "TestCategory"));
         assert_eq!(result.unwrap(), "TestCategory");
+    }
+
+    #[test]
+    fn test_parse_message_html_body() {
+        let msg = serde_json::json!({
+            "id": "html-msg",
+            "receivedDateTime": "2024-01-15T10:30:00Z",
+            "body": { "contentType": "html", "content": "<p>HTML content</p>" }
+        });
+        let email = OutlookProvider::parse_message(&msg).unwrap();
+        assert!(email.body.is_none());
+        assert!(email.body_html.is_some());
+        assert!(email.body_html.unwrap().contains("<p>HTML content</p>"));
+    }
+
+    #[test]
+    fn test_parse_message_text_body() {
+        let msg = serde_json::json!({
+            "id": "text-msg",
+            "receivedDateTime": "2024-01-15T10:30:00Z",
+            "body": { "contentType": "text", "content": "Plain text content" }
+        });
+        let email = OutlookProvider::parse_message(&msg).unwrap();
+        assert_eq!(email.body, Some("Plain text content".to_string()));
+        assert!(email.body_html.is_none());
+    }
+
+    #[test]
+    fn test_parse_message_html_body_sanitized() {
+        let msg = serde_json::json!({
+            "id": "xss-msg",
+            "receivedDateTime": "2024-01-15T10:30:00Z",
+            "body": {
+                "contentType": "html",
+                "content": "<p>Safe</p><script>alert('xss')</script>"
+            }
+        });
+        let email = OutlookProvider::parse_message(&msg).unwrap();
+        let html = email.body_html.unwrap();
+        assert!(html.contains("<p>Safe</p>"));
+        assert!(!html.contains("<script>"));
+    }
+
+    #[test]
+    fn test_parse_message_missing_content_type_defaults_to_text() {
+        // When contentType is missing, treat as text.
+        let msg = serde_json::json!({
+            "id": "no-ct",
+            "receivedDateTime": "2024-01-15T10:30:00Z",
+            "body": { "content": "Fallback text" }
+        });
+        let email = OutlookProvider::parse_message(&msg).unwrap();
+        assert_eq!(email.body, Some("Fallback text".to_string()));
+        assert!(email.body_html.is_none());
     }
 }

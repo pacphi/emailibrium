@@ -154,6 +154,8 @@ pub struct EmailMessage {
     pub snippet: String,
     /// Full body text (if fetched).
     pub body: Option<String>,
+    /// Sanitized HTML body (if available from provider).
+    pub body_html: Option<String>,
     /// Provider-specific labels/categories.
     pub labels: Vec<String>,
     /// When the message was received.

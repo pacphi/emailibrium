@@ -183,6 +183,7 @@ fn envelope_to_message(env: ImapEnvelope) -> EmailMessage {
             env.body_snippet
         },
         body: env.body_full,
+        body_html: None,
         labels,
         date: env.date.unwrap_or_else(Utc::now),
         is_read,

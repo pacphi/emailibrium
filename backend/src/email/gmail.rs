@@ -140,6 +140,9 @@ impl GmailProvider {
 
         // Extract plain-text body from parts.
         let body = extract_body_text(msg);
+        // Extract and sanitize HTML body from parts.
+        let body_html = extract_body_html(msg)
+            .map(|html| crate::content::email_sanitizer::sanitize_email_html(&html));
 
         Ok(EmailMessage {
             id,
@@ -149,6 +152,7 @@ impl GmailProvider {
             subject,
             snippet,
             body,
+            body_html,
             labels,
             date,
             is_read,
@@ -185,6 +189,48 @@ fn extract_body_text(msg: &serde_json::Value) -> Option<String> {
         }
     }
 
+    None
+}
+
+/// Recursively extract HTML body from Gmail message parts.
+///
+/// Searches `payload.parts[]` for `text/html` MIME parts, including nested
+/// `multipart/alternative` sub-parts. Falls back to `payload.body.data`
+/// when the top-level `mimeType` is `text/html` (simple non-multipart messages).
+fn extract_body_html(msg: &serde_json::Value) -> Option<String> {
+    // Check if the top-level payload itself is text/html (non-multipart message).
+    if msg["payload"]["mimeType"].as_str() == Some("text/html") {
+        if let Some(data) = msg["payload"]["body"]["data"].as_str() {
+            return decode_base64url(data);
+        }
+    }
+
+    // Check parts recursively.
+    if let Some(parts) = msg["payload"]["parts"].as_array() {
+        if let Some(html) = find_html_in_parts(parts) {
+            return Some(html);
+        }
+    }
+
+    None
+}
+
+/// Recursively search a list of MIME parts for `text/html` content.
+fn find_html_in_parts(parts: &[serde_json::Value]) -> Option<String> {
+    for part in parts {
+        let mime = part["mimeType"].as_str().unwrap_or_default();
+        if mime == "text/html" {
+            if let Some(data) = part["body"]["data"].as_str() {
+                return decode_base64url(data);
+            }
+        }
+        // Recurse into multipart sub-parts (e.g., multipart/alternative).
+        if let Some(sub_parts) = part["parts"].as_array() {
+            if let Some(html) = find_html_in_parts(sub_parts) {
+                return Some(html);
+            }
+        }
+    }
     None
 }
 
@@ -1182,5 +1228,113 @@ mod tests {
         let config = test_config();
         let provider = GmailProvider::new(config.clone());
         assert_eq!(provider.config.client_id, "test-client-id");
+    }
+
+    #[test]
+    fn test_extract_body_html_from_parts() {
+        // "PGh0bWw-" is base64url for "<html>"
+        let msg = serde_json::json!({
+            "payload": {
+                "parts": [
+                    {
+                        "mimeType": "text/plain",
+                        "body": { "data": "UGxhaW4gdGV4dA" }
+                    },
+                    {
+                        "mimeType": "text/html",
+                        "body": { "data": "PGh0bWw-" }
+                    }
+                ]
+            }
+        });
+        let html = extract_body_html(&msg);
+        assert_eq!(html, Some("<html>".to_string()));
+    }
+
+    #[test]
+    fn test_extract_body_html_direct() {
+        // Simple non-multipart message where payload itself is text/html.
+        let msg = serde_json::json!({
+            "payload": {
+                "mimeType": "text/html",
+                "body": { "data": "PHA-SGVsbG88L3A-" }
+            }
+        });
+        let html = extract_body_html(&msg);
+        assert_eq!(html, Some("<p>Hello</p>".to_string()));
+    }
+
+    #[test]
+    fn test_extract_body_html_nested() {
+        // Nested multipart/alternative inside multipart/mixed.
+        let msg = serde_json::json!({
+            "payload": {
+                "mimeType": "multipart/mixed",
+                "parts": [
+                    {
+                        "mimeType": "multipart/alternative",
+                        "parts": [
+                            {
+                                "mimeType": "text/plain",
+                                "body": { "data": "UGxhaW4" }
+                            },
+                            {
+                                "mimeType": "text/html",
+                                "body": { "data": "PGI-Qm9sZDwvYj4" }
+                            }
+                        ]
+                    }
+                ]
+            }
+        });
+        let html = extract_body_html(&msg);
+        assert_eq!(html, Some("<b>Bold</b>".to_string()));
+    }
+
+    #[test]
+    fn test_extract_body_html_none() {
+        // Message with no HTML part.
+        let msg = serde_json::json!({
+            "payload": {
+                "mimeType": "text/plain",
+                "body": { "data": "UGxhaW4" }
+            }
+        });
+        let html = extract_body_html(&msg);
+        assert!(html.is_none());
+    }
+
+    #[test]
+    fn test_parse_message_includes_body_html() {
+        // Ensure parse_message populates body_html when HTML part exists.
+        let msg = serde_json::json!({
+            "id": "html-msg",
+            "threadId": "thread-1",
+            "snippet": "Hello",
+            "labelIds": ["INBOX"],
+            "internalDate": "1700000000000",
+            "payload": {
+                "headers": [
+                    { "name": "From", "value": "sender@test.com" },
+                    { "name": "To", "value": "me@test.com" },
+                    { "name": "Subject", "value": "HTML Test" }
+                ],
+                "parts": [
+                    {
+                        "mimeType": "text/plain",
+                        "body": { "data": "SGVsbG8" }
+                    },
+                    {
+                        "mimeType": "text/html",
+                        "body": { "data": "PHA-SGVsbG88L3A-" }
+                    }
+                ]
+            }
+        });
+        let email = GmailProvider::parse_message(&msg).unwrap();
+        assert_eq!(email.body, Some("Hello".to_string()));
+        assert!(email.body_html.is_some());
+        // Sanitizer should preserve <p> tags.
+        assert!(email.body_html.unwrap().contains("<p>"));
     }
 }

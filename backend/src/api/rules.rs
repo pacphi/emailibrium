@@ -479,6 +479,7 @@ async fn test_rule(
         } else {
             Some(req.email.body)
         },
+        body_html: None,
         labels: req.email.labels,
         date: now,
         is_read: false,

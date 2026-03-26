@@ -13,6 +13,7 @@ use emailibrium::email::types::{
 
 use async_trait::async_trait;
 use chrono::Utc;
+use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 
 // ---------------------------------------------------------------------------
@@ -36,6 +37,7 @@ impl MockEmailProvider {
                 subject: format!("Subject {i}"),
                 snippet: format!("Snippet {i}"),
                 body: Some(format!("Body {i}")),
+                body_html: None,
                 labels: vec!["INBOX".into()],
                 date: Utc::now(),
                 is_read: i % 2 == 0,

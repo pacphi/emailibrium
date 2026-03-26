@@ -2,26 +2,7 @@ import { useState } from 'react';
 import { ChevronDown, ChevronUp } from 'lucide-react';
 import { format } from 'date-fns';
 import type { Email } from '@emailibrium/types';
-
-interface MessageBubbleProps {
-  email: Email;
-  isLatest: boolean;
-}
-
-function SanitizedHtml({ html }: { html: string }) {
-  // Basic sanitisation -- a production build would use DOMPurify.
-  const cleaned = html
-    .replace(/<script[\s\S]*?<\/script>/gi, '')
-    .replace(/on\w+="[^"]*"/gi, '')
-    .replace(/javascript:/gi, '');
-
-  return (
-    <div
-      className="prose prose-sm max-w-none dark:prose-invert"
-      dangerouslySetInnerHTML={{ __html: cleaned }}
-    />
-  );
-}
+import { EmailHtmlViewer } from './EmailHtmlViewer';
 
 /** Parse "Display Name <email@example.com>" into { name, email }. */
 function parseFrom(raw: string): { name: string; email: string } {
@@ -30,7 +11,7 @@ function parseFrom(raw: string): { name: string; email: string } {
   return { name: '', email: raw };
 }
 
-export function MessageBubble({ email, isLatest }: MessageBubbleProps) {
+export function MessageBubble({ email, isLatest }: { email: Email; isLatest: boolean }) {
   const [isExpanded, setIsExpanded] = useState(isLatest);
   const dateStr = format(new Date(email.receivedAt), 'MMM d, yyyy h:mm a');
   const from = parseFrom(email.fromName || email.fromAddr);
@@ -63,7 +44,7 @@ export function MessageBubble({ email, isLatest }: MessageBubbleProps) {
           </div>
           {!isExpanded && (
             <p className="truncate text-xs text-gray-500 dark:text-gray-400">
-              {email.bodyText?.slice(0, 100)}
+              {(email.bodyText || email.subject)?.slice(0, 200)}
             </p>
           )}
         </div>
@@ -84,14 +65,14 @@ export function MessageBubble({ email, isLatest }: MessageBubbleProps) {
           </div>
 
           {email.bodyHtml ? (
-            <SanitizedHtml html={email.bodyHtml} />
+            <EmailHtmlViewer html={email.bodyHtml} />
           ) : (
-            <p className="whitespace-pre-wrap text-sm text-gray-700 dark:text-gray-300">
+            <pre className="whitespace-pre-wrap text-sm text-gray-700 dark:text-gray-300 font-sans">
               {email.bodyText || '(No content)'}
-            </p>
+            </pre>
           )}
 
-          {/* Attachment indicator -- full attachment data is not yet available from the API */}
+          {/* Attachment indicator */}
           {email.hasAttachments && (
             <p className="mt-4 text-xs text-gray-500 dark:text-gray-400">
               This message has attachments. Attachment downloads are not yet available.

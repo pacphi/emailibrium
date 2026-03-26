@@ -357,6 +357,7 @@ mod tests {
                     subject: format!("Subject {i}"),
                     snippet: format!("Snippet {i}"),
                     body: None,
+                    body_html: None,
                     labels: vec![],
                     date: Utc::now(),
                     is_read: false,
