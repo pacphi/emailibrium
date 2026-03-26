@@ -1,4 +1,4 @@
-export type { Email, EmailThread, EmbeddingStatus } from './email.js';
+export type { Attachment, Email, EmailThread, EmbeddingStatus } from './email.js';
 
 export type {
   SearchMode,

@@ -3,6 +3,26 @@ import { ChevronDown, ChevronUp } from 'lucide-react';
 import { format } from 'date-fns';
 import type { Email } from '@emailibrium/types';
 import { EmailHtmlViewer } from './EmailHtmlViewer';
+import { AttachmentList } from './AttachmentList';
+
+/** Decode common HTML entities to their plain-text equivalents. */
+function decodeHtmlEntities(text: string): string {
+  const el = typeof document !== 'undefined' ? document.createElement('textarea') : null;
+  if (el) {
+    el.innerHTML = text;
+    return el.value;
+  }
+  // SSR fallback: decode the most common entities manually.
+  return text
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&#x27;/g, "'")
+    .replace(/&apos;/g, "'")
+    .replace(/&nbsp;/g, ' ');
+}
 
 /** Parse "Display Name <email@example.com>" into { name, email }. */
 function parseFrom(raw: string): { name: string; email: string } {
@@ -44,7 +64,7 @@ export function MessageBubble({ email, isLatest }: { email: Email; isLatest: boo
           </div>
           {!isExpanded && (
             <p className="truncate text-xs text-gray-500 dark:text-gray-400">
-              {(email.bodyText || email.subject)?.slice(0, 200)}
+              {decodeHtmlEntities((email.bodyText || email.subject) ?? '').slice(0, 200)}
             </p>
           )}
         </div>
@@ -68,16 +88,12 @@ export function MessageBubble({ email, isLatest }: { email: Email; isLatest: boo
             <EmailHtmlViewer html={email.bodyHtml} />
           ) : (
             <pre className="whitespace-pre-wrap text-sm text-gray-700 dark:text-gray-300 font-sans">
-              {email.bodyText || '(No content)'}
+              {decodeHtmlEntities(email.bodyText || '(No content)')}
             </pre>
           )}
 
-          {/* Attachment indicator */}
-          {email.hasAttachments && (
-            <p className="mt-4 text-xs text-gray-500 dark:text-gray-400">
-              This message has attachments. Attachment downloads are not yet available.
-            </p>
-          )}
+          {/* Attachments */}
+          {email.hasAttachments && <AttachmentList emailId={email.id} />}
         </div>
       )}
     </article>

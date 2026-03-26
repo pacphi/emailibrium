@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { getAccounts, startIngestion } from '@emailibrium/api';
+import { getAccounts, startIngestion, getEmails } from '@emailibrium/api';
 
 export interface SyncState {
   /** Whether a sync is currently in progress. */
@@ -17,6 +17,37 @@ export interface SyncState {
   startSync: () => Promise<void>;
   /** Clear the error message. */
   clearError: () => void;
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** Poll until email count stabilizes (no new emails for 2 consecutive checks). */
+async function waitForSyncCompletion(
+  accountId: string,
+  onUpdate: (count: number) => void,
+): Promise<number> {
+  let stableCount = 0;
+  let stableChecks = 0;
+  const maxWait = 120; // 120 polls × 3s = 6 min max
+
+  for (let i = 0; i < maxWait; i++) {
+    await sleep(3000);
+    try {
+      const { total } = await getEmails({ accountId, limit: 1, offset: 0 });
+      onUpdate(total);
+
+      if (total === stableCount) {
+        stableChecks++;
+        if (stableChecks >= 2) return total; // Stable for 6s — sync done
+      } else {
+        stableCount = total;
+        stableChecks = 0;
+      }
+    } catch {
+      // Ignore transient errors during polling
+    }
+  }
+  return stableCount;
 }
 
 export const useSyncStore = create<SyncState>((set, get) => ({
@@ -58,6 +89,13 @@ export const useSyncStore = create<SyncState>((set, get) => ({
         });
         try {
           await startIngestion(a.id);
+
+          // Poll until sync completes (email count stabilizes).
+          await waitForSyncCompletion(a.id, (count) => {
+            set({
+              status: `Syncing ${a.emailAddress}... (${count.toLocaleString()} emails)`,
+            });
+          });
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           errors.push(`${a.emailAddress}: ${msg}`);
@@ -74,7 +112,6 @@ export const useSyncStore = create<SyncState>((set, get) => ({
       } else {
         set({ syncing: false, status: 'Sync complete!', error: '' });
         setTimeout(() => {
-          // Only clear if still showing "complete" (not re-triggered).
           if (get().status === 'Sync complete!') {
             set({ status: '' });
           }

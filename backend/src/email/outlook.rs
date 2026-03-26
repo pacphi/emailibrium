@@ -124,9 +124,7 @@ impl OutlookProvider {
         let (body, body_html) = match content_type.to_lowercase().as_str() {
             "html" => (
                 None,
-                raw_content.map(|html| {
-                    crate::content::email_sanitizer::sanitize_email_html(&html)
-                }),
+                raw_content.map(|html| crate::content::email_sanitizer::sanitize_email_html(&html)),
             ),
             _ => (raw_content, None),
         };

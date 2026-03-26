@@ -23,6 +23,16 @@ export interface Email {
   categoryConfidence?: number;
 }
 
+export interface Attachment {
+  id: string;
+  emailId: string;
+  filename: string;
+  contentType: string;
+  sizeBytes: number;
+  isInline: boolean;
+  fetchStatus: 'pending' | 'fetched' | 'failed';
+}
+
 export interface EmailThread {
   threadId: string;
   emails: Email[];

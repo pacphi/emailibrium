@@ -2,6 +2,7 @@
 
 pub mod accounts;
 mod ai;
+pub mod attachments;
 mod backup;
 mod clustering;
 mod consent;

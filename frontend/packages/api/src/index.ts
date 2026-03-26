@@ -39,6 +39,9 @@ export {
   forwardEmail,
   getLabels,
   moveEmail,
+  getAttachments,
+  getAttachmentDownloadUrl,
+  getAttachmentsZipUrl,
 } from './emailApi.js';
 export type { GetEmailsParams, SendEmailDraft, FolderOrLabel } from './emailApi.js';
 

@@ -24,6 +24,7 @@ pub fn routes() -> Router<AppState> {
         // Static paths before dynamic /{id} to avoid matching "labels" or "thread" as an id.
         .route("/labels", get(list_account_labels))
         .route("/thread/{thread_id}", get(get_thread))
+        .nest("/{id}/attachments", super::attachments::routes())
         .route("/{id}", get(get_email).delete(delete_email))
         .route("/{id}/archive", post(archive_email))
         .route("/{id}/star", post(star_email))
@@ -417,6 +418,23 @@ async fn delete_email(
             }
         }
     }
+
+    // Clean up attachment files before deleting the email (DB rows cascade).
+    let att_paths: Vec<(Option<String>,)> = sqlx::query_as(
+        "SELECT storage_path FROM attachments WHERE email_id = ?1 AND storage_path IS NOT NULL",
+    )
+    .bind(&id)
+    .fetch_all(&state.db.pool)
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    for (path,) in &att_paths {
+        if let Some(p) = path {
+            let _ = tokio::fs::remove_file(p).await; // best-effort
+        }
+    }
+    // Also try to remove the per-email attachment directory.
+    let _ = tokio::fs::remove_dir(format!("data/attachments/{}", id)).await;
 
     let rows = sqlx::query("DELETE FROM emails WHERE id = ?1")
         .bind(&id)

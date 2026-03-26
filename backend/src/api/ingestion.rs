@@ -307,14 +307,21 @@ async fn sync_emails_from_provider(
         );
 
         for msg in &page.messages {
-            // Insert if not already in DB (ON CONFLICT IGNORE for idempotency).
+            // Upsert: insert new emails or update existing ones with body_html.
             let is_starred = msg.labels.iter().any(|l| l == "STARRED");
+            let has_attachments = false; // Attachment metadata populated separately
             let result = sqlx::query(
-                r#"INSERT OR IGNORE INTO emails
+                r#"INSERT INTO emails
                    (id, account_id, provider, message_id, thread_id, subject,
-                    from_addr, to_addrs, received_at, body_text, labels,
-                    is_read, is_starred, embedding_status)
-                   VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, 'pending')"#,
+                    from_addr, to_addrs, received_at, body_text, body_html, labels,
+                    is_read, is_starred, has_attachments, embedding_status)
+                   VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, 'pending')
+                   ON CONFLICT(id) DO UPDATE SET
+                    body_html = CASE WHEN length(excluded.body_html) > 0 THEN excluded.body_html ELSE emails.body_html END,
+                    body_text = CASE WHEN length(excluded.body_text) > 0 THEN excluded.body_text ELSE emails.body_text END,
+                    labels = excluded.labels,
+                    is_read = excluded.is_read,
+                    is_starred = excluded.is_starred"#,
             )
             .bind(&msg.id)
             .bind(account_id)
@@ -326,16 +333,18 @@ async fn sync_emails_from_provider(
             .bind(msg.to.join(", "))
             .bind(msg.date.to_rfc3339())
             .bind(msg.body.as_deref().unwrap_or(&msg.snippet))
+            .bind(msg.body_html.as_deref().unwrap_or(""))
             .bind(msg.labels.join(","))
             .bind(msg.is_read)
             .bind(is_starred)
+            .bind(has_attachments)
             .execute(&state.db.pool)
             .await;
 
             match result {
                 Ok(r) if r.rows_affected() > 0 => inserted += 1,
-                Ok(_) => skipped += 1, // already exists
-                Err(e) => warn!(email_id = %msg.id, "Failed to insert email: {e}"),
+                Ok(_) => skipped += 1,
+                Err(e) => warn!(email_id = %msg.id, "Failed to upsert email: {e}"),
             }
         }
 
@@ -390,38 +399,96 @@ async fn start_ingestion(
         "starting ingestion job"
     );
 
-    // Phase 0: Sync emails from the provider into local DB.
-    if account_id != "default" {
-        match sync_emails_from_provider(&state, &account_id).await {
-            Ok(n) => info!(account_id = %account_id, synced = n, "Provider sync complete"),
-            Err((status, msg)) => {
-                warn!(account_id = %account_id, "Provider sync failed ({status}): {msg}");
-                // Continue to pipeline anyway — it will process whatever is already in DB.
+    // Generate job ID early so we can return it immediately.
+    let job_id = uuid::Uuid::new_v4().to_string();
+
+    // Spawn sync + pipeline in background so the HTTP response returns immediately.
+    let bg_state = state.clone();
+    let bg_account_id = account_id.clone();
+    let bg_job_id = job_id.clone();
+    tokio::spawn(async move {
+        // Broadcast: sync starting.
+        let _ = bg_state.ingestion_broadcast.send(IngestionProgress {
+            job_id: bg_job_id.clone(),
+            total: 0,
+            processed: 0,
+            embedded: 0,
+            categorized: 0,
+            failed: 0,
+            phase: IngestionPhase::Syncing,
+            eta_seconds: None,
+            emails_per_second: 0.0,
+        });
+
+        // Phase 0: Sync emails from the provider into local DB.
+        let mut synced_count = 0u64;
+        if bg_account_id != "default" {
+            match sync_emails_from_provider(&bg_state, &bg_account_id).await {
+                Ok(n) => {
+                    synced_count = n;
+                    info!(account_id = %bg_account_id, synced = n, "Provider sync complete");
+                }
+                Err((_status, msg)) => {
+                    warn!(account_id = %bg_account_id, "Provider sync failed: {msg}");
+                }
             }
         }
-    }
 
-    // Phase 1+: Run the embedding/categorization pipeline on pending emails.
-    let job_id = state
-        .vector_service
-        .ingestion_pipeline
-        .start_ingestion(&account_id)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        // Broadcast: sync done, pipeline starting.
+        let _ = bg_state.ingestion_broadcast.send(IngestionProgress {
+            job_id: bg_job_id.clone(),
+            total: synced_count,
+            processed: synced_count,
+            embedded: 0,
+            categorized: 0,
+            failed: 0,
+            phase: IngestionPhase::Embedding,
+            eta_seconds: None,
+            emails_per_second: 0.0,
+        });
 
-    // Publish EmailIngested domain event for the batch start (Audit Item #20).
-    state
-        .event_bus
-        .emit(
-            &job_id,
-            crate::events::DomainEvent::EmailIngested {
-                email_id: job_id.clone(),
-                account_id: account_id.clone(),
-                subject: format!("Ingestion batch started for {account_id}"),
-                from_addr: String::new(),
-            },
-        )
-        .await;
+        // Phase 1+: Run the embedding/categorization pipeline on pending emails.
+        match bg_state
+            .vector_service
+            .ingestion_pipeline
+            .start_ingestion(&bg_account_id)
+            .await
+        {
+            Ok(pipeline_job_id) => {
+                info!(job_id = %bg_job_id, pipeline_job_id = %pipeline_job_id, "Ingestion pipeline started");
+
+                let event_id = pipeline_job_id.clone();
+                bg_state
+                    .event_bus
+                    .emit(
+                        &event_id,
+                        crate::events::DomainEvent::EmailIngested {
+                            email_id: pipeline_job_id,
+                            account_id: bg_account_id.clone(),
+                            subject: format!("Ingestion batch started for {bg_account_id}"),
+                            from_addr: String::new(),
+                        },
+                    )
+                    .await;
+            }
+            Err(e) => {
+                warn!(job_id = %bg_job_id, "Ingestion pipeline failed: {e}");
+            }
+        }
+
+        // Broadcast: complete.
+        let _ = bg_state.ingestion_broadcast.send(IngestionProgress {
+            job_id: bg_job_id.clone(),
+            total: synced_count,
+            processed: synced_count,
+            embedded: 0,
+            categorized: 0,
+            failed: 0,
+            phase: IngestionPhase::Complete,
+            eta_seconds: None,
+            emails_per_second: 0.0,
+        });
+    });
 
     Ok(Json(JobResponse {
         job_id,

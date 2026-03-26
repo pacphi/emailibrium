@@ -235,12 +235,43 @@ fn find_html_in_parts(parts: &[serde_json::Value]) -> Option<String> {
 }
 
 /// Decode Gmail's URL-safe base64 encoded content.
+///
+/// Gmail uses URL-safe base64 without padding. This handles:
+/// - Whitespace/newlines that some encoders insert (stripped before decode)
+/// - Padding characters that some responses include
+/// - Non-UTF-8 charsets (ISO-8859-1, Windows-1252) via lossy conversion
 fn decode_base64url(data: &str) -> Option<String> {
     use base64::Engine;
-    base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .decode(data)
-        .ok()
-        .and_then(|bytes| String::from_utf8(bytes).ok())
+
+    // Strip whitespace — some base64 data contains newlines or spaces.
+    let cleaned: String = data.chars().filter(|c| !c.is_whitespace()).collect();
+
+    // Try URL-safe without padding first (Gmail's documented format).
+    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(&cleaned)
+        // Fall back to URL-safe with padding.
+        .or_else(|_| base64::engine::general_purpose::URL_SAFE.decode(&cleaned))
+        // Fall back to standard base64.
+        .or_else(|_| base64::engine::general_purpose::STANDARD.decode(&cleaned));
+
+    match bytes {
+        Ok(bytes) => {
+            // Try strict UTF-8 first, then lossy for non-UTF-8 charsets
+            // (ISO-8859-1, Windows-1252 are common in marketing emails).
+            Some(
+                String::from_utf8(bytes.clone())
+                    .unwrap_or_else(|_| String::from_utf8_lossy(&bytes).into_owned()),
+            )
+        }
+        Err(e) => {
+            tracing::warn!(
+                data_len = cleaned.len(),
+                error = %e,
+                "Failed to base64-decode body data"
+            );
+            None
+        }
+    }
 }
 
 #[async_trait]
@@ -362,25 +393,44 @@ impl EmailProvider for GmailProvider {
 
         let message_refs = resp["messages"].as_array().cloned().unwrap_or_default();
 
-        // Fetch full message details for each message ID.
-        let mut messages = Vec::with_capacity(message_refs.len());
-        for msg_ref in &message_refs {
-            let msg_id = msg_ref["id"].as_str().unwrap_or_default();
-            if msg_id.is_empty() {
-                continue;
-            }
-            let full = self
-                .http
-                .get(format!("{GMAIL_API_BASE}/messages/{msg_id}?format=full"))
-                .bearer_auth(access_token)
-                .send()
-                .await
-                .map_err(|e| ProviderError::RequestFailed(e.to_string()))?
-                .json::<serde_json::Value>()
-                .await
-                .map_err(|e| ProviderError::ParseError(e.to_string()))?;
+        // Fetch full message details concurrently.
+        // Gmail allows 250 quota units/sec; messages.get costs 5 units = 50 req/sec max.
+        // 5 concurrent requests at ~100ms each ≈ 50 req/sec — safe within quota.
+        let msg_ids: Vec<String> = message_refs
+            .iter()
+            .filter_map(|r| r["id"].as_str().map(|s| s.to_string()))
+            .collect();
 
-            messages.push(Self::parse_message(&full)?);
+        use futures::StreamExt;
+
+        let token = access_token.to_string();
+        let http = self.http.clone();
+        let results: Vec<Result<EmailMessage, ProviderError>> =
+            futures::stream::iter(msg_ids.into_iter())
+                .map(|msg_id| {
+                    let t = token.clone();
+                    let h = http.clone();
+                    async move {
+                        let full: serde_json::Value = h
+                            .get(format!("{GMAIL_API_BASE}/messages/{msg_id}?format=full"))
+                            .bearer_auth(&t)
+                            .send()
+                            .await
+                            .map_err(|e| ProviderError::RequestFailed(e.to_string()))?
+                            .json()
+                            .await
+                            .map_err(|e| ProviderError::ParseError(e.to_string()))?;
+                        check_error_response(&full)?;
+                        Self::parse_message(&full)
+                    }
+                })
+                .buffer_unordered(5)
+                .collect()
+                .await;
+
+        let mut messages = Vec::with_capacity(results.len());
+        for result in results {
+            messages.push(result?);
         }
 
         Ok(EmailPage {

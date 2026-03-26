@@ -1,4 +1,4 @@
-import type { Email, EmailThread } from '@emailibrium/types';
+import type { Email, EmailThread, Attachment } from '@emailibrium/types';
 import { api } from './client.js';
 
 export interface GetEmailsParams {
@@ -83,4 +83,16 @@ export async function moveEmail(
   body: { accountId: string; targetId: string; kind: 'folder' | 'label' },
 ): Promise<void> {
   await api.post(`emails/${id}/move`, { json: body });
+}
+
+export async function getAttachments(emailId: string): Promise<Attachment[]> {
+  return api.get(`emails/${emailId}/attachments`).json<Attachment[]>();
+}
+
+export function getAttachmentDownloadUrl(emailId: string, attachmentId: string): string {
+  return `/api/v1/emails/${emailId}/attachments/${attachmentId}`;
+}
+
+export function getAttachmentsZipUrl(emailId: string): string {
+  return `/api/v1/emails/${emailId}/attachments/zip`;
 }

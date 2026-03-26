@@ -4,7 +4,9 @@
 //! with an email-specific whitelist. All body_html content must
 //! pass through this service before database storage.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+
+use base64::Engine;
 
 /// Sanitize HTML email content for safe storage and rendering.
 ///
@@ -13,31 +15,67 @@ use std::collections::HashSet;
 /// Sets `rel="noopener noreferrer"` on all links.
 pub fn sanitize_email_html(raw_html: &str) -> String {
     let tags: HashSet<&str> = [
-        "a", "b", "blockquote", "br", "center", "code", "div", "em",
-        "font", "h1", "h2", "h3", "h4", "h5", "h6", "hr", "i", "img",
-        "li", "ol", "p", "pre", "span", "strong", "table",
-        "tbody", "td", "th", "thead", "tr", "u", "ul", "sup", "sub",
+        "a",
+        "b",
+        "blockquote",
+        "br",
+        "center",
+        "code",
+        "div",
+        "em",
+        "font",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6",
+        "hr",
+        "i",
+        "img",
+        "li",
+        "ol",
+        "p",
+        "pre",
+        "span",
+        "strong",
+        "table",
+        "tbody",
+        "td",
+        "th",
+        "thead",
+        "tr",
+        "u",
+        "ul",
+        "sup",
+        "sub",
     ]
     .into_iter()
     .collect();
 
     // Allow <style> tags via clean_content_tags (ammonia 4 handles CSS
     // sanitization separately from regular tag allowlisting).
-    let clean_content_tags: HashSet<&str> =
-        ["style", "script"].into_iter().collect();
+    let clean_content_tags: HashSet<&str> = ["style", "script"].into_iter().collect();
 
     let mut tag_attrs = std::collections::HashMap::new();
 
     let a_attrs: HashSet<&str> = ["href", "target"].into_iter().collect();
-    let img_attrs: HashSet<&str> =
-        ["src", "alt", "width", "height", "style"].into_iter().collect();
+    let img_attrs: HashSet<&str> = ["src", "alt", "width", "height", "style"]
+        .into_iter()
+        .collect();
     let td_attrs: HashSet<&str> = [
         "style", "width", "height", "align", "valign", "bgcolor", "colspan", "rowspan",
     ]
     .into_iter()
     .collect();
     let table_attrs: HashSet<&str> = [
-        "style", "width", "border", "cellpadding", "cellspacing", "bgcolor", "align",
+        "style",
+        "width",
+        "border",
+        "cellpadding",
+        "cellspacing",
+        "bgcolor",
+        "align",
     ]
     .into_iter()
     .collect();
@@ -66,6 +104,28 @@ pub fn sanitize_email_html(raw_html: &str) -> String {
         .url_schemes(url_schemes)
         .clean(raw_html)
         .to_string()
+}
+
+/// Replace CID references in HTML with base64 data URIs.
+///
+/// This must be called BEFORE `sanitize_email_html()` so that ammonia's
+/// URL scheme whitelist allows the resulting `data:` URIs.
+pub fn resolve_cid_references(
+    html: &str,
+    inline_images: &HashMap<String, (String, Vec<u8>)>,
+) -> String {
+    let mut result = html.to_string();
+    for (content_id, (content_type, data)) in inline_images {
+        // CID references can appear as cid:xxx or cid:xxx@domain.
+        let cid_ref = format!("cid:{}", content_id.trim_matches('<').trim_matches('>'));
+        let data_uri = format!(
+            "data:{};base64,{}",
+            content_type,
+            base64::engine::general_purpose::STANDARD.encode(data)
+        );
+        result = result.replace(&cid_ref, &data_uri);
+    }
+    result
 }
 
 #[cfg(test)]
@@ -162,5 +222,61 @@ mod tests {
     fn test_empty_input() {
         let output = sanitize_email_html("");
         assert_eq!(output, "");
+    }
+
+    // --- CID resolution tests ---
+
+    #[test]
+    fn test_resolve_cid_single() {
+        let html = r#"<img src="cid:logo123">"#;
+        let mut map = HashMap::new();
+        map.insert(
+            "logo123".to_string(),
+            ("image/png".to_string(), vec![0x89, 0x50, 0x4E, 0x47]),
+        );
+        let result = resolve_cid_references(html, &map);
+        assert!(result.contains("data:image/png;base64,"));
+        assert!(!result.contains("cid:"));
+    }
+
+    #[test]
+    fn test_resolve_cid_with_angle_brackets() {
+        let html = r#"<img src="cid:logo456">"#;
+        let mut map = HashMap::new();
+        map.insert(
+            "<logo456>".to_string(),
+            ("image/jpeg".to_string(), vec![0xFF, 0xD8]),
+        );
+        let result = resolve_cid_references(html, &map);
+        assert!(result.contains("data:image/jpeg;base64,"));
+        assert!(!result.contains("cid:"));
+    }
+
+    #[test]
+    fn test_resolve_cid_multiple() {
+        let html = r#"<img src="cid:img1"><img src="cid:img2">"#;
+        let mut map = HashMap::new();
+        map.insert("img1".to_string(), ("image/png".to_string(), vec![1]));
+        map.insert("img2".to_string(), ("image/gif".to_string(), vec![2]));
+        let result = resolve_cid_references(html, &map);
+        assert!(result.contains("data:image/png;base64,"));
+        assert!(result.contains("data:image/gif;base64,"));
+        assert!(!result.contains("cid:"));
+    }
+
+    #[test]
+    fn test_resolve_cid_missing_leaves_original() {
+        let html = r#"<img src="cid:unknown">"#;
+        let map = HashMap::new();
+        let result = resolve_cid_references(html, &map);
+        assert_eq!(result, html);
+    }
+
+    #[test]
+    fn test_resolve_cid_empty_map() {
+        let html = "<p>No images</p>";
+        let map = HashMap::new();
+        let result = resolve_cid_references(html, &map);
+        assert_eq!(result, html);
     }
 }

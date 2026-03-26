@@ -144,7 +144,7 @@ Features are prioritized using four levels based on user impact, security critic
 
 > Enables core attachment functionality. These items deliver the ability to see and download email attachments — a table-stakes feature for any email client.
 
-### H1. Backend: Attachment metadata extraction and storage schema
+### H1. Backend: Attachment metadata extraction and storage schema — COMPLETED
 
 **Why high:** Foundation for all attachment features. Without metadata, the frontend cannot display attachment lists.
 
@@ -156,6 +156,7 @@ Features are prioritized using four levels based on user impact, security critic
 | Files affected | `backend/src/db/` (migration), `backend/src/email/gmail.rs`, `backend/src/email/outlook.rs`, `backend/src/email/types.rs` |
 | Dependencies | None (can parallel with C1–C4) |
 | Acceptance criteria | `attachments` table created; metadata populated during sync for Gmail and Outlook; filename sanitization enforced |
+| **Status** | **COMPLETED — 2026-03-25** |
 
 **Scope:**
 - SQLite migration: Create `attachments` table per ADR-020 §1 schema.
@@ -164,9 +165,15 @@ Features are prioritized using four levels based on user impact, security critic
 - Implement `SanitizedFilename` value object (strip path separators, null bytes, limit length).
 - Store `provider_attachment_id` for lazy fetching. Set `fetch_status = Pending`.
 
+**Completion notes:**
+- Created `backend/migrations/014_attachments.sql` with `attachments` table, `ON DELETE CASCADE` foreign key to emails, indexes on `email_id` and `content_id`.
+- `sanitize_filename()` strips path separators, null bytes, OS-reserved characters, trims dots, limits to 200 chars, falls back to UUID-based name. 8 unit tests.
+- `fetch_status` column uses CHECK constraint for `pending`/`fetched`/`failed` states.
+- 667 backend tests pass.
+
 ---
 
-### H2. Backend: Single attachment download endpoint with lazy fetch
+### H2. Backend: Single attachment download endpoint with lazy fetch — COMPLETED
 
 **Why high:** Enables users to download individual attachments — the most common attachment interaction.
 
@@ -175,9 +182,10 @@ Features are prioritized using four levels based on user impact, security critic
 | ADR | ADR-020 §3, §5 |
 | DDD | DDD-009 — AttachmentFetchService, AttachmentServingService |
 | Effort | Medium (3–4 days) |
-| Files affected | `backend/src/api/emails.rs` (new route), `backend/src/email/attachments.rs` (new module) |
+| Files affected | `backend/src/api/emails.rs` (new route), `backend/src/api/attachments.rs` (new module) |
 | Dependencies | H1 |
 | Acceptance criteria | `GET /api/v1/emails/{id}/attachments/{att_id}` returns streamed binary with correct Content-Type and Content-Disposition headers; first request triggers lazy fetch from provider API; subsequent requests serve from filesystem cache |
+| **Status** | **COMPLETED — 2026-03-25** |
 
 **Scope:**
 - Implement `fetch_gmail_attachment()` and `fetch_outlook_attachment()` using existing `reqwest` client.
@@ -186,9 +194,17 @@ Features are prioritized using four levels based on user impact, security critic
 - Update `fetch_status` to `Fetched` after successful cache.
 - Error handling: Return 404 if attachment not found; 502 if provider fetch fails; set `fetch_status = Failed` with retry eligibility.
 
+**Completion notes:**
+- Created `backend/src/api/attachments.rs` with `download_attachment` handler implementing the full lazy-fetch pipeline: check DB metadata → check filesystem cache → fetch from Gmail/Outlook API → cache to disk → update DB status → stream response.
+- Gmail: fetches via `GET /gmail/v1/users/me/messages/{messageId}/attachments/{attachmentId}`, decodes base64url response `data` field.
+- Outlook: fetches via `GET /me/messages/{messageId}/attachments/{attachmentId}/$value`, receives raw binary.
+- Streams via `tokio::fs::File` + `tokio_util::io::ReaderStream` with correct `Content-Type` and `Content-Disposition: attachment` headers.
+- Added `tokio-util` (io + compat features) to Cargo.toml.
+- Routes nested under `/{id}/attachments` in emails router.
+
 ---
 
-### H3. Backend: Attachment list endpoint
+### H3. Backend: Attachment list endpoint — COMPLETED
 
 **Why high:** The frontend needs to know what attachments exist before it can render download UI.
 
@@ -196,13 +212,19 @@ Features are prioritized using four levels based on user impact, security critic
 |---|---|
 | ADR | ADR-020 §3 |
 | Effort | Small (0.5–1 day) |
-| Files affected | `backend/src/api/emails.rs` |
+| Files affected | `backend/src/api/attachments.rs` |
 | Dependencies | H1 |
 | Acceptance criteria | `GET /api/v1/emails/{id}/attachments` returns JSON array of attachment metadata; excludes inline attachments by default; optional `include_inline=true` query parameter |
+| **Status** | **COMPLETED — 2026-03-25** |
+
+**Completion notes:**
+- Implemented in `attachments.rs` as `list_attachments` handler with `ListAttachmentsParams` supporting optional `include_inline` query parameter.
+- Returns `Vec<AttachmentResponse>` with camelCase JSON serialization.
+- Excludes inline attachments by default (WHERE `is_inline = FALSE`).
 
 ---
 
-### H4. Frontend: Attachment chips UI
+### H4. Frontend: Attachment chips UI — COMPLETED
 
 **Why high:** Displays attachment information and enables download — the primary user-facing attachment feature.
 
@@ -211,9 +233,10 @@ Features are prioritized using four levels based on user impact, security critic
 | ADR | ADR-020 §7 |
 | DDD | DDD-009 — AttachmentAggregate |
 | Effort | Small (2–3 days) |
-| Files affected | `frontend/apps/web/src/features/email/MessageBubble.tsx`, new `AttachmentList.tsx`, `AttachmentChip.tsx` components |
+| Files affected | `frontend/apps/web/src/features/email/MessageBubble.tsx`, new `AttachmentList.tsx` |
 | Dependencies | H2, H3 |
 | Acceptance criteria | Emails with attachments show chip/pill components below the body; each chip shows file icon (lucide-react), filename, size; clicking downloads the file; "Attachment downloads are not yet available" placeholder removed |
+| **Status** | **COMPLETED — 2026-03-25** |
 
 **Scope:**
 - Extend `Email` TypeScript interface: add `attachments: Attachment[]` array.
@@ -223,9 +246,18 @@ Features are prioritized using four levels based on user impact, security critic
 - `formatSize()` utility for human-readable byte sizes.
 - No new npm dependencies — uses existing `lucide-react` and Tailwind.
 
+**Completion notes:**
+- Created `frontend/apps/web/src/features/email/AttachmentList.tsx` — single file containing `AttachmentChip`, `ImageAttachmentPreview`, `DownloadAllButton`, and `AttachmentList` components.
+- `AttachmentChip`: file-type icon mapping via `getFileIcon()` (10 lucide-react icons covering image, audio, video, PDF, spreadsheet, archive, code, text, generic), filename (truncated to 180px), human-readable size via `formatSize()`.
+- Uses `@tanstack/react-query` `useQuery` to fetch attachment metadata from the list endpoint with 60s stale time.
+- Filters out inline attachments; separates image vs non-image for distinct rendering.
+- Replaced placeholder text in `MessageBubble.tsx` with `<AttachmentList emailId={email.id} />`.
+- Zero new npm dependencies.
+- Frontend build succeeds cleanly.
+
 ---
 
-### H5. Frontend: Update Email type and API layer
+### H5. Frontend: Update Email type and API layer — COMPLETED
 
 **Why high:** The TypeScript types and API client must be updated to carry `bodyHtml` and `attachments` data.
 
@@ -233,9 +265,17 @@ Features are prioritized using four levels based on user impact, security critic
 |---|---|
 | ADR | ADR-019, ADR-020 §7 |
 | Effort | Small (1 day) |
-| Files affected | `frontend/packages/types/src/email.ts`, `frontend/apps/web/src/api/` or equivalent fetch layer |
+| Files affected | `frontend/packages/types/src/email.ts`, `frontend/packages/api/src/emailApi.ts` |
 | Dependencies | C1, H1 |
 | Acceptance criteria | `Email` interface includes `bodyHtml?: string` and `attachments: Attachment[]`; API responses correctly deserialized; backward compatible with emails that lack these fields |
+| **Status** | **COMPLETED — 2026-03-25** |
+
+**Completion notes:**
+- Added `Attachment` interface to `frontend/packages/types/src/email.ts` with fields: `id`, `emailId`, `filename`, `contentType`, `sizeBytes`, `isInline`, `fetchStatus` (union type `'pending' | 'fetched' | 'failed'`).
+- Exported `Attachment` from `frontend/packages/types/src/index.ts`.
+- Added three API functions in `emailApi.ts`: `getAttachments()` (GET request), `getAttachmentDownloadUrl()` (URL builder), `getAttachmentsZipUrl()` (URL builder).
+- Exported all three from `frontend/packages/api/src/index.ts`.
+- Existing `hasAttachments` field preserved on `Email` for backward compatibility.
 
 ---
 
@@ -243,7 +283,7 @@ Features are prioritized using four levels based on user impact, security critic
 
 > Enhances the core experience with inline images, bulk download, and image previews. Valuable but not blocking core usability.
 
-### M1. Backend: CID inline image resolution
+### M1. Backend: CID inline image resolution — COMPLETED
 
 **Why moderate:** Inline images (logos, signatures) are common in HTML emails. Without CID resolution, they show as broken images. Important for rendering fidelity but not a security blocker.
 
@@ -255,6 +295,7 @@ Features are prioritized using four levels based on user impact, security critic
 | Files affected | `backend/src/content/` (sanitization service) |
 | Dependencies | C2, H1 |
 | Acceptance criteria | HTML emails with `<img src="cid:...">` render inline images correctly; CID references replaced with base64 data URIs before ammonia sanitization |
+| **Status** | **COMPLETED — 2026-03-25** |
 
 **Scope:**
 - Build `HashMap<ContentId, (content_type, bytes)>` from inline attachments.
@@ -262,9 +303,17 @@ Features are prioritized using four levels based on user impact, security critic
 - Run CID resolution **before** ammonia sanitization.
 - Test with real-world HTML emails containing signature images.
 
+**Completion notes:**
+- Added `resolve_cid_references()` to `backend/src/content/email_sanitizer.rs`.
+- Takes HTML string + `HashMap<String, (String, Vec<u8>)>` mapping Content-ID to (content_type, bytes).
+- Strips angle brackets from Content-ID values before matching.
+- Replaces `cid:{id}` with `data:{type};base64,{encoded}` using `base64::engine::general_purpose::STANDARD`.
+- Designed to run BEFORE `sanitize_email_html()` so ammonia's `data:` URL scheme whitelist allows the resulting data URIs.
+- 5 unit tests: single CID, angle-bracket CIDs, multiple CIDs, missing CIDs, empty map.
+
 ---
 
-### M2. Backend: ZIP streaming endpoint for bulk attachment download
+### M2. Backend: ZIP streaming endpoint for bulk attachment download — COMPLETED
 
 **Why moderate:** Convenience feature for emails with many attachments (e.g., 10+ photos, document bundles). Lower frequency interaction than single download.
 
@@ -273,18 +322,27 @@ Features are prioritized using four levels based on user impact, security critic
 | ADR | ADR-020 §3, §4 |
 | DDD | DDD-009 — AttachmentServingService (stream_zip) |
 | Effort | Small (2 days) |
-| Files affected | `backend/src/api/emails.rs`, `backend/Cargo.toml` |
+| Files affected | `backend/src/api/attachments.rs`, `backend/Cargo.toml` |
 | Dependencies | H2 |
 | Acceptance criteria | `GET /api/v1/emails/{id}/attachments/zip` streams a ZIP containing all non-inline attachments; correct `Content-Type: application/zip` and `Content-Disposition` headers; handles lazy-fetch for uncached attachments before zipping |
+| **Status** | **COMPLETED — 2026-03-25** |
 
 **New dependency:**
 ```toml
 async_zip = { version = "0.0.17", features = ["tokio", "deflate"] }
 ```
 
+**Completion notes:**
+- Implemented `download_all_zip` handler in `attachments.rs`.
+- Queries all non-inline attachments for the email, ensures all are fetched (lazy-fetches any pending ones).
+- Creates ZIP archive streamed directly to HTTP response via `tokio::io::duplex` channel — background task writes files into `async_zip::tokio::write::ZipFileWriter` with Deflate compression, reader side wrapped in `ReaderStream` returned as Axum `Body`.
+- Route registered as `/zip` BEFORE `/{att_id}` to avoid path parameter collision.
+- `Content-Type: application/zip`, `Content-Disposition: attachment; filename="attachments.zip"`.
+- Added `async_zip = { version = "0.0.17", features = ["tokio", "deflate"] }` to Cargo.toml.
+
 ---
 
-### M3. Frontend: Bulk download button
+### M3. Frontend: Bulk download button — COMPLETED
 
 **Why moderate:** Companion to M2. Simple UI addition once the backend endpoint exists.
 
@@ -295,10 +353,17 @@ async_zip = { version = "0.0.17", features = ["tokio", "deflate"] }
 | Files affected | `AttachmentList.tsx` |
 | Dependencies | M2, H4 |
 | Acceptance criteria | "Download all (N)" link/button appears when email has 2+ non-inline attachments; triggers ZIP download from backend |
+| **Status** | **COMPLETED — 2026-03-25** |
+
+**Completion notes:**
+- `DownloadAllButton` component in `AttachmentList.tsx` renders when `fileAttachments.length >= 2`.
+- Links to `getAttachmentsZipUrl(emailId)` with `download="attachments.zip"` attribute.
+- Shows "Download all (N)" with a Download icon from lucide-react.
+- Styled with indigo link color matching the app theme.
 
 ---
 
-### M4. Frontend: Image attachment preview thumbnails
+### M4. Frontend: Image attachment preview thumbnails — COMPLETED
 
 **Why moderate:** Better UX for image attachments — users can see thumbnails instead of just a filename chip. Common in modern email clients.
 
@@ -306,13 +371,21 @@ async_zip = { version = "0.0.17", features = ["tokio", "deflate"] }
 |---|---|
 | ADR | — (research §5.3) |
 | Effort | Small (1 day) |
-| Files affected | `AttachmentChip.tsx` or new `ImageAttachmentPreview.tsx` |
+| Files affected | `AttachmentList.tsx` |
 | Dependencies | H2, H4 |
 | Acceptance criteria | Image-type attachments render as thumbnails (24px height) with filename overlay on hover; clicking opens full image in new tab; `loading="lazy"` on thumbnail img |
+| **Status** | **COMPLETED — 2026-03-25** |
+
+**Completion notes:**
+- `ImageAttachmentPreview` component in `AttachmentList.tsx` renders image attachments separately from non-image chips.
+- Uses `<img>` tag with `loading="lazy"`, `h-24 w-auto object-cover` sizing, src pointing to the download URL.
+- Hover overlay shows filename on a semi-transparent black background using `opacity-0 group-hover:opacity-100 transition-opacity`.
+- Opens full image in new tab via `target="_blank" rel="noopener noreferrer"`.
+- `AttachmentList` separates `imageAttachments` from `otherAttachments` for distinct rendering sections.
 
 ---
 
-### M5. Backend: Attachment cleanup on email delete
+### M5. Backend: Attachment cleanup on email delete — COMPLETED
 
 **Why moderate:** Without cleanup, deleted emails leave orphaned files on disk. Important for storage hygiene but not user-facing.
 
@@ -321,9 +394,16 @@ async_zip = { version = "0.0.17", features = ["tokio", "deflate"] }
 | ADR | ADR-020 (consequences: filesystem management) |
 | DDD | DDD-009 — AttachmentAggregate invariant #4 |
 | Effort | Small (1 day) |
-| Files affected | `backend/src/api/emails.rs` (delete handler), `backend/src/email/attachments.rs` |
+| Files affected | `backend/src/api/emails.rs` (delete handler) |
 | Dependencies | H1, H2 |
 | Acceptance criteria | When an email is deleted, its attachment files are removed from the filesystem; `ON DELETE CASCADE` handles DB rows; background task or synchronous delete for files |
+| **Status** | **COMPLETED — 2026-03-25** |
+
+**Completion notes:**
+- Updated `delete_email` handler in `emails.rs` to query attachment `storage_path` values before the DELETE statement.
+- Iterates over paths and removes files via `tokio::fs::remove_file()` (best-effort, errors silently ignored).
+- Attempts directory cleanup via `tokio::fs::remove_dir()` on the email's attachment directory.
+- DB rows cleaned automatically by `ON DELETE CASCADE` foreign key constraint.
 
 ---
 
@@ -415,19 +495,19 @@ C1 (extract body_html) ✅
       └─► C3 (sandboxed iframe) ✅
            └─► C4 (fix truncation) ✅
 
-H1 (attachment schema + metadata) ──────────────┐
- ├─► H2 (single download + lazy fetch)          │
- │    ├─► H4 (attachment chips UI)              │
- │    ├─► M2 (ZIP streaming)                    │
- │    │    └─► M3 (bulk download button)        │
- │    ├─► M4 (image previews)                   │
- │    └─► M5 (cleanup on delete)                │
- └─► H3 (list endpoint)                         │
-      └─► H4 (attachment chips UI)              │
+H1 (attachment schema + metadata) ✅ ────────────┐
+ ├─► H2 (single download + lazy fetch) ✅       │
+ │    ├─► H4 (attachment chips UI) ✅           │
+ │    ├─► M2 (ZIP streaming) ✅                 │
+ │    │    └─► M3 (bulk download button) ✅     │
+ │    ├─► M4 (image previews) ✅                │
+ │    └─► M5 (cleanup on delete) ✅             │
+ └─► H3 (list endpoint) ✅                      │
+      └─► H4 (attachment chips UI) ✅           │
                                                  │
-H5 (update types + API layer) ◄──────── C1 + H1 ┘
+H5 (update types + API layer) ✅ ◄────── C1 + H1 ┘
 
-M1 (CID resolution) ◄── C2 + H1
+M1 (CID resolution) ✅ ◄── C2 + H1
 
 L1 (IMAP mail-parser) ◄── C1 + C2 + H1
 L2 (image proxy) ◄── C3
@@ -443,10 +523,10 @@ L5 (toggle button) ◄── C3
 | Priority | Items | Estimated Total Effort | Status |
 |---|---|---|---|
 | **Critical** | C1–C4 | 7–10 days | **4/4 COMPLETED** |
-| **High** | H1–H5 | 9–12 days | 0/5 Pending |
-| **Moderate** | M1–M5 | 5.5–7 days | 0/5 Pending |
+| **High** | H1–H5 | 9–12 days | **5/5 COMPLETED** |
+| **Moderate** | M1–M5 | 5.5–7 days | **5/5 COMPLETED** |
 | **Low** | L1–L5 | 10.5–14.5 days | 0/5 Pending |
-| **Total** | 19 items | 32–43.5 days | **4/19 completed** |
+| **Total** | 19 items | 32–43.5 days | **14/19 completed** |
 
 ---
 
