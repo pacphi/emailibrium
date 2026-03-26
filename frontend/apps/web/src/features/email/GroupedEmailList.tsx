@@ -75,11 +75,14 @@ export function GroupedEmailList({
     [domains, expandedDomains, expandedSenders],
   );
 
-  const itemHeight: Record<VirtualItem['type'], number> = useMemo(() => ({
-    'domain-header': 44,
-    'sender-header': 48,
-    'email': DENSITY_EMAIL_HEIGHT[emailListDensity],
-  }), [emailListDensity]);
+  const itemHeight: Record<VirtualItem['type'], number> = useMemo(
+    () => ({
+      'domain-header': 44,
+      'sender-header': 48,
+      email: DENSITY_EMAIL_HEIGHT[emailListDensity],
+    }),
+    [emailListDensity],
+  );
 
   const virtualizer = useVirtualizer({
     count: flatItems.length,
@@ -146,7 +149,9 @@ export function GroupedEmailList({
       aria-rowcount={flatItems.length}
       className="flex-1 overflow-y-auto"
     >
-      <div style={{ height: `${virtualizer.getTotalSize()}px`, width: '100%', position: 'relative' }}>
+      <div
+        style={{ height: `${virtualizer.getTotalSize()}px`, width: '100%', position: 'relative' }}
+      >
         {virtualizer.getVirtualItems().map((virtualRow) => {
           const item = flatItems[virtualRow.index];
           if (!item) return null;
@@ -226,8 +231,8 @@ export function GroupedEmailList({
                 item.type === 'domain-header'
                   ? `domain-${item.domain.domain}`
                   : item.type === 'sender-header'
-                  ? `sender-${item.group.key}`
-                  : `email-${item.email.id}`
+                    ? `sender-${item.group.key}`
+                    : `email-${item.email.id}`
               }
               style={{
                 position: 'absolute',
