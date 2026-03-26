@@ -4,7 +4,12 @@ export type { SSEStream } from './sse.js';
 
 export { searchEmails, findSimilar, classifyEmail } from './searchApi.js';
 
-export { getSubscriptions, getRecurringSenders, getInboxReport, getTemporalInsights } from './insightsApi.js';
+export {
+  getSubscriptions,
+  getRecurringSenders,
+  getInboxReport,
+  getTemporalInsights,
+} from './insightsApi.js';
 
 export {
   startIngestion,

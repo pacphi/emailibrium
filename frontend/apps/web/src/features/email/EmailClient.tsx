@@ -26,11 +26,13 @@ import {
 } from './hooks/useEmails';
 
 const SUBSCRIPTION_CATEGORIES = new Set([
-  'newsletters', 'marketing', 'promotions', 'updates', 'digests',
+  'newsletters',
+  'marketing',
+  'promotions',
+  'updates',
+  'digests',
 ]);
-const TOPIC_CATEGORIES = new Set([
-  'projects', 'travel', 'events', 'meetings',
-]);
+const TOPIC_CATEGORIES = new Set(['projects', 'travel', 'events', 'meetings']);
 
 function groupToQueryParam(groupId: string): { category?: string } {
   if (groupId === 'inbox') return {};
@@ -73,16 +75,18 @@ export function EmailClient() {
     return emails.filter((email) => {
       switch (searchField) {
         case 'from':
-          return email.fromAddr.toLowerCase().includes(needle) ||
-                 (email.fromName?.toLowerCase().includes(needle) ?? false);
+          return (
+            email.fromAddr.toLowerCase().includes(needle) ||
+            (email.fromName?.toLowerCase().includes(needle) ?? false)
+          );
         case 'to':
           return email.toAddrs.toLowerCase().includes(needle);
         case 'cc':
-          return (email.ccAddrs?.toLowerCase().includes(needle) ?? false);
+          return email.ccAddrs?.toLowerCase().includes(needle) ?? false;
         case 'subject':
           return email.subject.toLowerCase().includes(needle);
         case 'body':
-          return (email.bodyText?.toLowerCase().includes(needle) ?? false);
+          return email.bodyText?.toLowerCase().includes(needle) ?? false;
         default:
           return true;
       }
@@ -113,9 +117,7 @@ export function EmailClient() {
 
   // Build sidebar groups dynamically from real category data.
   const sidebarGroups = useMemo(() => {
-    const groups: SidebarGroup[] = [
-      { id: 'inbox', label: 'Inbox', icon: 'inbox', unreadCount: 0 },
-    ];
+    const groups: SidebarGroup[] = [{ id: 'inbox', label: 'Inbox', icon: 'inbox', unreadCount: 0 }];
 
     for (const cat of categories) {
       const lower = cat.toLowerCase();
@@ -276,9 +278,7 @@ export function EmailClient() {
   const [moveDialogEmailId, setMoveDialogEmailId] = useState<string | null>(null);
   const [bulkMoveIds, setBulkMoveIds] = useState<string[] | null>(null);
   const [bulkMoveSubject, setBulkMoveSubject] = useState('');
-  const moveDialogEmail = moveDialogEmailId
-    ? emails.find((e) => e.id === moveDialogEmailId)
-    : null;
+  const moveDialogEmail = moveDialogEmailId ? emails.find((e) => e.id === moveDialogEmailId) : null;
   const isMoveOpen = moveDialogEmailId !== null || bulkMoveIds !== null;
 
   const handleMoveOpen = useCallback((emailId: string) => {
@@ -440,7 +440,7 @@ export function EmailClient() {
             >
               <Plus className="h-3.5 w-3.5" aria-hidden="true" />
               Compose
-          </button>
+            </button>
           </div>
           {/* Filter pills */}
           <div className="flex items-center gap-1 px-3 pb-2">
