@@ -6,6 +6,13 @@ import { flattenGroups } from './utils/groupBySender';
 import { DomainGroupHeader } from './DomainGroupHeader';
 import { SenderGroupHeader } from './SenderGroupHeader';
 import { EmailListItem } from './EmailListItem';
+import { useSettings, type EmailListDensity } from '../settings/hooks/useSettings';
+
+const DENSITY_EMAIL_HEIGHT: Record<EmailListDensity, number> = {
+  compact: 48,
+  comfortable: 64,
+  spacious: 84,
+};
 
 interface GroupedEmailListProps {
   domains: DomainGroup[];
@@ -34,12 +41,6 @@ interface GroupedEmailListProps {
   onFetchNextPage?: () => void;
 }
 
-const ITEM_HEIGHT: Record<VirtualItem['type'], number> = {
-  'domain-header': 44,
-  'sender-header': 48,
-  'email': 64,
-};
-
 export function GroupedEmailList({
   domains,
   expandedDomains,
@@ -67,18 +68,30 @@ export function GroupedEmailList({
   onFetchNextPage,
 }: GroupedEmailListProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const { emailListDensity, fontSize } = useSettings();
 
   const flatItems: VirtualItem[] = useMemo(
     () => flattenGroups(domains, expandedDomains, expandedSenders),
     [domains, expandedDomains, expandedSenders],
   );
 
+  const itemHeight: Record<VirtualItem['type'], number> = useMemo(() => ({
+    'domain-header': 44,
+    'sender-header': 48,
+    'email': DENSITY_EMAIL_HEIGHT[emailListDensity],
+  }), [emailListDensity]);
+
   const virtualizer = useVirtualizer({
     count: flatItems.length,
     getScrollElement: () => scrollRef.current,
-    estimateSize: (index) => ITEM_HEIGHT[flatItems[index]?.type ?? 'email'],
+    estimateSize: (index) => itemHeight[flatItems[index]?.type ?? 'email'],
     overscan: 10,
   });
+
+  // Re-measure all rows when density changes.
+  useEffect(() => {
+    virtualizer.measure();
+  }, [emailListDensity, virtualizer]);
 
   // Infinite scroll: load more when near the bottom of the virtual list
   useEffect(() => {
@@ -194,6 +207,8 @@ export function GroupedEmailList({
                 email={item.email}
                 isSelected={selectedEmailId === item.email.id}
                 isChecked={checkedEmailIds.has(item.email.id)}
+                density={emailListDensity}
+                fontSize={fontSize}
                 onSelect={onSelectEmail}
                 onCheck={onCheckEmail}
                 onStar={onStarEmail}

@@ -3,6 +3,13 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import { Loader2 } from 'lucide-react';
 import type { Email } from '@emailibrium/types';
 import { EmailListItem } from './EmailListItem';
+import { useSettings, type EmailListDensity } from '../settings/hooks/useSettings';
+
+const DENSITY_ROW_HEIGHT: Record<EmailListDensity, number> = {
+  compact: 48,
+  comfortable: 64,
+  spacious: 84,
+};
 
 interface EmailListProps {
   emails: Email[];
@@ -40,13 +47,20 @@ export function EmailList({
   onMarkUnread,
 }: EmailListProps) {
   const parentRef = useRef<HTMLDivElement>(null);
+  const { emailListDensity, fontSize } = useSettings();
+  const rowHeight = DENSITY_ROW_HEIGHT[emailListDensity];
 
   const virtualizer = useVirtualizer({
     count: emails.length,
     getScrollElement: () => parentRef.current,
-    estimateSize: () => 64,
+    estimateSize: () => rowHeight,
     overscan: 10,
   });
+
+  // Re-measure all rows when density changes.
+  useEffect(() => {
+    virtualizer.measure();
+  }, [emailListDensity, virtualizer]);
 
   // Infinite scroll: load more when last few items are visible.
   useEffect(() => {
@@ -145,6 +159,8 @@ export function EmailList({
                 email={email}
                 isSelected={selectedEmailId === email.id}
                 isChecked={checkedEmailIds.has(email.id)}
+                density={emailListDensity}
+                fontSize={fontSize}
                 onSelect={onSelectEmail}
                 onCheck={onCheckEmail}
                 onStar={onStarEmail}

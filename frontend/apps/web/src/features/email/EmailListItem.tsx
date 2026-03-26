@@ -2,11 +2,14 @@ import { forwardRef, useState } from 'react';
 import { Star, Archive, Trash2, FolderInput, Paperclip, MailOpen } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import type { Email } from '@emailibrium/types';
+import type { EmailListDensity } from '../settings/hooks/useSettings';
 
 interface EmailListItemProps {
   email: Email;
   isSelected: boolean;
   isChecked: boolean;
+  density?: EmailListDensity;
+  fontSize?: number;
   onSelect: (emailId: string) => void;
   onCheck: (emailId: string, checked: boolean) => void;
   onStar: (emailId: string) => void;
@@ -15,6 +18,12 @@ interface EmailListItemProps {
   onMoveOpen?: (emailId: string) => void;
   onMarkUnread?: (emailId: string) => void;
 }
+
+const DENSITY_PADDING: Record<EmailListDensity, string> = {
+  compact: 'py-1 px-3',
+  comfortable: 'py-2.5 px-3',
+  spacious: 'py-4 px-3',
+};
 
 const providerBadge: Record<string, { label: string; className: string }> = {
   gmail: {
@@ -53,7 +62,7 @@ function getPreview(email: Email): string {
 
 export const EmailListItem = forwardRef<HTMLDivElement, EmailListItemProps>(
   function EmailListItem(
-    { email, isSelected, isChecked, onSelect, onCheck, onStar, onArchive, onDelete, onMoveOpen, onMarkUnread },
+    { email, isSelected, isChecked, density = 'comfortable', fontSize = 14, onSelect, onCheck, onStar, onArchive, onDelete, onMoveOpen, onMarkUnread },
     ref,
   ) {
     const [showActions, setShowActions] = useState(false);
@@ -78,8 +87,9 @@ export const EmailListItem = forwardRef<HTMLDivElement, EmailListItemProps>(
         }}
         onMouseEnter={() => setShowActions(true)}
         onMouseLeave={() => setShowActions(false)}
+        style={{ fontSize: `${fontSize}px` }}
         className={`
-          group flex cursor-pointer items-center gap-3 border-b border-gray-100 px-3 py-2.5 transition-colors
+          group flex cursor-pointer items-center gap-3 border-b border-gray-100 ${DENSITY_PADDING[density]} transition-colors
           dark:border-gray-700/50
           ${
             isSelected
@@ -135,7 +145,7 @@ export const EmailListItem = forwardRef<HTMLDivElement, EmailListItemProps>(
               {badge.label}
             </span>
             <span
-              className={`truncate text-sm ${
+              className={`truncate ${
                 !email.isRead
                   ? 'font-semibold text-gray-900 dark:text-white'
                   : 'font-medium text-gray-700 dark:text-gray-300'
@@ -146,7 +156,7 @@ export const EmailListItem = forwardRef<HTMLDivElement, EmailListItemProps>(
           </div>
           <div className="flex items-center gap-1">
             <span
-              className={`truncate text-sm ${
+              className={`truncate ${
                 !email.isRead
                   ? 'font-medium text-gray-900 dark:text-white'
                   : 'text-gray-600 dark:text-gray-400'
@@ -155,7 +165,7 @@ export const EmailListItem = forwardRef<HTMLDivElement, EmailListItemProps>(
               {email.subject}
             </span>
             {preview && (
-              <span className="truncate text-sm text-gray-400 dark:text-gray-500">
+              <span className="truncate text-gray-400 dark:text-gray-500">
                 {' '}
                 - {preview}
               </span>
