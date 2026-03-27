@@ -16,7 +16,9 @@ export {
   pauseIngestion,
   resumeIngestion,
   createIngestionStream,
+  getEmbeddingStatus,
 } from './ingestionApi.js';
+export type { EmbeddingStatus } from './ingestionApi.js';
 
 export { getHealth, getStats } from './vectorsApi.js';
 

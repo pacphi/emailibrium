@@ -189,6 +189,7 @@ function AccountCard({
 export function AccountSettings() {
   const [accounts, setAccounts] = useState<EmailAccount[]>([]);
   const [loading, setLoading] = useState(true);
+  const [banner, setBanner] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const debounceTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
   useEffect(() => {
@@ -208,12 +209,29 @@ export function AccountSettings() {
     }, 300);
   }, []);
 
-  const handleRemove = useCallback((id: string) => {
-    if (!window.confirm('Disconnect this account and delete all local data?')) return;
-    disconnectAccount(id)
-      .then(() => setAccounts((prev) => prev.filter((a) => a.id !== id)))
-      .catch(() => {});
-  }, []);
+  const handleRemove = useCallback(
+    (id: string) => {
+      if (!window.confirm('Disconnect this account and delete all local data?')) return;
+      const removed = accounts.find((a) => a.id === id);
+      disconnectAccount(id)
+        .then(() => {
+          setAccounts((prev) => prev.filter((a) => a.id !== id));
+          setBanner({
+            type: 'success',
+            message: `Account ${removed?.emailAddress ?? ''} disconnected and all local data removed.`,
+          });
+          setTimeout(() => setBanner(null), 5000);
+        })
+        .catch((err) => {
+          setBanner({
+            type: 'error',
+            message: `Failed to disconnect: ${err instanceof Error ? err.message : 'Unknown error'}`,
+          });
+          setTimeout(() => setBanner(null), 5000);
+        });
+    },
+    [accounts],
+  );
 
   const handleRemoveLabels = useCallback((id: string) => {
     if (
@@ -250,6 +268,26 @@ export function AccountSettings() {
           Add Account
         </button>
       </div>
+
+      {banner && (
+        <div
+          className={`flex items-center justify-between rounded-lg px-4 py-3 text-sm ${
+            banner.type === 'success'
+              ? 'bg-green-50 text-green-700 border border-green-200 dark:bg-green-900/20 dark:text-green-400 dark:border-green-800'
+              : 'bg-red-50 text-red-700 border border-red-200 dark:bg-red-900/20 dark:text-red-400 dark:border-red-800'
+          }`}
+          role="status"
+        >
+          <span>{banner.message}</span>
+          <button
+            type="button"
+            onClick={() => setBanner(null)}
+            className="ml-2 font-medium underline hover:no-underline"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
 
       {loading ? (
         <div className="text-center py-12 text-gray-500 dark:text-gray-400">

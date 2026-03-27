@@ -52,12 +52,12 @@ The type system already carries `bodyHtml` but the API layer and rendering layer
 
 ### 2.1 Rendering Approaches Compared
 
-| Approach | Security | CSS Isolation | Performance | Complexity |
-|---|---|---|---|---|
-| **Sandboxed iframe + srcdoc** | Excellent | Full | Good | Medium |
-| **DOMPurify + dangerouslySetInnerHTML** | Very Good | None | Excellent | Low |
-| **html-react-parser + DOMPurify** | Very Good | None | Good | Medium |
-| **Shadow DOM** | Good | Partial | Good | Medium |
+| Approach                                | Security  | CSS Isolation | Performance | Complexity |
+| --------------------------------------- | --------- | ------------- | ----------- | ---------- |
+| **Sandboxed iframe + srcdoc**           | Excellent | Full          | Good        | Medium     |
+| **DOMPurify + dangerouslySetInnerHTML** | Very Good | None          | Excellent   | Low        |
+| **html-react-parser + DOMPurify**       | Very Good | None          | Good        | Medium     |
+| **Shadow DOM**                          | Good      | Partial       | Good        | Medium     |
 
 ### 2.2 Recommended: Sandboxed Iframe (Close.com Approach)
 
@@ -98,7 +98,9 @@ export function EmailHtmlViewer({ html, onLoad }: EmailHtmlViewerProps) {
       try {
         const height = iframe.contentDocument?.documentElement?.scrollHeight;
         if (height) iframe.style.height = `${height}px`;
-      } catch { /* cross-origin safety */ }
+      } catch {
+        /* cross-origin safety */
+      }
       onLoad?.();
     };
     iframe.addEventListener('load', resize);
@@ -125,14 +127,14 @@ For simpler emails or performance-critical scenarios (e.g., rendering many email
 
 #### Library: isomorphic-dompurify
 
-| Attribute | Value |
-|---|---|
-| **npm** | [isomorphic-dompurify](https://www.npmjs.com/package/isomorphic-dompurify) |
-| **Weekly downloads** | ~1,937,000 |
-| **GitHub stars** | ~500 (wraps DOMPurify at ~14,000 stars) |
-| **License** | Apache-2.0 / MPL-2.0 |
-| **Last updated** | Active, 2025 |
-| **Key feature** | Works identically on server (jsdom) and client (native DOM) |
+| Attribute            | Value                                                                      |
+| -------------------- | -------------------------------------------------------------------------- |
+| **npm**              | [isomorphic-dompurify](https://www.npmjs.com/package/isomorphic-dompurify) |
+| **Weekly downloads** | ~1,937,000                                                                 |
+| **GitHub stars**     | ~500 (wraps DOMPurify at ~14,000 stars)                                    |
+| **License**          | Apache-2.0 / MPL-2.0                                                       |
+| **Last updated**     | Active, 2025                                                               |
+| **Key feature**      | Works identically on server (jsdom) and client (native DOM)                |
 
 **Caveat for Next.js:** CommonJS + jsdom@28 can cause ESM-only import failures. Pin jsdom to 25.0.1 via overrides if SSR issues arise.
 
@@ -141,24 +143,66 @@ import DOMPurify from 'isomorphic-dompurify';
 
 function SanitizedEmailHtml({ html }: { html: string }) {
   const clean = DOMPurify.sanitize(html, {
-    ALLOW_TAGS: ['a', 'b', 'br', 'div', 'em', 'h1', 'h2', 'h3', 'h4',
-      'hr', 'i', 'img', 'li', 'ol', 'p', 'span', 'strong', 'table',
-      'tbody', 'td', 'th', 'thead', 'tr', 'u', 'ul', 'blockquote', 'pre', 'code',
-      'center', 'font', 'style'],
-    ALLOW_ATTR: ['href', 'src', 'alt', 'title', 'style', 'class', 'width',
-      'height', 'align', 'valign', 'bgcolor', 'color', 'border',
-      'cellpadding', 'cellspacing', 'colspan', 'rowspan', 'target', 'rel'],
+    ALLOW_TAGS: [
+      'a',
+      'b',
+      'br',
+      'div',
+      'em',
+      'h1',
+      'h2',
+      'h3',
+      'h4',
+      'hr',
+      'i',
+      'img',
+      'li',
+      'ol',
+      'p',
+      'span',
+      'strong',
+      'table',
+      'tbody',
+      'td',
+      'th',
+      'thead',
+      'tr',
+      'u',
+      'ul',
+      'blockquote',
+      'pre',
+      'code',
+      'center',
+      'font',
+      'style',
+    ],
+    ALLOW_ATTR: [
+      'href',
+      'src',
+      'alt',
+      'title',
+      'style',
+      'class',
+      'width',
+      'height',
+      'align',
+      'valign',
+      'bgcolor',
+      'color',
+      'border',
+      'cellpadding',
+      'cellspacing',
+      'colspan',
+      'rowspan',
+      'target',
+      'rel',
+    ],
     FORBID_TAGS: ['script', 'iframe', 'object', 'embed', 'form', 'input'],
     FORBID_ATTR: ['onerror', 'onload', 'onclick', 'onmouseover'],
     ADD_ATTR: ['target'],
   });
 
-  return (
-    <div
-      className="prose prose-sm max-w-none dark:prose-invert"
-      dangerouslySetInnerHTML={{ __html: clean }}
-    />
-  );
+  return <div className="prose prose-sm max-w-none dark:prose-invert" dangerouslySetInnerHTML={{ __html: clean }} />;
 }
 ```
 
@@ -166,33 +210,35 @@ function SanitizedEmailHtml({ html }: { html: string }) {
 
 ### 2.4 Library: html-react-parser
 
-| Attribute | Value |
-|---|---|
-| **npm** | [html-react-parser](https://www.npmjs.com/package/html-react-parser) |
-| **Weekly downloads** | ~2,673,000 |
-| **GitHub stars** | ~2,384 |
-| **License** | MIT |
-| **Last updated** | Active, v5.x (2025) |
-| **Key feature** | Converts HTML to React elements; allows element replacement via `replace` callback |
+| Attribute            | Value                                                                              |
+| -------------------- | ---------------------------------------------------------------------------------- |
+| **npm**              | [html-react-parser](https://www.npmjs.com/package/html-react-parser)               |
+| **Weekly downloads** | ~2,673,000                                                                         |
+| **GitHub stars**     | ~2,384                                                                             |
+| **License**          | MIT                                                                                |
+| **Last updated**     | Active, v5.x (2025)                                                                |
+| **Key feature**      | Converts HTML to React elements; allows element replacement via `replace` callback |
 
 **Pros:**
+
 - Most popular HTML-to-React parser
 - Allows transforming elements during parsing (e.g., rewriting image src attributes, adding `target="_blank"` to links)
 - TypeScript support
 
 **Cons:**
+
 - Does NOT sanitize by default. Must pair with DOMPurify.
 - Slightly more overhead than raw `dangerouslySetInnerHTML`.
 
 ### 2.5 Library: react-safe-src-doc-iframe (GoDaddy)
 
-| Attribute | Value |
-|---|---|
-| **npm** | [react-safe-src-doc-iframe](https://www.npmjs.com/package/react-safe-src-doc-iframe) |
-| **GitHub stars** | 23 |
-| **License** | MIT |
-| **Last updated** | Archived August 2022 |
-| **Key feature** | Disables pointer events on links/buttons/images, restricts sandbox to `allow-same-origin` |
+| Attribute        | Value                                                                                     |
+| ---------------- | ----------------------------------------------------------------------------------------- |
+| **npm**          | [react-safe-src-doc-iframe](https://www.npmjs.com/package/react-safe-src-doc-iframe)      |
+| **GitHub stars** | 23                                                                                        |
+| **License**      | MIT                                                                                       |
+| **Last updated** | Archived August 2022                                                                      |
+| **Key feature**  | Disables pointer events on links/buttons/images, restricts sandbox to `allow-same-origin` |
 
 **Verdict:** Archived and low adoption. Better to implement a custom sandboxed iframe component (see section 2.2) which gives full control over sandbox flags, CSP, and auto-resizing.
 
@@ -200,10 +246,10 @@ function SanitizedEmailHtml({ html }: { html: string }) {
 
 The frontend should handle three content types:
 
-| Content Type | Rendering Strategy |
-|---|---|
-| `bodyHtml` present | Render in sandboxed iframe (primary) |
-| `bodyText` only | Render in `<pre>` with `whitespace-pre-wrap` |
+| Content Type                         | Rendering Strategy                                |
+| ------------------------------------ | ------------------------------------------------- |
+| `bodyHtml` present                   | Render in sandboxed iframe (primary)              |
+| `bodyText` only                      | Render in `<pre>` with `whitespace-pre-wrap`      |
 | Both present (multipart/alternative) | Default to HTML with toggle button for plain text |
 
 ### 2.7 Performance Considerations
@@ -221,13 +267,13 @@ The frontend should handle three content types:
 
 The backend already depends on `ammonia = "4"`. Ammonia is the Rust equivalent of DOMPurify.
 
-| Attribute | Value |
-|---|---|
-| **Crate** | [ammonia](https://crates.io/crates/ammonia) |
-| **GitHub stars** | ~700 |
-| **License** | Apache-2.0 / MIT |
-| **Last updated** | Active |
-| **Key feature** | Whitelist-based, uses html5ever parser, fuzz-tested |
+| Attribute        | Value                                               |
+| ---------------- | --------------------------------------------------- |
+| **Crate**        | [ammonia](https://crates.io/crates/ammonia)         |
+| **GitHub stars** | ~700                                                |
+| **License**      | Apache-2.0 / MIT                                    |
+| **Last updated** | Active                                              |
+| **Key feature**  | Whitelist-based, uses html5ever parser, fuzz-tested |
 
 #### Recommended Configuration for Email
 
@@ -265,12 +311,12 @@ pub fn sanitize_email_html(raw_html: &str) -> String {
 
 ### 3.2 MIME Parsing with mail-parser
 
-| Attribute | Value |
-|---|---|
-| **Crate** | [mail-parser](https://crates.io/crates/mail-parser) |
-| **GitHub stars** | 429 |
-| **License** | Apache-2.0 / MIT |
-| **Version** | 0.11.1 (Aug 2025) |
+| Attribute        | Value                                                                             |
+| ---------------- | --------------------------------------------------------------------------------- |
+| **Crate**        | [mail-parser](https://crates.io/crates/mail-parser)                               |
+| **GitHub stars** | 429                                                                               |
+| **License**      | Apache-2.0 / MIT                                                                  |
+| **Version**      | 0.11.1 (Aug 2025)                                                                 |
 | **Key features** | Zero-copy, 100% safe Rust, no dependencies, 41 character sets, RFC 8621 compliant |
 
 **Why mail-parser over mailparse:** mail-parser provides a human-friendly representation with `body_html()`, `body_text()`, and `attachment()` accessors rather than nested MIME tree traversal. It also handles automatic HTML-to-text conversion when the alternative is missing.
@@ -338,33 +384,33 @@ mail-parser handles 41 character sets natively. For Gmail/Outlook API responses 
 
 #### Gmail API
 
-| Attribute | Value |
-|---|---|
+| Attribute    | Value                                                                          |
+| ------------ | ------------------------------------------------------------------------------ |
 | **Endpoint** | `GET /gmail/v1/users/{userId}/messages/{messageId}/attachments/{attachmentId}` |
-| **Auth** | OAuth 2.0 with `gmail.readonly` scope |
-| **Response** | `{ attachmentId, size, data }` where `data` is base64url-encoded |
-| **Max size** | 25 MB per message (Gmail limit) |
+| **Auth**     | OAuth 2.0 with `gmail.readonly` scope                                          |
+| **Response** | `{ attachmentId, size, data }` where `data` is base64url-encoded               |
+| **Max size** | 25 MB per message (Gmail limit)                                                |
 
 The `attachmentId` is available in the message payload's `body.attachmentId` field for parts that are stored separately (large attachments).
 
 #### Microsoft Graph API
 
-| Attribute | Value |
-|---|---|
-| **List endpoint** | `GET /me/messages/{messageId}/attachments` |
-| **Get endpoint** | `GET /me/messages/{messageId}/attachments/{attachmentId}` |
-| **Raw content** | Append `/$value` to get raw bytes |
-| **Auth** | OAuth 2.0 with `Mail.Read` permission |
-| **Response** | `{ id, name, contentType, size, isInline, contentId, contentBytes }` |
-| **Attachment types** | `fileAttachment`, `itemAttachment`, `referenceAttachment` |
+| Attribute            | Value                                                                |
+| -------------------- | -------------------------------------------------------------------- |
+| **List endpoint**    | `GET /me/messages/{messageId}/attachments`                           |
+| **Get endpoint**     | `GET /me/messages/{messageId}/attachments/{attachmentId}`            |
+| **Raw content**      | Append `/$value` to get raw bytes                                    |
+| **Auth**             | OAuth 2.0 with `Mail.Read` permission                                |
+| **Response**         | `{ id, name, contentType, size, isInline, contentId, contentBytes }` |
+| **Attachment types** | `fileAttachment`, `itemAttachment`, `referenceAttachment`            |
 
 #### Rust SDK Options
 
-| Crate | Purpose | Notes |
-|---|---|---|
-| `google-gmail1` | Gmail API client | Official Google-generated SDK, uses hyper/reqwest |
-| `graph-rs-sdk` | Microsoft Graph client | Community SDK, returns `reqwest::Response` |
-| Direct `reqwest` | Both APIs | Simpler; the project already uses reqwest |
+| Crate            | Purpose                | Notes                                             |
+| ---------------- | ---------------------- | ------------------------------------------------- |
+| `google-gmail1`  | Gmail API client       | Official Google-generated SDK, uses hyper/reqwest |
+| `graph-rs-sdk`   | Microsoft Graph client | Community SDK, returns `reqwest::Response`        |
+| Direct `reqwest` | Both APIs              | Simpler; the project already uses reqwest         |
 
 **Recommendation:** Use direct `reqwest` calls (already in the project) with structured types rather than adding heavyweight SDK crates. Both APIs return JSON with base64-encoded content.
 
@@ -372,11 +418,11 @@ The `attachmentId` is available in the message payload's `body.attachmentId` fie
 
 Given the project uses SQLite + local storage, attachment storage options:
 
-| Strategy | Pros | Cons |
-|---|---|---|
-| **Filesystem (recommended)** | Simple, fast, works with streaming | Needs cleanup on delete, path management |
-| **SQLite BLOB** | Atomic with email record | Bloats DB, slow for large files, no streaming |
-| **S3/MinIO** | Scalable, CDN-friendly | Added infrastructure complexity |
+| Strategy                     | Pros                               | Cons                                          |
+| ---------------------------- | ---------------------------------- | --------------------------------------------- |
+| **Filesystem (recommended)** | Simple, fast, works with streaming | Needs cleanup on delete, path management      |
+| **SQLite BLOB**              | Atomic with email record           | Bloats DB, slow for large files, no streaming |
+| **S3/MinIO**                 | Scalable, CDN-friendly             | Added infrastructure complexity               |
 
 **Recommended:** Store attachment metadata in SQLite, store file content on the local filesystem under `data/attachments/{account_id}/{message_id}/{filename}`.
 
@@ -400,7 +446,7 @@ CREATE INDEX idx_attachments_email_id ON attachments(email_id);
 
 ### 4.3 New API Endpoints
 
-```
+```text
 GET /api/v1/emails/{id}/attachments          -- list attachments for an email
 GET /api/v1/emails/{id}/attachments/{att_id}  -- download single attachment
 GET /api/v1/emails/{id}/attachments/zip       -- download all as ZIP
@@ -431,11 +477,11 @@ async fn download_attachment(/* params */) -> impl IntoResponse {
 
 ### 4.5 ZIP Archive for Bulk Download
 
-| Crate | Purpose | Notes |
-|---|---|---|
-| **async_zip** | Async ZIP creation with tokio | Best fit for Axum streaming |
-| **zipit** | Streaming ZIP generation | Simpler API, fewer features |
-| **zip** (standard) | Sync ZIP creation | Requires blocking task spawn |
+| Crate              | Purpose                       | Notes                        |
+| ------------------ | ----------------------------- | ---------------------------- |
+| **async_zip**      | Async ZIP creation with tokio | Best fit for Axum streaming  |
+| **zipit**          | Streaming ZIP generation      | Simpler API, fewer features  |
+| **zip** (standard) | Sync ZIP creation             | Requires blocking task spawn |
 
 **Recommended: `async_zip`** -- native tokio support, can stream ZIP creation directly into an Axum response body.
 
@@ -539,11 +585,7 @@ For bulk download, use a simple link to the ZIP endpoint:
 ```tsx
 function DownloadAllButton({ emailId, count }: { emailId: string; count: number }) {
   return (
-    <a
-      href={`/api/v1/emails/${emailId}/attachments/zip`}
-      download="attachments.zip"
-      className="inline-flex items-center gap-1 text-sm text-indigo-600 hover:text-indigo-700"
-    >
+    <a href={`/api/v1/emails/${emailId}/attachments/zip`} download="attachments.zip" className="inline-flex items-center gap-1 text-sm text-indigo-600 hover:text-indigo-700">
       <Download className="h-4 w-4" />
       Download all ({count})
     </a>
@@ -553,10 +595,10 @@ function DownloadAllButton({ emailId, count }: { emailId: string; count: number 
 
 For client-side ZIP creation (if backend streaming is not available), use `jszip` + `file-saver`:
 
-| Library | Weekly Downloads | Stars | License | Notes |
-|---|---|---|---|---|
-| **jszip** | ~6M | ~9,800 | MIT / GPLv3 | Browser ZIP creation, well-maintained |
-| **file-saver** | ~3M | ~21,000 | MIT | Cross-browser download trigger |
+| Library        | Weekly Downloads | Stars   | License     | Notes                                 |
+| -------------- | ---------------- | ------- | ----------- | ------------------------------------- |
+| **jszip**      | ~6M              | ~9,800  | MIT / GPLv3 | Browser ZIP creation, well-maintained |
+| **file-saver** | ~3M              | ~21,000 | MIT         | Cross-browser download trigger        |
 
 ### 5.3 Inline Image Preview
 
@@ -575,14 +617,11 @@ function ImageAttachmentPreview({ attachment, emailId }: AttachmentChipProps) {
       className="group relative overflow-hidden rounded-lg border border-gray-200
         dark:border-gray-700"
     >
-      <img
-        src={`/api/v1/emails/${emailId}/attachments/${attachment.id}`}
-        alt={attachment.filename}
-        loading="lazy"
-        className="h-24 w-auto object-cover"
-      />
-      <div className="absolute inset-x-0 bottom-0 bg-black/60 px-2 py-1 text-xs text-white
-        opacity-0 group-hover:opacity-100 transition-opacity">
+      <img src={`/api/v1/emails/${emailId}/attachments/${attachment.id}`} alt={attachment.filename} loading="lazy" className="h-24 w-auto object-cover" />
+      <div
+        className="absolute inset-x-0 bottom-0 bg-black/60 px-2 py-1 text-xs text-white
+        opacity-0 group-hover:opacity-100 transition-opacity"
+      >
         {attachment.filename}
       </div>
     </button>
@@ -596,9 +635,9 @@ Given that the project already has `lucide-react` for icons and uses Tailwind CS
 
 For future compose/upload functionality:
 
-| Library | Weekly Downloads | Stars | License | Use Case |
-|---|---|---|---|---|
-| **react-dropzone** | ~2.5M | ~10,600 | MIT | Drag-and-drop file upload for compose |
+| Library            | Weekly Downloads | Stars   | License | Use Case                              |
+| ------------------ | ---------------- | ------- | ------- | ------------------------------------- |
+| **react-dropzone** | ~2.5M            | ~10,600 | MIT     | Drag-and-drop file upload for compose |
 
 ---
 
@@ -606,23 +645,23 @@ For future compose/upload functionality:
 
 ### 6.1 Open-Source Email Clients (Reference Implementations)
 
-| Project | Tech Stack | HTML Rendering | Stars | Status |
-|---|---|---|---|---|
-| **Roundcube** | PHP, JS | HTML5-PHP sanitizer + iframe | ~6,000 | Active, GPLv3 |
-| **Mailspring** | Electron, React | Chromium renderer (full browser) | ~15,000 | Active, GPLv3 |
-| **ProtonMail** | React | Sanitization + iframe sandbox | Private | Active |
-| **next-email-client** (leerob) | Next.js, Postgres | Basic; demo project | ~600 | Demo only |
-| **Cozy Emails** | Node.js, React | Legacy, not maintained | ~300 | Archived |
+| Project                        | Tech Stack        | HTML Rendering                   | Stars   | Status        |
+| ------------------------------ | ----------------- | -------------------------------- | ------- | ------------- |
+| **Roundcube**                  | PHP, JS           | HTML5-PHP sanitizer + iframe     | ~6,000  | Active, GPLv3 |
+| **Mailspring**                 | Electron, React   | Chromium renderer (full browser) | ~15,000 | Active, GPLv3 |
+| **ProtonMail**                 | React             | Sanitization + iframe sandbox    | Private | Active        |
+| **next-email-client** (leerob) | Next.js, Postgres | Basic; demo project              | ~600    | Demo only     |
+| **Cozy Emails**                | Node.js, React    | Legacy, not maintained           | ~300    | Archived      |
 
 ### 6.2 Email Template Libraries (Not Directly Applicable)
 
 These libraries are for **creating** emails, not **viewing** them, but are worth noting:
 
-| Library | Stars | Purpose |
-|---|---|---|
+| Library                  | Stars   | Purpose                                     |
+| ------------------------ | ------- | ------------------------------------------- |
 | **React Email** (Resend) | ~14,000 | Build email templates with React components |
-| **MJML** | ~16,000 | Responsive email markup language |
-| **Mailing** | ~3,800 | Next.js email sending framework |
+| **MJML**                 | ~16,000 | Responsive email markup language            |
+| **Mailing**              | ~3,800  | Next.js email sending framework             |
 
 ### 6.3 Key Takeaway
 
@@ -638,14 +677,14 @@ There is no off-the-shelf "React email viewer component" that handles arbitrary 
 
 ### Frontend
 
-| Layer | Solution | Rationale |
-|---|---|---|
-| **HTML email rendering** | Custom sandboxed iframe with `srcdoc` + CSP | Industry standard; full CSS isolation; defense-in-depth |
-| **Fallback sanitization** | `isomorphic-dompurify` | For previews, snippets, or when iframe is overkill |
-| **HTML parsing (optional)** | `html-react-parser` | Only if element-level transformation is needed (e.g., link rewriting) |
-| **Attachment chips** | Custom component with `lucide-react` icons | No new dependency; leverages existing icon library |
-| **Bulk ZIP download** | Backend-streamed ZIP (preferred) or `jszip` + `file-saver` (fallback) | Server-side is more efficient |
-| **File upload (compose, future)** | `react-dropzone` | De facto standard |
+| Layer                             | Solution                                                              | Rationale                                                             |
+| --------------------------------- | --------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| **HTML email rendering**          | Custom sandboxed iframe with `srcdoc` + CSP                           | Industry standard; full CSS isolation; defense-in-depth               |
+| **Fallback sanitization**         | `isomorphic-dompurify`                                                | For previews, snippets, or when iframe is overkill                    |
+| **HTML parsing (optional)**       | `html-react-parser`                                                   | Only if element-level transformation is needed (e.g., link rewriting) |
+| **Attachment chips**              | Custom component with `lucide-react` icons                            | No new dependency; leverages existing icon library                    |
+| **Bulk ZIP download**             | Backend-streamed ZIP (preferred) or `jszip` + `file-saver` (fallback) | Server-side is more efficient                                         |
+| **File upload (compose, future)** | `react-dropzone`                                                      | De facto standard                                                     |
 
 #### New npm Dependencies
 
@@ -659,16 +698,16 @@ That is **one new dependency**. The sandboxed iframe, attachment chips, and imag
 
 ### Backend (Rust)
 
-| Layer | Solution | Rationale |
-|---|---|---|
-| **HTML sanitization** | `ammonia` (already in Cargo.toml) | Whitelist-based, fuzz-tested, html5ever-backed |
-| **MIME parsing (IMAP)** | `mail-parser` | Zero-copy, RFC-compliant, handles CID and attachments |
-| **CID resolution** | Custom (replace `cid:` with base64 data URIs) | Avoids extra HTTP round-trips |
-| **Attachment storage** | Filesystem under `data/attachments/` | Simple, works with streaming |
-| **Attachment streaming** | Axum + `tokio_util::io::ReaderStream` | No full file buffering |
-| **ZIP streaming** | `async_zip` | Native tokio; streams directly to HTTP response |
-| **Gmail attachments** | Direct `reqwest` to `messages.attachments.get` | Already using reqwest |
-| **Outlook attachments** | Direct `reqwest` to Graph API `attachments/{id}/$value` | Already using reqwest |
+| Layer                    | Solution                                                | Rationale                                             |
+| ------------------------ | ------------------------------------------------------- | ----------------------------------------------------- |
+| **HTML sanitization**    | `ammonia` (already in Cargo.toml)                       | Whitelist-based, fuzz-tested, html5ever-backed        |
+| **MIME parsing (IMAP)**  | `mail-parser`                                           | Zero-copy, RFC-compliant, handles CID and attachments |
+| **CID resolution**       | Custom (replace `cid:` with base64 data URIs)           | Avoids extra HTTP round-trips                         |
+| **Attachment storage**   | Filesystem under `data/attachments/`                    | Simple, works with streaming                          |
+| **Attachment streaming** | Axum + `tokio_util::io::ReaderStream`                   | No full file buffering                                |
+| **ZIP streaming**        | `async_zip`                                             | Native tokio; streams directly to HTTP response       |
+| **Gmail attachments**    | Direct `reqwest` to `messages.attachments.get`          | Already using reqwest                                 |
+| **Outlook attachments**  | Direct `reqwest` to Graph API `attachments/{id}/$value` | Already using reqwest                                 |
 
 #### New Cargo Dependencies
 
@@ -680,16 +719,16 @@ async_zip = { version = "0.0.17", features = ["tokio", "deflate"] }  # ZIP strea
 
 ### Implementation Priority
 
-| Phase | Work | Effort |
-|---|---|---|
-| **Phase 1** | Backend: extract `body_html` from Gmail/Outlook APIs and store in DB | Small |
-| **Phase 2** | Frontend: replace `SanitizedHtml` with sandboxed iframe viewer | Medium |
-| **Phase 3** | Backend: attachment download endpoints + filesystem storage | Medium |
-| **Phase 4** | Frontend: attachment chips with download | Small |
-| **Phase 5** | Backend: CID inline image resolution | Small |
-| **Phase 6** | Backend: ZIP streaming endpoint | Small |
-| **Phase 7** | Frontend: bulk download button, image previews | Small |
-| **Phase 8** | Backend: `mail-parser` integration for IMAP provider | Medium |
+| Phase       | Work                                                                 | Effort |
+| ----------- | -------------------------------------------------------------------- | ------ |
+| **Phase 1** | Backend: extract `body_html` from Gmail/Outlook APIs and store in DB | Small  |
+| **Phase 2** | Frontend: replace `SanitizedHtml` with sandboxed iframe viewer       | Medium |
+| **Phase 3** | Backend: attachment download endpoints + filesystem storage          | Medium |
+| **Phase 4** | Frontend: attachment chips with download                             | Small  |
+| **Phase 5** | Backend: CID inline image resolution                                 | Small  |
+| **Phase 6** | Backend: ZIP streaming endpoint                                      | Small  |
+| **Phase 7** | Frontend: bulk download button, image previews                       | Small  |
+| **Phase 8** | Backend: `mail-parser` integration for IMAP provider                 | Medium |
 
 ### Security Checklist
 
@@ -708,6 +747,7 @@ async_zip = { version = "0.0.17", features = ["tokio", "deflate"] }  # ZIP strea
 ## Sources
 
 ### Email Body Rendering
+
 - [Rendering untrusted HTML email, safely (Close.com)](https://making.close.com/posts/rendering-untrusted-html-email-safely/)
 - [DOMPurify - XSS Sanitizer](https://github.com/cure53/DOMPurify)
 - [isomorphic-dompurify (npm)](https://www.npmjs.com/package/isomorphic-dompurify)
@@ -718,6 +758,7 @@ async_zip = { version = "0.0.17", features = ["tokio", "deflate"] }  # ZIP strea
 - [Sanitising HTML: the DOM clobbering issue (Fastmail)](https://www.fastmail.com/blog/sanitising-html-the-dom-clobbering-issue/)
 
 ### Backend Parsing & Sanitization
+
 - [mail-parser (crates.io)](https://crates.io/crates/mail-parser)
 - [mail-parser GitHub (Stalwart Labs)](https://github.com/stalwartlabs/mail-parser)
 - [Ammonia HTML Sanitizer (crates.io)](https://crates.io/crates/ammonia)
@@ -725,17 +766,20 @@ async_zip = { version = "0.0.17", features = ["tokio", "deflate"] }  # ZIP strea
 - [mailparse (crates.io)](https://crates.io/crates/mailparse)
 
 ### Email Provider APIs
+
 - [Gmail API - users.messages.attachments](https://developers.google.com/gmail/api/reference/rest/v1/users.messages.attachments)
 - [Microsoft Graph API - Get attachment](https://learn.microsoft.com/en-us/graph/api/attachment-get?view=graph-rest-1.0)
 - [graph-rs-sdk (Rust Microsoft Graph)](https://github.com/sreeise/graph-rs-sdk)
 - [google-gmail1 (Rust Gmail SDK)](https://crates.io/crates/google-gmail1)
 
 ### ZIP & File Handling
+
 - [async_zip (crates.io)](https://lib.rs/crates/async_zip)
 - [JSZip](https://stuk.github.io/jszip/)
 - [file-saver (npm)](https://www.npmjs.com/package/file-saver)
 
 ### Reference Implementations
+
 - [Roundcube Webmail](https://roundcube.net/)
 - [Mailspring (GitHub)](https://github.com/Foundry376/Mailspring)
 - [next-email-client (leerob)](https://github.com/leerob/next-email-client)

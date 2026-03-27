@@ -24,6 +24,9 @@ function generateId(): string {
 /**
  * Manages chat state for the conversational rule-building assistant.
  * Supports both standard request/response and SSE streaming modes.
+ *
+ * All inference runs on the Rust backend (Tier 0.5 built-in LLM, Ollama,
+ * or cloud) — the frontend is a pure REST/SSE client.
  */
 export function useChat() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);

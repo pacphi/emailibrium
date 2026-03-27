@@ -138,8 +138,16 @@ impl Default for ClusterConfig {
 // Domain types
 // ---------------------------------------------------------------------------
 
-/// A discovered topic cluster.
+/// A term with its TF-IDF weight within a cluster.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClusterTerm {
+    pub word: String,
+    pub score: f32,
+    pub count: usize,
+}
+
+/// A discovered topic cluster.
+#[derive(Clone)]
 pub struct TopicCluster {
     pub id: String,
     pub name: String,
@@ -147,6 +155,10 @@ pub struct TopicCluster {
     pub centroid: Vec<f32>,
     pub email_ids: Vec<String>,
     pub email_count: usize,
+    /// TF-IDF weighted top terms for this cluster (sorted by score descending).
+    pub top_terms: Vec<ClusterTerm>,
+    /// Email IDs closest to the centroid (most representative).
+    pub representative_email_ids: Vec<String>,
     pub stability_score: f32,
     pub stability_runs: u32,
     pub is_pinned: bool,
@@ -655,6 +667,96 @@ pub fn generate_cluster_name(email_subjects: &[String]) -> String {
     top_words.join(" ")
 }
 
+/// Compute TF-IDF terms for a cluster relative to all clusters.
+///
+/// `cluster_subjects` — subjects for this cluster.
+/// `all_cluster_subjects` — subjects for each cluster (Vec of Vec of subjects).
+/// Returns the top `max_terms` terms sorted by TF-IDF score.
+fn compute_tfidf_terms(
+    cluster_subjects: &[String],
+    all_cluster_subjects: &[Vec<String>],
+    max_terms: usize,
+) -> Vec<ClusterTerm> {
+    let stop: HashSet<&str> = STOP_WORDS.iter().copied().collect();
+    let num_clusters = all_cluster_subjects.len() as f32;
+
+    // Term frequency in this cluster
+    let mut tf: HashMap<String, usize> = HashMap::new();
+    for subject in cluster_subjects {
+        let words: HashSet<String> = subject
+            .split(|c: char| !c.is_alphanumeric())
+            .filter(|w| w.len() > 1)
+            .map(|w| w.to_lowercase())
+            .filter(|w| !stop.contains(w.as_str()))
+            .collect();
+        for word in words {
+            *tf.entry(word).or_insert(0) += 1;
+        }
+    }
+
+    // Document frequency across all clusters (how many clusters contain this term)
+    let mut df: HashMap<String, usize> = HashMap::new();
+    for subjects in all_cluster_subjects {
+        let mut cluster_words: HashSet<String> = HashSet::new();
+        for subject in subjects {
+            for word in subject
+                .split(|c: char| !c.is_alphanumeric())
+                .filter(|w| w.len() > 1)
+                .map(|w| w.to_lowercase())
+                .filter(|w| !stop.contains(w.as_str()))
+            {
+                cluster_words.insert(word);
+            }
+        }
+        for word in cluster_words {
+            *df.entry(word).or_insert(0) += 1;
+        }
+    }
+
+    // TF-IDF = tf * log(N / df)
+    let total_subjects = cluster_subjects.len().max(1) as f32;
+    let mut scored: Vec<ClusterTerm> = tf
+        .into_iter()
+        .map(|(word, count)| {
+            let tf_score = count as f32 / total_subjects;
+            let idf = (num_clusters / *df.get(&word).unwrap_or(&1) as f32).ln() + 1.0;
+            ClusterTerm {
+                word,
+                score: tf_score * idf,
+                count,
+            }
+        })
+        .collect();
+
+    scored.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    scored.truncate(max_terms);
+    scored
+}
+
+/// Find the `n` email IDs closest to the centroid by cosine similarity.
+fn find_representative_emails(
+    centroid: &[f32],
+    member_ids: &[String],
+    member_embeddings: &[&Vec<f32>],
+    n: usize,
+) -> Vec<String> {
+    let mut scored: Vec<(usize, f32)> = member_embeddings
+        .iter()
+        .enumerate()
+        .map(|(i, emb)| (i, cosine_similarity(centroid, emb)))
+        .collect();
+    scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    scored
+        .into_iter()
+        .take(n)
+        .map(|(i, _)| member_ids[i].clone())
+        .collect()
+}
+
 /// Compute the centroid (mean vector) for a set of embeddings.
 fn compute_centroid(embeddings: &[&Vec<f32>]) -> Vec<f32> {
     if embeddings.is_empty() {
@@ -924,9 +1026,17 @@ impl ClusterEngine {
         };
 
         let now = Utc::now();
-        let mut new_clusters: Vec<TopicCluster> = Vec::new();
         let mut unclustered_count = 0;
 
+        // Collect per-cluster data for TF-IDF computation.
+        struct ClusterData {
+            member_indices: Vec<usize>,
+            email_ids: Vec<String>,
+            cluster_subjects: Vec<String>,
+            centroid: Vec<f32>,
+        }
+
+        let mut cluster_data: Vec<ClusterData> = Vec::new();
         for (&_cluster_idx, members) in &cluster_members {
             if members.len() < self.config.min_cluster_size {
                 unclustered_count += members.len();
@@ -936,22 +1046,45 @@ impl ClusterEngine {
             let member_embeddings: Vec<&Vec<f32>> =
                 members.iter().map(|&i| &embeddings[i]).collect();
             let centroid = compute_centroid(&member_embeddings);
-
             let email_ids: Vec<String> = members.iter().map(|&i| ids[i].clone()).collect();
             let cluster_subjects: Vec<String> = email_ids
                 .iter()
                 .filter_map(|id| subjects.get(id).cloned())
                 .collect();
 
-            let name = generate_cluster_name(&cluster_subjects);
+            cluster_data.push(ClusterData {
+                member_indices: members.clone(),
+                email_ids,
+                cluster_subjects,
+                centroid,
+            });
+        }
+
+        // Build all-cluster subject lists for TF-IDF.
+        let all_cluster_subjects: Vec<Vec<String>> = cluster_data
+            .iter()
+            .map(|cd| cd.cluster_subjects.clone())
+            .collect();
+
+        let mut new_clusters: Vec<TopicCluster> = Vec::new();
+        for cd in &cluster_data {
+            let name = generate_cluster_name(&cd.cluster_subjects);
+            let top_terms = compute_tfidf_terms(&cd.cluster_subjects, &all_cluster_subjects, 20);
+
+            let member_embeddings: Vec<&Vec<f32>> =
+                cd.member_indices.iter().map(|&i| &embeddings[i]).collect();
+            let representative_email_ids =
+                find_representative_emails(&cd.centroid, &cd.email_ids, &member_embeddings, 5);
 
             new_clusters.push(TopicCluster {
                 id: uuid::Uuid::new_v4().to_string(),
                 name: name.clone(),
-                description: format!("{} ({} emails)", name, members.len()),
-                centroid,
-                email_ids,
-                email_count: members.len(),
+                description: format!("{} ({} emails)", name, cd.email_ids.len()),
+                centroid: cd.centroid.clone(),
+                email_ids: cd.email_ids.clone(),
+                email_count: cd.email_ids.len(),
+                top_terms,
+                representative_email_ids,
                 stability_score: 0.0,
                 stability_runs: 0,
                 is_pinned: false,
@@ -1092,6 +1225,8 @@ impl ClusterEngine {
             email_ids: merged_emails,
             stability_score: 1.0,
             stability_runs: self.config.min_stability_runs,
+            top_terms: Vec::new(),
+            representative_email_ids: Vec::new(),
             is_pinned: false,
             created_at: now,
             updated_at: now,

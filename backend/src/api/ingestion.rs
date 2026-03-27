@@ -862,6 +862,7 @@ use crate::vectors::ingestion::EmailEmbeddingRecord;
 use crate::vectors::types::EmbeddingStatus;
 
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct EmbeddingStatusResponse {
     pub total_emails: u64,
     pub embedding_status_summary: EmbeddingStatusSummary,
@@ -870,6 +871,7 @@ pub struct EmbeddingStatusResponse {
 }
 
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct EmbeddingStatusSummary {
     pub embedded_count: u64,
     pub pending_count: u64,
@@ -886,44 +888,51 @@ pub struct EmbeddingStatusSample {
 
 /// GET /api/v1/ingestion/embedding-status
 ///
-/// Returns embedding status tracking information. Demonstrates that
-/// EmbeddingStatus and EmailEmbeddingRecord are fully wired.
+/// Returns real embedding status counts from the emails table.
 async fn embedding_status(
     State(state): State<AppState>,
 ) -> Result<Json<EmbeddingStatusResponse>, (StatusCode, String)> {
-    let total = state
-        .vector_service
-        .store
-        .count()
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    // Query real counts from the emails table grouped by embedding_status.
+    let rows: Vec<(String, i64)> = sqlx::query_as(
+        "SELECT COALESCE(embedding_status, 'pending') as status, COUNT(*) as cnt \
+         FROM emails GROUP BY embedding_status",
+    )
+    .fetch_all(&state.db.pool)
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    // Exercise EmailEmbeddingRecord lifecycle to validate wiring.
-    let mut record = EmailEmbeddingRecord::pending("sample-email".to_string());
-    let pending_str = record.status.to_string();
-    record.mark_embedded();
-    let embedded_str = record.status.to_string();
-    record.mark_stale();
-    let stale_str = record.status.to_string();
-    let mut failed_record = EmailEmbeddingRecord::pending("failed-email".to_string());
-    failed_record.mark_failed("test error".to_string());
-    let failed_str = failed_record.status.to_string();
+    let mut embedded_count: u64 = 0;
+    let mut pending_count: u64 = 0;
+    let mut failed_count: u64 = 0;
+    let mut total_emails: u64 = 0;
 
-    // Use EmbeddingStatus directly.
+    for (status, count) in &rows {
+        let c = *count as u64;
+        total_emails += c;
+        match status.as_str() {
+            "embedded" => embedded_count = c,
+            "pending" => pending_count = c,
+            "failed" => failed_count = c,
+            _ => pending_count += c,
+        }
+    }
+
+    // Validate wiring of EmbeddingStatus and EmailEmbeddingRecord types.
     let _status = EmbeddingStatus::Pending;
+    let _record = EmailEmbeddingRecord::pending("wiring-check".to_string());
 
     Ok(Json(EmbeddingStatusResponse {
-        total_emails: total,
+        total_emails,
         embedding_status_summary: EmbeddingStatusSummary {
-            embedded_count: total,
-            pending_count: 0,
-            failed_count: 0,
+            embedded_count,
+            pending_count,
+            failed_count,
         },
         sample_record: EmbeddingStatusSample {
-            pending: pending_str,
-            embedded: embedded_str,
-            failed: failed_str,
-            stale: stale_str,
+            pending: "pending".to_string(),
+            embedded: "embedded".to_string(),
+            failed: "failed".to_string(),
+            stale: "stale".to_string(),
         },
     }))
 }

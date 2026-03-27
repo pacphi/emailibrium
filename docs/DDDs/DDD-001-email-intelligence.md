@@ -117,7 +117,7 @@ Manages topic cluster lifecycle via GraphSAGE and HDBSCAN.
 
 ### EmbeddingVector
 
-```
+```rust
 EmbeddingVector(Vec<f32>)
 ```
 
@@ -134,7 +134,7 @@ An immutable, dense floating-point vector representing the semantic content of a
 
 ### SimilarityScore
 
-```
+```rust
 SimilarityScore(f32) -- bounded [0.0, 1.0]
 ```
 
@@ -142,7 +142,7 @@ Represents the cosine similarity between two vectors. Used for classification co
 
 ### ConfidenceThreshold
 
-```
+```rust
 ConfidenceThreshold(f32) -- configurable, default 0.7
 ```
 
@@ -220,7 +220,7 @@ This layer ensures that if the vector database implementation changes, only the 
 
 All embedding providers implement a unified trait:
 
-```
+```rust
 trait EmbeddingModel {
     fn embed_text(text: &str) -> Result<EmbeddingVector>;
     fn embed_batch(texts: &[&str]) -> Result<Vec<EmbeddingVector>>;

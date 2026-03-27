@@ -1,3 +1,16 @@
+export interface ClusterTerm {
+  word: string;
+  score: number;
+  count: number;
+}
+
+export interface RepresentativeEmail {
+  id: string;
+  subject: string;
+  fromAddr: string;
+  fromName?: string;
+}
+
 export interface Cluster {
   id: string;
   name: string;
@@ -6,6 +19,8 @@ export interface Cluster {
   stabilityScore: number;
   isPinned: boolean;
   createdAt: string;
+  topTerms: ClusterTerm[];
+  representativeEmails: RepresentativeEmail[];
 }
 
 export interface VectorStats {

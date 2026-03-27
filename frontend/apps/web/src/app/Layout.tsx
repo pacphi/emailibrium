@@ -2,13 +2,12 @@ import { type ReactNode, useState } from 'react';
 import {
   LayoutDashboard,
   Mail,
-  Sparkles,
+  Wind,
   BarChart3,
   Cog,
   MessageSquare,
   ListChecks,
   ChevronLeft,
-  ChevronRight,
 } from 'lucide-react';
 import { useSettings } from '../features/settings/hooks/useSettings';
 
@@ -39,7 +38,7 @@ const NAV_ITEMS: {
 }[] = [
   { href: '/command-center', label: 'Command Center', icon: LayoutDashboard },
   { href: '/email', label: 'Email', icon: Mail },
-  { href: '/inbox-cleaner', label: 'Inbox Cleaner', icon: Sparkles, needsLlm: true },
+  { href: '/inbox-cleaner', label: 'Inbox Cleaner', icon: Wind, needsLlm: true },
   { href: '/insights', label: 'Insights', icon: BarChart3 },
   { href: '/rules', label: 'Rules', icon: ListChecks },
   { href: '/chat', label: 'Chat', icon: MessageSquare, needsLlm: true },
@@ -56,18 +55,31 @@ function Sidebar() {
     <nav
       className={`${collapsed ? 'w-16' : 'w-52'} ${borderClass} border-gray-200 bg-white dark:bg-gray-800 dark:border-gray-700 flex flex-col transition-all duration-200`}
     >
-      {/* Header */}
-      <div className="flex items-center justify-between p-3 border-b border-gray-200 dark:border-gray-700">
-        {!collapsed && <h1 className="text-lg font-bold text-indigo-600">Emailibrium</h1>}
-        <button
-          type="button"
-          onClick={() => setCollapsed(!collapsed)}
-          className={`p-1 rounded-md text-gray-400 hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-700 dark:hover:text-gray-300 transition-colors ${collapsed ? 'mx-auto' : ''}`}
-          title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-          aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-        >
-          {collapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
-        </button>
+      {/* Brand header — no borders */}
+      <div className="flex items-center justify-between px-3 py-3">
+        {collapsed ? (
+          <button
+            type="button"
+            onClick={() => setCollapsed(false)}
+            className="mx-auto"
+            title="Expand sidebar"
+          >
+            <img src="/emailibrium-icon.svg" alt="Emailibrium" className="h-8 w-8" />
+          </button>
+        ) : (
+          <>
+            <img src="/emailibrium-text.svg" alt="Emailibrium" className="h-5 w-auto" />
+            <button
+              type="button"
+              onClick={() => setCollapsed(true)}
+              className="p-1 rounded-md text-gray-400 hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-700 dark:hover:text-gray-300 transition-colors"
+              title="Collapse sidebar"
+              aria-label="Collapse sidebar"
+            >
+              <ChevronLeft className="h-4 w-4" />
+            </button>
+          </>
+        )}
       </div>
 
       {/* Nav items */}

@@ -1,0 +1,69 @@
+# Emailibrium Tuning Parameters
+# ============================================================================
+# Maintainers: adjust these values to tune AI inference, RAG retrieval,
+# memory management, and error recovery behavior.
+#
+# Used by: Rust backend (config loader) and Node frontend (build/runtime).
+# ============================================================================
+
+version: "1.0"
+
+# ── LLM Inference Defaults ───────────────────────────────────────────────────
+# Applied when the model's own tuning config doesn't override.
+llm:
+  # Generation parameters
+  default_temperature: 0.7 # 0.0 = deterministic, 1.0 = creative
+  classification_temperature: 0.1 # Low temp for classification accuracy
+  default_max_tokens: 512 # Max tokens for chat responses
+  classification_max_tokens: 200 # Max tokens for classification output
+  top_p: 0.9 # Nucleus sampling threshold
+  repeat_penalty: 1.1 # Penalize repeated tokens (1.0 = none)
+
+  # Context management
+  default_context_size: 2048 # Fallback context window (overridden by model config)
+  chat_max_tokens: 256 # Max response tokens for chat (small models)
+
+  # Resource management
+  idle_timeout_secs: 300 # Unload model after N seconds of inactivity
+  low_ram_idle_timeout_secs: 120 # Shorter timeout for machines with < low_ram_threshold
+  low_ram_threshold_gb: 8 # Machines with <= this RAM get aggressive unloading
+  memory_safety_margin: 1.2 # Multiply model RAM estimate by this for safety
+  memory_warning_threshold: 0.8 # Warn when system RAM usage exceeds this ratio
+  memory_monitor_interval_secs: 30 # How often to check system memory
+
+# ── RAG (Retrieval-Augmented Generation) ─────────────────────────────────────
+# See also: ADR-022 (RAG Pipeline)
+rag:
+  top_k: 3 # Max emails to retrieve per query
+  min_relevance_score: 0.005 # RRF scores are ~0.016 for rank-1; this filters noise
+  max_context_tokens: 500 # Overridden at runtime by model context window
+  include_body: true # Include email body text in context
+  max_body_chars: 200 # Max body characters per email in RAG context
+  overhead_tokens: 656 # Reserved for: system prompt (~200) + history (~200) + response (~256)
+
+# ── Chat Service ─────────────────────────────────────────────────────────────
+chat:
+  session_ttl_secs: 3600 # Chat session expires after 1 hour of inactivity
+  max_history_messages: 20 # Sliding window: keep last N messages per session
+
+# ── Ingestion Pipeline ───────────────────────────────────────────────────────
+ingestion:
+  embedding_batch_size: 64 # Emails per embedding batch
+  min_cluster_emails: 50 # Minimum embedded emails before clustering runs
+
+# ── Clustering ───────────────────────────────────────────────────────────────
+clustering:
+  tfidf_max_terms: 20 # Max TF-IDF terms per cluster for word cloud
+  representative_emails: 5 # Number of centroid-nearest emails per cluster
+
+# ── Error Recovery ───────────────────────────────────────────────────────────
+error_recovery:
+  max_retries: 2 # Retry failed LLM calls this many times
+  retry_delay_ms: 1000 # Wait between retries
+
+# ── Repetition Detection (built-in LLM) ──────────────────────────────────────
+repetition:
+  token_window: 8 # Check last N tokens for repetition
+  token_repeat_threshold: 4 # Stop if same token appears this many times in window
+  phrase_check_length: 100 # Check last N chars of output for repeated phrases
+  phrase_check_after: 200 # Only check after this many chars of output

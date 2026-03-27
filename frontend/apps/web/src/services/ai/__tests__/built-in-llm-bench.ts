@@ -113,6 +113,10 @@ async function benchTokenCounting(adapter: BuiltInLlmAdapter): Promise<Benchmark
 
 async function runBenchmarks(): Promise<BenchmarkResult[]> {
   const manifest = getDefaultManifest();
+  if (!manifest) {
+    console.log('Skipping benchmarks -- model manifest not available (models now served by API)');
+    process.exit(0);
+  }
   if (!(await isModelCached(manifest))) {
     console.log('Skipping benchmarks -- no model cached');
     process.exit(0);

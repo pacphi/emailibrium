@@ -1,13 +1,13 @@
 # Email Interaction Enhancements — Implementation Plan
 
-| Field     | Value                          |
-| --------- | ------------------------------ |
-| Status    | In Progress                    |
-| Date      | 2026-03-25                     |
-| Updated   | 2026-03-25                     |
-| ADRs      | ADR-019, ADR-020               |
-| DDD       | DDD-009                        |
-| Research  | docs/research/email-interaction-enhancements.md |
+| Field    | Value                                           |
+| -------- | ----------------------------------------------- |
+| Status   | In Progress                                     |
+| Date     | 2026-03-25                                      |
+| Updated  | 2026-03-25                                      |
+| ADRs     | ADR-019, ADR-020                                |
+| DDD      | DDD-009                                         |
+| Research | docs/research/email-interaction-enhancements.md |
 
 ---
 
@@ -25,23 +25,25 @@ Features are prioritized using four levels based on user impact, security critic
 
 **Why critical:** Without HTML body extraction, all downstream rendering work has no data to display. This is the foundation that unblocks everything else.
 
-| Attribute | Value |
-|---|---|
-| ADR | ADR-019 §3 |
-| DDD | DDD-009 — ContentExtractionService |
-| Effort | Small (2–3 days) |
-| Files affected | `backend/src/email/gmail.rs`, `backend/src/email/outlook.rs`, `backend/src/email/types.rs` |
-| Dependencies | None |
+| Attribute           | Value                                                                                                         |
+| ------------------- | ------------------------------------------------------------------------------------------------------------- |
+| ADR                 | ADR-019 §3                                                                                                    |
+| DDD                 | DDD-009 — ContentExtractionService                                                                            |
+| Effort              | Small (2–3 days)                                                                                              |
+| Files affected      | `backend/src/email/gmail.rs`, `backend/src/email/outlook.rs`, `backend/src/email/types.rs`                    |
+| Dependencies        | None                                                                                                          |
 | Acceptance criteria | `body_html` populated for newly synced emails from both providers; existing `body_text` extraction unaffected |
-| **Status** | **COMPLETED — 2026-03-25** |
+| **Status**          | **COMPLETED — 2026-03-25**                                                                                    |
 
 **Scope:**
+
 - Gmail: Traverse `payload.parts[]` recursively to find `text/html` MIME part; base64url-decode `body.data`.
 - Outlook: Use `body.content` when `body.contentType === "html"`.
 - Store `body_html` in the `emails` table (add column if not present).
 - Backfill: Add a migration or re-sync mechanism for existing emails missing `body_html`.
 
 **Completion notes:**
+
 - Added `body_html: Option<String>` field to `EmailMessage` struct in `types.rs`.
 - Gmail: Added `extract_body_html()` with recursive MIME traversal via `find_html_in_parts()` helper; handles direct payload, top-level parts, and nested multipart/alternative. 5 new tests.
 - Outlook: Updated `parse_message()` to distinguish `body.contentType == "html"` vs `"text"`; HTML goes to `body_html`, text goes to `body`. 4 new tests.
@@ -55,22 +57,24 @@ Features are prioritized using four levels based on user impact, security critic
 
 **Why critical:** Storing unsanitized HTML in the database is a persistent XSS vector. This must be in place before any HTML is served to the frontend.
 
-| Attribute | Value |
-|---|---|
-| ADR | ADR-019 §3 |
-| DDD | DDD-009 — HtmlSanitizationService |
-| Effort | Small (1–2 days) |
-| Files affected | `backend/src/content/` (new service), `backend/src/email/gmail.rs`, `backend/src/email/outlook.rs` |
-| Dependencies | C1 |
+| Attribute           | Value                                                                                                                                                     |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ADR                 | ADR-019 §3                                                                                                                                                |
+| DDD                 | DDD-009 — HtmlSanitizationService                                                                                                                         |
+| Effort              | Small (1–2 days)                                                                                                                                          |
+| Files affected      | `backend/src/content/` (new service), `backend/src/email/gmail.rs`, `backend/src/email/outlook.rs`                                                        |
+| Dependencies        | C1                                                                                                                                                        |
 | Acceptance criteria | All `body_html` passes through ammonia with email-specific whitelist before DB insertion; existing ammonia dependency used; tests cover known XSS vectors |
-| **Status** | **COMPLETED — 2026-03-25** |
+| **Status**          | **COMPLETED — 2026-03-25**                                                                                                                                |
 
 **Scope:**
+
 - Implement `sanitize_email_html()` using ammonia `Builder` with the configuration from ADR-019.
 - Call sanitization in the email sync pipeline after extraction, before DB write.
 - Unit tests: verify `<script>`, `onerror`, `data:text/html`, `javascript:` URIs are stripped; verify legitimate email tags (table, img, style) are preserved.
 
 **Completion notes:**
+
 - Created `backend/src/content/email_sanitizer.rs` with `sanitize_email_html()` using ammonia 4 Builder.
 - Email-specific whitelist: 28 allowed tags (table, td, th, img, a, div, span, font, etc.), per-tag attribute allowlists, `data:` URI scheme for CID images, `rel="noopener noreferrer"` on all links.
 - Uses `clean_content_tags` for `style` (CSS sanitization) and `script` (complete removal including content).
@@ -85,17 +89,18 @@ Features are prioritized using four levels based on user impact, security critic
 
 **Why critical:** The current regex-based sanitizer is a known XSS vulnerability. Replacing it eliminates the attack vector and enables proper HTML email rendering.
 
-| Attribute | Value |
-|---|---|
-| ADR | ADR-019 §1, §2 |
-| DDD | DDD-009 — EmailContentAggregate |
-| Effort | Medium (3–4 days) |
-| Files affected | `frontend/apps/web/src/features/email/MessageBubble.tsx`, new `EmailHtmlViewer.tsx` component |
-| Dependencies | C1, C2 |
+| Attribute           | Value                                                                                                                                                           |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ADR                 | ADR-019 §1, §2                                                                                                                                                  |
+| DDD                 | DDD-009 — EmailContentAggregate                                                                                                                                 |
+| Effort              | Medium (3–4 days)                                                                                                                                               |
+| Files affected      | `frontend/apps/web/src/features/email/MessageBubble.tsx`, new `EmailHtmlViewer.tsx` component                                                                   |
+| Dependencies        | C1, C2                                                                                                                                                          |
 | Acceptance criteria | HTML emails render with full fidelity in sandboxed iframe; plain-text emails render in `<pre>`; XSS payloads blocked; CSS does not leak between iframe and host |
-| **Status** | **COMPLETED — 2026-03-25** |
+| **Status**          | **COMPLETED — 2026-03-25**                                                                                                                                      |
 
 **Scope:**
+
 - Create `EmailHtmlViewer` component with sandboxed iframe + srcdoc + CSP meta tag.
 - Auto-resize iframe to content height via load-event handler.
 - Content type switching: HTML primary with plain-text toggle when both available.
@@ -103,6 +108,7 @@ Features are prioritized using four levels based on user impact, security critic
 - Remove the regex-based sanitizer code entirely.
 
 **Completion notes:**
+
 - Created `frontend/apps/web/src/features/email/EmailHtmlViewer.tsx` — sandboxed iframe with triple-layer security: `sandbox="allow-popups allow-popups-to-escape-sandbox allow-same-origin"`, CSP meta tag (`script-src 'none'; object-src 'none'`), `referrerPolicy="no-referrer"`.
 - Auto-resizes to content height via `contentDocument.scrollHeight` on load event.
 - Includes base styles for body, images (max-width: 100%), links, tables, blockquotes, and pre elements.
@@ -118,21 +124,23 @@ Features are prioritized using four levels based on user impact, security critic
 
 **Why critical:** Users cannot read their full emails. This is the most visually obvious defect.
 
-| Attribute | Value |
-|---|---|
-| ADR | ADR-019 §5 |
-| Effort | Small (0.5–1 day) |
-| Files affected | `frontend/apps/web/src/features/email/MessageBubble.tsx` |
-| Dependencies | C3 |
+| Attribute           | Value                                                                                                                                      |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| ADR                 | ADR-019 §5                                                                                                                                 |
+| Effort              | Small (0.5–1 day)                                                                                                                          |
+| Files affected      | `frontend/apps/web/src/features/email/MessageBubble.tsx`                                                                                   |
+| Dependencies        | C3                                                                                                                                         |
 | Acceptance criteria | Collapsed emails show a meaningful preview (200 chars); expanded emails show full content; no `slice(0, 100)` truncation in expanded state |
-| **Status** | **COMPLETED — 2026-03-25** |
+| **Status**          | **COMPLETED — 2026-03-25**                                                                                                                 |
 
 **Scope:**
+
 - Remove `bodyText?.slice(0, 100)` from expanded message rendering.
 - Collapsed state: Use DOMPurify-sanitized snippet (first 200 chars of `bodyText`, or text extracted from `bodyHtml`).
 - Add `isomorphic-dompurify` as a frontend dependency for snippet sanitization.
 
 **Completion notes:**
+
 - Changed collapsed preview from `email.bodyText?.slice(0, 100)` to `(email.bodyText || email.subject)?.slice(0, 200)` — doubled preview length and added subject fallback when bodyText is unavailable.
 - Expanded view now shows full untruncated content via `EmailHtmlViewer` (HTML) or `<pre>` (plain text).
 - Did NOT add `isomorphic-dompurify` — the collapsed preview uses plain text slicing which is safe (no HTML interpretation). DOMPurify can be added later if HTML-derived snippets are needed (deferred to L5 toggle work).
@@ -148,17 +156,18 @@ Features are prioritized using four levels based on user impact, security critic
 
 **Why high:** Foundation for all attachment features. Without metadata, the frontend cannot display attachment lists.
 
-| Attribute | Value |
-|---|---|
-| ADR | ADR-020 §1, §2 |
-| DDD | DDD-009 — AttachmentAggregate |
-| Effort | Medium (2–3 days) |
-| Files affected | `backend/src/db/` (migration), `backend/src/email/gmail.rs`, `backend/src/email/outlook.rs`, `backend/src/email/types.rs` |
-| Dependencies | None (can parallel with C1–C4) |
-| Acceptance criteria | `attachments` table created; metadata populated during sync for Gmail and Outlook; filename sanitization enforced |
-| **Status** | **COMPLETED — 2026-03-25** |
+| Attribute           | Value                                                                                                                     |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| ADR                 | ADR-020 §1, §2                                                                                                            |
+| DDD                 | DDD-009 — AttachmentAggregate                                                                                             |
+| Effort              | Medium (2–3 days)                                                                                                         |
+| Files affected      | `backend/src/db/` (migration), `backend/src/email/gmail.rs`, `backend/src/email/outlook.rs`, `backend/src/email/types.rs` |
+| Dependencies        | None (can parallel with C1–C4)                                                                                            |
+| Acceptance criteria | `attachments` table created; metadata populated during sync for Gmail and Outlook; filename sanitization enforced         |
+| **Status**          | **COMPLETED — 2026-03-25**                                                                                                |
 
 **Scope:**
+
 - SQLite migration: Create `attachments` table per ADR-020 §1 schema.
 - Gmail: Extract attachment metadata from `payload.parts[]` where `body.attachmentId` is present.
 - Outlook: Extract from `message.attachments` array in Graph API response.
@@ -166,6 +175,7 @@ Features are prioritized using four levels based on user impact, security critic
 - Store `provider_attachment_id` for lazy fetching. Set `fetch_status = Pending`.
 
 **Completion notes:**
+
 - Created `backend/migrations/014_attachments.sql` with `attachments` table, `ON DELETE CASCADE` foreign key to emails, indexes on `email_id` and `content_id`.
 - `sanitize_filename()` strips path separators, null bytes, OS-reserved characters, trims dots, limits to 200 chars, falls back to UUID-based name. 8 unit tests.
 - `fetch_status` column uses CHECK constraint for `pending`/`fetched`/`failed` states.
@@ -177,17 +187,18 @@ Features are prioritized using four levels based on user impact, security critic
 
 **Why high:** Enables users to download individual attachments — the most common attachment interaction.
 
-| Attribute | Value |
-|---|---|
-| ADR | ADR-020 §3, §5 |
-| DDD | DDD-009 — AttachmentFetchService, AttachmentServingService |
-| Effort | Medium (3–4 days) |
-| Files affected | `backend/src/api/emails.rs` (new route), `backend/src/api/attachments.rs` (new module) |
-| Dependencies | H1 |
+| Attribute           | Value                                                                                                                                                                                                                                  |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ADR                 | ADR-020 §3, §5                                                                                                                                                                                                                         |
+| DDD                 | DDD-009 — AttachmentFetchService, AttachmentServingService                                                                                                                                                                             |
+| Effort              | Medium (3–4 days)                                                                                                                                                                                                                      |
+| Files affected      | `backend/src/api/emails.rs` (new route), `backend/src/api/attachments.rs` (new module)                                                                                                                                                 |
+| Dependencies        | H1                                                                                                                                                                                                                                     |
 | Acceptance criteria | `GET /api/v1/emails/{id}/attachments/{att_id}` returns streamed binary with correct Content-Type and Content-Disposition headers; first request triggers lazy fetch from provider API; subsequent requests serve from filesystem cache |
-| **Status** | **COMPLETED — 2026-03-25** |
+| **Status**          | **COMPLETED — 2026-03-25**                                                                                                                                                                                                             |
 
 **Scope:**
+
 - Implement `fetch_gmail_attachment()` and `fetch_outlook_attachment()` using existing `reqwest` client.
 - Implement `cache_to_filesystem()` with directory creation and path validation.
 - Implement streaming response via `tokio_util::io::ReaderStream`.
@@ -195,6 +206,7 @@ Features are prioritized using four levels based on user impact, security critic
 - Error handling: Return 404 if attachment not found; 502 if provider fetch fails; set `fetch_status = Failed` with retry eligibility.
 
 **Completion notes:**
+
 - Created `backend/src/api/attachments.rs` with `download_attachment` handler implementing the full lazy-fetch pipeline: check DB metadata → check filesystem cache → fetch from Gmail/Outlook API → cache to disk → update DB status → stream response.
 - Gmail: fetches via `GET /gmail/v1/users/me/messages/{messageId}/attachments/{attachmentId}`, decodes base64url response `data` field.
 - Outlook: fetches via `GET /me/messages/{messageId}/attachments/{attachmentId}/$value`, receives raw binary.
@@ -208,16 +220,17 @@ Features are prioritized using four levels based on user impact, security critic
 
 **Why high:** The frontend needs to know what attachments exist before it can render download UI.
 
-| Attribute | Value |
-|---|---|
-| ADR | ADR-020 §3 |
-| Effort | Small (0.5–1 day) |
-| Files affected | `backend/src/api/attachments.rs` |
-| Dependencies | H1 |
+| Attribute           | Value                                                                                                                                                                   |
+| ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ADR                 | ADR-020 §3                                                                                                                                                              |
+| Effort              | Small (0.5–1 day)                                                                                                                                                       |
+| Files affected      | `backend/src/api/attachments.rs`                                                                                                                                        |
+| Dependencies        | H1                                                                                                                                                                      |
 | Acceptance criteria | `GET /api/v1/emails/{id}/attachments` returns JSON array of attachment metadata; excludes inline attachments by default; optional `include_inline=true` query parameter |
-| **Status** | **COMPLETED — 2026-03-25** |
+| **Status**          | **COMPLETED — 2026-03-25**                                                                                                                                              |
 
 **Completion notes:**
+
 - Implemented in `attachments.rs` as `list_attachments` handler with `ListAttachmentsParams` supporting optional `include_inline` query parameter.
 - Returns `Vec<AttachmentResponse>` with camelCase JSON serialization.
 - Excludes inline attachments by default (WHERE `is_inline = FALSE`).
@@ -228,17 +241,18 @@ Features are prioritized using four levels based on user impact, security critic
 
 **Why high:** Displays attachment information and enables download — the primary user-facing attachment feature.
 
-| Attribute | Value |
-|---|---|
-| ADR | ADR-020 §7 |
-| DDD | DDD-009 — AttachmentAggregate |
-| Effort | Small (2–3 days) |
-| Files affected | `frontend/apps/web/src/features/email/MessageBubble.tsx`, new `AttachmentList.tsx` |
-| Dependencies | H2, H3 |
+| Attribute           | Value                                                                                                                                                                                                                     |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ADR                 | ADR-020 §7                                                                                                                                                                                                                |
+| DDD                 | DDD-009 — AttachmentAggregate                                                                                                                                                                                             |
+| Effort              | Small (2–3 days)                                                                                                                                                                                                          |
+| Files affected      | `frontend/apps/web/src/features/email/MessageBubble.tsx`, new `AttachmentList.tsx`                                                                                                                                        |
+| Dependencies        | H2, H3                                                                                                                                                                                                                    |
 | Acceptance criteria | Emails with attachments show chip/pill components below the body; each chip shows file icon (lucide-react), filename, size; clicking downloads the file; "Attachment downloads are not yet available" placeholder removed |
-| **Status** | **COMPLETED — 2026-03-25** |
+| **Status**          | **COMPLETED — 2026-03-25**                                                                                                                                                                                                |
 
 **Scope:**
+
 - Extend `Email` TypeScript interface: add `attachments: Attachment[]` array.
 - Create `AttachmentChip` component with icon mapping by MIME type (lucide-react).
 - Create `AttachmentList` container that fetches from the attachments endpoint.
@@ -247,6 +261,7 @@ Features are prioritized using four levels based on user impact, security critic
 - No new npm dependencies — uses existing `lucide-react` and Tailwind.
 
 **Completion notes:**
+
 - Created `frontend/apps/web/src/features/email/AttachmentList.tsx` — single file containing `AttachmentChip`, `ImageAttachmentPreview`, `DownloadAllButton`, and `AttachmentList` components.
 - `AttachmentChip`: file-type icon mapping via `getFileIcon()` (10 lucide-react icons covering image, audio, video, PDF, spreadsheet, archive, code, text, generic), filename (truncated to 180px), human-readable size via `formatSize()`.
 - Uses `@tanstack/react-query` `useQuery` to fetch attachment metadata from the list endpoint with 60s stale time.
@@ -261,16 +276,17 @@ Features are prioritized using four levels based on user impact, security critic
 
 **Why high:** The TypeScript types and API client must be updated to carry `bodyHtml` and `attachments` data.
 
-| Attribute | Value |
-|---|---|
-| ADR | ADR-019, ADR-020 §7 |
-| Effort | Small (1 day) |
-| Files affected | `frontend/packages/types/src/email.ts`, `frontend/packages/api/src/emailApi.ts` |
-| Dependencies | C1, H1 |
+| Attribute           | Value                                                                                                                                                                        |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ADR                 | ADR-019, ADR-020 §7                                                                                                                                                          |
+| Effort              | Small (1 day)                                                                                                                                                                |
+| Files affected      | `frontend/packages/types/src/email.ts`, `frontend/packages/api/src/emailApi.ts`                                                                                              |
+| Dependencies        | C1, H1                                                                                                                                                                       |
 | Acceptance criteria | `Email` interface includes `bodyHtml?: string` and `attachments: Attachment[]`; API responses correctly deserialized; backward compatible with emails that lack these fields |
-| **Status** | **COMPLETED — 2026-03-25** |
+| **Status**          | **COMPLETED — 2026-03-25**                                                                                                                                                   |
 
 **Completion notes:**
+
 - Added `Attachment` interface to `frontend/packages/types/src/email.ts` with fields: `id`, `emailId`, `filename`, `contentType`, `sizeBytes`, `isInline`, `fetchStatus` (union type `'pending' | 'fetched' | 'failed'`).
 - Exported `Attachment` from `frontend/packages/types/src/index.ts`.
 - Added three API functions in `emailApi.ts`: `getAttachments()` (GET request), `getAttachmentDownloadUrl()` (URL builder), `getAttachmentsZipUrl()` (URL builder).
@@ -287,23 +303,25 @@ Features are prioritized using four levels based on user impact, security critic
 
 **Why moderate:** Inline images (logos, signatures) are common in HTML emails. Without CID resolution, they show as broken images. Important for rendering fidelity but not a security blocker.
 
-| Attribute | Value |
-|---|---|
-| ADR | ADR-019 §3, ADR-020 §6 |
-| DDD | DDD-009 — HtmlSanitizationService (resolve_cid_references) |
-| Effort | Small (1–2 days) |
-| Files affected | `backend/src/content/` (sanitization service) |
-| Dependencies | C2, H1 |
+| Attribute           | Value                                                                                                                                            |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| ADR                 | ADR-019 §3, ADR-020 §6                                                                                                                           |
+| DDD                 | DDD-009 — HtmlSanitizationService (resolve_cid_references)                                                                                       |
+| Effort              | Small (1–2 days)                                                                                                                                 |
+| Files affected      | `backend/src/content/` (sanitization service)                                                                                                    |
+| Dependencies        | C2, H1                                                                                                                                           |
 | Acceptance criteria | HTML emails with `<img src="cid:...">` render inline images correctly; CID references replaced with base64 data URIs before ammonia sanitization |
-| **Status** | **COMPLETED — 2026-03-25** |
+| **Status**          | **COMPLETED — 2026-03-25**                                                                                                                       |
 
 **Scope:**
+
 - Build `HashMap<ContentId, (content_type, bytes)>` from inline attachments.
 - Replace `cid:{id}` patterns in HTML body with `data:{type};base64,{encoded}`.
 - Run CID resolution **before** ammonia sanitization.
 - Test with real-world HTML emails containing signature images.
 
 **Completion notes:**
+
 - Added `resolve_cid_references()` to `backend/src/content/email_sanitizer.rs`.
 - Takes HTML string + `HashMap<String, (String, Vec<u8>)>` mapping Content-ID to (content_type, bytes).
 - Strips angle brackets from Content-ID values before matching.
@@ -317,22 +335,24 @@ Features are prioritized using four levels based on user impact, security critic
 
 **Why moderate:** Convenience feature for emails with many attachments (e.g., 10+ photos, document bundles). Lower frequency interaction than single download.
 
-| Attribute | Value |
-|---|---|
-| ADR | ADR-020 §3, §4 |
-| DDD | DDD-009 — AttachmentServingService (stream_zip) |
-| Effort | Small (2 days) |
-| Files affected | `backend/src/api/attachments.rs`, `backend/Cargo.toml` |
-| Dependencies | H2 |
+| Attribute           | Value                                                                                                                                                                                                                                |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| ADR                 | ADR-020 §3, §4                                                                                                                                                                                                                       |
+| DDD                 | DDD-009 — AttachmentServingService (stream_zip)                                                                                                                                                                                      |
+| Effort              | Small (2 days)                                                                                                                                                                                                                       |
+| Files affected      | `backend/src/api/attachments.rs`, `backend/Cargo.toml`                                                                                                                                                                               |
+| Dependencies        | H2                                                                                                                                                                                                                                   |
 | Acceptance criteria | `GET /api/v1/emails/{id}/attachments/zip` streams a ZIP containing all non-inline attachments; correct `Content-Type: application/zip` and `Content-Disposition` headers; handles lazy-fetch for uncached attachments before zipping |
-| **Status** | **COMPLETED — 2026-03-25** |
+| **Status**          | **COMPLETED — 2026-03-25**                                                                                                                                                                                                           |
 
 **New dependency:**
+
 ```toml
 async_zip = { version = "0.0.17", features = ["tokio", "deflate"] }
 ```
 
 **Completion notes:**
+
 - Implemented `download_all_zip` handler in `attachments.rs`.
 - Queries all non-inline attachments for the email, ensures all are fetched (lazy-fetches any pending ones).
 - Creates ZIP archive streamed directly to HTTP response via `tokio::io::duplex` channel — background task writes files into `async_zip::tokio::write::ZipFileWriter` with Deflate compression, reader side wrapped in `ReaderStream` returned as Axum `Body`.
@@ -346,16 +366,17 @@ async_zip = { version = "0.0.17", features = ["tokio", "deflate"] }
 
 **Why moderate:** Companion to M2. Simple UI addition once the backend endpoint exists.
 
-| Attribute | Value |
-|---|---|
-| ADR | ADR-020 |
-| Effort | Small (0.5 day) |
-| Files affected | `AttachmentList.tsx` |
-| Dependencies | M2, H4 |
+| Attribute           | Value                                                                                                               |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| ADR                 | ADR-020                                                                                                             |
+| Effort              | Small (0.5 day)                                                                                                     |
+| Files affected      | `AttachmentList.tsx`                                                                                                |
+| Dependencies        | M2, H4                                                                                                              |
 | Acceptance criteria | "Download all (N)" link/button appears when email has 2+ non-inline attachments; triggers ZIP download from backend |
-| **Status** | **COMPLETED — 2026-03-25** |
+| **Status**          | **COMPLETED — 2026-03-25**                                                                                          |
 
 **Completion notes:**
+
 - `DownloadAllButton` component in `AttachmentList.tsx` renders when `fileAttachments.length >= 2`.
 - Links to `getAttachmentsZipUrl(emailId)` with `download="attachments.zip"` attribute.
 - Shows "Download all (N)" with a Download icon from lucide-react.
@@ -367,16 +388,17 @@ async_zip = { version = "0.0.17", features = ["tokio", "deflate"] }
 
 **Why moderate:** Better UX for image attachments — users can see thumbnails instead of just a filename chip. Common in modern email clients.
 
-| Attribute | Value |
-|---|---|
-| ADR | — (research §5.3) |
-| Effort | Small (1 day) |
-| Files affected | `AttachmentList.tsx` |
-| Dependencies | H2, H4 |
+| Attribute           | Value                                                                                                                                                             |
+| ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ADR                 | — (research §5.3)                                                                                                                                                 |
+| Effort              | Small (1 day)                                                                                                                                                     |
+| Files affected      | `AttachmentList.tsx`                                                                                                                                              |
+| Dependencies        | H2, H4                                                                                                                                                            |
 | Acceptance criteria | Image-type attachments render as thumbnails (24px height) with filename overlay on hover; clicking opens full image in new tab; `loading="lazy"` on thumbnail img |
-| **Status** | **COMPLETED — 2026-03-25** |
+| **Status**          | **COMPLETED — 2026-03-25**                                                                                                                                        |
 
 **Completion notes:**
+
 - `ImageAttachmentPreview` component in `AttachmentList.tsx` renders image attachments separately from non-image chips.
 - Uses `<img>` tag with `loading="lazy"`, `h-24 w-auto object-cover` sizing, src pointing to the download URL.
 - Hover overlay shows filename on a semi-transparent black background using `opacity-0 group-hover:opacity-100 transition-opacity`.
@@ -389,17 +411,18 @@ async_zip = { version = "0.0.17", features = ["tokio", "deflate"] }
 
 **Why moderate:** Without cleanup, deleted emails leave orphaned files on disk. Important for storage hygiene but not user-facing.
 
-| Attribute | Value |
-|---|---|
-| ADR | ADR-020 (consequences: filesystem management) |
-| DDD | DDD-009 — AttachmentAggregate invariant #4 |
-| Effort | Small (1 day) |
-| Files affected | `backend/src/api/emails.rs` (delete handler) |
-| Dependencies | H1, H2 |
+| Attribute           | Value                                                                                                                                                                |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ADR                 | ADR-020 (consequences: filesystem management)                                                                                                                        |
+| DDD                 | DDD-009 — AttachmentAggregate invariant #4                                                                                                                           |
+| Effort              | Small (1 day)                                                                                                                                                        |
+| Files affected      | `backend/src/api/emails.rs` (delete handler)                                                                                                                         |
+| Dependencies        | H1, H2                                                                                                                                                               |
 | Acceptance criteria | When an email is deleted, its attachment files are removed from the filesystem; `ON DELETE CASCADE` handles DB rows; background task or synchronous delete for files |
-| **Status** | **COMPLETED — 2026-03-25** |
+| **Status**          | **COMPLETED — 2026-03-25**                                                                                                                                           |
 
 **Completion notes:**
+
 - Updated `delete_email` handler in `emails.rs` to query attachment `storage_path` values before the DELETE statement.
 - Iterates over paths and removes files via `tokio::fs::remove_file()` (best-effort, errors silently ignored).
 - Attempts directory cleanup via `tokio::fs::remove_dir()` on the email's attachment directory.
@@ -415,15 +438,16 @@ async_zip = { version = "0.0.17", features = ["tokio", "deflate"] }
 
 **Why low:** Only relevant when IMAP provider support is added. Gmail and Outlook use structured JSON APIs, not raw MIME.
 
-| Attribute | Value |
-|---|---|
-| ADR | ADR-019 (research §3.2) |
-| DDD | DDD-009 — ContentExtractionService (extract_imap_body) |
-| Effort | Medium (3–4 days) |
-| Dependencies | C1, C2, H1 |
+| Attribute           | Value                                                                                                                                 |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| ADR                 | ADR-019 (research §3.2)                                                                                                               |
+| DDD                 | DDD-009 — ContentExtractionService (extract_imap_body)                                                                                |
+| Effort              | Medium (3–4 days)                                                                                                                     |
+| Dependencies        | C1, C2, H1                                                                                                                            |
 | Acceptance criteria | Raw IMAP FETCH responses parsed via `mail-parser`; HTML body, text body, and attachment metadata extracted; CID inline images handled |
 
 **New dependency:**
+
 ```toml
 mail-parser = "0.11"
 ```
@@ -434,11 +458,11 @@ mail-parser = "0.11"
 
 **Why low:** Security/privacy enhancement. The backend already detects tracking pixels in `content/types.rs`. A full proxy adds complexity and latency.
 
-| Attribute | Value |
-|---|---|
-| ADR | ADR-019 (research §2.7) |
-| Effort | Medium (3–4 days) |
-| Dependencies | C3 |
+| Attribute           | Value                                                                                                                                                      |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ADR                 | ADR-019 (research §2.7)                                                                                                                                    |
+| Effort              | Medium (3–4 days)                                                                                                                                          |
+| Dependencies        | C3                                                                                                                                                         |
 | Acceptance criteria | External images in HTML emails routed through a backend proxy endpoint; original IP and headers not exposed to remote servers; optional per-account toggle |
 
 ---
@@ -447,11 +471,11 @@ mail-parser = "0.11"
 
 **Why low:** Storage growth is gradual and manageable for personal use. Enterprise-scale would need this sooner.
 
-| Attribute | Value |
-|---|---|
-| ADR | ADR-020 (consequences: storage growth) |
-| Effort | Small (1–2 days) |
-| Dependencies | H2 |
+| Attribute           | Value                                                                                                                                                  |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| ADR                 | ADR-020 (consequences: storage growth)                                                                                                                 |
+| Effort              | Small (1–2 days)                                                                                                                                       |
+| Dependencies        | H2                                                                                                                                                     |
 | Acceptance criteria | LRU eviction removes cached attachment files older than a configurable threshold; re-fetch from provider on next download; storage budget configurable |
 
 ---
@@ -460,14 +484,15 @@ mail-parser = "0.11"
 
 **Why low:** Compose functionality is a separate feature track. This item is forward-looking.
 
-| Attribute | Value |
-|---|---|
-| ADR | — (research §5.4) |
-| Effort | Medium (3–4 days) |
-| Dependencies | Compose feature (not yet planned) |
+| Attribute           | Value                                                                                                    |
+| ------------------- | -------------------------------------------------------------------------------------------------------- |
+| ADR                 | — (research §5.4)                                                                                        |
+| Effort              | Medium (3–4 days)                                                                                        |
+| Dependencies        | Compose feature (not yet planned)                                                                        |
 | Acceptance criteria | Drag-and-drop file upload in compose view; `react-dropzone` integration; attachment previews before send |
 
 **New dependency:**
+
 ```json
 { "react-dropzone": "^14.0.0" }
 ```
@@ -478,18 +503,18 @@ mail-parser = "0.11"
 
 **Why low:** For multipart/alternative emails, defaulting to HTML is correct 95%+ of the time. The toggle is a power-user feature.
 
-| Attribute | Value |
-|---|---|
-| ADR | ADR-019 §4 |
-| Effort | Small (0.5 day) |
-| Dependencies | C3 |
+| Attribute           | Value                                                                                                                          |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| ADR                 | ADR-019 §4                                                                                                                     |
+| Effort              | Small (0.5 day)                                                                                                                |
+| Dependencies        | C3                                                                                                                             |
 | Acceptance criteria | When both `bodyHtml` and `bodyText` are present, a toggle button switches between HTML iframe view and plain text `<pre>` view |
 
 ---
 
 ## Dependency Graph
 
-```
+```text
 C1 (extract body_html) ✅
  └─► C2 (ammonia sanitization) ✅
       └─► C3 (sandboxed iframe) ✅
@@ -520,35 +545,35 @@ L5 (toggle button) ◄── C3
 
 ## Effort Summary
 
-| Priority | Items | Estimated Total Effort | Status |
-|---|---|---|---|
-| **Critical** | C1–C4 | 7–10 days | **4/4 COMPLETED** |
-| **High** | H1–H5 | 9–12 days | **5/5 COMPLETED** |
-| **Moderate** | M1–M5 | 5.5–7 days | **5/5 COMPLETED** |
-| **Low** | L1–L5 | 10.5–14.5 days | 0/5 Pending |
-| **Total** | 19 items | 32–43.5 days | **14/19 completed** |
+| Priority     | Items    | Estimated Total Effort | Status              |
+| ------------ | -------- | ---------------------- | ------------------- |
+| **Critical** | C1–C4    | 7–10 days              | **4/4 COMPLETED**   |
+| **High**     | H1–H5    | 9–12 days              | **5/5 COMPLETED**   |
+| **Moderate** | M1–M5    | 5.5–7 days             | **5/5 COMPLETED**   |
+| **Low**      | L1–L5    | 10.5–14.5 days         | 0/5 Pending         |
+| **Total**    | 19 items | 32–43.5 days           | **14/19 completed** |
 
 ---
 
 ## New Dependencies Summary
 
-| Dependency | Type | Priority Level | Purpose |
-|---|---|---|---|
-| ~~`isomorphic-dompurify` ^3.0.0~~ | npm | ~~Critical (C4)~~ | Deferred — plain text slicing is safe for collapsed previews; revisit with L5 |
-| `async_zip` 0.0.17 | Cargo | Moderate (M2) | Streaming ZIP archive creation |
-| `mail-parser` 0.11 | Cargo | Low (L1) | IMAP MIME parsing |
-| `react-dropzone` ^14.0.0 | npm | Low (L4) | Compose file upload (future) |
+| Dependency                        | Type  | Priority Level    | Purpose                                                                       |
+| --------------------------------- | ----- | ----------------- | ----------------------------------------------------------------------------- |
+| ~~`isomorphic-dompurify` ^3.0.0~~ | npm   | ~~Critical (C4)~~ | Deferred — plain text slicing is safe for collapsed previews; revisit with L5 |
+| `async_zip` 0.0.17                | Cargo | Moderate (M2)     | Streaming ZIP archive creation                                                |
+| `mail-parser` 0.11                | Cargo | Low (L1)          | IMAP MIME parsing                                                             |
+| `react-dropzone` ^14.0.0          | npm   | Low (L4)          | Compose file upload (future)                                                  |
 
 ---
 
 ## Cross-References
 
-| Document | Relevance |
-|---|---|
-| [ADR-019](../ADRs/ADR-019-email-body-rendering.md) | Email body rendering strategy and security model |
-| [ADR-020](../ADRs/ADR-020-email-attachment-management.md) | Attachment storage, API, and download architecture |
-| [DDD-009](../DDDs/DDD-009-email-content-rendering.md) | Domain model for email content and attachments |
-| [DDD-008](../DDDs/DDD-008-email-operations.md) | Email Operations domain (upstream dependency) |
-| [DDD-005](../DDDs/DDD-005-account-management.md) | Account Management (OAuth tokens for lazy fetch) |
-| [DDD-003](../DDDs/DDD-003-ingestion.md) | Ingestion context (supplies raw provider responses) |
+| Document                                                  | Relevance                                             |
+| --------------------------------------------------------- | ----------------------------------------------------- |
+| [ADR-019](../ADRs/ADR-019-email-body-rendering.md)        | Email body rendering strategy and security model      |
+| [ADR-020](../ADRs/ADR-020-email-attachment-management.md) | Attachment storage, API, and download architecture    |
+| [DDD-009](../DDDs/DDD-009-email-content-rendering.md)     | Domain model for email content and attachments        |
+| [DDD-008](../DDDs/DDD-008-email-operations.md)            | Email Operations domain (upstream dependency)         |
+| [DDD-005](../DDDs/DDD-005-account-management.md)          | Account Management (OAuth tokens for lazy fetch)      |
+| [DDD-003](../DDDs/DDD-003-ingestion.md)                   | Ingestion context (supplies raw provider responses)   |
 | [Research](../research/email-interaction-enhancements.md) | Library evaluations, code examples, security analysis |

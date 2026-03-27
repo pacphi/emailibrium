@@ -49,6 +49,9 @@ pub struct VectorConfig {
     /// Generative AI settings (ADR-012).
     #[serde(default)]
     pub generative: GenerativeConfig,
+    /// RAG (Retrieval-Augmented Generation) settings (ADR-022, DDD-010).
+    #[serde(default)]
+    pub rag: super::rag::RagConfig,
     /// OAuth provider settings (DDD-005).
     #[serde(default)]
     pub oauth: OAuthConfig,
@@ -77,6 +80,7 @@ impl Default for VectorConfig {
             learning: super::learning::LearningConfig::default(),
             quantization: super::quantization::QuantizationConfig::default(),
             generative: GenerativeConfig::default(),
+            rag: super::rag::RagConfig::default(),
             oauth: OAuthConfig::default(),
             redis: RedisConfig::default(),
             security: SecurityConfig::default(),

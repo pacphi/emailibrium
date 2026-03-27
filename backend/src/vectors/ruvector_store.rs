@@ -44,10 +44,37 @@ const ALL_COLLECTIONS: [VectorCollection; 4] = [
 /// uses `serde_json::Value`. We keep a parallel map of emailibrium-specific
 /// fields (email_id, collection, created_at, full metadata) so we can
 /// reconstruct `VectorDocument` on retrieval.
+///
+/// The documents sidecar is persisted to `documents.json` alongside the HNSW
+/// index so that vectors survive application restarts.
 struct CollectionIndex {
     db: VectorDB,
     /// vector_id (uuid string) -> full VectorDocument for retrieval.
     documents: HashMap<String, VectorDocument>,
+    /// Path to the sidecar file for this collection.
+    sidecar_path: PathBuf,
+}
+
+impl CollectionIndex {
+    /// Persist the documents sidecar to disk.
+    fn save_sidecar(&self) {
+        if let Ok(json) = serde_json::to_string(&self.documents) {
+            if let Err(e) = std::fs::write(&self.sidecar_path, json) {
+                tracing::warn!(
+                    path = %self.sidecar_path.display(),
+                    "Failed to persist document sidecar: {e}"
+                );
+            }
+        }
+    }
+
+    /// Load the documents sidecar from disk.
+    fn load_sidecar(path: &std::path::Path) -> HashMap<String, VectorDocument> {
+        match std::fs::read_to_string(path) {
+            Ok(json) => serde_json::from_str(&json).unwrap_or_default(),
+            Err(_) => HashMap::new(),
+        }
+    }
 }
 
 /// RuVector-backed vector store using per-collection HNSW indices.
@@ -118,11 +145,22 @@ impl RuVectorStore {
                 ))
             })?;
 
+            let sidecar_path = dir.join("documents.json");
+            let documents = CollectionIndex::load_sidecar(&sidecar_path);
+            if !documents.is_empty() {
+                tracing::info!(
+                    collection = collection_dir(collection),
+                    count = documents.len(),
+                    "Loaded document sidecar from disk"
+                );
+            }
+
             collections.insert(
                 collection.clone(),
                 CollectionIndex {
                     db,
-                    documents: HashMap::new(),
+                    documents,
+                    sidecar_path,
                 },
             );
         }
@@ -182,6 +220,7 @@ impl super::store::VectorStoreBackend for RuVectorStore {
             .map_err(|e| VectorError::StoreFailed(format!("ruvector insert failed: {e}")))?;
 
         coll.documents.insert(rv_id, doc);
+        coll.save_sidecar();
         Ok(id)
     }
 
@@ -234,6 +273,7 @@ impl super::store::VectorStoreBackend for RuVectorStore {
                 ids.push(doc.id.clone());
                 coll.documents.insert(rv_id, doc);
             }
+            coll.save_sidecar();
         }
 
         Ok(ids)
@@ -345,6 +385,7 @@ impl super::store::VectorStoreBackend for RuVectorStore {
                 let _ = coll.db.delete(&rv_id).map_err(|e| {
                     VectorError::StoreFailed(format!("ruvector delete failed: {e}"))
                 })?;
+                coll.save_sidecar();
                 return Ok(true);
             }
         }

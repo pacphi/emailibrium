@@ -1,0 +1,114 @@
+# Emailibrium Application Configuration
+# ============================================================================
+# Maintainers: general application settings, polling intervals, caching,
+# UI defaults, and provider configuration.
+#
+# For model-specific config, see: models-llm.yaml, models-embedding.yaml
+# For AI tuning, see: tuning.yaml
+# For prompts, see: prompts.yaml
+# For classification rules, see: classification.yaml
+# ============================================================================
+
+version: "1.0"
+
+# ── Sync & Polling ───────────────────────────────────────────────────────────
+sync:
+  poll_interval_secs: 15 # Background email poll scheduler tick
+  default_sync_frequency_minutes: 5 # User-configurable sync interval default
+  sync_completion_stable_checks: 2 # Number of stable count checks before marking sync done
+  sync_completion_check_interval_ms: 3000 # Interval between stability checks
+  max_sync_wait_polls: 120 # Max polls before giving up (120 * 3s = 6 min)
+
+# ── Frontend Cache (React Query) ─────────────────────────────────────────────
+cache:
+  default_stale_time_ms: 30000 # Global default for React Query staleTime
+  default_retry_count: 1 # Global default retry count
+
+  # Per-feature overrides
+  email_counts_stale_time_ms: 10000
+  email_counts_refetch_interval_ms: 30000
+  categories_stale_time_ms: 30000
+  labels_stale_time_ms: 30000
+  chat_sessions_stale_time_ms: 30000
+  subscriptions_stale_time_ms: 60000
+  ollama_models_stale_time_ms: 30000
+  model_catalog_stale_time_ms: 60000
+  clusters_stale_time_ms: 10000
+  clusters_refetch_interval_ms: 30000
+  dashboard_accounts_refetch_interval_ms: 10000
+  dashboard_embedding_refetch_interval_ms: 10000
+
+# ── Network Timeouts ─────────────────────────────────────────────────────────
+network:
+  ollama_fetch_timeout_ms: 3000 # Timeout for Ollama model list fetch
+  model_catalog_fetch_timeout_ms: 3000
+  ingestion_start_timeout_ms: 300000 # 5 min — sync fetches all emails from provider
+  model_switch_poll_interval_ms: 2000 # Poll interval during model download
+  model_switch_max_polls: 150 # 150 * 2s = 5 min max download wait
+
+# ── UI Defaults ──────────────────────────────────────────────────────────────
+# These are the initial values for user-configurable settings.
+# Users can override them via the Settings page (persisted to localStorage).
+defaults:
+  theme: system # "light" | "dark" | "system"
+  sidebar_position: left # "left" | "right"
+  font_size_px: 14
+  email_density: comfortable # "compact" | "comfortable" | "spacious"
+  data_retention_days: 90 # GDPR: auto-delete local data after N days
+  sona_learning_enabled: true # SONA adaptive learning on/off
+  learning_rate_sensitivity: 0.5 # 0.0-1.0, how aggressively to adapt
+
+# ── Providers ────────────────────────────────────────────────────────────────
+# API key environment variable names and base URLs.
+# The actual keys are NEVER stored in this file — only env var names.
+providers:
+  ollama:
+    base_url: "http://localhost:11434"
+
+  openai:
+    api_key_env: OPENAI_API_KEY
+
+  anthropic:
+    api_key_env: ANTHROPIC_API_KEY
+
+  openrouter:
+    api_key_env: OPENROUTER_API_KEY
+    base_url: "https://openrouter.ai/api/v1"
+    required_headers:
+      HTTP-Referer: "https://emailibrium.app"
+      X-Title: "Emailibrium"
+
+  google_oauth:
+    client_id_env: EMAILIBRIUM_GOOGLE_CLIENT_ID
+    client_secret_env: EMAILIBRIUM_GOOGLE_CLIENT_SECRET
+
+  microsoft_oauth:
+    client_id_env: EMAILIBRIUM_MICROSOFT_CLIENT_ID
+    client_secret_env: EMAILIBRIUM_MICROSOFT_CLIENT_SECRET
+
+# ── Hardware Detection ───────────────────────────────────────────────────────
+hardware:
+  # Priority order for GPU backend selection
+  backend_priority:
+    - metal # macOS Apple Silicon
+    - cuda # NVIDIA GPU
+    - vulkan # Cross-platform GPU
+    - cpu # Fallback
+
+  # RAM reserved for OS + app (subtracted from total when recommending models)
+  os_overhead_mb: 4096
+
+# ── Security ─────────────────────────────────────────────────────────────────
+security:
+  jwt_secret_env: JWT_SECRET
+  encryption_key_env: EMAILIBRIUM_ENCRYPTION_MASTER_PASSWORD
+  rate_limit_capacity: 60 # Max requests in burst window
+  rate_limit_refill_per_sec: 1.0 # Tokens refilled per second
+  hsts_max_age_secs: 63072000 # 2 years
+
+# ── Paths ────────────────────────────────────────────────────────────────────
+paths:
+  llm_cache_dir: "~/.emailibrium/models/llm"
+  embedding_cache_dir: ".fastembed_cache"
+  vector_data_dir: "data/vectors"
+  database_file: "emailibrium.db"

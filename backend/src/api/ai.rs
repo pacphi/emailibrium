@@ -10,6 +10,8 @@
 use std::convert::Infallible;
 use std::time::Duration;
 
+use uuid::Uuid;
+
 use axum::{
     extract::{Path, State},
     http::StatusCode,
@@ -41,6 +43,15 @@ pub fn routes() -> Router<AppState> {
         .route("/chat/stream", post(chat_message_sse))
         .route("/chat/sessions", get(list_chat_sessions))
         .route("/chat/sessions/{id}", delete(delete_chat_session))
+        .route("/model-catalog", get(model_catalog))
+        .route("/embedding-catalog", get(embedding_catalog))
+        .route("/system-info", get(system_info))
+        .route("/switch-model", post(switch_model))
+        .route("/model-status/{model_id}", get(model_status))
+        .route("/reembed", post(trigger_reembed))
+        .route("/config/prompts", get(config_prompts))
+        .route("/config/classification", get(config_classification))
+        .route("/config/tuning", get(config_tuning))
 }
 
 // ---------------------------------------------------------------------------
@@ -171,14 +182,18 @@ async fn enable_provider(
 
 /// Request body for POST /api/v1/ai/chat.
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct ChatRequest {
-    /// Session ID (created if not found).
-    session_id: String,
+    /// Session ID (created if not found; auto-generated when absent).
+    #[serde(default)]
+    session_id: Option<String>,
     /// The user's message.
     message: String,
-    /// Optional email IDs to include as conversation context.
+    /// Optional conversation history from the frontend (accepted but ignored
+    /// server-side; the backend maintains its own session history).
     #[serde(default)]
-    email_context: Option<Vec<String>>,
+    #[allow(dead_code)]
+    history: Option<serde_json::Value>,
 }
 
 /// POST /api/v1/ai/chat — send a message and get a JSON response.
@@ -198,8 +213,10 @@ async fn chat_message(
         }
     };
 
+    let session_id = req.session_id.unwrap_or_else(|| Uuid::new_v4().to_string());
+
     debug!(
-        session_id = %req.session_id,
+        session_id = %session_id,
         message_len = req.message.len(),
         "Chat request"
     );
@@ -223,8 +240,34 @@ async fn chat_message(
     let audit_timer =
         crate::vectors::audit::AuditTimer::start(&format!("{provider}"), &model_name, "chat", None);
 
+    // RAG: derive context budget from model's context window.
+    // Reserve tokens for: system prompt + history + response (overhead from YAML tuning config).
+    let ctx_window = state.vector_service.config.generative.builtin.context_size as usize;
+    let overhead = state.yaml_config.tuning.rag.overhead_tokens;
+    let rag_budget = ctx_window.saturating_sub(overhead);
+
+    debug!(rag_budget, ctx_window, "RAG context budget calculated");
+    let email_context = if let Some(ref rag) = state.rag_pipeline {
+        match rag.retrieve_context(&req.message, Some(rag_budget)).await {
+            Ok(ctx) if ctx.result_count > 0 => {
+                debug!(
+                    result_count = ctx.result_count,
+                    "RAG: injecting email context"
+                );
+                Some(ctx.formatted_context)
+            }
+            Ok(_) => None,
+            Err(e) => {
+                tracing::warn!("RAG retrieval failed: {e}");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     let result = chat_service
-        .chat(&req.session_id, &req.message, req.email_context)
+        .chat(&session_id, &req.message, email_context)
         .await;
 
     match &result {
@@ -279,15 +322,40 @@ async fn chat_message_sse(
         }
     };
 
+    let session_id = req.session_id.unwrap_or_else(|| Uuid::new_v4().to_string());
+
     debug!(
-        session_id = %req.session_id,
+        session_id = %session_id,
         message_len = req.message.len(),
         "Chat SSE stream request"
     );
 
+    // RAG: derive context budget from model's context window.
+    let ctx_window = state.vector_service.config.generative.builtin.context_size as usize;
+    let rag_budget = ctx_window.saturating_sub(656);
+
+    let email_context = if let Some(ref rag) = state.rag_pipeline {
+        match rag.retrieve_context(&req.message, Some(rag_budget)).await {
+            Ok(ctx) if ctx.result_count > 0 => {
+                debug!(
+                    result_count = ctx.result_count,
+                    "RAG: injecting email context"
+                );
+                Some(ctx.formatted_context)
+            }
+            Ok(_) => None,
+            Err(e) => {
+                tracing::warn!("RAG retrieval failed: {e}");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     // Generate the complete response up-front, then split into SSE events.
     let result = chat_service
-        .chat(&req.session_id, &req.message, req.email_context)
+        .chat(&session_id, &req.message, email_context)
         .await;
 
     let events: Vec<Result<Event, Infallible>> = match result {
@@ -303,31 +371,28 @@ async fn chat_message_sse(
                     .map(|c| String::from_utf8_lossy(c).into_owned())
                     .collect()
             };
-            let total = raw_chunks.len();
 
+            // Emit chunks in the format the frontend expects:
+            // data: {"type":"token","content":"..."}
             let mut evts: Vec<Result<Event, Infallible>> = raw_chunks
                 .into_iter()
-                .enumerate()
-                .filter_map(|(i, chunk)| {
+                .filter_map(|chunk| {
                     let payload = serde_json::json!({
-                        "session_id": response.session_id,
-                        "chunk": chunk,
-                        "chunk_index": i,
-                        "total_chunks": total,
+                        "type": "token",
+                        "content": chunk,
                     });
                     serde_json::to_string(&payload)
                         .ok()
-                        .map(|json| Ok(Event::default().event("chunk").data(json)))
+                        .map(|json| Ok(Event::default().data(json)))
                 })
                 .collect();
 
-            // Final "done" event with the complete response.
+            // Final "done" event with the session ID.
             if let Ok(json) = serde_json::to_string(&serde_json::json!({
-                "session_id": response.session_id,
-                "reply": response.reply,
-                "message_count": response.message_count,
+                "type": "done",
+                "sessionId": response.session_id,
             })) {
-                evts.push(Ok(Event::default().event("done").data(json)));
+                evts.push(Ok(Event::default().data(json)));
             }
 
             evts
@@ -335,9 +400,10 @@ async fn chat_message_sse(
         Err(e) => {
             let mut evts = Vec::new();
             if let Ok(json) = serde_json::to_string(&serde_json::json!({
+                "type": "error",
                 "error": e.to_string(),
             })) {
-                evts.push(Ok(Event::default().event("error").data(json)));
+                evts.push(Ok(Event::default().data(json)));
             }
             evts
         }
@@ -398,4 +464,345 @@ async fn delete_chat_session(
         deleted,
         session_id,
     }))
+}
+
+// ---------------------------------------------------------------------------
+// Model catalog & system info
+// ---------------------------------------------------------------------------
+
+/// GET /api/v1/ai/model-catalog — list available models with hardware recommendations.
+///
+/// Prefers models from YAML config (`models-llm.yaml`); falls back to hardcoded catalog.
+async fn model_catalog(
+    State(state): State<AppState>,
+) -> Json<Vec<crate::vectors::model_catalog::ModelInfo>> {
+    let yaml = &state.yaml_config;
+    let cache_dir = &state.vector_service.config.generative.builtin.cache_dir;
+
+    // If YAML has builtin provider models, serve those.
+    if let Some(builtin) = yaml.llm_catalog.providers.get("builtin") {
+        if !builtin.models.is_empty() {
+            let sys = crate::vectors::model_catalog::get_system_info();
+            let available = sys.available_for_model_mb;
+            let hf_cache = dirs::home_dir()
+                .map(|h| h.join(".cache/huggingface/hub"))
+                .unwrap_or_default();
+
+            let models: Vec<crate::vectors::model_catalog::ModelInfo> = builtin
+                .models
+                .iter()
+                .map(|m| {
+                    let ram_mb = m.min_ram_mb.unwrap_or(500);
+                    let disk_mb = m.disk_mb.unwrap_or(0);
+                    let fits = (ram_mb as u64) <= available;
+                    let repo = m.repo_id.as_deref().unwrap_or("");
+                    let file = m.filename.as_deref().unwrap_or("");
+                    let cache_key = repo.replace('/', "--");
+                    let cached = hf_cache.join(format!("models--{cache_key}")).exists()
+                        || std::path::Path::new(cache_dir).join(file).exists();
+
+                    crate::vectors::model_catalog::ModelInfo {
+                        id: m.id.clone(),
+                        name: m.name.clone(),
+                        params: m.params.clone().unwrap_or_default(),
+                        disk_mb,
+                        ram_mb,
+                        context_size: m.context_size,
+                        quality: m.quality.clone().unwrap_or_else(|| "good".to_string()),
+                        recommended: fits,
+                        cached,
+                        repo_id: repo.to_string(),
+                        filename: file.to_string(),
+                    }
+                })
+                .collect();
+
+            return Json(models);
+        }
+    }
+
+    // No YAML models found — return empty with a log warning.
+    tracing::warn!(
+        "No models found in config/models-llm.yaml under providers.builtin. \
+         Add models to the YAML file or check the config/ directory path."
+    );
+    Json(Vec::new())
+}
+
+// ---------------------------------------------------------------------------
+// Embedding catalog
+// ---------------------------------------------------------------------------
+
+/// A single embedding model entry returned by the API.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EmbeddingCatalogEntry {
+    id: String,
+    name: String,
+    provider: String,
+    dimensions: u32,
+    max_tokens: u32,
+    quality: String,
+    description: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    disk_mb: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    min_ram_mb: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cost_per_1m_tokens: Option<f64>,
+    download_required: bool,
+}
+
+/// GET /api/v1/ai/embedding-catalog — list available embedding models grouped by provider.
+async fn embedding_catalog(State(state): State<AppState>) -> Json<Vec<EmbeddingCatalogEntry>> {
+    let catalog = &state.yaml_config.embedding_catalog;
+
+    let sys = crate::vectors::model_catalog::get_system_info();
+    let available_mb = sys.available_for_model_mb;
+
+    let mut entries = Vec::new();
+    for (provider_name, provider) in &catalog.providers {
+        for model in &provider.models {
+            let ram_mb = model.min_ram_mb.unwrap_or(0);
+            // Filter out models that exceed available RAM (hardware filtering).
+            if ram_mb > 0 && (ram_mb as u64) > available_mb {
+                continue;
+            }
+            entries.push(EmbeddingCatalogEntry {
+                id: model.id.clone(),
+                name: model.name.clone(),
+                provider: provider_name.clone(),
+                dimensions: model.dimensions,
+                max_tokens: model.max_tokens,
+                quality: model.quality.clone().unwrap_or_else(|| "good".to_string()),
+                description: model.description.clone().unwrap_or_default(),
+                disk_mb: model.disk_mb,
+                min_ram_mb: model.min_ram_mb,
+                cost_per_1m_tokens: model.cost_per_1m_tokens,
+                download_required: provider.download_required,
+            });
+        }
+    }
+
+    Json(entries)
+}
+
+/// GET /api/v1/ai/system-info — system hardware info for model selection.
+async fn system_info() -> Json<crate::vectors::model_catalog::SystemInfo> {
+    Json(crate::vectors::model_catalog::get_system_info())
+}
+
+// ---------------------------------------------------------------------------
+// Model switching & re-embedding
+// ---------------------------------------------------------------------------
+
+/// Request body for POST /api/v1/ai/switch-model.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SwitchModelRequest {
+    /// New model ID (e.g., "qwen2.5-3b-q4km").
+    #[allow(dead_code)] // Read when `builtin-llm` feature is enabled
+    model_id: String,
+}
+
+/// Response for model switch.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SwitchModelResponse {
+    model_id: String,
+    /// "ready" | "downloading" | "error"
+    status: String,
+    message: String,
+}
+
+/// Response for model status check.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ModelStatusResponse {
+    model_id: String,
+    /// "cached" | "downloading" | "not_cached"
+    status: String,
+    cached: bool,
+}
+
+/// Track which models are currently being downloaded.
+static DOWNLOADING: std::sync::LazyLock<tokio::sync::RwLock<std::collections::HashSet<String>>> =
+    std::sync::LazyLock::new(|| tokio::sync::RwLock::new(std::collections::HashSet::new()));
+
+/// POST /api/v1/ai/switch-model — switch the active built-in LLM at runtime.
+///
+/// If the model is cached, activates it immediately (status: "ready").
+/// If not cached, starts a background download (status: "downloading").
+/// Poll GET /api/v1/ai/model-status/:model_id to track progress.
+#[cfg(feature = "builtin-llm")]
+async fn switch_model(
+    State(state): State<AppState>,
+    Json(req): Json<SwitchModelRequest>,
+) -> Result<Json<SwitchModelResponse>, (StatusCode, String)> {
+    use crate::vectors::generative_builtin::BuiltInGenerativeModel;
+    use crate::vectors::model_registry::ProviderType;
+
+    let mut config = state.vector_service.config.generative.builtin.clone();
+    config.model_id = req.model_id.clone();
+
+    // Look up context_size from the catalog.
+    let catalog = crate::vectors::model_catalog::get_model_catalog(&config.cache_dir);
+    if let Some(entry) = catalog.iter().find(|m| m.id == req.model_id) {
+        config.context_size = entry.context_size;
+    }
+
+    // Check if already cached — try to initialize (fast if cached).
+    let is_cached = catalog.iter().any(|m| m.id == req.model_id && m.cached);
+
+    if is_cached {
+        // Model is cached — activate immediately.
+        tracing::info!(model_id = %req.model_id, "Switching to cached model");
+        let model = BuiltInGenerativeModel::new(&config).map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Model init failed: {e}"),
+            )
+        })?;
+        state
+            .vector_service
+            .generative_router
+            .register(ProviderType::BuiltIn, std::sync::Arc::new(model), 1)
+            .await;
+
+        return Ok(Json(SwitchModelResponse {
+            model_id: req.model_id,
+            status: "ready".to_string(),
+            message: "Model activated. Ready for chat.".to_string(),
+        }));
+    }
+
+    // Not cached — start background download.
+    let model_id = req.model_id.clone();
+    {
+        let mut downloading = DOWNLOADING.write().await;
+        if downloading.contains(&model_id) {
+            return Ok(Json(SwitchModelResponse {
+                model_id,
+                status: "downloading".to_string(),
+                message: "Download already in progress.".to_string(),
+            }));
+        }
+        downloading.insert(model_id.clone());
+    }
+
+    tracing::info!(model_id = %model_id, "Starting background model download");
+    let router = state.vector_service.generative_router.clone();
+    tokio::spawn(async move {
+        match BuiltInGenerativeModel::new(&config) {
+            Ok(model) => {
+                router
+                    .register(ProviderType::BuiltIn, std::sync::Arc::new(model), 1)
+                    .await;
+                tracing::info!(model_id = %model_id, "Model downloaded and activated");
+            }
+            Err(e) => {
+                tracing::error!(model_id = %model_id, "Model download failed: {e}");
+            }
+        }
+        DOWNLOADING.write().await.remove(&model_id);
+    });
+
+    Ok(Json(SwitchModelResponse {
+        model_id: req.model_id,
+        status: "downloading".to_string(),
+        message: "Download started. Poll /ai/model-status/{id} for progress.".to_string(),
+    }))
+}
+
+#[cfg(not(feature = "builtin-llm"))]
+async fn switch_model(
+    Json(_req): Json<SwitchModelRequest>,
+) -> Result<Json<SwitchModelResponse>, (StatusCode, String)> {
+    Err((
+        StatusCode::NOT_IMPLEMENTED,
+        "Built-in LLM not enabled. Build with --features builtin-llm".to_string(),
+    ))
+}
+
+/// GET /api/v1/ai/model-status/:model_id — check if a model is cached/downloading.
+async fn model_status(
+    State(state): State<AppState>,
+    Path(model_id): Path<String>,
+) -> Json<ModelStatusResponse> {
+    let cache_dir = &state.vector_service.config.generative.builtin.cache_dir;
+    let catalog = crate::vectors::model_catalog::get_model_catalog(cache_dir);
+    let is_cached = catalog.iter().any(|m| m.id == model_id && m.cached);
+    let is_downloading = DOWNLOADING.read().await.contains(&model_id);
+
+    let status = if is_cached {
+        "cached"
+    } else if is_downloading {
+        "downloading"
+    } else {
+        "not_cached"
+    };
+
+    Json(ModelStatusResponse {
+        model_id,
+        status: status.to_string(),
+        cached: is_cached,
+    })
+}
+
+/// Response for re-embed trigger.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ReembedResponse {
+    emails_reset: u64,
+    message: String,
+}
+
+/// POST /api/v1/ai/reembed — mark all emails for re-embedding.
+///
+/// Resets all email embedding_status to 'pending', clears the vector store,
+/// and lets the next poll cycle re-embed everything with the current model.
+async fn trigger_reembed(
+    State(state): State<AppState>,
+) -> Result<Json<ReembedResponse>, (StatusCode, String)> {
+    // Reset all embeddings to pending.
+    let reset = sqlx::query("UPDATE emails SET embedding_status = 'pending', vector_id = NULL")
+        .execute(&state.db.pool)
+        .await
+        .map(|r| r.rows_affected())
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    tracing::info!(
+        emails_reset = reset,
+        "Re-embed triggered: all emails marked pending"
+    );
+
+    Ok(Json(ReembedResponse {
+        emails_reset: reset,
+        message: format!("{reset} emails queued for re-embedding. This will happen automatically on the next sync cycle."),
+    }))
+}
+
+// ---------------------------------------------------------------------------
+// Handlers — YAML config endpoints (Task 3)
+// ---------------------------------------------------------------------------
+
+/// GET /api/v1/ai/config/prompts — return prompts from YAML config.
+async fn config_prompts(
+    State(state): State<AppState>,
+) -> Json<crate::vectors::yaml_config::PromptsConfig> {
+    Json(state.yaml_config.prompts.clone())
+}
+
+/// GET /api/v1/ai/config/classification — return categories and rules from YAML config.
+async fn config_classification(
+    State(state): State<AppState>,
+) -> Json<crate::vectors::yaml_config::ClassificationConfig> {
+    Json(state.yaml_config.classification.clone())
+}
+
+/// GET /api/v1/ai/config/tuning — return tuning parameters from YAML config.
+async fn config_tuning(
+    State(state): State<AppState>,
+) -> Json<crate::vectors::yaml_config::TuningConfig> {
+    Json(state.yaml_config.tuning.clone())
 }

@@ -127,6 +127,7 @@ pub struct EmailEmbeddingRecord {
     pub embedded_at: Option<DateTime<Utc>>,
 }
 
+#[allow(dead_code)]
 impl EmailEmbeddingRecord {
     /// Create a new record in Pending state.
     pub fn pending(email_id: String) -> Self {
@@ -201,6 +202,7 @@ pub struct IngestionPipeline {
     categorizer: Arc<VectorCategorizer>,
     db: Arc<Database>,
     generative: Option<Arc<dyn crate::vectors::generative::GenerativeModel>>,
+    cluster_engine: Option<Arc<crate::vectors::clustering::ClusterEngine>>,
     progress_tx: broadcast::Sender<IngestionProgress>,
     state: Arc<RwLock<IngestionState>>,
     resume_notify: Arc<Notify>,
@@ -221,6 +223,7 @@ impl IngestionPipeline {
             categorizer,
             db,
             generative: None,
+            cluster_engine: None,
             progress_tx,
             state: Arc::new(RwLock::new(IngestionState {
                 current_job: None,
@@ -236,6 +239,11 @@ impl IngestionPipeline {
         gen: Option<Arc<dyn crate::vectors::generative::GenerativeModel>>,
     ) {
         self.generative = gen;
+    }
+
+    /// Inject the cluster engine for the clustering phase of ingestion.
+    pub fn set_cluster_engine(&mut self, engine: Arc<crate::vectors::clustering::ClusterEngine>) {
+        self.cluster_engine = Some(engine);
     }
 
     /// Subscribe to progress updates (for SSE streaming).
@@ -282,6 +290,7 @@ impl IngestionPipeline {
             categorizer: self.categorizer.clone(),
             db: self.db.clone(),
             generative: self.generative.clone(),
+            cluster_engine: self.cluster_engine.clone(),
             progress_tx: self.progress_tx.clone(),
             state: self.state.clone(),
             resume_notify: self.resume_notify.clone(),
@@ -431,6 +440,7 @@ impl IngestionPipeline {
             categorizer: self.categorizer.clone(),
             db: self.db.clone(),
             generative: self.generative.clone(),
+            cluster_engine: self.cluster_engine.clone(),
             progress_tx: self.progress_tx.clone(),
             state: self.state.clone(),
             resume_notify: self.resume_notify.clone(),
@@ -489,6 +499,7 @@ struct IngestionPipelineHandle {
     categorizer: Arc<VectorCategorizer>,
     db: Arc<Database>,
     generative: Option<Arc<dyn crate::vectors::generative::GenerativeModel>>,
+    cluster_engine: Option<Arc<crate::vectors::clustering::ClusterEngine>>,
     progress_tx: broadcast::Sender<IngestionProgress>,
     state: Arc<RwLock<IngestionState>>,
     resume_notify: Arc<Notify>,
@@ -793,14 +804,29 @@ impl IngestionPipelineHandle {
         // Phase 4: Clustering (ADR-009)
         self.update_phase(IngestionPhase::Clustering).await;
         self.broadcast_progress(&job_id).await;
-        // TODO: Wire ClusterEngine::recluster() here when cluster_engine is plumbed
-        // into IngestionPipelineHandle. Requires minimum 50 embedded emails.
         let embedded_count = {
             let state = self.state.read().await;
             state.current_job.as_ref().map(|j| j.embedded).unwrap_or(0)
         };
         if embedded_count >= 50 {
-            info!(job_id = %job_id, embedded = embedded_count, "Clustering phase: sufficient emails for clustering (not yet wired)");
+            if let Some(ref engine) = self.cluster_engine {
+                match engine.full_recluster().await {
+                    Ok(report) => {
+                        info!(
+                            job_id = %job_id,
+                            clusters = report.cluster_count,
+                            new = report.new_clusters,
+                            merged = report.merged_clusters,
+                            "Clustering complete"
+                        );
+                    }
+                    Err(e) => {
+                        warn!(job_id = %job_id, error = %e, "Clustering failed, continuing");
+                    }
+                }
+            } else {
+                debug!(job_id = %job_id, "Clustering phase: skipped (no cluster engine)");
+            }
         } else {
             debug!(job_id = %job_id, embedded = embedded_count, "Clustering phase: skipped (< 50 embedded emails)");
         }

@@ -35,8 +35,12 @@ pub struct AppState {
     /// Chat service for AI-assisted email conversations (R-07).
     /// `None` when no generative model is configured.
     pub chat_service: Option<Arc<vectors::chat::ChatService>>,
+    /// RAG pipeline for email-aware chat (ADR-022).
+    pub rag_pipeline: Option<Arc<vectors::rag::RagPipeline>>,
     /// Background poll scheduler for periodic email sync.
     pub poll_scheduler: Option<email::poll_scheduler::PollSchedulerHandle>,
+    /// YAML configuration loaded from `config/` directory.
+    pub yaml_config: Arc<vectors::yaml_config::YamlConfig>,
 }
 
 #[tokio::main]
@@ -51,8 +55,20 @@ async fn main() -> anyhow::Result<()> {
         .with(middleware::log_scrub::ScrubLayer)
         .init();
 
-    // ── CLI: --download-models (ADR-013, item #33) ────────────────────
+    // ── CLI: --download-model <model_id> (ADR-013, Phase 3) ──────────
     let args: Vec<String> = std::env::args().collect();
+    if let Some(pos) = args.iter().position(|a| a == "--download-model") {
+        if let Some(model_id) = args.get(pos + 1) {
+            return vectors::model_download::run_download_model_by_id(model_id)
+                .map_err(|e| anyhow::anyhow!("{e}"));
+        } else {
+            eprintln!("Usage: emailibrium --download-model <model-id>");
+            eprintln!("Run 'make models' to see available models.");
+            std::process::exit(1);
+        }
+    }
+
+    // ── CLI: --download-models (ADR-013, item #33) ────────────────────
     if args.iter().any(|a| a == "--download-models") {
         // Parse optional --models-dir and --model flags.
         let models_dir = args
@@ -104,6 +120,17 @@ async fn main() -> anyhow::Result<()> {
 
     tracing::info!("Starting Emailibrium backend");
 
+    // Load YAML configuration from config/ directory (prompts, tuning, classification, etc.)
+    let yaml_config = Arc::new(
+        vectors::yaml_config::load_yaml_config("../config").unwrap_or_else(|e| {
+            tracing::warn!("Failed to load YAML config: {e} — using defaults");
+            vectors::yaml_config::YamlConfig::default()
+        }),
+    );
+
+    // ── Provider validation summary (Phase 1) ──────────────────────────
+    validate_provider_catalog(&yaml_config);
+
     // Load configuration
     let config = VectorConfig::load()?;
 
@@ -142,32 +169,19 @@ async fn main() -> anyhow::Result<()> {
     match config.generative.provider.as_str() {
         "builtin" => {
             let model = &config.generative.builtin.model_id;
-            let cache_dir = &config.generative.builtin.cache_dir;
             let gpu = config.generative.builtin.gpu_layers;
 
-            // Check if model is cached
-            let cache_path = std::path::Path::new(cache_dir);
-            let cached = cache_path.exists()
-                && std::fs::read_dir(cache_path)
-                    .map(|entries| {
-                        entries
-                            .flatten()
-                            .any(|e| e.path().extension().is_some_and(|ext| ext == "gguf"))
-                    })
-                    .unwrap_or(false);
-
-            if cached {
+            if vector_service.generative.is_some() {
                 tracing::info!(
-                    "Generative: builtin ({}, gpu_layers={}) — model cached",
+                    "Generative: builtin ({}, gpu_layers={}) — ready",
                     model,
                     gpu,
                 );
             } else {
                 tracing::info!(
-                    "Generative: builtin ({}) — model not cached, will download on first use",
+                    "Generative: builtin ({}) — not available (build with --features builtin-llm)",
                     model,
                 );
-                tracing::info!("  Tip: run 'make download-models' to pre-download");
             }
         }
         "ollama" => {
@@ -183,6 +197,9 @@ async fn main() -> anyhow::Result<()> {
                 config.generative.cloud.provider,
                 config.generative.cloud.model,
             );
+        }
+        "openrouter" => {
+            tracing::info!("Generative: openrouter ({})", config.generative.cloud.model,);
         }
         "none" => {
             tracing::info!("Generative: disabled (rule-based fallback only)");
@@ -216,16 +233,24 @@ async fn main() -> anyhow::Result<()> {
         }))
         .await;
 
-    // Initialize chat service using the generative router for provider failover (R-07)
-    let chat_service = if vector_service.generative.is_some() {
-        Some(Arc::new(vectors::chat::ChatService::new(
-            Duration::from_secs(3600), // 1 hour session TTL
-            20,                        // 20-message sliding window
+    // Initialize chat service using the generative router for provider failover (R-07).
+    // Always created — when no backend provider is configured (e.g. "builtin"),
+    // the frontend handles chat locally via its own generative router.
+    let chat_service = Some(Arc::new(
+        vectors::chat::ChatService::new(
+            Duration::from_secs(yaml_config.tuning.chat.session_ttl_secs),
+            yaml_config.tuning.chat.max_history_messages,
             vector_service.generative_router.clone(),
-        )))
-    } else {
-        None
-    };
+        )
+        .with_system_prompt(yaml_config.prompts.chat_assistant.clone()),
+    ));
+
+    // Initialize RAG pipeline for email-aware chat (ADR-022, DDD-010).
+    let rag_pipeline = Some(Arc::new(vectors::rag::RagPipeline::new(
+        vector_service.hybrid_search.clone(),
+        db.clone(),
+        vector_service.config.rag.clone(),
+    )));
 
     let state = AppState {
         vector_service,
@@ -235,7 +260,9 @@ async fn main() -> anyhow::Result<()> {
         oauth_manager: oauth_manager.clone(),
         event_bus,
         chat_service,
+        rag_pipeline,
         poll_scheduler: None, // Initialized below after state creation.
+        yaml_config: yaml_config.clone(),
     };
 
     // Start the background email poll scheduler.
@@ -252,13 +279,17 @@ async fn main() -> anyhow::Result<()> {
                 .map_err(|(_status, msg)| msg)?;
 
             // Phase 1+: Run ingestion pipeline on pending emails.
-            if synced > 0 {
-                if let Err(e) = s
-                    .vector_service
-                    .ingestion_pipeline
-                    .start_ingestion(&account_id)
-                    .await
-                {
+            // Always attempt ingestion — there may be pending embeddings from
+            // a prior incomplete run even when no new emails were synced.
+            if let Err(e) = s
+                .vector_service
+                .ingestion_pipeline
+                .start_ingestion(&account_id)
+                .await
+            {
+                // "already in progress" is expected when a job is running; don't warn.
+                let msg = e.to_string();
+                if !msg.contains("already in progress") {
                     tracing::warn!(
                         account_id = %account_id,
                         "Poll scheduler: ingestion pipeline failed: {e}"
@@ -363,4 +394,121 @@ async fn main() -> anyhow::Result<()> {
     .await?;
 
     Ok(())
+}
+
+/// Log a startup validation summary for each provider in the model catalogs.
+///
+/// - **builtin**: checks if GGUF files exist in the HuggingFace cache or local cache dir.
+/// - **ollama**: pings the base URL (non-blocking, just logs).
+/// - **cloud providers**: checks if the required API key env var is set.
+fn validate_provider_catalog(yaml_config: &vectors::yaml_config::YamlConfig) {
+    // ── LLM catalog ────────────────────────────────────────────────────
+    let hf_cache = dirs::home_dir()
+        .map(|h| h.join(".cache/huggingface/hub"))
+        .unwrap_or_default();
+
+    for (provider_name, provider) in &yaml_config.llm_catalog.providers {
+        let total = provider.models.len();
+
+        match provider_name.as_str() {
+            "builtin" => {
+                let mut cached_count = 0u32;
+                for model in &provider.models {
+                    let repo = model.repo_id.as_deref().unwrap_or("");
+                    let file = model.filename.as_deref().unwrap_or("");
+                    let cache_key = repo.replace('/', "--");
+                    let in_hf = hf_cache.join(format!("models--{cache_key}")).exists();
+                    // Also check the default local cache dir.
+                    let in_local = if !file.is_empty() {
+                        std::path::Path::new(file).exists()
+                    } else {
+                        false
+                    };
+                    let is_cached = in_hf || in_local;
+                    if is_cached {
+                        cached_count += 1;
+                    }
+                    tracing::debug!(
+                        model_id = %model.id,
+                        cached = is_cached,
+                        "builtin model cache status"
+                    );
+                }
+                tracing::info!(
+                    "Provider builtin: {total} models configured, {cached_count} cached"
+                );
+            }
+            "ollama" => {
+                let base_url = provider
+                    .base_url
+                    .as_deref()
+                    .unwrap_or("http://localhost:11434");
+                tracing::info!("Provider ollama: {total} models configured, base_url={base_url}");
+                // Non-blocking ping — spawn a task so it doesn't delay startup.
+                let url = format!("{base_url}/api/tags");
+                tokio::spawn(async move {
+                    match reqwest::Client::new()
+                        .get(&url)
+                        .timeout(std::time::Duration::from_secs(3))
+                        .send()
+                        .await
+                    {
+                        Ok(resp) if resp.status().is_success() => {
+                            tracing::info!("Provider ollama: reachable at {url}");
+                        }
+                        Ok(resp) => {
+                            tracing::warn!(
+                                "Provider ollama: responded with status {} at {url}",
+                                resp.status()
+                            );
+                        }
+                        Err(e) => {
+                            tracing::warn!("Provider ollama: not reachable at {url} — {e}");
+                        }
+                    }
+                });
+            }
+            _ => {
+                // Cloud providers (openai, anthropic, openrouter, etc.)
+                if let Some(env_var) = &provider.api_key_env {
+                    if env_var.is_empty() {
+                        tracing::info!(
+                            "Provider {provider_name}: {total} models configured, no API key env var specified"
+                        );
+                    } else if std::env::var(env_var).is_ok() {
+                        tracing::info!(
+                            "Provider {provider_name}: {total} models configured, API key set ({env_var})"
+                        );
+                    } else {
+                        tracing::warn!(
+                            "Provider {provider_name}: {total} models configured, API key NOT set ({env_var})"
+                        );
+                    }
+                } else {
+                    tracing::info!("Provider {provider_name}: {total} models configured");
+                }
+            }
+        }
+    }
+
+    // ── Embedding catalog ──────────────────────────────────────────────
+    for (provider_name, provider) in &yaml_config.embedding_catalog.providers {
+        let total = provider.models.len();
+
+        if let Some(env_var) = &provider.api_key_env {
+            if !env_var.is_empty() {
+                if std::env::var(env_var).is_ok() {
+                    tracing::info!(
+                        "Embedding provider {provider_name}: {total} models configured, API key set ({env_var})"
+                    );
+                } else {
+                    tracing::warn!(
+                        "Embedding provider {provider_name}: {total} models configured, API key NOT set ({env_var})"
+                    );
+                }
+                continue;
+            }
+        }
+        tracing::info!("Embedding provider {provider_name}: {total} models configured");
+    }
 }

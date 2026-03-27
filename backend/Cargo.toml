@@ -10,6 +10,7 @@ license = "MIT"
 default = ["vectors"]
 vectors = []
 test-vectors = ["vectors"]
+builtin-llm = ["dep:llama-cpp-2", "dep:hf-hub", "dep:encoding_rs"]
 
 [dependencies]
 # Web framework
@@ -77,12 +78,20 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 
 # Config
 figment = { version = "0.10", features = ["yaml", "env", "toml"] }
+serde_yaml = "0.9"
 fastembed = "5.13.0"
 
 # Vector database (ADR-003: RuVector as primary)
 ruvector-core = { path = "../ruvector/crates/ruvector-core", default-features = false, features = ["hnsw", "storage", "simd", "parallel"] }
 ruvector-collections = { path = "../ruvector/crates/ruvector-collections" }
 ruvector-gnn = { path = "../ruvector/crates/ruvector-gnn", default-features = false }
+
+# Built-in local LLM (ADR-021 addendum, opt-in via --features builtin-llm)
+llama-cpp-2 = { version = "0.1", optional = true }
+hf-hub = { version = "0.4", optional = true }
+encoding_rs = { version = "0.8", optional = true }
+shellexpand = "3"
+dirs = "6"
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["async_tokio"] }

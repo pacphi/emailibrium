@@ -1,7 +1,7 @@
-import { type ReactNode, useState, useEffect } from 'react';
+import { type ReactNode } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import type { AppStats } from './hooks/useStats';
-import { getAccounts, getEmailCounts } from '@emailibrium/api';
-import type { EmailCounts } from '@emailibrium/api';
+import { getAccounts, getEmailCounts, getEmbeddingStatus } from '@emailibrium/api';
 
 /** Map backend index type identifiers to human-friendly display names. */
 function formatIndexType(raw?: string): string {
@@ -82,36 +82,37 @@ interface StatsCardsProps {
 }
 
 export function StatsCards({ stats, isLoading }: StatsCardsProps) {
-  const [accountCount, setAccountCount] = useState<number | null>(null);
-  const [accountsByProvider, setAccountsByProvider] = useState<Record<string, number>>({});
-  const [emailCounts, setEmailCounts] = useState<EmailCounts | null>(null);
+  // All dashboard data auto-refreshes every 10s via React Query.
+  const accountsQuery = useQuery({
+    queryKey: ['dashboard-accounts'],
+    queryFn: getAccounts,
+    staleTime: 5_000,
+    refetchInterval: 10_000,
+  });
 
-  useEffect(() => {
-    getAccounts()
-      .then((accounts) => {
-        setAccountCount(accounts.length);
-        const byProvider: Record<string, number> = {};
-        for (const a of accounts) {
-          byProvider[a.provider] = (byProvider[a.provider] || 0) + 1;
-        }
-        setAccountsByProvider(byProvider);
-      })
-      .catch(() => setAccountCount(0));
+  const emailCountsQuery = useQuery({
+    queryKey: ['dashboard-email-counts'],
+    queryFn: getEmailCounts,
+    staleTime: 5_000,
+    refetchInterval: 10_000,
+  });
 
-    getEmailCounts()
-      .then((counts) => setEmailCounts(counts))
-      .catch(() => {});
-  }, []);
+  const embeddingQuery = useQuery({
+    queryKey: ['dashboard-embedding-status'],
+    queryFn: getEmbeddingStatus,
+    staleTime: 5_000,
+    refetchInterval: 10_000,
+  });
 
-  // Refresh email counts periodically (every 10s) to reflect sync progress.
-  useEffect(() => {
-    const interval = setInterval(() => {
-      getEmailCounts()
-        .then((counts) => setEmailCounts(counts))
-        .catch(() => {});
-    }, 10_000);
-    return () => clearInterval(interval);
-  }, []);
+  const accounts = accountsQuery.data ?? [];
+  const accountCount = accounts.length;
+  const accountsByProvider: Record<string, number> = {};
+  for (const a of accounts) {
+    accountsByProvider[a.provider] = (accountsByProvider[a.provider] || 0) + 1;
+  }
+
+  const emailCounts = emailCountsQuery.data ?? null;
+  const embeddingStatus = embeddingQuery.data ?? null;
 
   if (isLoading) {
     return (
@@ -131,7 +132,7 @@ export function StatsCards({ stats, isLoading }: StatsCardsProps) {
     {
       icon: <AccountsIcon />,
       label: 'Accounts',
-      value: accountCount?.toString() ?? '0',
+      value: accountCount.toString(),
     },
     {
       icon: <EmailCountIcon />,
@@ -177,7 +178,7 @@ export function StatsCards({ stats, isLoading }: StatsCardsProps) {
     pop3: '#9CA3AF',
   };
 
-  const totalAccounts = accountCount ?? 0;
+  const totalAccounts = accountCount;
 
   return (
     <div className="space-y-4">
@@ -188,70 +189,137 @@ export function StatsCards({ stats, isLoading }: StatsCardsProps) {
         {cards.map((card) => (
           <StatCard key={card.label} {...card} />
         ))}
-      </div>
 
-      {totalAccounts > 0 && Object.keys(accountsByProvider).length > 0 && (
-        <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-800">
-          <p className="text-sm font-medium text-gray-500 dark:text-gray-400 mb-3">
-            Accounts by Provider
-          </p>
-          <div className="flex items-center gap-6">
-            {/* Simple donut chart using SVG */}
-            <svg viewBox="0 0 36 36" className="h-20 w-20 flex-shrink-0">
-              {(() => {
-                const entries = Object.entries(accountsByProvider);
-                let offset = 0;
-                return entries.map(([provider, count]) => {
-                  const pct = (count / totalAccounts) * 100;
-                  const dashArray = `${pct} ${100 - pct}`;
-                  const el = (
-                    <circle
-                      key={provider}
-                      cx="18"
-                      cy="18"
-                      r="15.9155"
-                      fill="none"
-                      stroke={providerColors[provider] ?? '#6B7280'}
-                      strokeWidth="3.5"
-                      strokeDasharray={dashArray}
-                      strokeDashoffset={-offset}
-                      strokeLinecap="round"
+        {/* Accounts by Provider — spans 6 of 8 columns */}
+        {totalAccounts > 0 && Object.keys(accountsByProvider).length > 0 && (
+          <div className="col-span-2 rounded-xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-800 lg:col-span-4 xl:col-span-6">
+            <p className="text-sm font-medium text-gray-500 dark:text-gray-400 mb-3">
+              Accounts by Provider
+            </p>
+            <div className="flex items-center gap-6">
+              <svg viewBox="0 0 36 36" className="h-20 w-20 flex-shrink-0">
+                {(() => {
+                  const entries = Object.entries(accountsByProvider);
+                  let offset = 0;
+                  return entries.map(([provider, count]) => {
+                    const pct = (count / totalAccounts) * 100;
+                    const dashArray = `${pct} ${100 - pct}`;
+                    const el = (
+                      <circle
+                        key={provider}
+                        cx="18"
+                        cy="18"
+                        r="15.9155"
+                        fill="none"
+                        stroke={providerColors[provider] ?? '#6B7280'}
+                        strokeWidth="3.5"
+                        strokeDasharray={dashArray}
+                        strokeDashoffset={-offset}
+                        strokeLinecap="round"
+                      />
+                    );
+                    offset += pct;
+                    return el;
+                  });
+                })()}
+                <text
+                  x="18"
+                  y="18"
+                  textAnchor="middle"
+                  dominantBaseline="central"
+                  className="fill-gray-900 dark:fill-white"
+                  fontSize="8"
+                  fontWeight="600"
+                >
+                  {totalAccounts}
+                </text>
+              </svg>
+              <div className="flex flex-wrap gap-x-6 gap-y-2">
+                {Object.entries(accountsByProvider).map(([provider, count]) => (
+                  <div key={provider} className="flex items-center gap-2">
+                    <span
+                      className="inline-block h-3 w-3 rounded-full"
+                      style={{ backgroundColor: providerColors[provider] ?? '#6B7280' }}
                     />
-                  );
-                  offset += pct;
-                  return el;
-                });
-              })()}
-              <text
-                x="18"
-                y="18"
-                textAnchor="middle"
-                dominantBaseline="central"
-                className="fill-gray-900 dark:fill-white"
-                fontSize="8"
-                fontWeight="600"
-              >
-                {totalAccounts}
-              </text>
-            </svg>
-            {/* Legend */}
-            <div className="flex flex-wrap gap-x-6 gap-y-2">
-              {Object.entries(accountsByProvider).map(([provider, count]) => (
-                <div key={provider} className="flex items-center gap-2">
-                  <span
-                    className="inline-block h-3 w-3 rounded-full"
-                    style={{ backgroundColor: providerColors[provider] ?? '#6B7280' }}
-                  />
-                  <span className="text-sm capitalize text-gray-700 dark:text-gray-300">
-                    {provider}
-                  </span>
-                  <span className="text-sm font-medium text-gray-900 dark:text-white">{count}</span>
-                </div>
-              ))}
+                    <span className="text-sm capitalize text-gray-700 dark:text-gray-300">
+                      {provider}
+                    </span>
+                    <span className="text-sm font-medium text-gray-900 dark:text-white">
+                      {count}
+                    </span>
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        )}
+
+        {/* AI Readiness — spans 2 of 8 columns */}
+        {embeddingStatus && embeddingStatus.totalEmails > 0 && (
+          <div className="col-span-2 rounded-xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-800">
+            <p className="text-sm font-medium text-gray-500 dark:text-gray-400 mb-3">
+              AI Readiness
+            </p>
+            {(() => {
+              const { embeddedCount, pendingCount, failedCount } =
+                embeddingStatus.embeddingStatusSummary;
+              const total = embeddingStatus.totalEmails;
+              const pct = total > 0 ? Math.round((embeddedCount / total) * 100) : 0;
+              const isReady = pct === 100;
+              const isInProgress = pendingCount > 0;
+
+              return (
+                <div className="space-y-3">
+                  <div>
+                    <div className="flex items-center justify-between text-sm mb-1">
+                      <span className="text-gray-700 dark:text-gray-300">Embeddings</span>
+                      <span className="font-medium text-gray-900 dark:text-white">{pct}%</span>
+                    </div>
+                    <div className="h-2 w-full rounded-full bg-gray-200 dark:bg-gray-700">
+                      <div
+                        className={`h-2 rounded-full transition-all duration-500 ${
+                          isReady
+                            ? 'bg-green-500'
+                            : isInProgress
+                              ? 'bg-indigo-500'
+                              : 'bg-yellow-500'
+                        }`}
+                        style={{ width: `${pct}%` }}
+                      />
+                    </div>
+                  </div>
+                  <div className="text-xs">
+                    <span className="flex items-center gap-1.5">
+                      <span
+                        className={`inline-block h-2 w-2 rounded-full ${
+                          isReady
+                            ? 'bg-green-500'
+                            : isInProgress
+                              ? 'animate-pulse bg-indigo-500'
+                              : 'bg-yellow-500'
+                        }`}
+                      />
+                      <span className="text-gray-600 dark:text-gray-400">
+                        {isReady
+                          ? 'Chat ready'
+                          : isInProgress
+                            ? `${pendingCount.toLocaleString()} pending`
+                            : 'Waiting'}
+                      </span>
+                    </span>
+                    {failedCount > 0 && (
+                      <span className="flex items-center gap-1.5 mt-1">
+                        <span className="inline-block h-2 w-2 rounded-full bg-red-500" />
+                        <span className="text-red-600 dark:text-red-400">{failedCount} failed</span>
+                      </span>
+                    )}
+                  </div>
+                </div>
+              );
+            })()}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

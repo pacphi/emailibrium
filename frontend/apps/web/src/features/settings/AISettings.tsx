@@ -4,10 +4,10 @@ import { useState, useMemo } from 'react';
 import { ModelDownloadProgress } from './components/ModelDownloadProgress';
 
 // ---------------------------------------------------------------------------
-// Embedding models grouped by provider
+// Embedding models — loaded from API (config/models-embedding.yaml)
 // ---------------------------------------------------------------------------
 
-type EmbeddingProvider = 'onnx' | 'ollama' | 'openai';
+type EmbeddingProvider = string;
 
 interface EmbeddingModelOption {
   value: string;
@@ -17,66 +17,40 @@ interface EmbeddingModelOption {
   description: string;
 }
 
-const EMBEDDING_MODELS: EmbeddingModelOption[] = [
-  // ONNX (local, privacy-first — ADR-002 default)
-  {
-    value: 'all-MiniLM-L6-v2',
-    label: 'all-MiniLM-L6-v2',
-    provider: 'onnx',
-    dimensions: 384,
-    description: 'Fast, lightweight English embedding (22M params). Best size/quality trade-off.',
-  },
-  {
-    value: 'bge-small-en-v1.5',
-    label: 'bge-small-en-v1.5',
-    provider: 'onnx',
-    dimensions: 384,
-    description: 'Higher quality English embedding with longer context (33M params).',
-  },
-  {
-    value: 'bge-base-en-v1.5',
-    label: 'bge-base-en-v1.5',
-    provider: 'onnx',
-    dimensions: 768,
-    description: 'High quality English embedding. Requires more memory (109M params).',
-  },
-  // Ollama (local, requires running Ollama)
-  {
-    value: 'nomic-embed-text',
-    label: 'nomic-embed-text',
-    provider: 'ollama',
-    dimensions: 768,
-    description: 'General-purpose embedding via Ollama. Requires Ollama running locally.',
-  },
-  {
-    value: 'mxbai-embed-large',
-    label: 'mxbai-embed-large',
-    provider: 'ollama',
-    dimensions: 1024,
-    description: 'High quality embedding via Ollama. Larger model, better for complex queries.',
-  },
-  // OpenAI (cloud, requires API key)
-  {
-    value: 'text-embedding-3-small',
-    label: 'text-embedding-3-small',
-    provider: 'openai',
-    dimensions: 1536,
-    description: 'OpenAI cloud embedding. Fast and cost-effective. Requires API key.',
-  },
-  {
-    value: 'text-embedding-3-large',
-    label: 'text-embedding-3-large',
-    provider: 'openai',
-    dimensions: 3072,
-    description: 'OpenAI highest quality cloud embedding. Requires API key.',
-  },
-];
+interface EmbeddingCatalogEntry {
+  id: string;
+  name: string;
+  provider: string;
+  dimensions: number;
+  maxTokens: number;
+  quality: string;
+  description: string;
+  diskMb?: number;
+  minRamMb?: number;
+  costPer1mTokens?: number;
+  downloadRequired: boolean;
+}
 
-const EMBEDDING_PROVIDERS: { value: EmbeddingProvider; label: string; badge?: string }[] = [
-  { value: 'onnx', label: 'Built-in (ONNX)', badge: 'Recommended' },
-  { value: 'ollama', label: 'Ollama (Local)' },
-  { value: 'openai', label: 'OpenAI (Cloud)' },
-];
+async function fetchEmbeddingCatalog(): Promise<EmbeddingModelOption[]> {
+  const res = await fetch('/api/v1/ai/embedding-catalog', { signal: AbortSignal.timeout(3000) });
+  if (!res.ok) throw new Error(`Embedding catalog returned ${res.status}`);
+  const data: EmbeddingCatalogEntry[] = await res.json();
+  return data.map((m) => ({
+    value: m.id,
+    label: m.name,
+    provider: m.provider,
+    dimensions: m.dimensions,
+    description: m.description,
+  }));
+}
+
+// Provider display metadata — derived from API data or fallback defaults.
+const EMBEDDING_PROVIDER_META: Record<string, { label: string; badge?: string }> = {
+  onnx: { label: 'Built-in (ONNX)', badge: 'Recommended' },
+  ollama: { label: 'Ollama (Local)' },
+  openai: { label: 'OpenAI (Cloud)' },
+  cohere: { label: 'Cohere (Cloud)' },
+};
 
 // ---------------------------------------------------------------------------
 // LLM providers and their models
@@ -118,57 +92,14 @@ const LLM_PROVIDERS: {
   },
 ];
 
+// Model lists are loaded from the backend API (sourced from config/models-llm.yaml).
+// Empty arrays here — the UI shows a helpful message when no models are available.
 const LLM_MODELS: Record<LlmProvider, LlmModelOption[]> = {
   none: [],
-  builtin: [
-    {
-      value: 'qwen2.5-0.5b-q4km',
-      label: 'Qwen 2.5 0.5B',
-      description: 'Fast classification (0.5B params, ~350 MB)',
-    },
-    {
-      value: 'smollm2-360m-q4km',
-      label: 'SmolLM2 360M',
-      description: 'Ultra-light classification (360M params, ~250 MB)',
-    },
-    {
-      value: 'smollm2-1.7b-q4km',
-      label: 'SmolLM2 1.7B',
-      description: 'Better quality + basic chat (1.7B params, ~1 GB)',
-    },
-    {
-      value: 'llama3.2-3b-q4km',
-      label: 'Llama 3.2 3B',
-      description: 'High-quality chat (3B params, ~1.8 GB)',
-    },
-    {
-      value: 'phi3.5-mini-q4km',
-      label: 'Phi 3.5 mini',
-      description: 'Best quality, higher resources (3.8B params, ~2.3 GB)',
-    },
-  ],
-  local: [
-    { value: 'llama3.2:1b', label: 'Llama 3.2 1B', description: 'Fast classification (1B params)' },
-    { value: 'llama3.2:3b', label: 'Llama 3.2 3B', description: 'Better quality chat (3B params)' },
-    { value: 'mistral:7b', label: 'Mistral 7B', description: 'Strong general-purpose (7B params)' },
-    { value: 'gemma2:2b', label: 'Gemma 2 2B', description: 'Compact and efficient (2B params)' },
-  ],
-  openai: [
-    { value: 'gpt-4o-mini', label: 'GPT-4o mini', description: 'Fast and cost-effective' },
-    { value: 'gpt-4o', label: 'GPT-4o', description: 'Highest quality' },
-  ],
-  anthropic: [
-    {
-      value: 'claude-sonnet-4-6',
-      label: 'Claude Sonnet 4',
-      description: 'Balanced speed and quality',
-    },
-    {
-      value: 'claude-haiku-4-5-20251001',
-      label: 'Claude Haiku 4.5',
-      description: 'Fast and cost-effective',
-    },
-  ],
+  builtin: [],
+  local: [],
+  openai: [],
+  anthropic: [],
 };
 
 // ---------------------------------------------------------------------------
@@ -192,6 +123,31 @@ async function fetchOllamaModels(baseUrl: string): Promise<LlmModelOption[]> {
   }));
 }
 
+interface ModelCatalogEntry {
+  id: string;
+  name: string;
+  params: string;
+  diskMb: number;
+  ramMb: number;
+  contextSize: number;
+  quality: string;
+  recommended: boolean;
+  cached: boolean;
+}
+
+async function fetchModelCatalog(): Promise<LlmModelOption[]> {
+  const res = await fetch('/api/v1/ai/model-catalog', { signal: AbortSignal.timeout(3000) });
+  if (!res.ok) throw new Error(`Model catalog returned ${res.status}`);
+  const data: ModelCatalogEntry[] = await res.json();
+  return data
+    .filter((m) => m.recommended)
+    .map((m) => ({
+      value: m.id,
+      label: `${m.name} (${m.params})`,
+      description: `${m.quality} quality, ${m.contextSize.toLocaleString()} ctx, ~${m.diskMb >= 1000 ? `${(m.diskMb / 1000).toFixed(1)}GB` : `${m.diskMb}MB`} disk${m.cached ? ' (cached)' : ''}`,
+    }));
+}
+
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
@@ -212,16 +168,46 @@ export function AISettings() {
     setOllamaBaseUrl,
     setSonaLearningEnabled,
     setLearningRateSensitivity,
+    builtInLlmModel,
+    setBuiltInLlmModel,
   } = useSettings();
 
   const [isResetting, setIsResetting] = useState(false);
-  const [llmModel, setLlmModel] = useState(() => LLM_MODELS[llmProvider]?.[0]?.value ?? '');
+  const [llmModel, setLlmModel] = useState(
+    () => builtInLlmModel || LLM_MODELS[llmProvider]?.[0]?.value || '',
+  );
+  const [modelSwitchStatus, setModelSwitchStatus] = useState<
+    'idle' | 'downloading' | 'ready' | 'error'
+  >('idle');
+
+  // Fetch embedding catalog from API
+  const embeddingCatalogQuery = useQuery({
+    queryKey: ['embedding-catalog'],
+    queryFn: fetchEmbeddingCatalog,
+    staleTime: 60_000,
+    retry: false,
+  });
+
+  const embeddingModels: EmbeddingModelOption[] = useMemo(
+    () => embeddingCatalogQuery.data ?? [],
+    [embeddingCatalogQuery.data],
+  );
 
   // Derive the current embedding provider from the selected model
   const embeddingProvider = useMemo(() => {
-    const found = EMBEDDING_MODELS.find((m) => m.value === embeddingModel);
+    const found = embeddingModels.find((m) => m.value === embeddingModel);
     return found?.provider ?? 'onnx';
-  }, [embeddingModel]);
+  }, [embeddingModel, embeddingModels]);
+
+  // Derive available embedding providers from API data
+  const embeddingProviders = useMemo(() => {
+    const providerSet = new Set(embeddingModels.map((m) => m.provider));
+    return Array.from(providerSet).map((p) => ({
+      value: p,
+      label: EMBEDDING_PROVIDER_META[p]?.label ?? p,
+      badge: EMBEDDING_PROVIDER_META[p]?.badge,
+    }));
+  }, [embeddingModels]);
 
   // Fetch live Ollama models when the provider is local
   const ollamaModelsQuery = useQuery({
@@ -232,26 +218,39 @@ export function AISettings() {
     retry: false,
   });
 
+  // Fetch hardware-aware model catalog for built-in provider
+  const modelCatalogQuery = useQuery({
+    queryKey: ['model-catalog'],
+    queryFn: fetchModelCatalog,
+    staleTime: 60_000,
+    retry: false,
+  });
+
   // Filter embedding models by selected provider
   const filteredEmbeddingModels = useMemo(
-    () => EMBEDDING_MODELS.filter((m) => m.provider === embeddingProvider),
-    [embeddingProvider],
+    () => embeddingModels.filter((m) => m.provider === embeddingProvider),
+    [embeddingProvider, embeddingModels],
   );
 
   // Current embedding model details
-  const currentEmbeddingModel = EMBEDDING_MODELS.find((m) => m.value === embeddingModel);
+  const currentEmbeddingModel = embeddingModels.find((m) => m.value === embeddingModel);
 
   // Available LLM models for the selected provider.
-  // When Ollama is selected, prefer live-fetched models over the hardcoded fallback list.
+  // For builtin: use hardware-aware catalog from the API.
+  // For Ollama: use live-fetched models.
+  // Others: static lists.
   const availableLlmModels = useMemo(() => {
+    if (llmProvider === 'builtin' && modelCatalogQuery.data && modelCatalogQuery.data.length > 0) {
+      return modelCatalogQuery.data;
+    }
     if (llmProvider === 'local' && ollamaModelsQuery.data && ollamaModelsQuery.data.length > 0) {
       return ollamaModelsQuery.data;
     }
     return LLM_MODELS[llmProvider] ?? [];
-  }, [llmProvider, ollamaModelsQuery.data]);
+  }, [llmProvider, ollamaModelsQuery.data, modelCatalogQuery.data]);
 
   function handleEmbeddingProviderChange(provider: EmbeddingProvider) {
-    const firstModel = EMBEDDING_MODELS.find((m) => m.provider === provider);
+    const firstModel = embeddingModels.find((m) => m.provider === provider);
     if (firstModel) {
       setEmbeddingModel(firstModel.value);
     }
@@ -291,8 +290,17 @@ export function AISettings() {
         <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">
           How email vectors are generated. Built-in ONNX runs entirely on your machine.
         </p>
+        {embeddingCatalogQuery.isError && (
+          <div className="rounded-lg border border-yellow-200 bg-yellow-50 px-4 py-3 text-sm text-yellow-800 dark:border-yellow-700 dark:bg-yellow-900/20 dark:text-yellow-300 max-w-lg mb-2">
+            <p className="font-medium">Embedding catalog unavailable</p>
+            <p className="mt-1 text-xs">
+              Could not reach the backend API. Check that the backend is running and
+              config/models-embedding.yaml exists.
+            </p>
+          </div>
+        )}
         <div className="flex flex-wrap gap-2 max-w-lg">
-          {EMBEDDING_PROVIDERS.map((ep) => (
+          {embeddingProviders.map((ep) => (
             <button
               key={ep.value}
               type="button"
@@ -411,7 +419,19 @@ export function AISettings() {
         })}
       </fieldset>
 
-      {/* ── LLM Model (shown only when provider has models) ── */}
+      {/* ── LLM Model ── */}
+      {availableLlmModels.length === 0 && llmProvider !== 'none' && (
+        <div className="rounded-lg border border-yellow-200 bg-yellow-50 px-4 py-3 text-sm text-yellow-800 dark:border-yellow-700 dark:bg-yellow-900/20 dark:text-yellow-300">
+          <p className="font-medium">No models available for this provider</p>
+          <p className="mt-1 text-xs">
+            {llmProvider === 'builtin'
+              ? 'Check that config/models-llm.yaml exists and has models under providers.builtin.'
+              : llmProvider === 'local'
+                ? 'Start Ollama and pull a model: ollama pull qwen3:8b'
+                : `Configure your ${llmProvider === 'openai' ? 'OpenAI' : 'Anthropic'} API key and ensure the backend is running.`}
+          </p>
+        </div>
+      )}
       {availableLlmModels.length > 0 && (
         <div className="space-y-1">
           <label
@@ -423,7 +443,61 @@ export function AISettings() {
           <select
             id="llm-model"
             value={llmModel}
-            onChange={(e) => setLlmModel(e.target.value)}
+            onChange={async (e) => {
+              const newModel = e.target.value;
+              setLlmModel(newModel);
+              setBuiltInLlmModel(newModel);
+              if (llmProvider !== 'builtin') return;
+
+              setModelSwitchStatus('idle');
+              try {
+                const res = await fetch('/api/v1/ai/switch-model', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ modelId: newModel }),
+                });
+                const data = await res.json();
+                if (data.status === 'ready') {
+                  setModelSwitchStatus('ready');
+                  setTimeout(() => setModelSwitchStatus('idle'), 3000);
+                } else if (data.status === 'downloading') {
+                  setModelSwitchStatus('downloading');
+                  // Poll until download completes (max 5 min).
+                  let polls = 0;
+                  const maxPolls = 150; // 150 × 2s = 5 min
+                  const poll = setInterval(async () => {
+                    polls++;
+                    if (polls > maxPolls) {
+                      clearInterval(poll);
+                      setModelSwitchStatus('error');
+                      setTimeout(() => setModelSwitchStatus('idle'), 5000);
+                      return;
+                    }
+                    try {
+                      const statusRes = await fetch(`/api/v1/ai/model-status/${newModel}`);
+                      if (!statusRes.ok) return; // retry next tick
+                      const statusData = await statusRes.json();
+                      if (statusData.status === 'cached') {
+                        clearInterval(poll);
+                        // Activate the now-cached model.
+                        await fetch('/api/v1/ai/switch-model', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ modelId: newModel }),
+                        });
+                        setModelSwitchStatus('ready');
+                        setTimeout(() => setModelSwitchStatus('idle'), 3000);
+                      }
+                    } catch {
+                      // Retry on next tick
+                    }
+                  }, 2000);
+                }
+              } catch {
+                setModelSwitchStatus('error');
+                setTimeout(() => setModelSwitchStatus('idle'), 5000);
+              }
+            }}
             className="w-full max-w-sm rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm
               focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500
               dark:bg-gray-800 dark:border-gray-600 dark:text-gray-200"
@@ -437,6 +511,36 @@ export function AISettings() {
           <p className="text-xs text-gray-500 dark:text-gray-400">
             {availableLlmModels.find((m) => m.value === llmModel)?.description ?? ''}
           </p>
+          {modelSwitchStatus === 'downloading' && (
+            <div className="flex items-center gap-2 mt-2 text-sm text-indigo-600 dark:text-indigo-400">
+              <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">
+                <circle
+                  className="opacity-25"
+                  cx="12"
+                  cy="12"
+                  r="10"
+                  stroke="currentColor"
+                  strokeWidth="4"
+                />
+                <path
+                  className="opacity-75"
+                  fill="currentColor"
+                  d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+                />
+              </svg>
+              Downloading model... This may take a few minutes.
+            </div>
+          )}
+          {modelSwitchStatus === 'ready' && (
+            <p className="mt-2 text-sm text-green-600 dark:text-green-400">
+              Model activated and ready for chat.
+            </p>
+          )}
+          {modelSwitchStatus === 'error' && (
+            <p className="mt-2 text-sm text-red-600 dark:text-red-400">
+              Failed to switch model. Check server logs.
+            </p>
+          )}
         </div>
       )}
 

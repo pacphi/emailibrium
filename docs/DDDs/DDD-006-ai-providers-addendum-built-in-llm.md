@@ -19,7 +19,7 @@ This addendum extends DDD-006 (AI Providers Domain) with the structures, command
 
 **ProviderType enum — add variant:**
 
-```
+```rust
 enum ProviderType {
     Onnx,       // Tier 0: In-process ONNX Runtime via fastembed (embedding)
     BuiltInLlm, // Tier 0.5: In-process llama.cpp via node-llama-cpp (generative) [NEW]
@@ -32,7 +32,7 @@ enum ProviderType {
 
 **ProviderTier enum — add variant:**
 
-```
+```rust
 enum ProviderTier {
     Tier0,    // Zero-config default: ONNX embedding, no generative, no cloud
     Tier0_5,  // Built-in LLM: ONNX embedding + node-llama-cpp generative [NEW]
@@ -64,7 +64,7 @@ enum ProviderTier {
 
 **ModelFormat enum (new):**
 
-```
+```rust
 enum ModelFormat {
     Onnx,   // ONNX Runtime models (.onnx files)
     Gguf,   // llama.cpp models (.gguf files)
@@ -73,7 +73,7 @@ enum ModelFormat {
 
 **ModelCapability enum — add variant:**
 
-```
+```rust
 enum ModelCapability {
     TextEmbedding,
     ImageEmbedding,
@@ -205,7 +205,7 @@ Wraps `node-llama-cpp` behind the `GenerativeModel` trait defined in DDD-006.
 
 ### GenerativeRouter — Updated fallback chain
 
-```
+```text
 1. Read generative_provider from ProviderConfig
 2. If None: return rule-based heuristic result (Tier 0 behavior)
 3. If BuiltInLlm:                                         [NEW]
@@ -221,7 +221,7 @@ Wraps `node-llama-cpp` behind the `GenerativeModel` trait defined in DDD-006.
 
 **Updated fallback chain:**
 
-```
+```text
 Cloud → Ollama → Built-in LLM → Rule-based heuristics
 ```
 
@@ -240,7 +240,7 @@ Add GGUF download support:
 
 ### HardwareBackend (new)
 
-```
+```rust
 enum HardwareBackend {
     Metal,    // macOS GPU acceleration
     Cuda,     // NVIDIA GPU
@@ -281,7 +281,7 @@ Environment variable overrides: `EMAILIBRIUM_AI__GENERATIVE__BUILTIN__MODEL=qwen
 
 ## Context Map Integration — Additions
 
-```
+```text
 AI Providers ──[Published Language]──> Email Intelligence
   Events: BuiltInLlmLoaded, BuiltInLlmUnloaded (NEW)
   Purpose: Signals when built-in generative is available/unavailable

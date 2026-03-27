@@ -109,7 +109,7 @@ Tracks user interactions with search results for SONA learning.
 
 ### SearchMode
 
-```
+```rust
 enum SearchMode {
     Hybrid,    -- FTS5 + HNSW with RRF fusion (default)
     Semantic,  -- HNSW vector search only
@@ -119,7 +119,7 @@ enum SearchMode {
 
 ### RRFScore
 
-```
+```rust
 RRFScore(f32)
 ```
 
@@ -127,7 +127,7 @@ A Reciprocal Rank Fusion score computed as `sum(1 / (k + rank))` across multiple
 
 ### SearchFeedback
 
-```
+```rust
 enum SearchFeedback {
     Relevant,
     Irrelevant,

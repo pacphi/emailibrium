@@ -68,6 +68,8 @@ pub enum ProviderType {
     Gemini,
     /// Rule-based (no model needed).
     RuleBased,
+    /// OpenRouter proxy (OpenAI-compatible API with extra headers).
+    OpenRouter,
     /// Disabled / none.
     None,
 }
@@ -81,6 +83,7 @@ impl std::fmt::Display for ProviderType {
             Self::OpenAi => write!(f, "openai"),
             Self::Anthropic => write!(f, "anthropic"),
             Self::Gemini => write!(f, "gemini"),
+            Self::OpenRouter => write!(f, "openrouter"),
             Self::RuleBased => write!(f, "rule_based"),
             Self::None => write!(f, "none"),
         }
@@ -98,6 +101,7 @@ impl std::str::FromStr for ProviderType {
             "openai" => Ok(Self::OpenAi),
             "anthropic" => Ok(Self::Anthropic),
             "gemini" => Ok(Self::Gemini),
+            "openrouter" => Ok(Self::OpenRouter),
             "cloud" => Ok(Self::OpenAi), // backward compat
             "rule_based" | "rules" => Ok(Self::RuleBased),
             "none" | "disabled" | "" => Ok(Self::None),
@@ -518,6 +522,10 @@ mod tests {
         assert_eq!(
             "gemini".parse::<ProviderType>().unwrap(),
             ProviderType::Gemini
+        );
+        assert_eq!(
+            "openrouter".parse::<ProviderType>().unwrap(),
+            ProviderType::OpenRouter
         );
         assert_eq!("none".parse::<ProviderType>().unwrap(), ProviderType::None);
         assert!("invalid".parse::<ProviderType>().is_err());

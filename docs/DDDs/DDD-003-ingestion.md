@@ -99,7 +99,7 @@ Manages multi-asset extraction for a single email.
 
 ### IngestionPhase
 
-```
+```rust
 enum IngestionPhase {
     Syncing,       -- Fetching emails from provider
     Embedding,     -- Generating vector embeddings
@@ -120,7 +120,7 @@ enum IngestionPhase {
 
 ### AssetType
 
-```
+```rust
 enum AssetType {
     HtmlBody,       -- The email's HTML/text body
     InlineImage,    -- Images embedded in the email
@@ -194,6 +194,7 @@ Processes inline images for OCR text and visual embeddings.
 Extracts text content from file attachments.
 
 **Supported Formats:**
+
 | Format | Tool |
 |--------|------|
 | PDF | `pdf-extract` crate |

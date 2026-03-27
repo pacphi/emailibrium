@@ -23,3 +23,16 @@ export async function resumeIngestion(jobId: string): Promise<void> {
 export function createIngestionStream(jobId: string): SSEStream<IngestionProgress> {
   return createSSEStream<IngestionProgress>(`/api/v1/ingestion/${jobId}/stream`);
 }
+
+export interface EmbeddingStatus {
+  totalEmails: number;
+  embeddingStatusSummary: {
+    embeddedCount: number;
+    pendingCount: number;
+    failedCount: number;
+  };
+}
+
+export async function getEmbeddingStatus(): Promise<EmbeddingStatus> {
+  return api.get('ingestion/embedding-status').json<EmbeddingStatus>();
+}

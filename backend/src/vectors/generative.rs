@@ -521,6 +521,140 @@ impl CloudGenerativeModel {
 }
 
 // ---------------------------------------------------------------------------
+// Tier 2b — OpenRouter (OpenAI-compatible cloud proxy)
+// ---------------------------------------------------------------------------
+
+/// Cloud generative model backed by OpenRouter (OpenAI-compatible API with extra headers).
+///
+/// OpenRouter provides access to 300+ models through a single endpoint using the
+/// OpenAI chat completions format. It requires an API key and additional headers
+/// (`HTTP-Referer`, `X-Title`) for attribution.
+#[derive(Debug)]
+pub struct OpenRouterGenerativeModel {
+    client: reqwest::Client,
+    api_key: String,
+    model: String,
+    base_url: String,
+    /// Extra headers required by OpenRouter (HTTP-Referer, X-Title).
+    extra_headers: std::collections::HashMap<String, String>,
+}
+
+impl OpenRouterGenerativeModel {
+    /// Create a new OpenRouter generative model.
+    ///
+    /// Reads the API key from `OPENROUTER_API_KEY` env var (or the name specified
+    /// in `api_key_env`). The `base_url` defaults to `https://openrouter.ai/api/v1`.
+    pub fn new(
+        api_key_env: &str,
+        model: &str,
+        base_url: &str,
+        extra_headers: std::collections::HashMap<String, String>,
+    ) -> Result<Self, VectorError> {
+        let env_name = if api_key_env.is_empty() {
+            "OPENROUTER_API_KEY"
+        } else {
+            api_key_env
+        };
+        let api_key = std::env::var(env_name).map_err(|_| {
+            VectorError::ConfigError(format!("OpenRouter API key env var '{env_name}' not set"))
+        })?;
+
+        let resolved_base = if base_url.is_empty() {
+            "https://openrouter.ai/api/v1"
+        } else {
+            base_url
+        };
+
+        Ok(Self {
+            client: reqwest::Client::new(),
+            api_key,
+            model: model.to_string(),
+            base_url: resolved_base.to_string(),
+            extra_headers,
+        })
+    }
+
+    /// Send a chat completion request using the OpenAI-compatible format.
+    async fn generate_openai_compat(
+        &self,
+        prompt: &str,
+        max_tokens: u32,
+    ) -> Result<String, VectorError> {
+        let url = format!("{}/chat/completions", self.base_url);
+
+        let body = serde_json::json!({
+            "model": self.model,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": max_tokens,
+            "temperature": 0.0,
+        });
+
+        debug!(model = %self.model, provider = "openrouter", "OpenRouter generate request");
+
+        let mut request = self
+            .client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .header("Content-Type", "application/json");
+
+        // Add OpenRouter-specific headers (HTTP-Referer, X-Title)
+        for (key, value) in &self.extra_headers {
+            request = request.header(key.as_str(), value.as_str());
+        }
+
+        let resp = request.json(&body).send().await.map_err(|e| {
+            VectorError::CategorizationFailed(format!("OpenRouter request failed: {e}"))
+        })?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            return Err(VectorError::CategorizationFailed(format!(
+                "OpenRouter returned {status}: {text}"
+            )));
+        }
+
+        let parsed: serde_json::Value = resp.json().await.map_err(|e| {
+            VectorError::CategorizationFailed(format!("OpenRouter parse error: {e}"))
+        })?;
+
+        parsed["choices"][0]["message"]["content"]
+            .as_str()
+            .map(|s| s.to_string())
+            .ok_or_else(|| {
+                VectorError::CategorizationFailed("OpenRouter response missing content".into())
+            })
+    }
+}
+
+#[async_trait]
+impl GenerativeModel for OpenRouterGenerativeModel {
+    async fn generate(&self, prompt: &str, max_tokens: u32) -> Result<String, VectorError> {
+        self.generate_openai_compat(prompt, max_tokens).await
+    }
+
+    async fn classify(&self, text: &str, categories: &[&str]) -> Result<String, VectorError> {
+        let cats = categories.join(", ");
+        let prompt = format!(
+            "Classify the following email into exactly one of these categories: [{cats}].\n\
+             Respond with only the category name, nothing else.\n\n\
+             Email:\n{text}"
+        );
+
+        let response = self.generate(&prompt, 50).await?;
+        validate_classification(&response, categories, &cats)
+    }
+
+    fn model_name(&self) -> &str {
+        &self.model
+    }
+
+    async fn is_available(&self) -> bool {
+        !self.api_key.is_empty()
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -716,5 +850,88 @@ mod tests {
         assert_eq!(model.provider, "anthropic");
         assert!(model.gemini_config.is_none());
         std::env::remove_var("__TEST_ANTHRO_KEY");
+    }
+
+    // -- OpenRouterGenerativeModel tests ------------------------------------
+
+    #[test]
+    fn test_openrouter_requires_api_key() {
+        std::env::remove_var("__TEST_OR_KEY_MISSING");
+        let result = OpenRouterGenerativeModel::new(
+            "__TEST_OR_KEY_MISSING",
+            "openai/gpt-4.1-mini",
+            "https://openrouter.ai/api/v1",
+            std::collections::HashMap::new(),
+        );
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("__TEST_OR_KEY_MISSING"),
+            "expected env var name in error, got: {err_msg}"
+        );
+    }
+
+    #[test]
+    fn test_openrouter_creates_with_valid_key() {
+        std::env::set_var("__TEST_OR_KEY", "sk-or-test-key");
+        let mut headers = std::collections::HashMap::new();
+        headers.insert(
+            "HTTP-Referer".to_string(),
+            "https://emailibrium.app".to_string(),
+        );
+        headers.insert("X-Title".to_string(), "Emailibrium".to_string());
+
+        let model = OpenRouterGenerativeModel::new(
+            "__TEST_OR_KEY",
+            "openai/gpt-4.1-mini",
+            "https://openrouter.ai/api/v1",
+            headers,
+        )
+        .unwrap();
+        assert_eq!(model.model_name(), "openai/gpt-4.1-mini");
+        assert_eq!(model.extra_headers.len(), 2);
+        std::env::remove_var("__TEST_OR_KEY");
+    }
+
+    #[test]
+    fn test_openrouter_default_base_url() {
+        std::env::set_var("__TEST_OR_KEY2", "sk-or-test");
+        let model = OpenRouterGenerativeModel::new(
+            "__TEST_OR_KEY2",
+            "qwen/qwen3-32b",
+            "",
+            std::collections::HashMap::new(),
+        )
+        .unwrap();
+        assert_eq!(model.base_url, "https://openrouter.ai/api/v1");
+        std::env::remove_var("__TEST_OR_KEY2");
+    }
+
+    #[tokio::test]
+    async fn test_openrouter_is_available() {
+        std::env::set_var("__TEST_OR_AVAIL", "sk-or-available");
+        let model = OpenRouterGenerativeModel::new(
+            "__TEST_OR_AVAIL",
+            "openai/gpt-4.1-mini",
+            "https://openrouter.ai/api/v1",
+            std::collections::HashMap::new(),
+        )
+        .unwrap();
+        assert!(model.is_available().await);
+        std::env::remove_var("__TEST_OR_AVAIL");
+    }
+
+    #[test]
+    fn test_openrouter_default_env_var_name() {
+        std::env::set_var("OPENROUTER_API_KEY", "sk-or-default-env");
+        let model = OpenRouterGenerativeModel::new(
+            "",
+            "meta-llama/llama-4-scout",
+            "",
+            std::collections::HashMap::new(),
+        )
+        .unwrap();
+        assert_eq!(model.model_name(), "meta-llama/llama-4-scout");
+        std::env::remove_var("OPENROUTER_API_KEY");
     }
 }

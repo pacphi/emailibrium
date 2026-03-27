@@ -180,7 +180,149 @@ pub fn download_and_update_manifest(
 }
 
 // ---------------------------------------------------------------------------
-// CLI entry point
+// CLI entry point: --download-model <model_id>
+// ---------------------------------------------------------------------------
+
+/// Execute the `--download-model <model_id>` CLI command.
+///
+/// Loads `config/models-llm.yaml`, finds the model by ID across all providers,
+/// and downloads it using the appropriate mechanism:
+/// - `builtin`: downloads GGUF via `hf_hub` (requires `builtin-llm` feature)
+/// - `ollama`: shells out to `ollama pull <tag>`
+/// - Cloud providers (openai/anthropic/openrouter): no download needed
+pub fn run_download_model_by_id(model_id: &str) -> Result<(), VectorError> {
+    println!("Emailibrium Model Downloader");
+    println!("============================");
+    println!();
+
+    // Load the YAML catalog.
+    let yaml = super::yaml_config::load_yaml_config("../config").map_err(|e| {
+        VectorError::ConfigError(format!("Failed to load config/models-llm.yaml: {e}"))
+    })?;
+
+    // Search across all providers for the model ID.
+    let mut found_provider: Option<String> = None;
+    let mut found_model: Option<super::yaml_config::LlmModelEntry> = None;
+
+    for (provider_name, provider_catalog) in &yaml.llm_catalog.providers {
+        if let Some(entry) = provider_catalog.models.iter().find(|m| m.id == model_id) {
+            found_provider = Some(provider_name.clone());
+            found_model = Some(entry.clone());
+            break;
+        }
+    }
+
+    let provider_name = found_provider.ok_or_else(|| {
+        VectorError::ConfigError(format!(
+            "Model '{model_id}' not found in config/models-llm.yaml. \
+             Available providers: {:?}",
+            yaml.llm_catalog.providers.keys().collect::<Vec<_>>()
+        ))
+    })?;
+    let model_entry = found_model.unwrap();
+
+    println!("Model:    {} ({})", model_entry.name, model_id);
+    println!("Provider: {provider_name}");
+    if let Some(ref params) = model_entry.params {
+        println!("Params:   {params}");
+    }
+    if let Some(disk) = model_entry.disk_mb {
+        println!("Disk:     {disk} MB");
+    }
+    println!();
+
+    match provider_name.as_str() {
+        "builtin" => {
+            // Download GGUF from Hugging Face Hub.
+            let repo_id = model_entry.repo_id.as_ref().ok_or_else(|| {
+                VectorError::ConfigError(format!(
+                    "Model '{model_id}' is missing repo_id in config/models-llm.yaml"
+                ))
+            })?;
+            let filename = model_entry.filename.as_ref().ok_or_else(|| {
+                VectorError::ConfigError(format!(
+                    "Model '{model_id}' is missing filename in config/models-llm.yaml"
+                ))
+            })?;
+
+            println!("Downloading GGUF from Hugging Face...");
+            println!("  Repo: {repo_id}");
+            println!("  File: {filename}");
+            println!();
+
+            #[cfg(feature = "builtin-llm")]
+            {
+                let api = hf_hub::api::sync::Api::new().map_err(|e| {
+                    VectorError::ConfigError(format!("HF Hub API init failed: {e}"))
+                })?;
+                let repo = api.model(repo_id.clone());
+                let path = repo
+                    .get(filename)
+                    .map_err(|e| VectorError::ConfigError(format!("Download failed: {e}")))?;
+                println!("Downloaded successfully!");
+                println!("  Path: {}", path.display());
+            }
+
+            #[cfg(not(feature = "builtin-llm"))]
+            {
+                return Err(VectorError::ConfigError(
+                    "The 'builtin-llm' feature is required to download GGUF models. \
+                     Rebuild with: cargo build --features builtin-llm"
+                        .to_string(),
+                ));
+            }
+        }
+        "ollama" => {
+            // Pull via `ollama pull <tag>`.
+            let tag = model_entry.ollama_tag.as_ref().ok_or_else(|| {
+                VectorError::ConfigError(format!(
+                    "Model '{model_id}' is missing ollama_tag in config/models-llm.yaml"
+                ))
+            })?;
+
+            println!("Pulling via Ollama...");
+            println!("  Tag: {tag}");
+            println!();
+
+            let status = std::process::Command::new("ollama")
+                .args(["pull", tag])
+                .status()
+                .map_err(|e| {
+                    VectorError::ConfigError(format!(
+                        "Failed to run 'ollama pull {tag}': {e}. Is Ollama installed?"
+                    ))
+                })?;
+
+            if !status.success() {
+                return Err(VectorError::ConfigError(format!(
+                    "'ollama pull {tag}' exited with status {status}"
+                )));
+            }
+
+            println!();
+            println!("Model pulled successfully via Ollama.");
+        }
+        "openai" | "anthropic" | "openrouter" | "gemini" => {
+            println!("Cloud provider '{provider_name}' does not require model downloads.");
+            println!("Set the appropriate API key environment variable to use this model.");
+            if let Some(provider_catalog) = yaml.llm_catalog.providers.get(&provider_name) {
+                if let Some(ref key_env) = provider_catalog.api_key_env {
+                    println!("  Required env var: {key_env}");
+                }
+            }
+        }
+        other => {
+            return Err(VectorError::ConfigError(format!(
+                "Unknown provider '{other}' for model '{model_id}'"
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// CLI entry point: --download-models (legacy batch download)
 // ---------------------------------------------------------------------------
 
 /// Execute the `--download-models` CLI command.
