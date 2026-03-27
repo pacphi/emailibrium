@@ -324,7 +324,10 @@ mod tests {
         assert_eq!(state.consecutive_failures, 0);
         // last_poll should be far in the past (86400 seconds ago)
         let elapsed = state.last_poll.elapsed().as_secs();
-        assert!(elapsed >= 86300, "Expected last_poll to be ~24h ago, got {elapsed}s");
+        assert!(
+            elapsed >= 86300,
+            "Expected last_poll to be ~24h ago, got {elapsed}s"
+        );
     }
 
     // -- Account tracking via inner state -----------------------------------
@@ -334,7 +337,9 @@ mod tests {
         let handle = PollSchedulerHandle::new();
         {
             let mut inner = handle.inner.write().await;
-            inner.accounts.insert("acct-1".to_string(), AccountPollState::default());
+            inner
+                .accounts
+                .insert("acct-1".to_string(), AccountPollState::default());
         }
         let status = handle.status().await;
         assert_eq!(status.accounts.len(), 1);
@@ -347,8 +352,12 @@ mod tests {
         let handle = PollSchedulerHandle::new();
         {
             let mut inner = handle.inner.write().await;
-            inner.accounts.insert("acct-1".to_string(), AccountPollState::default());
-            inner.accounts.insert("acct-2".to_string(), AccountPollState::default());
+            inner
+                .accounts
+                .insert("acct-1".to_string(), AccountPollState::default());
+            inner
+                .accounts
+                .insert("acct-2".to_string(), AccountPollState::default());
         }
         assert_eq!(handle.status().await.accounts.len(), 2);
 
@@ -431,7 +440,9 @@ mod tests {
         let handle = PollSchedulerHandle::new();
         {
             let mut inner = handle.inner.write().await;
-            inner.accounts.insert("acct-1".to_string(), AccountPollState::default());
+            inner
+                .accounts
+                .insert("acct-1".to_string(), AccountPollState::default());
             inner.total_polls += 1;
             let state = inner.accounts.get_mut("acct-1").unwrap();
             state.last_poll = Instant::now();
@@ -450,7 +461,9 @@ mod tests {
         let handle = PollSchedulerHandle::new();
         {
             let mut inner = handle.inner.write().await;
-            inner.accounts.insert("acct-1".to_string(), AccountPollState::default());
+            inner
+                .accounts
+                .insert("acct-1".to_string(), AccountPollState::default());
             inner.total_polls += 1;
             inner.total_errors += 1;
             let state = inner.accounts.get_mut("acct-1").unwrap();

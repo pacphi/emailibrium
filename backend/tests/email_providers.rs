@@ -188,10 +188,7 @@ async fn imap_list_messages_returns_empty() {
     // When it is available, it returns an empty page (no real server).
     match result {
         Ok(page) => assert!(page.messages.is_empty()),
-        Err(e) => assert!(
-            e.to_string().contains("imap"),
-            "Unexpected error: {e}"
-        ),
+        Err(e) => assert!(e.to_string().contains("imap"), "Unexpected error: {e}"),
     }
 }
 

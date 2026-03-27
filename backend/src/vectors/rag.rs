@@ -365,12 +365,8 @@ mod tests {
         // We construct a RagPipeline with dummy Arc pointers that we never call.
         // Only format_email / format_email_truncated are exercised — they don't
         // touch search or db.
-        let search = unsafe {
-            Arc::from_raw(std::ptr::null::<HybridSearch>())
-        };
-        let db = unsafe {
-            Arc::from_raw(std::ptr::null::<Database>())
-        };
+        let search = unsafe { Arc::from_raw(std::ptr::null::<HybridSearch>()) };
+        let db = unsafe { Arc::from_raw(std::ptr::null::<Database>()) };
         RagPipeline { search, db, config }
     }
 
@@ -401,7 +397,11 @@ mod tests {
     fn test_format_email_with_body() {
         let config = make_config();
         let pipeline = make_pipeline_stub(config);
-        let snippet = make_snippet("e1", "Weekly Report", Some("Here is the weekly report content"));
+        let snippet = make_snippet(
+            "e1",
+            "Weekly Report",
+            Some("Here is the weekly report content"),
+        );
 
         let formatted = pipeline.format_email(&snippet);
         assert!(formatted.contains("--- Email ---"));

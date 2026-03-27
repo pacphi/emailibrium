@@ -392,11 +392,12 @@ async fn record_gdpr_consent(
 async fn list_gdpr_consents(
     State(state): State<TestState>,
 ) -> Result<Json<GdprConsentListResponse>, (StatusCode, String)> {
-    let rows: Vec<(String, String, bool)> =
-        sqlx::query_as("SELECT id, consent_type, granted FROM consent_decisions ORDER BY created_at")
-            .fetch_all(&state.pool)
-            .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let rows: Vec<(String, String, bool)> = sqlx::query_as(
+        "SELECT id, consent_type, granted FROM consent_decisions ORDER BY created_at",
+    )
+    .fetch_all(&state.pool)
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     let decisions = rows
         .into_iter()
@@ -462,9 +463,7 @@ async fn erase_user_data(
         ));
     }
 
-    let _ = sqlx::query("DELETE FROM emails")
-        .execute(&state.pool)
-        .await;
+    let _ = sqlx::query("DELETE FROM emails").execute(&state.pool).await;
     let _ = sqlx::query("DELETE FROM consent_decisions")
         .execute(&state.pool)
         .await;
@@ -602,10 +601,7 @@ async fn send_request(app: Router, req: Request<Body>) -> (StatusCode, Vec<u8>) 
 
 /// Send a GET request to the given path.
 async fn get_request(app: Router, path: &str) -> (StatusCode, Vec<u8>) {
-    let req = Request::builder()
-        .uri(path)
-        .body(Body::empty())
-        .unwrap();
+    let req = Request::builder().uri(path).body(Body::empty()).unwrap();
     send_request(app, req).await
 }
 
@@ -688,7 +684,13 @@ async fn test_list_emails_returns_inserted_emails() {
 async fn test_list_emails_pagination() {
     let pool = setup_test_db().await;
     for i in 0..5 {
-        insert_test_email(&pool, &format!("email-{i}"), "acc-001", &format!("Email {i}")).await;
+        insert_test_email(
+            &pool,
+            &format!("email-{i}"),
+            "acc-001",
+            &format!("Email {i}"),
+        )
+        .await;
     }
 
     let app = build_test_router(TestState { pool });
@@ -789,7 +791,12 @@ async fn test_archive_email() {
     insert_test_email(&pool, "email-arc", "acc-001", "To Archive").await;
 
     let app = build_test_router(TestState { pool: pool.clone() });
-    let (status, _) = post_json(app, "/api/v1/emails/email-arc/archive", &serde_json::json!({})).await;
+    let (status, _) = post_json(
+        app,
+        "/api/v1/emails/email-arc/archive",
+        &serde_json::json!({}),
+    )
+    .await;
     assert_eq!(status, StatusCode::NO_CONTENT);
 
     let (labels,): (String,) = sqlx::query_as("SELECT labels FROM emails WHERE id = 'email-arc'")
@@ -804,7 +811,12 @@ async fn test_archive_email_not_found_returns_404() {
     let pool = setup_test_db().await;
     let app = build_test_router(TestState { pool });
 
-    let (status, _) = post_json(app, "/api/v1/emails/nonexistent/archive", &serde_json::json!({})).await;
+    let (status, _) = post_json(
+        app,
+        "/api/v1/emails/nonexistent/archive",
+        &serde_json::json!({}),
+    )
+    .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
@@ -814,7 +826,12 @@ async fn test_star_email_toggles() {
     insert_test_email(&pool, "email-star", "acc-001", "Starrable").await;
 
     let app = build_test_router(TestState { pool: pool.clone() });
-    let (status, _) = post_json(app, "/api/v1/emails/email-star/star", &serde_json::json!({})).await;
+    let (status, _) = post_json(
+        app,
+        "/api/v1/emails/email-star/star",
+        &serde_json::json!({}),
+    )
+    .await;
     assert_eq!(status, StatusCode::NO_CONTENT);
 
     let (starred,): (bool,) =
@@ -830,7 +847,12 @@ async fn test_star_email_not_found_returns_404() {
     let pool = setup_test_db().await;
     let app = build_test_router(TestState { pool });
 
-    let (status, _) = post_json(app, "/api/v1/emails/nonexistent/star", &serde_json::json!({})).await;
+    let (status, _) = post_json(
+        app,
+        "/api/v1/emails/nonexistent/star",
+        &serde_json::json!({}),
+    )
+    .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
@@ -924,8 +946,7 @@ async fn test_disconnect_account_success() {
     insert_test_account(&pool, &account_id, "disconnect@example.com").await;
 
     let app = build_test_router(TestState { pool: pool.clone() });
-    let (status, _) =
-        delete_request(app, &format!("/api/v1/auth/accounts/{account_id}")).await;
+    let (status, _) = delete_request(app, &format!("/api/v1/auth/accounts/{account_id}")).await;
     assert_eq!(status, StatusCode::NO_CONTENT);
 
     let (db_status,): (String,) =
@@ -1032,12 +1053,7 @@ async fn test_ingestion_start_default_account_returns_200() {
     let pool = setup_test_db().await;
     let app = build_test_router(TestState { pool });
 
-    let (status, body) = post_json(
-        app,
-        "/api/v1/ingestion/start",
-        &serde_json::json!({}),
-    )
-    .await;
+    let (status, body) = post_json(app, "/api/v1/ingestion/start", &serde_json::json!({})).await;
     assert_eq!(status, StatusCode::OK);
 
     let resp: JobResponse = serde_json::from_slice(&body).unwrap();

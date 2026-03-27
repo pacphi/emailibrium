@@ -511,7 +511,7 @@ mod tests {
     #[test]
     fn token_bucket_never_exceeds_capacity() {
         let mut bucket = TokenBucket::new(5.0, 1000.0); // very high refill rate
-        // Even with high refill, consuming then waiting should not exceed capacity
+                                                        // Even with high refill, consuming then waiting should not exceed capacity
         bucket.try_consume(1.0);
         std::thread::sleep(std::time::Duration::from_millis(50));
         bucket.try_consume(0.0); // triggers refill
