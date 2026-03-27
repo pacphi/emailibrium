@@ -253,10 +253,13 @@ async fn main() -> anyhow::Result<()> {
     ));
 
     // Initialize RAG pipeline for email-aware chat (ADR-022, DDD-010).
+    // Build RagConfig from tuning.yaml so all RAG parameters (top_k, min_relevance_score,
+    // max_context_tokens, include_body, max_body_chars) are driven by config/tuning.yaml.
+    let rag_config = vectors::rag::RagConfig::from(&yaml_config.tuning.rag);
     let rag_pipeline = Some(Arc::new(vectors::rag::RagPipeline::new(
         vector_service.hybrid_search.clone(),
         db.clone(),
-        vector_service.config.rag.clone(),
+        rag_config,
     )));
 
     let state = AppState {

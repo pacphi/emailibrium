@@ -67,6 +67,18 @@ impl Default for RagConfig {
     }
 }
 
+impl From<&super::yaml_config::RagTuning> for RagConfig {
+    fn from(tuning: &super::yaml_config::RagTuning) -> Self {
+        Self {
+            top_k: tuning.top_k,
+            min_relevance_score: tuning.min_relevance_score,
+            max_context_tokens: tuning.max_context_tokens,
+            include_body: tuning.include_body,
+            max_body_chars: tuning.max_body_chars,
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // RAG context (output)
 // ---------------------------------------------------------------------------
@@ -283,11 +295,13 @@ impl RagPipeline {
             email.subject, email.received_at,
         );
 
-        if header.len() >= max_chars {
+        if header.len() >= max_chars || !self.config.include_body {
             return header[..header.floor_char_boundary(max_chars)].to_string();
         }
 
-        let body_budget = max_chars - header.len() - 10; // 10 for "\nBody: " + "..."
+        let body_budget_from_chars = max_chars - header.len() - 10; // 10 for "\nBody: " + "..."
+        // Also respect max_body_chars from config
+        let body_budget = body_budget_from_chars.min(self.config.max_body_chars);
         let body = email.body_text.as_deref().unwrap_or("");
         let body = if body.len() > body_budget {
             format!("{}...", &body[..body.floor_char_boundary(body_budget)])
