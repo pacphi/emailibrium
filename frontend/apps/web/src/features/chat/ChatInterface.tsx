@@ -56,11 +56,9 @@ export function ChatInterface() {
         <div className="flex items-center gap-2">
           <MessageSquare className="h-5 w-5 text-indigo-500" aria-hidden="true" />
           <h2 className="text-sm font-semibold text-gray-900 dark:text-white">Email Assistant</h2>
-          {router.provider === 'builtin' && (
-            <span className="rounded-full bg-emerald-100 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400">
-              Powered by built-in AI (local)
-            </span>
-          )}
+          <span className="rounded-full bg-emerald-100 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400">
+            {router.activeModel}
+          </span>
           {streamingEnabled && (
             <span className="rounded-full bg-green-100 px-1.5 py-0.5 text-[10px] font-medium text-green-700 dark:bg-green-900/30 dark:text-green-400">
               Live

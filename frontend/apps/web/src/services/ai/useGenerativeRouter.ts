@@ -48,13 +48,29 @@ export function useGenerativeRouter() {
 
   const router = routerRef.current;
 
+  const activeModel = useMemo(() => {
+    switch (config.provider) {
+      case 'builtin':
+        return config.builtInModelId || 'qwen3-1.7b-q4km';
+      case 'local':
+        return 'Ollama';
+      case 'openai':
+        return 'OpenAI';
+      case 'anthropic':
+        return 'Anthropic';
+      default:
+        return 'Rule-based';
+    }
+  }, [config.provider, config.builtInModelId]);
+
   return useMemo(
     () => ({
       classify: router.classify.bind(router),
       chat: router.chat.bind(router),
       provider: config.provider,
+      activeModel,
       isReady: true,
     }),
-    [router, config.provider],
+    [router, config.provider, activeModel],
   );
 }
