@@ -52,7 +52,7 @@ describe('useSettings store', () => {
     expect(state.syncFrequencyMinutes).toBe(5);
     expect(state.embeddingModel).toBe('all-MiniLM-L6-v2');
     expect(state.llmProvider).toBe('builtin');
-    expect(state.builtInLlmModel).toBe('qwen2.5-0.5b-q4km');
+    expect(state.builtInLlmModel).toBe('qwen3-1.7b-q4km');
     expect(state.builtInLlmIdleTimeout).toBe(300);
     expect(state.builtInLlmMaxContext).toBe(2048);
     expect(state.builtInLlmTemperature).toBe(0.7);

@@ -66,7 +66,7 @@ const DEFAULT_STATE = {
   syncFrequencyMinutes: 5,
   embeddingModel: 'all-MiniLM-L6-v2',
   llmProvider: 'builtin' as LlmProvider,
-  builtInLlmModel: 'qwen2.5-0.5b-q4km',
+  builtInLlmModel: 'qwen3-1.7b-q4km',
   builtInLlmIdleTimeout: 300,
   builtInLlmMaxContext: 2048,
   builtInLlmTemperature: 0.7,

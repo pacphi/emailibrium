@@ -708,7 +708,7 @@ fn default_gen_provider() -> String {
 }
 
 fn default_builtin_model() -> String {
-    "qwen2.5-0.5b-q4km".to_string()
+    "qwen3-1.7b-q4km".to_string()
 }
 fn default_builtin_context_size() -> u32 {
     2048
@@ -1025,7 +1025,7 @@ mod tests {
         let config = GenerativeConfig::default();
         assert_eq!(config.provider, "builtin");
         // Built-in LLM sub-config (ADR-021)
-        assert_eq!(config.builtin.model_id, "qwen2.5-0.5b-q4km");
+        assert_eq!(config.builtin.model_id, "qwen3-1.7b-q4km");
         assert_eq!(config.builtin.context_size, 2048);
         assert_eq!(config.builtin.gpu_layers, 99);
         assert_eq!(config.builtin.idle_timeout_secs, 300);

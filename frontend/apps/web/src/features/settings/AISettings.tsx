@@ -567,7 +567,7 @@ export function AISettings() {
       )}
       {llmProvider === 'builtin' && (
         <div className="space-y-2 max-w-sm">
-          <ModelDownloadProgress modelId={llmModel || 'qwen2.5-0.5b-q4km'} />
+          <ModelDownloadProgress modelId={llmModel || 'qwen3-1.7b-q4km'} />
           <p className="text-xs text-gray-500 dark:text-gray-400">
             Model runs entirely on your machine. No data leaves your device.
           </p>

@@ -119,15 +119,15 @@ pub fn get_model_catalog(cache_dir: &str) -> Vec<ModelInfo> {
 
     let models = vec![
         (
-            "qwen2.5-0.5b-q4km",
-            "Qwen 2.5 0.5B Instruct",
-            "0.5B",
-            469,
-            500,
-            2048,
-            "basic",
-            "Qwen/Qwen2.5-0.5B-Instruct-GGUF",
-            "qwen2.5-0.5b-instruct-q4_k_m.gguf",
+            "qwen3-1.7b-q4km",
+            "Qwen 3 1.7B",
+            "1.7B",
+            1100,
+            1500,
+            32768,
+            "fair",
+            "unsloth/Qwen3-1.7B-GGUF",
+            "Qwen3-1.7B-Q4_K_M.gguf",
         ),
         (
             "qwen2.5-1.5b-q4km",
@@ -215,17 +215,17 @@ pub fn recommend_model(cache_dir: &str) -> ModelInfo {
         .unwrap_or_else(|| {
             // Fallback to smallest
             ModelInfo {
-                id: "qwen2.5-0.5b-q4km".to_string(),
-                name: "Qwen 2.5 0.5B Instruct".to_string(),
-                params: "0.5B".to_string(),
-                disk_mb: 469,
-                ram_mb: 500,
-                context_size: 2048,
-                quality: "basic".to_string(),
+                id: "qwen3-1.7b-q4km".to_string(),
+                name: "Qwen 3 1.7B".to_string(),
+                params: "1.7B".to_string(),
+                disk_mb: 1100,
+                ram_mb: 1500,
+                context_size: 32768,
+                quality: "fair".to_string(),
                 recommended: true,
                 cached: false,
-                repo_id: "Qwen/Qwen2.5-0.5B-Instruct-GGUF".to_string(),
-                filename: "qwen2.5-0.5b-instruct-q4_k_m.gguf".to_string(),
+                repo_id: "unsloth/Qwen3-1.7B-GGUF".to_string(),
+                filename: "Qwen3-1.7B-Q4_K_M.gguf".to_string(),
             }
         })
 }
