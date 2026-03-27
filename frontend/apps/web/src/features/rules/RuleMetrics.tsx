@@ -90,7 +90,7 @@ export function RuleMetrics({ rules }: RuleMetricsProps) {
                 height={60}
               />
               <YAxis domain={[0, 100]} tick={{ fontSize: 11 }} tickFormatter={(v) => `${v}%`} />
-              <Tooltip formatter={(val: number) => `${val}%`} />
+              <Tooltip formatter={(val) => `${val}%`} />
               <Line
                 type="monotone"
                 dataKey="accuracy"

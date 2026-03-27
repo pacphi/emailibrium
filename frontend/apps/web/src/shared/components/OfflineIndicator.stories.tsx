@@ -1,3 +1,4 @@
+import React from 'react';
 import type { Meta, StoryObj } from '@storybook/react';
 import { OfflineIndicator } from './OfflineIndicator';
 
@@ -48,7 +49,7 @@ export const Offline: Story = {
     },
   },
   decorators: [
-    (Story) => {
+    (Story: React.ComponentType) => {
       // Override navigator.onLine for this story frame
       Object.defineProperty(navigator, 'onLine', { value: false, writable: true });
       window.dispatchEvent(new Event('offline'));
@@ -67,7 +68,7 @@ export const Offline: Story = {
 export const WithContent: Story = {
   name: 'Offline with page content',
   decorators: [
-    (Story) => {
+    (Story: React.ComponentType) => {
       Object.defineProperty(navigator, 'onLine', { value: false, writable: true });
       window.dispatchEvent(new Event('offline'));
       return (

@@ -225,3 +225,153 @@ pub async fn security_headers_middleware(req: Request, next: Next) -> Response {
 
     response
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // -----------------------------------------------------------------------
+    // SecurityHeadersConfig defaults
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn default_config_has_one_year_hsts() {
+        let config = SecurityHeadersConfig::default();
+        assert_eq!(config.hsts_max_age, 31536000);
+    }
+
+    #[test]
+    fn default_config_disables_hsts_preload() {
+        let config = SecurityHeadersConfig::default();
+        assert!(!config.hsts_preload);
+    }
+
+    #[test]
+    fn default_config_allows_inline_styles() {
+        let config = SecurityHeadersConfig::default();
+        assert!(config.allow_inline_styles);
+    }
+
+    #[test]
+    fn default_config_has_no_report_uri() {
+        let config = SecurityHeadersConfig::default();
+        assert!(config.csp_report_uri.is_none());
+    }
+
+    #[test]
+    fn default_config_has_no_extra_connect_origins() {
+        let config = SecurityHeadersConfig::default();
+        assert!(config.connect_src_origins.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // CSP policy construction
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn csp_policy_contains_default_src_self() {
+        let config = SecurityHeadersConfig::default();
+        let policy = config.build_csp_policy();
+        assert!(policy.contains("default-src 'self'"));
+    }
+
+    #[test]
+    fn csp_policy_does_not_contain_unsafe_eval() {
+        let config = SecurityHeadersConfig::default();
+        let policy = config.build_csp_policy();
+        assert!(
+            !policy.contains("unsafe-eval"),
+            "CSP must never contain unsafe-eval: {}",
+            policy
+        );
+    }
+
+    #[test]
+    fn csp_policy_blocks_framing() {
+        let config = SecurityHeadersConfig::default();
+        let policy = config.build_csp_policy();
+        assert!(policy.contains("frame-ancestors 'none'"));
+    }
+
+    #[test]
+    fn csp_policy_disables_object_src() {
+        let config = SecurityHeadersConfig::default();
+        let policy = config.build_csp_policy();
+        assert!(policy.contains("object-src 'none'"));
+    }
+
+    #[test]
+    fn csp_policy_includes_google_oauth_origins() {
+        let config = SecurityHeadersConfig::default();
+        let policy = config.build_csp_policy();
+        assert!(policy.contains("https://accounts.google.com"));
+        assert!(policy.contains("https://oauth2.googleapis.com"));
+    }
+
+    #[test]
+    fn csp_policy_includes_microsoft_oauth_origins() {
+        let config = SecurityHeadersConfig::default();
+        let policy = config.build_csp_policy();
+        assert!(policy.contains("https://login.microsoftonline.com"));
+        assert!(policy.contains("https://graph.microsoft.com"));
+    }
+
+    #[test]
+    fn csp_policy_upgrades_insecure_requests() {
+        let config = SecurityHeadersConfig::default();
+        let policy = config.build_csp_policy();
+        assert!(policy.contains("upgrade-insecure-requests"));
+    }
+
+    #[test]
+    fn csp_policy_allows_inline_styles_when_configured() {
+        let config = SecurityHeadersConfig {
+            allow_inline_styles: true,
+            ..SecurityHeadersConfig::default()
+        };
+        let policy = config.build_csp_policy();
+        assert!(policy.contains("style-src 'self' 'unsafe-inline'"));
+    }
+
+    #[test]
+    fn csp_policy_disallows_inline_styles_when_disabled() {
+        let config = SecurityHeadersConfig {
+            allow_inline_styles: false,
+            ..SecurityHeadersConfig::default()
+        };
+        let policy = config.build_csp_policy();
+        assert!(policy.contains("style-src 'self'"));
+        assert!(!policy.contains("unsafe-inline"));
+    }
+
+    #[test]
+    fn csp_policy_includes_report_uri_when_set() {
+        let config = SecurityHeadersConfig {
+            csp_report_uri: Some("https://example.com/csp-report".to_string()),
+            ..SecurityHeadersConfig::default()
+        };
+        let policy = config.build_csp_policy();
+        assert!(policy.contains("report-uri https://example.com/csp-report"));
+    }
+
+    #[test]
+    fn csp_policy_omits_report_uri_when_none() {
+        let config = SecurityHeadersConfig::default();
+        let policy = config.build_csp_policy();
+        assert!(!policy.contains("report-uri"));
+    }
+
+    #[test]
+    fn csp_policy_includes_custom_connect_origins() {
+        let config = SecurityHeadersConfig {
+            connect_src_origins: vec![
+                "https://custom-api.example.com".to_string(),
+                "https://other.example.com".to_string(),
+            ],
+            ..SecurityHeadersConfig::default()
+        };
+        let policy = config.build_csp_policy();
+        assert!(policy.contains("https://custom-api.example.com"));
+        assert!(policy.contains("https://other.example.com"));
+    }
+}

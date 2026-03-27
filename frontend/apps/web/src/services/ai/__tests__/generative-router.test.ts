@@ -1,23 +1,28 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { GenerativeRouter } from '../generative-router';
 import type { GenerativeRouterConfig } from '../generative-router';
 import type { ClassificationPrompt } from '../built-in-llm-adapter';
 
 // ---------------------------------------------------------------------------
-// Mock BuiltInLlmManager
+// Mock BuiltInLlmManager (vitest 4: hoist mock variables)
 // ---------------------------------------------------------------------------
 
-const mockClassify = vi.fn();
-const mockChat = vi.fn();
-const mockShutdown = vi.fn().mockResolvedValue(undefined);
+const { mockClassify, mockChat, mockShutdown } = vi.hoisted(() => ({
+  mockClassify: vi.fn(),
+  mockChat: vi.fn(),
+  mockShutdown: vi.fn().mockResolvedValue(undefined),
+}));
 
 vi.mock('../built-in-llm-manager', () => ({
-  BuiltInLlmManager: vi.fn().mockImplementation(() => ({
-    classify: mockClassify,
-    chat: mockChat,
-    shutdown: mockShutdown,
-  })),
+  BuiltInLlmManager: vi.fn().mockImplementation(function () {
+    return {
+      classify: mockClassify,
+      chat: mockChat,
+      shutdown: mockShutdown,
+    };
+  }),
 }));
+
+import { GenerativeRouter } from '../generative-router';
 
 // ---------------------------------------------------------------------------
 // Helpers

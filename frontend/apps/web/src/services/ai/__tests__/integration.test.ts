@@ -2,27 +2,41 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { ClassificationPrompt } from '../built-in-llm-adapter';
 import type { GenerativeRouterConfig } from '../generative-router';
 
-// Mocks — declared before module imports
+// ---------------------------------------------------------------------------
+// Vitest 4: hoist mock variables for use in vi.mock factories
+// ---------------------------------------------------------------------------
 
-const mockClassify = vi.fn();
-const mockChat = vi.fn();
-const mockShutdown = vi.fn().mockResolvedValue(undefined);
-const mockInitialize = vi.fn().mockResolvedValue(undefined);
-const mockSwitchModel = vi.fn().mockResolvedValue(undefined);
-const mockGetStatus = vi.fn();
-
-vi.mock('../built-in-llm-manager', () => ({
-  BuiltInLlmManager: vi.fn().mockImplementation(() => ({
-    classify: mockClassify,
-    chat: mockChat,
-    shutdown: mockShutdown,
-    initialize: mockInitialize,
-    switchModel: mockSwitchModel,
-    getStatus: mockGetStatus,
-  })),
+const {
+  mockClassify,
+  mockChat,
+  mockShutdown,
+  mockInitialize,
+  mockSwitchModel,
+  mockGetStatus,
+  mockAccess,
+} = vi.hoisted(() => ({
+  mockClassify: vi.fn(),
+  mockChat: vi.fn(),
+  mockShutdown: vi.fn().mockResolvedValue(undefined),
+  mockInitialize: vi.fn().mockResolvedValue(undefined),
+  mockSwitchModel: vi.fn().mockResolvedValue(undefined),
+  mockGetStatus: vi.fn(),
+  mockAccess: vi.fn(),
 }));
 
-const mockAccess = vi.fn();
+vi.mock('../built-in-llm-manager', () => ({
+  BuiltInLlmManager: vi.fn().mockImplementation(function () {
+    return {
+      classify: mockClassify,
+      chat: mockChat,
+      shutdown: mockShutdown,
+      initialize: mockInitialize,
+      switchModel: mockSwitchModel,
+      getStatus: mockGetStatus,
+    };
+  }),
+}));
+
 vi.mock('fs/promises', () => ({
   access: (...args: unknown[]) => mockAccess(...args),
   mkdir: vi.fn().mockResolvedValue(undefined),

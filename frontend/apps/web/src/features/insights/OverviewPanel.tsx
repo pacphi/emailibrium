@@ -144,7 +144,7 @@ export function OverviewPanel({ report, isLoading }: OverviewPanelProps) {
                   outerRadius={100}
                   paddingAngle={2}
                   dataKey="value"
-                  onClick={(entry) => setSelectedCategory(entry.name)}
+                  onClick={(entry) => setSelectedCategory(entry.name ?? null)}
                   className="cursor-pointer"
                 >
                   {categoryData.map((entry) => (

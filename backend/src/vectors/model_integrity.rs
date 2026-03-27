@@ -130,7 +130,8 @@ pub fn sha256_file(path: &Path) -> Result<String, VectorError> {
     let mut hasher = Sha256::new();
     hasher.update(&file_bytes);
     let result = hasher.finalize();
-    Ok(format!("{:x}", result))
+    let bytes: &[u8] = result.as_ref();
+    Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
 }
 
 /// Compute the SHA-256 hash of a byte slice.
@@ -138,7 +139,8 @@ pub fn sha256_bytes(data: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(data);
     let result = hasher.finalize();
-    format!("{:x}", result)
+    let bytes: &[u8] = result.as_ref();
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// Verify a single model file against the manifest.

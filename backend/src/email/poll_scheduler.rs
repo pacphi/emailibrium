@@ -274,3 +274,216 @@ async fn poll_loop(
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // -- PollSchedulerHandle creation and defaults --------------------------
+
+    #[tokio::test]
+    async fn test_handle_creation_defaults() {
+        let handle = PollSchedulerHandle::new();
+        let status = handle.status().await;
+        assert!(status.enabled);
+        assert_eq!(status.total_polls, 0);
+        assert_eq!(status.total_errors, 0);
+        assert!(status.accounts.is_empty());
+    }
+
+    // -- Enable / disable ---------------------------------------------------
+
+    #[tokio::test]
+    async fn test_set_enabled_false() {
+        let handle = PollSchedulerHandle::new();
+        handle.set_enabled(false).await;
+        let status = handle.status().await;
+        assert!(!status.enabled);
+    }
+
+    #[tokio::test]
+    async fn test_set_enabled_toggle() {
+        let handle = PollSchedulerHandle::new();
+        handle.set_enabled(false).await;
+        assert!(!handle.status().await.enabled);
+        handle.set_enabled(true).await;
+        assert!(handle.status().await.enabled);
+    }
+
+    // -- AccountPollState defaults ------------------------------------------
+
+    #[test]
+    fn test_account_poll_state_defaults() {
+        let state = AccountPollState::default();
+        assert_eq!(state.backoff_secs, 0);
+        assert!(!state.in_progress);
+        assert_eq!(state.consecutive_failures, 0);
+        // last_poll should be far in the past (86400 seconds ago)
+        let elapsed = state.last_poll.elapsed().as_secs();
+        assert!(elapsed >= 86300, "Expected last_poll to be ~24h ago, got {elapsed}s");
+    }
+
+    // -- Account tracking via inner state -----------------------------------
+
+    #[tokio::test]
+    async fn test_add_account_tracking() {
+        let handle = PollSchedulerHandle::new();
+        {
+            let mut inner = handle.inner.write().await;
+            inner.accounts.insert("acct-1".to_string(), AccountPollState::default());
+        }
+        let status = handle.status().await;
+        assert_eq!(status.accounts.len(), 1);
+        assert_eq!(status.accounts[0].account_id, "acct-1");
+        assert_eq!(status.accounts[0].consecutive_failures, 0);
+    }
+
+    #[tokio::test]
+    async fn test_remove_account_tracking() {
+        let handle = PollSchedulerHandle::new();
+        {
+            let mut inner = handle.inner.write().await;
+            inner.accounts.insert("acct-1".to_string(), AccountPollState::default());
+            inner.accounts.insert("acct-2".to_string(), AccountPollState::default());
+        }
+        assert_eq!(handle.status().await.accounts.len(), 2);
+
+        {
+            let mut inner = handle.inner.write().await;
+            inner.accounts.remove("acct-1");
+        }
+        let status = handle.status().await;
+        assert_eq!(status.accounts.len(), 1);
+        assert_eq!(status.accounts[0].account_id, "acct-2");
+    }
+
+    // -- Backoff calculation ------------------------------------------------
+
+    #[test]
+    fn test_backoff_calculation_first_failure() {
+        // First failure: 30 * 2^0 = 30
+        let backoff = (30u64 * 2u64.saturating_pow(0)).min(MAX_BACKOFF_SECS);
+        assert_eq!(backoff, 30);
+    }
+
+    #[test]
+    fn test_backoff_calculation_escalation() {
+        // Second failure: 30 * 2^1 = 60
+        let backoff2 = (30u64 * 2u64.saturating_pow(1)).min(MAX_BACKOFF_SECS);
+        assert_eq!(backoff2, 60);
+
+        // Third failure: 30 * 2^2 = 120
+        let backoff3 = (30u64 * 2u64.saturating_pow(2)).min(MAX_BACKOFF_SECS);
+        assert_eq!(backoff3, 120);
+
+        // Fifth failure: 30 * 2^4 = 480
+        let backoff5 = (30u64 * 2u64.saturating_pow(4)).min(MAX_BACKOFF_SECS);
+        assert_eq!(backoff5, 480);
+    }
+
+    #[test]
+    fn test_backoff_capped_at_max() {
+        // Sixth failure: 30 * 2^5 = 960, capped to MAX_BACKOFF_SECS (600)
+        let backoff = (30u64 * 2u64.saturating_pow(5)).min(MAX_BACKOFF_SECS);
+        assert_eq!(backoff, MAX_BACKOFF_SECS);
+        assert_eq!(backoff, 600);
+    }
+
+    // -- Poll interval logic ------------------------------------------------
+
+    #[test]
+    fn test_poll_interval_minimum_enforced() {
+        // A sync_frequency of 10 should be raised to MIN_POLL_INTERVAL_SECS (60)
+        let configured_secs: u64 = 10;
+        let poll_interval = configured_secs.max(MIN_POLL_INTERVAL_SECS);
+        assert_eq!(poll_interval, 60);
+    }
+
+    #[test]
+    fn test_poll_interval_uses_configured_when_above_min() {
+        let configured_secs: u64 = 180;
+        let poll_interval = configured_secs.max(MIN_POLL_INTERVAL_SECS);
+        assert_eq!(poll_interval, 180);
+    }
+
+    #[test]
+    fn test_poll_interval_default_when_zero() {
+        // sync_frequency == 0 should use DEFAULT_POLL_INTERVAL_SECS
+        let sync_frequency: i32 = 0;
+        let configured_secs = if sync_frequency > 0 {
+            sync_frequency as u64
+        } else {
+            DEFAULT_POLL_INTERVAL_SECS
+        };
+        let poll_interval = configured_secs.max(MIN_POLL_INTERVAL_SECS);
+        assert_eq!(poll_interval, DEFAULT_POLL_INTERVAL_SECS);
+        assert_eq!(poll_interval, 300);
+    }
+
+    // -- Poll counters via simulated sync results ---------------------------
+
+    #[tokio::test]
+    async fn test_poll_counters_on_success() {
+        let handle = PollSchedulerHandle::new();
+        {
+            let mut inner = handle.inner.write().await;
+            inner.accounts.insert("acct-1".to_string(), AccountPollState::default());
+            inner.total_polls += 1;
+            let state = inner.accounts.get_mut("acct-1").unwrap();
+            state.last_poll = Instant::now();
+            state.backoff_secs = 0;
+            state.consecutive_failures = 0;
+        }
+        let status = handle.status().await;
+        assert_eq!(status.total_polls, 1);
+        assert_eq!(status.total_errors, 0);
+        assert_eq!(status.accounts[0].consecutive_failures, 0);
+        assert_eq!(status.accounts[0].backoff_secs, 0);
+    }
+
+    #[tokio::test]
+    async fn test_poll_counters_on_failure() {
+        let handle = PollSchedulerHandle::new();
+        {
+            let mut inner = handle.inner.write().await;
+            inner.accounts.insert("acct-1".to_string(), AccountPollState::default());
+            inner.total_polls += 1;
+            inner.total_errors += 1;
+            let state = inner.accounts.get_mut("acct-1").unwrap();
+            state.last_poll = Instant::now();
+            state.consecutive_failures = 2;
+            state.backoff_secs = (30u64 * 2u64.saturating_pow(1)).min(MAX_BACKOFF_SECS);
+        }
+        let status = handle.status().await;
+        assert_eq!(status.total_polls, 1);
+        assert_eq!(status.total_errors, 1);
+        assert_eq!(status.accounts[0].consecutive_failures, 2);
+        assert_eq!(status.accounts[0].backoff_secs, 60);
+    }
+
+    // -- Constants ----------------------------------------------------------
+
+    #[test]
+    fn test_constants() {
+        assert_eq!(MIN_POLL_INTERVAL_SECS, 60);
+        assert_eq!(MAX_BACKOFF_SECS, 600);
+        assert_eq!(DEFAULT_POLL_INTERVAL_SECS, 300);
+        assert_eq!(TICK_INTERVAL_SECS, 15);
+    }
+
+    // -- Clone semantics for handle -----------------------------------------
+
+    #[tokio::test]
+    async fn test_handle_clone_shares_state() {
+        let handle1 = PollSchedulerHandle::new();
+        let handle2 = handle1.clone();
+
+        handle1.set_enabled(false).await;
+        // handle2 should see the same state
+        assert!(!handle2.status().await.enabled);
+    }
+}

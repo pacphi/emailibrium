@@ -603,7 +603,7 @@ impl OAuthManager {
                 let cipher = Aes256Gcm::new_from_slice(key.as_ref())
                     .map_err(|e| OAuthError::EncryptionError(e.to_string()))?;
                 let mut nonce_bytes = [0u8; NONCE_SIZE];
-                rand::thread_rng().fill_bytes(&mut nonce_bytes);
+                rand::rng().fill_bytes(&mut nonce_bytes);
                 let nonce = Nonce::from_slice(&nonce_bytes);
 
                 let ciphertext = cipher

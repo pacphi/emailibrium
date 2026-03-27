@@ -1,3 +1,4 @@
+import React from 'react';
 import type { Meta, StoryObj } from '@storybook/react';
 import { SkipToContent } from './SkipToContent';
 
@@ -31,7 +32,7 @@ type Story = StoryObj<typeof meta>;
 export const Default: Story = {
   args: {},
   decorators: [
-    (Story) => (
+    (Story: React.ComponentType) => (
       <div>
         <Story />
         <p className="mt-16 text-sm text-gray-500">
@@ -53,7 +54,7 @@ export const CustomLabel: Story = {
     targetId: 'dashboard',
   },
   decorators: [
-    (Story) => (
+    (Story: React.ComponentType) => (
       <div>
         <Story />
         <p className="mt-16 text-sm text-gray-500">
@@ -74,7 +75,7 @@ export const FocusedState: Story = {
     pseudo: { focus: true },
   },
   decorators: [
-    (Story) => (
+    (Story: React.ComponentType) => (
       <div>
         <Story />
         <p className="mt-16 text-sm text-gray-400">

@@ -476,3 +476,168 @@ fn add_rate_limit_headers(
         reset_timestamp.to_string().parse().unwrap(),
     );
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // -----------------------------------------------------------------------
+    // TokenBucket unit tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn token_bucket_new_starts_at_full_capacity() {
+        let bucket = TokenBucket::new(10.0, 1.0);
+        assert_eq!(bucket.remaining(), 10.0);
+    }
+
+    #[test]
+    fn token_bucket_try_consume_succeeds_when_tokens_available() {
+        let mut bucket = TokenBucket::new(5.0, 1.0);
+        assert!(bucket.try_consume(1.0));
+        // After consuming 1, remaining should be close to 4 (plus tiny refill)
+        assert!(bucket.remaining() >= 3.9);
+        assert!(bucket.remaining() <= 5.0);
+    }
+
+    #[test]
+    fn token_bucket_try_consume_fails_when_exhausted() {
+        let mut bucket = TokenBucket::new(2.0, 0.0); // zero refill so no recovery
+        assert!(bucket.try_consume(1.0));
+        assert!(bucket.try_consume(1.0));
+        assert!(!bucket.try_consume(1.0));
+    }
+
+    #[test]
+    fn token_bucket_never_exceeds_capacity() {
+        let mut bucket = TokenBucket::new(5.0, 1000.0); // very high refill rate
+        // Even with high refill, consuming then waiting should not exceed capacity
+        bucket.try_consume(1.0);
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        bucket.try_consume(0.0); // triggers refill
+        assert!(bucket.remaining() <= 5.0);
+    }
+
+    #[test]
+    fn token_bucket_consumes_fractional_tokens() {
+        let mut bucket = TokenBucket::new(1.0, 0.0);
+        assert!(bucket.try_consume(0.5));
+        assert!(bucket.try_consume(0.5));
+        assert!(!bucket.try_consume(0.5));
+    }
+
+    #[test]
+    fn token_bucket_time_until_refill_at_least_one_second() {
+        let mut bucket = TokenBucket::new(2.0, 1.0);
+        bucket.try_consume(2.0);
+        let dur = bucket.time_until_refill();
+        assert!(dur.as_secs() >= 1);
+    }
+
+    // -----------------------------------------------------------------------
+    // RateLimitConfig preset tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn production_preset_has_strictest_limits() {
+        let prod = RateLimitConfig::from_preset(RateLimitPreset::Production);
+        let dev = RateLimitConfig::from_preset(RateLimitPreset::Development);
+        assert!(prod.auth_start_limit < dev.auth_start_limit);
+        assert!(prod.auth_callback_limit < dev.auth_callback_limit);
+        assert!(prod.session_status_limit < dev.session_status_limit);
+    }
+
+    #[test]
+    fn development_preset_disables_user_limits() {
+        let dev = RateLimitConfig::from_preset(RateLimitPreset::Development);
+        assert!(!dev.enable_user_limits);
+    }
+
+    #[test]
+    fn staging_preset_enables_user_limits() {
+        let staging = RateLimitConfig::from_preset(RateLimitPreset::Staging);
+        assert!(staging.enable_user_limits);
+        assert_eq!(staging.user_limit_multiplier, 2.0);
+    }
+
+    #[test]
+    fn default_config_uses_production_preset() {
+        let default = RateLimitConfig::default();
+        let prod = RateLimitConfig::from_preset(RateLimitPreset::Production);
+        assert_eq!(default.auth_start_limit, prod.auth_start_limit);
+        assert_eq!(default.auth_callback_limit, prod.auth_callback_limit);
+    }
+
+    // -----------------------------------------------------------------------
+    // get_capacity_and_rate endpoint lookup tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn get_capacity_and_rate_returns_correct_auth_start() {
+        let config = RateLimitConfig::from_preset(RateLimitPreset::Production);
+        let (capacity, rate) = config.get_capacity_and_rate("auth_start");
+        assert_eq!(capacity, 10.0);
+        assert!((rate - 10.0 / 60.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn get_capacity_and_rate_returns_correct_session_status() {
+        let config = RateLimitConfig::from_preset(RateLimitPreset::Production);
+        let (capacity, _rate) = config.get_capacity_and_rate("session_status");
+        assert_eq!(capacity, 60.0);
+    }
+
+    #[test]
+    fn get_capacity_and_rate_returns_default_for_unknown_endpoint() {
+        let config = RateLimitConfig::from_preset(RateLimitPreset::Production);
+        let (capacity, rate) = config.get_capacity_and_rate("unknown_endpoint");
+        assert_eq!(capacity, 60.0);
+        assert!((rate - 1.0).abs() < f64::EPSILON);
+    }
+
+    // -----------------------------------------------------------------------
+    // RateLimiter and InMemoryBackend async tests
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn in_memory_backend_allows_within_capacity() {
+        let backend = InMemoryBackend::new();
+        let (allowed, remaining, _) = backend.check("test_key", 5.0, 1.0).await;
+        assert!(allowed);
+        assert!(remaining >= 3.0); // consumed 1 from 5
+    }
+
+    #[tokio::test]
+    async fn in_memory_backend_rejects_after_exhaustion() {
+        let backend = InMemoryBackend::new();
+        // Exhaust a bucket with capacity 2
+        let _ = backend.check("exhaust", 2.0, 0.0).await;
+        let _ = backend.check("exhaust", 2.0, 0.0).await;
+        let (allowed, _, retry_after) = backend.check("exhaust", 2.0, 0.0).await;
+        assert!(!allowed);
+        assert!(retry_after.as_secs() >= 1);
+    }
+
+    #[tokio::test]
+    async fn rate_limiter_policy_description_format() {
+        let limiter = RateLimiter::new_in_memory(10.0, 2.0, "test".to_string());
+        let desc = limiter.get_policy_description();
+        assert!(desc.contains("120 requests per minute"));
+        assert!(desc.contains("burst: 10"));
+    }
+
+    #[tokio::test]
+    async fn rate_limiter_check_ip_uses_endpoint_scoped_key() {
+        let limiter = RateLimiter::new_in_memory(100.0, 10.0, "auth".to_string());
+        let ip: IpAddr = "127.0.0.1".parse().unwrap();
+        let (allowed, _, _) = limiter.check_ip(ip).await;
+        assert!(allowed);
+    }
+
+    #[tokio::test]
+    async fn rate_limiter_check_user_uses_endpoint_scoped_key() {
+        let limiter = RateLimiter::new_in_memory(100.0, 10.0, "auth".to_string());
+        let (allowed, _, _) = limiter.check_user("user123").await;
+        assert!(allowed);
+    }
+}

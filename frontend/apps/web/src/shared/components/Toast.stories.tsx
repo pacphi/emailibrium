@@ -1,3 +1,4 @@
+import React from 'react';
 import type { Meta, StoryObj } from '@storybook/react';
 import { useEffect } from 'react';
 import { ToastContainer } from './Toast';
@@ -46,7 +47,7 @@ function ToastSeeder({
 
 export const Success: Story = {
   decorators: [
-    (Story) => (
+    (Story: React.ComponentType) => (
       <div className="relative min-h-[200px]">
         <ToastSeeder type="success" message="Email rules applied successfully." />
         <Story />
@@ -57,7 +58,7 @@ export const Success: Story = {
 
 export const Error: Story = {
   decorators: [
-    (Story) => (
+    (Story: React.ComponentType) => (
       <div className="relative min-h-[200px]">
         <ToastSeeder type="error" message="Failed to sync inbox. Please try again." />
         <Story />
@@ -68,7 +69,7 @@ export const Error: Story = {
 
 export const Warning: Story = {
   decorators: [
-    (Story) => (
+    (Story: React.ComponentType) => (
       <div className="relative min-h-[200px]">
         <ToastSeeder type="warning" message="Your session will expire in 5 minutes." />
         <Story />
@@ -79,7 +80,7 @@ export const Warning: Story = {
 
 export const Info: Story = {
   decorators: [
-    (Story) => (
+    (Story: React.ComponentType) => (
       <div className="relative min-h-[200px]">
         <ToastSeeder type="info" message="New emails detected. Refresh to see updates." />
         <Story />

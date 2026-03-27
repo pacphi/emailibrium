@@ -329,3 +329,251 @@ struct EmailRow {
     body_text: Option<String>,
     category: String,
 }
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_config() -> RagConfig {
+        RagConfig::default()
+    }
+
+    fn make_config_no_body() -> RagConfig {
+        RagConfig {
+            include_body: false,
+            ..Default::default()
+        }
+    }
+
+    fn make_snippet(id: &str, subject: &str, body: Option<&str>) -> EmailSnippet {
+        EmailSnippet {
+            id: id.to_string(),
+            subject: subject.to_string(),
+            from_name: Some("Alice".to_string()),
+            from_addr: "alice@example.com".to_string(),
+            received_at: "2025-01-15T10:30:00Z".to_string(),
+            body_text: body.map(|b| b.to_string()),
+            category: "Work".to_string(),
+        }
+    }
+
+    fn make_pipeline_stub(config: RagConfig) -> RagPipeline {
+        // We construct a RagPipeline with dummy Arc pointers that we never call.
+        // Only format_email / format_email_truncated are exercised — they don't
+        // touch search or db.
+        let search = unsafe {
+            Arc::from_raw(std::ptr::null::<HybridSearch>())
+        };
+        let db = unsafe {
+            Arc::from_raw(std::ptr::null::<Database>())
+        };
+        RagPipeline { search, db, config }
+    }
+
+    // -- RagConfig defaults -------------------------------------------------
+
+    #[test]
+    fn test_default_config_values() {
+        let cfg = RagConfig::default();
+        assert_eq!(cfg.top_k, 3);
+        assert!((cfg.min_relevance_score - 0.005).abs() < 1e-6);
+        assert_eq!(cfg.max_context_tokens, 500);
+        assert!(cfg.include_body);
+        assert_eq!(cfg.max_body_chars, 200);
+    }
+
+    #[test]
+    fn test_config_serde_defaults() {
+        let json = "{}";
+        let cfg: RagConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(cfg.top_k, 3);
+        assert_eq!(cfg.max_context_tokens, 500);
+        assert!(cfg.include_body);
+    }
+
+    // -- format_email -------------------------------------------------------
+
+    #[test]
+    fn test_format_email_with_body() {
+        let config = make_config();
+        let pipeline = make_pipeline_stub(config);
+        let snippet = make_snippet("e1", "Weekly Report", Some("Here is the weekly report content"));
+
+        let formatted = pipeline.format_email(&snippet);
+        assert!(formatted.contains("--- Email ---"));
+        assert!(formatted.contains("From: Alice <alice@example.com>"));
+        assert!(formatted.contains("Subject: Weekly Report"));
+        assert!(formatted.contains("Category: Work"));
+        assert!(formatted.contains("Body: Here is the weekly report content"));
+
+        // Cleanup: prevent drop of null pointers
+        std::mem::forget(pipeline.search);
+        std::mem::forget(pipeline.db);
+    }
+
+    #[test]
+    fn test_format_email_without_body_config() {
+        let config = make_config_no_body();
+        let pipeline = make_pipeline_stub(config);
+        let snippet = make_snippet("e1", "Test", Some("Body text here"));
+
+        let formatted = pipeline.format_email(&snippet);
+        assert!(!formatted.contains("Body:"));
+
+        std::mem::forget(pipeline.search);
+        std::mem::forget(pipeline.db);
+    }
+
+    #[test]
+    fn test_format_email_no_from_name() {
+        let config = make_config();
+        let pipeline = make_pipeline_stub(config);
+        let snippet = EmailSnippet {
+            id: "e2".to_string(),
+            subject: "No Name".to_string(),
+            from_name: None,
+            from_addr: "bob@example.com".to_string(),
+            received_at: "2025-01-15T10:30:00Z".to_string(),
+            body_text: None,
+            category: "Personal".to_string(),
+        };
+
+        let formatted = pipeline.format_email(&snippet);
+        assert!(formatted.contains("From: bob@example.com"));
+        // Should not contain angle brackets when there is no name
+        assert!(!formatted.contains("<bob@example.com>"));
+
+        std::mem::forget(pipeline.search);
+        std::mem::forget(pipeline.db);
+    }
+
+    #[test]
+    fn test_format_email_truncates_long_body() {
+        let config = RagConfig {
+            max_body_chars: 20,
+            ..Default::default()
+        };
+        let pipeline = make_pipeline_stub(config);
+        let snippet = make_snippet(
+            "e3",
+            "Long Body",
+            Some("This is a very long body text that should be truncated at some point"),
+        );
+
+        let formatted = pipeline.format_email(&snippet);
+        assert!(formatted.contains("..."));
+        // The body portion should be roughly 20 chars + "..."
+        let body_line = formatted.lines().find(|l| l.starts_with("Body:")).unwrap();
+        // "Body: " is 6 chars, so content is ~20 chars + "..."
+        assert!(body_line.len() < 40, "Body line too long: {}", body_line);
+
+        std::mem::forget(pipeline.search);
+        std::mem::forget(pipeline.db);
+    }
+
+    // -- format_email_truncated ---------------------------------------------
+
+    #[test]
+    fn test_format_email_truncated_fits_budget() {
+        let config = make_config();
+        let pipeline = make_pipeline_stub(config);
+        let snippet = make_snippet("e4", "Budget Test", Some("Short body"));
+
+        let truncated = pipeline.format_email_truncated(&snippet, 500);
+        assert!(truncated.len() <= 500);
+        assert!(truncated.contains("Subject: Budget Test"));
+
+        std::mem::forget(pipeline.search);
+        std::mem::forget(pipeline.db);
+    }
+
+    #[test]
+    fn test_format_email_truncated_very_small_budget() {
+        let config = make_config();
+        let pipeline = make_pipeline_stub(config);
+        let snippet = make_snippet("e5", "Tiny Budget", Some("Some body text here"));
+
+        // Budget smaller than the header — should truncate header itself
+        let truncated = pipeline.format_email_truncated(&snippet, 30);
+        assert!(truncated.len() <= 30);
+
+        std::mem::forget(pipeline.search);
+        std::mem::forget(pipeline.db);
+    }
+
+    #[test]
+    fn test_format_email_truncated_no_body() {
+        let config = make_config();
+        let pipeline = make_pipeline_stub(config);
+        let snippet = make_snippet("e6", "No Body", None);
+
+        let truncated = pipeline.format_email_truncated(&snippet, 500);
+        assert!(!truncated.contains("Body:"));
+        assert!(truncated.contains("Subject: No Body"));
+
+        std::mem::forget(pipeline.search);
+        std::mem::forget(pipeline.db);
+    }
+
+    // -- Token budget logic (unit-level) ------------------------------------
+
+    #[test]
+    fn test_token_budget_calculation() {
+        // Verify the rough 1 token ≈ 4 chars heuristic used in retrieve_context
+        let budget_tokens = 100;
+        let budget_chars = budget_tokens * 4;
+        assert_eq!(budget_chars, 400);
+
+        // A snippet of ~200 chars should consume ~50 tokens
+        let snippet = "a".repeat(200);
+        let estimated_tokens = snippet.len() / 4;
+        assert_eq!(estimated_tokens, 50);
+        assert!(estimated_tokens <= budget_tokens);
+    }
+
+    // -- RagContext construction ---------------------------------------------
+
+    #[test]
+    fn test_empty_rag_context() {
+        let ctx = RagContext {
+            formatted_context: String::new(),
+            email_ids: Vec::new(),
+            result_count: 0,
+        };
+        assert_eq!(ctx.result_count, 0);
+        assert!(ctx.formatted_context.is_empty());
+        assert!(ctx.email_ids.is_empty());
+    }
+
+    #[test]
+    fn test_rag_context_with_results() {
+        let ctx = RagContext {
+            formatted_context: "The following 2 email(s) are relevant".to_string(),
+            email_ids: vec!["e1".to_string(), "e2".to_string()],
+            result_count: 2,
+        };
+        assert_eq!(ctx.result_count, 2);
+        assert_eq!(ctx.email_ids.len(), 2);
+        assert!(ctx.formatted_context.contains("2 email(s)"));
+    }
+
+    // -- Minimum relevance filtering (logic test) ---------------------------
+
+    #[test]
+    fn test_min_relevance_filtering_logic() {
+        let config = RagConfig::default();
+        let scores = vec![0.02, 0.01, 0.004, 0.001];
+        let filtered: Vec<f32> = scores
+            .into_iter()
+            .filter(|s| *s >= config.min_relevance_score)
+            .collect();
+        // 0.02 and 0.01 are above 0.005 threshold; 0.004 and 0.001 are below
+        assert_eq!(filtered.len(), 2);
+        assert!((filtered[0] - 0.02).abs() < 1e-6);
+        assert!((filtered[1] - 0.01).abs() < 1e-6);
+    }
+}

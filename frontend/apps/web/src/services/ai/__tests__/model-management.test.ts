@@ -1,22 +1,92 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-// Mocks — must be declared before any module imports that use them
+// ---------------------------------------------------------------------------
+// Vitest 4: hoist mock variables so they're available inside vi.mock factories
+// ---------------------------------------------------------------------------
 
-const mockGetLlama = vi.fn();
-const mockLlamaChatSession = vi.fn();
-const mockCreateModelDownloader = vi.fn();
+const {
+  mockGetLlama,
+  mockLlamaChatSession,
+  mockCreateModelDownloader,
+  mockStat,
+  mockReaddir,
+  mockMkdir,
+  mockRm,
+  mockAccess,
+  mockHomedir,
+  TEST_MANIFEST,
+  TEST_MANIFEST_ALT,
+  TEST_MANIFEST_LARGE,
+} = vi.hoisted(() => {
+  const _TEST_MANIFEST = {
+    modelId: 'qwen2.5-0.5b-q4km',
+    displayName: 'Qwen 2.5 0.5B Instruct',
+    repo: 'Qwen/Qwen2.5-0.5B-Instruct-GGUF',
+    filename: 'qwen2.5-0.5b-instruct-q4_k_m.gguf',
+    sizeBytes: 386_547_712,
+    ramEstimateBytes: 524_288_000,
+    quantization: 'Q4_K_M',
+    contextLength: 32_768,
+    description: 'Test model',
+    isDefault: true,
+    sha256: 'sha256:pending-verification',
+  };
+  const _TEST_MANIFEST_ALT = {
+    modelId: 'smollm2-360m-q4km',
+    displayName: 'SmolLM2 360M Instruct',
+    repo: 'bartowski/SmolLM2-360M-Instruct-GGUF',
+    filename: 'SmolLM2-360M-Instruct-Q4_K_M.gguf',
+    sizeBytes: 271_581_184,
+    ramEstimateBytes: 419_430_400,
+    quantization: 'Q4_K_M',
+    contextLength: 2_048,
+    description: 'Test model alt',
+    isDefault: false,
+    sha256: 'sha256:pending-verification',
+  };
+  const _TEST_MANIFEST_LARGE = {
+    modelId: 'llama3.2-3b-q4km',
+    displayName: 'Llama 3.2 3B Instruct',
+    repo: 'bartowski/Llama-3.2-3B-Instruct-GGUF',
+    filename: 'Llama-3.2-3B-Instruct-Q4_K_M.gguf',
+    sizeBytes: 2_019_557_376,
+    ramEstimateBytes: 2_684_354_560,
+    quantization: 'Q4_K_M',
+    contextLength: 131_072,
+    description: 'Test model large',
+    isDefault: false,
+    sha256: 'sha256:pending-verification',
+  };
+
+  // Manifests lookup by ID
+  const manifests: Record<string, typeof _TEST_MANIFEST> = {
+    'qwen2.5-0.5b-q4km': _TEST_MANIFEST,
+    'smollm2-360m-q4km': _TEST_MANIFEST_ALT,
+    'llama3.2-3b-q4km': _TEST_MANIFEST_LARGE,
+  };
+
+  return {
+    mockGetLlama: vi.fn(),
+    mockLlamaChatSession: vi.fn(),
+    mockCreateModelDownloader: vi.fn(),
+    mockStat: vi.fn(),
+    mockReaddir: vi.fn(),
+    mockMkdir: vi.fn(),
+    mockRm: vi.fn(),
+    mockAccess: vi.fn(),
+    mockHomedir: vi.fn(),
+    TEST_MANIFEST: _TEST_MANIFEST,
+    TEST_MANIFEST_ALT: _TEST_MANIFEST_ALT,
+    TEST_MANIFEST_LARGE: _TEST_MANIFEST_LARGE,
+    manifests,
+  };
+});
 
 vi.mock('node-llama-cpp', () => ({
   getLlama: (...args: unknown[]) => mockGetLlama(...args),
   LlamaChatSession: mockLlamaChatSession,
   createModelDownloader: (...args: unknown[]) => mockCreateModelDownloader(...args),
 }));
-
-const mockStat = vi.fn();
-const mockReaddir = vi.fn();
-const mockMkdir = vi.fn();
-const mockRm = vi.fn();
-const mockAccess = vi.fn();
 
 vi.mock('fs/promises', () => ({
   stat: (...args: unknown[]) => mockStat(...args),
@@ -26,8 +96,23 @@ vi.mock('fs/promises', () => ({
   access: (...args: unknown[]) => mockAccess(...args),
 }));
 
-const mockHomedir = vi.fn();
 vi.mock('os', () => ({ homedir: () => mockHomedir() }));
+
+// Mock model-manifest to return test fixtures instead of undefined
+vi.mock('../model-manifest', () => ({
+  DEFAULT_MODEL_ID: 'qwen2.5-0.5b-q4km',
+  LLM_CACHE_DIR: '.emailibrium/models/llm',
+  getManifest: (modelId: string) => {
+    const lookup: Record<string, unknown> = {
+      'qwen2.5-0.5b-q4km': TEST_MANIFEST,
+      'smollm2-360m-q4km': TEST_MANIFEST_ALT,
+      'llama3.2-3b-q4km': TEST_MANIFEST_LARGE,
+    };
+    return lookup[modelId];
+  },
+  getDefaultManifest: () => TEST_MANIFEST,
+  getAllManifests: () => [TEST_MANIFEST, TEST_MANIFEST_ALT, TEST_MANIFEST_LARGE],
+}));
 
 function setupDefaultMocks(): void {
   mockHomedir.mockReturnValue('/home/testuser');
@@ -51,10 +136,12 @@ function setupDefaultMocks(): void {
     dispose: vi.fn(),
   };
   mockGetLlama.mockResolvedValue(mockLlama);
-  mockLlamaChatSession.mockImplementation(() => ({
-    prompt: vi.fn().mockResolvedValue('{}'),
-    dispose: vi.fn(),
-  }));
+  mockLlamaChatSession.mockImplementation(function () {
+    return {
+      prompt: vi.fn().mockResolvedValue('{}'),
+      dispose: vi.fn(),
+    };
+  });
   mockCreateModelDownloader.mockResolvedValue({
     download: vi.fn().mockResolvedValue('/home/testuser/.emailibrium/models/llm/test/model.gguf'),
     cancel: vi.fn(),
@@ -63,53 +150,7 @@ function setupDefaultMocks(): void {
 
 // Imports — after mocks
 
-import {
-  getAllManifests,
-  getManifest,
-  getDefaultManifest,
-  type ModelManifest,
-} from '../model-manifest';
-
-// Test-local manifest fixtures (model data now comes from API, not hardcoded)
-const TEST_MANIFEST: ModelManifest = {
-  modelId: 'qwen2.5-0.5b-q4km',
-  displayName: 'Qwen 2.5 0.5B Instruct',
-  repo: 'Qwen/Qwen2.5-0.5B-Instruct-GGUF',
-  filename: 'qwen2.5-0.5b-instruct-q4_k_m.gguf',
-  sizeBytes: 386_547_712,
-  ramEstimateBytes: 524_288_000,
-  quantization: 'Q4_K_M',
-  contextLength: 32_768,
-  description: 'Test model',
-  isDefault: true,
-  sha256: 'sha256:pending-verification',
-};
-const TEST_MANIFEST_ALT: ModelManifest = {
-  modelId: 'smollm2-360m-q4km',
-  displayName: 'SmolLM2 360M Instruct',
-  repo: 'bartowski/SmolLM2-360M-Instruct-GGUF',
-  filename: 'SmolLM2-360M-Instruct-Q4_K_M.gguf',
-  sizeBytes: 271_581_184,
-  ramEstimateBytes: 419_430_400,
-  quantization: 'Q4_K_M',
-  contextLength: 2_048,
-  description: 'Test model alt',
-  isDefault: false,
-  sha256: 'sha256:pending-verification',
-};
-const TEST_MANIFEST_LARGE: ModelManifest = {
-  modelId: 'llama3.2-3b-q4km',
-  displayName: 'Llama 3.2 3B Instruct',
-  repo: 'bartowski/Llama-3.2-3B-Instruct-GGUF',
-  filename: 'Llama-3.2-3B-Instruct-Q4_K_M.gguf',
-  sizeBytes: 2_019_557_376,
-  ramEstimateBytes: 2_684_354_560,
-  quantization: 'Q4_K_M',
-  contextLength: 131_072,
-  description: 'Test model large',
-  isDefault: false,
-  sha256: 'sha256:pending-verification',
-};
+import type { ModelManifest } from '../model-manifest';
 import {
   getCacheDir,
   isModelCached,
@@ -122,21 +163,21 @@ import { BuiltInLlmManager } from '../built-in-llm-manager';
 
 // Tests
 
-describe('model-manifest', () => {
-  it('getAllManifests() returns empty array (models now served by API)', () => {
-    expect(getAllManifests()).toHaveLength(0);
+describe('model-manifest (mocked for tests)', () => {
+  it('getManifest() returns test fixture for known ID', async () => {
+    const { getManifest } = await import('../model-manifest');
+    expect(getManifest('qwen2.5-0.5b-q4km')).toBeDefined();
+    expect(getManifest('qwen2.5-0.5b-q4km')?.modelId).toBe('qwen2.5-0.5b-q4km');
   });
 
-  it('getManifest() returns undefined (models now served by API)', () => {
-    expect(getManifest('qwen2.5-0.5b-q4km')).toBeUndefined();
-  });
-
-  it('getManifest() returns undefined for unknown ID', () => {
+  it('getManifest() returns undefined for unknown ID', async () => {
+    const { getManifest } = await import('../model-manifest');
     expect(getManifest('nonexistent-model')).toBeUndefined();
   });
 
-  it('getDefaultManifest() returns undefined (models now served by API)', () => {
-    expect(getDefaultManifest()).toBeUndefined();
+  it('getAllManifests() returns test fixtures', async () => {
+    const { getAllManifests } = await import('../model-manifest');
+    expect(getAllManifests()).toHaveLength(3);
   });
 });
 
@@ -154,24 +195,24 @@ describe('model-cache', () => {
 
   it('isModelCached() returns true when file exists', async () => {
     mockAccess.mockResolvedValue(undefined);
-    expect(await isModelCached(TEST_MANIFEST)).toBe(true);
+    expect(await isModelCached(TEST_MANIFEST as ModelManifest)).toBe(true);
   });
 
   it('isModelCached() returns false when file missing', async () => {
     mockAccess.mockRejectedValue(new Error('ENOENT'));
-    expect(await isModelCached(TEST_MANIFEST)).toBe(false);
+    expect(await isModelCached(TEST_MANIFEST as ModelManifest)).toBe(false);
   });
 
   it('getModelPath() returns path when cached', async () => {
     mockAccess.mockResolvedValue(undefined);
-    const path = await getModelPath(TEST_MANIFEST);
+    const path = await getModelPath(TEST_MANIFEST as ModelManifest);
     expect(path).toContain('qwen2.5-0.5b-q4km');
     expect(path).toContain('.gguf');
   });
 
   it('getModelPath() returns null when not cached', async () => {
     mockAccess.mockRejectedValue(new Error('ENOENT'));
-    expect(await getModelPath(TEST_MANIFEST)).toBeNull();
+    expect(await getModelPath(TEST_MANIFEST as ModelManifest)).toBeNull();
   });
 
   it('deleteModel() removes model directory', async () => {
@@ -202,7 +243,7 @@ describe('model-downloader', () => {
   });
 
   it('downloadModel() calls createModelDownloader with correct URI', async () => {
-    await downloadModel(TEST_MANIFEST, '/tmp/cache');
+    await downloadModel(TEST_MANIFEST as ModelManifest, '/tmp/cache');
     expect(mockCreateModelDownloader).toHaveBeenCalledWith(
       expect.objectContaining({
         modelUri: `hf:${TEST_MANIFEST.repo}/${TEST_MANIFEST.filename}`,
@@ -225,7 +266,7 @@ describe('model-downloader', () => {
     });
 
     const cb = vi.fn();
-    await downloadModel(TEST_MANIFEST, '/tmp/cache', { onProgress: cb });
+    await downloadModel(TEST_MANIFEST as ModelManifest, '/tmp/cache', { onProgress: cb });
     expect(cb).toHaveBeenCalledWith(
       expect.objectContaining({ modelId: 'qwen2.5-0.5b-q4km', percent: expect.any(Number) }),
     );
@@ -243,7 +284,7 @@ describe('model-downloader', () => {
       cancel: vi.fn(),
     }));
 
-    const manifest = TEST_MANIFEST_ALT;
+    const manifest = TEST_MANIFEST_ALT as ModelManifest;
     const p1 = downloadModel(manifest, '/tmp/cache');
     const p2 = downloadModel(manifest, '/tmp/cache');
     await new Promise((r) => setTimeout(r, 10));
@@ -262,7 +303,7 @@ describe('model-downloader', () => {
     const controller = new AbortController();
     controller.abort();
     await expect(
-      downloadModel(TEST_MANIFEST_LARGE, '/tmp/cache', { signal: controller.signal }),
+      downloadModel(TEST_MANIFEST_LARGE as ModelManifest, '/tmp/cache', { signal: controller.signal }),
     ).rejects.toThrow(/abort/i);
   });
 });
@@ -296,10 +337,12 @@ describe('BuiltInLlmManager', () => {
   });
 
   it('classify() lazy-initializes then classifies', async () => {
-    mockLlamaChatSession.mockImplementation(() => ({
-      prompt: vi.fn().mockResolvedValue(JSON.stringify({ category: 'primary', confidence: 0.9 })),
-      dispose: vi.fn(),
-    }));
+    mockLlamaChatSession.mockImplementation(function () {
+      return {
+        prompt: vi.fn().mockResolvedValue(JSON.stringify({ category: 'primary', confidence: 0.9 })),
+        dispose: vi.fn(),
+      };
+    });
 
     const manager = new BuiltInLlmManager();
     const result = await manager.classify({

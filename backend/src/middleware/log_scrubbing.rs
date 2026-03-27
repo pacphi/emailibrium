@@ -174,3 +174,168 @@ pub fn scrub_headers(headers: &axum::http::HeaderMap) -> String {
 pub fn scrub_error_message(error: &dyn std::error::Error) -> String {
     scrub_sensitive_data(&error.to_string())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // -----------------------------------------------------------------------
+    // scrub_sensitive_data — pattern coverage
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn scrubs_jwt_token() {
+        let input = "token: eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abc123XYZ_-456";
+        let result = scrub_sensitive_data(input);
+        assert!(result.contains("[REDACTED]"));
+        assert!(!result.contains("eyJhbGciOiJIUzI1NiJ9"));
+    }
+
+    #[test]
+    fn scrubs_bearer_token() {
+        let input = "Authorization: Bearer ya29.a0AfH6SMBx12345abcdef";
+        let result = scrub_sensitive_data(input);
+        assert!(result.contains("[REDACTED]"));
+        assert!(!result.contains("ya29.a0AfH6SMBx12345abcdef"));
+    }
+
+    #[test]
+    fn scrubs_access_token_field() {
+        let input = r#"access_token: "AABBCCDD1234567890abcdef""#;
+        let result = scrub_sensitive_data(input);
+        assert!(result.contains("[REDACTED]"));
+        assert!(!result.contains("AABBCCDD1234567890abcdef"));
+    }
+
+    #[test]
+    fn scrubs_refresh_token_field() {
+        let input = r#"refresh_token="rt_1234567890abcdefghij""#;
+        let result = scrub_sensitive_data(input);
+        assert!(result.contains("[REDACTED]"));
+        assert!(!result.contains("rt_1234567890abcdefghij"));
+    }
+
+    #[test]
+    fn scrubs_api_key_case_insensitive() {
+        let input = r#"API-KEY: "sk-proj-abcdefghij1234567890""#;
+        let result = scrub_sensitive_data(input);
+        assert!(result.contains("[REDACTED]"));
+        assert!(!result.contains("sk-proj-abcdefghij1234567890"));
+    }
+
+    #[test]
+    fn scrubs_secret_field() {
+        let input = r#"secret="my_super_secret_value_12345""#;
+        let result = scrub_sensitive_data(input);
+        assert!(result.contains("[REDACTED]"));
+        assert!(!result.contains("my_super_secret_value_12345"));
+    }
+
+    #[test]
+    fn scrubs_password_field() {
+        let input = r#"password: "P@ssw0rd!Strong#123""#;
+        let result = scrub_sensitive_data(input);
+        assert!(result.contains("[REDACTED]"));
+        assert!(!result.contains("P@ssw0rd!Strong#123"));
+    }
+
+    #[test]
+    fn scrubs_pkce_code_verifier() {
+        // PKCE verifiers are 43-128 chars of unreserved characters
+        let verifier = "abcdefghijklmnopqrstuvwxyz0123456789_ABCDEFG";
+        let input = format!(r#"code_verifier="{}""#, verifier);
+        let result = scrub_sensitive_data(&input);
+        assert!(result.contains("[REDACTED]"));
+        assert!(!result.contains(verifier));
+    }
+
+    #[test]
+    fn leaves_safe_text_untouched() {
+        let input = "GET /api/v1/emails?page=1&limit=20 HTTP/1.1";
+        let result = scrub_sensitive_data(input);
+        assert_eq!(result, input);
+    }
+
+    #[test]
+    fn handles_multiple_sensitive_values_in_one_string() {
+        let input = r#"Bearer abc123.def456.ghi789 and password: "hunter2!abc""#;
+        let result = scrub_sensitive_data(input);
+        // Bearer token should be redacted
+        assert!(!result.contains("abc123.def456.ghi789"));
+        // Password should be redacted
+        assert!(!result.contains("hunter2!abc"));
+    }
+
+    // -----------------------------------------------------------------------
+    // scrub_query_params
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn scrubs_access_token_from_query_string() {
+        let url = "https://example.com/callback?access_token=secret123&state=abc";
+        let result = scrub_query_params(url);
+        assert!(result.contains("access_token=[REDACTED]"));
+        assert!(!result.contains("secret123"));
+        assert!(result.contains("state=abc"));
+    }
+
+    #[test]
+    fn scrubs_multiple_sensitive_query_params() {
+        let url = "https://example.com?token=tok123&code=authcode456&safe=yes";
+        let result = scrub_query_params(url);
+        assert!(result.contains("token=[REDACTED]"));
+        assert!(result.contains("code=[REDACTED]"));
+        assert!(result.contains("safe=yes"));
+    }
+
+    #[test]
+    fn scrub_query_params_leaves_safe_url_unchanged() {
+        let url = "https://example.com/api/v1/emails?page=1&limit=20";
+        let result = scrub_query_params(url);
+        assert_eq!(result, url);
+    }
+
+    // -----------------------------------------------------------------------
+    // scrub_headers
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn scrub_headers_redacts_authorization() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert("authorization", "Bearer secret".parse().unwrap());
+        headers.insert("content-type", "application/json".parse().unwrap());
+        let result = scrub_headers(&headers);
+        assert!(result.contains("[REDACTED]"));
+        assert!(result.contains("application/json"));
+        assert!(!result.contains("Bearer secret"));
+    }
+
+    #[test]
+    fn scrub_headers_redacts_cookie() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert("cookie", "session=abc123".parse().unwrap());
+        let result = scrub_headers(&headers);
+        assert!(result.contains("[REDACTED]"));
+        assert!(!result.contains("abc123"));
+    }
+
+    // -----------------------------------------------------------------------
+    // scrub_error_message
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn scrub_error_message_redacts_jwt_in_error() {
+        let jwt = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyIn0.signatureABC123";
+        let err = std::io::Error::other(format!("Failed with token {}", jwt));
+        let result = scrub_error_message(&err);
+        assert!(result.contains("[REDACTED]"));
+        assert!(!result.contains(jwt));
+    }
+
+    #[test]
+    fn scrub_error_message_passes_through_safe_errors() {
+        let err = std::io::Error::other("Connection refused on port 8080");
+        let result = scrub_error_message(&err);
+        assert_eq!(result, "Connection refused on port 8080");
+    }
+}

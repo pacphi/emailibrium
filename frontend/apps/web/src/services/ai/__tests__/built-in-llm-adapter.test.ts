@@ -1,44 +1,42 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import {
-  BuiltInLlmAdapter,
-  ModelNotFoundError,
-  type BuiltInLlmConfig,
-  type ClassificationPrompt,
-  type Message,
-} from '../built-in-llm-adapter';
 
 // ---------------------------------------------------------------------------
-// Mock node-llama-cpp
+// Mock node-llama-cpp  (vitest 4: use vi.hoisted for mock factory refs)
 // ---------------------------------------------------------------------------
 
-const mockSession = {
-  prompt: vi.fn(),
-  dispose: vi.fn(),
-};
-
-const mockSequence = {};
-
-const mockContext = {
-  getSequence: vi.fn().mockReturnValue(mockSequence),
-  dispose: vi.fn(),
-};
-
-const mockModel = {
-  dispose: vi.fn().mockResolvedValue(undefined),
-  tokenize: vi.fn().mockReturnValue([1, 2, 3]),
-  createContext: vi.fn().mockResolvedValue(mockContext),
-};
-
-const mockGrammar = {};
-
-const mockLlama = {
-  loadModel: vi.fn().mockResolvedValue(mockModel),
-  createGrammarForJsonSchema: vi.fn().mockResolvedValue(mockGrammar),
-  dispose: vi.fn(),
-};
-
-const mockGetLlama = vi.fn().mockResolvedValue(mockLlama);
-const mockLlamaChatSessionCtor = vi.fn().mockImplementation(() => mockSession);
+const { mockSession, mockContext, mockModel, mockGrammar, mockLlama, mockGetLlama, mockLlamaChatSessionCtor } = vi.hoisted(() => {
+  const _mockSession = {
+    prompt: vi.fn(),
+    dispose: vi.fn(),
+  };
+  const _mockContext = {
+    getSequence: vi.fn().mockReturnValue({}),
+    dispose: vi.fn(),
+  };
+  const _mockModel = {
+    dispose: vi.fn().mockResolvedValue(undefined),
+    tokenize: vi.fn().mockReturnValue([1, 2, 3]),
+    createContext: vi.fn().mockResolvedValue(_mockContext),
+  };
+  const _mockGrammar = {};
+  const _mockLlama = {
+    loadModel: vi.fn().mockResolvedValue(_mockModel),
+    createGrammarForJsonSchema: vi.fn().mockResolvedValue(_mockGrammar),
+    dispose: vi.fn(),
+  };
+  const _mockGetLlama = vi.fn().mockResolvedValue(_mockLlama);
+  // Use a regular function (not arrow) so it can be called with `new`
+  const _mockLlamaChatSessionCtor = vi.fn().mockImplementation(function () { return _mockSession; });
+  return {
+    mockSession: _mockSession,
+    mockContext: _mockContext,
+    mockModel: _mockModel,
+    mockGrammar: _mockGrammar,
+    mockLlama: _mockLlama,
+    mockGetLlama: _mockGetLlama,
+    mockLlamaChatSessionCtor: _mockLlamaChatSessionCtor,
+  };
+});
 
 vi.mock('node-llama-cpp', () => ({
   getLlama: mockGetLlama,
@@ -46,8 +44,16 @@ vi.mock('node-llama-cpp', () => ({
 }));
 
 // ---------------------------------------------------------------------------
-// Helpers
+// Imports & helpers
 // ---------------------------------------------------------------------------
+
+import {
+  BuiltInLlmAdapter,
+  ModelNotFoundError,
+  type BuiltInLlmConfig,
+  type ClassificationPrompt,
+  type Message,
+} from '../built-in-llm-adapter';
 
 function createAdapter(overrides?: Partial<BuiltInLlmConfig>): BuiltInLlmAdapter {
   return new BuiltInLlmAdapter({
@@ -74,13 +80,13 @@ describe('BuiltInLlmAdapter', () => {
     vi.clearAllMocks();
     // Re-setup mocks after clearAllMocks wipes them
     mockGetLlama.mockResolvedValue(mockLlama);
-    mockLlamaChatSessionCtor.mockImplementation(() => mockSession);
+    mockLlamaChatSessionCtor.mockImplementation(function () { return mockSession; });
     mockLlama.loadModel.mockResolvedValue(mockModel);
     mockLlama.createGrammarForJsonSchema.mockResolvedValue(mockGrammar);
     mockModel.createContext.mockResolvedValue(mockContext);
     mockModel.dispose.mockResolvedValue(undefined);
     mockModel.tokenize.mockReturnValue([1, 2, 3]);
-    mockContext.getSequence.mockReturnValue(mockSequence);
+    mockContext.getSequence.mockReturnValue({});
     mockSession.prompt.mockResolvedValue('Hello world');
     mockSession.dispose.mockReturnValue(undefined);
   });
@@ -155,9 +161,6 @@ describe('BuiltInLlmAdapter', () => {
       await adapter.load();
       await adapter.load();
 
-      // getLlama is called twice (the adapter does not guard against it),
-      // but the important contract is that only one model is active.
-      // If the implementation becomes idempotent, loadModel would be called once.
       expect(adapter.isLoaded()).toBe(true);
     });
 
