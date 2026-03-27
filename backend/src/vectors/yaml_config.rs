@@ -31,7 +31,6 @@ pub struct YamlConfig {
     pub embedding_catalog: EmbeddingCatalog,
 }
 
-
 // ---------------------------------------------------------------------------
 // prompts.yaml
 // ---------------------------------------------------------------------------
@@ -106,7 +105,6 @@ pub struct TuningConfig {
     #[serde(default)]
     pub repetition: RepetitionTuning,
 }
-
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LlmTuning {
@@ -360,7 +358,6 @@ pub struct AppConfig {
     pub hardware: HardwareConfig,
 }
 
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncConfig {
     #[serde(default = "default_15_u64")]
@@ -468,7 +465,6 @@ pub struct ProvidersConfig {
     pub openrouter: OpenRouterProviderConfig,
 }
 
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OllamaProviderConfig {
     #[serde(default = "default_ollama_url")]
@@ -488,7 +484,6 @@ pub struct ApiKeyProviderConfig {
     #[serde(default)]
     pub api_key_env: String,
 }
-
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OpenRouterProviderConfig {
@@ -611,7 +606,6 @@ pub struct LlmCatalog {
     pub providers: HashMap<String, LlmProviderCatalog>,
 }
 
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LlmProviderCatalog {
     #[serde(default)]
@@ -693,7 +687,6 @@ pub struct EmbeddingCatalog {
     #[serde(default)]
     pub providers: HashMap<String, EmbeddingProviderCatalog>,
 }
-
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EmbeddingProviderCatalog {
