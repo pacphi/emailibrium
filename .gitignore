@@ -16,6 +16,9 @@ secrets/staging/
 secrets/production/
 !secrets/*.example/
 
+# Runtime data (vector stores, embeddings, user data)
+backend/data/
+
 # Database
 *.db
 *.db-shm
