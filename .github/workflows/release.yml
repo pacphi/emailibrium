@@ -109,7 +109,7 @@ jobs:
           .github/scripts/generate-changelog.sh \
             "${{ needs.validate-tag.outputs.version }}" \
             "changelog-${{ needs.validate-tag.outputs.version }}.md"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: changelog
           path: changelog-${{ needs.validate-tag.outputs.version }}.md
