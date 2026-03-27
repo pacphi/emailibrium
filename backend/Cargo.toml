@@ -97,7 +97,7 @@ dirs = "6"
 criterion = { version = "0.8", features = ["async_tokio"] }
 tempfile = "3"
 tokio-test = "0.4"
-axum-test = "16"
+axum-test = "19"
 emailibrium = { path = ".", features = ["test-vectors"] }
 
 [[bench]]
