@@ -94,7 +94,7 @@ shellexpand = "3"
 dirs = "6"
 
 [dev-dependencies]
-criterion = { version = "0.5", features = ["async_tokio"] }
+criterion = { version = "0.8", features = ["async_tokio"] }
 tempfile = "3"
 tokio-test = "0.4"
 axum-test = "16"
