@@ -65,9 +65,3 @@ mod config_props {
         }
     }
 }
-
-/// Ensure the test file compiles even without the proptest feature.
-#[test]
-fn proptest_config_placeholder() {
-    assert!(true);
-}

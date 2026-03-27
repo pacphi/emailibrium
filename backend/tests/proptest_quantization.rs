@@ -148,9 +148,3 @@ mod quantization_props {
         }
     }
 }
-
-/// Ensure the test file compiles even without the proptest feature.
-#[test]
-fn proptest_quantization_placeholder() {
-    assert!(true);
-}

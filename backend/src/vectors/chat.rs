@@ -205,8 +205,9 @@ impl ChatService {
             tracing::warn!("Chat prompt has NO email context — RAG may not be injecting");
         }
 
-        // Generate the response.
-        let reply = self.generate_response(&prompt).await?;
+        // Generate the response and strip <think>...</think> blocks (Qwen 3 CoT).
+        let raw_reply = self.generate_response(&prompt).await?;
+        let reply = strip_think_blocks(&raw_reply);
 
         // Record the assistant reply.
         let message_count = {
@@ -319,14 +320,35 @@ impl ChatService {
 
 /// Build the system prompt for the email assistant persona.
 fn email_assistant_system_prompt() -> String {
-    "You are an email assistant with full access to the user's inbox. \
-     The [Email Context] section contains REAL emails from the user's inbox that match their query. \
-     IMPORTANT RULES:\n\
-     1. If emails are shown in the context, answer YES and list them with sender, subject, and date.\n\
-     2. NEVER say you don't have access. You DO have access — the emails are shown above.\n\
-     3. If no emails are in the context, say no matching emails were found.\n\
-     4. Be specific — quote subjects and senders from the provided emails."
-        .to_string()
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M %Z");
+    format!(
+        "You are an email assistant with full access to the user's inbox.\n\
+         The current date and time is: {now}\n\
+         The [Email Context] section contains REAL emails from the user's inbox that match their query.\n\
+         IMPORTANT RULES:\n\
+         1. If emails are shown in the context, answer YES and list them with sender, subject, and date.\n\
+         2. NEVER say you don't have access. You DO have access — the emails are shown above.\n\
+         3. If no emails are in the context, say no matching emails were found.\n\
+         4. Be specific — quote subjects and senders from the provided emails.\n\
+         5. Do NOT include internal reasoning or thinking in your response. Answer directly."
+    )
+}
+
+/// Strip `<think>...</think>` blocks from model output (Qwen 3 chain-of-thought).
+fn strip_think_blocks(text: &str) -> String {
+    if let Some(end) = text.find("</think>") {
+        text[end + 8..].trim().to_string()
+    } else if text.starts_with("<think>") {
+        // Thinking block never closed — return everything after first newline as fallback
+        text.lines()
+            .skip(1)
+            .collect::<Vec<_>>()
+            .join("\n")
+            .trim()
+            .to_string()
+    } else {
+        text.to_string()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -499,5 +521,28 @@ mod tests {
         let prompt = email_assistant_system_prompt();
         assert!(prompt.contains("email assistant"));
         assert!(prompt.contains("Email Context"));
+        assert!(prompt.contains("current date and time"));
+        // Verify date is injected (contains year)
+        assert!(prompt.contains("202"));
+    }
+
+    #[test]
+    fn test_strip_think_blocks_with_closing_tag() {
+        let input = "<think>\nLet me reason about this.\n</think>\nThe answer is 42.";
+        assert_eq!(strip_think_blocks(input), "The answer is 42.");
+    }
+
+    #[test]
+    fn test_strip_think_blocks_unclosed() {
+        let input = "<think>\nSome reasoning\nMore reasoning";
+        let result = strip_think_blocks(input);
+        assert!(result.contains("Some reasoning"));
+        assert!(!result.contains("<think>"));
+    }
+
+    #[test]
+    fn test_strip_think_blocks_no_think() {
+        let input = "Just a normal response.";
+        assert_eq!(strip_think_blocks(input), "Just a normal response.");
     }
 }

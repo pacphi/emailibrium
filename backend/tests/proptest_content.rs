@@ -61,11 +61,3 @@ mod content_props {
         }
     }
 }
-
-/// Ensure the test file compiles even without the proptest feature.
-#[test]
-fn proptest_content_placeholder() {
-    // This test exists so `cargo test` finds at least one test in this file.
-    // The real property tests require: cargo test --features proptest
-    assert!(true);
-}

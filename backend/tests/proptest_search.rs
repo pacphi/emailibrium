@@ -74,9 +74,3 @@ mod search_props {
         }
     }
 }
-
-/// Ensure the test file compiles even without the proptest feature.
-#[test]
-fn proptest_search_placeholder() {
-    assert!(true);
-}
