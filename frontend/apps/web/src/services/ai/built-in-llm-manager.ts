@@ -122,7 +122,7 @@ export class BuiltInLlmManager {
     const cached = await isModelCached(manifest);
 
     // 4. Download if needed
-    let modelPath: string | null = null;
+    let modelPath: string | null;
 
     if (!cached) {
       const cacheDir = await ensureCacheDir();

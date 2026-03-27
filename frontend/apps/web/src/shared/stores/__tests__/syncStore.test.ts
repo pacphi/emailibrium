@@ -120,9 +120,7 @@ describe('syncStore', () => {
     ]);
     mockStartIngestion.mockResolvedValue({ jobId: 'job-1' });
     // Make getEmails stabilize immediately (same count twice)
-    let callCount = 0;
     mockGetEmails.mockImplementation(async () => {
-      callCount++;
       return { emails: [], total: 10 };
     });
 
