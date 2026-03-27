@@ -27,6 +27,7 @@ jobs:
             --verbose --no-progress --cache --max-cache-age 1d
             --scheme file --include-fragments
             --exclude-path node_modules --exclude-path target --exclude-path .git
+            --exclude-path .claude/skills
             '**/*.md'
           fail: true
           jobSummary: true
