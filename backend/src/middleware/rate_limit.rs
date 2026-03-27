@@ -321,7 +321,15 @@ impl RateLimitConfig {
             "auth_callback" => self.auth_callback_limit,
             "session_status" => self.session_status_limit,
             "token_refresh" => self.token_refresh_limit,
-            _ => 60,
+            // Default: use session_status_limit (high) for dev, 60 for production
+            _ => {
+                if !self.enable_user_limits {
+                    // Development mode — use generous default
+                    self.session_status_limit.max(200)
+                } else {
+                    60
+                }
+            }
         };
 
         // Capacity is the burst limit, rate is tokens per second

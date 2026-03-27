@@ -229,7 +229,8 @@ dev: ## Start full stack dev servers (native, loads secrets/dev/ as env vars)
 		EMAILIBRIUM_MICROSOFT_CLIENT_ID="$$(cat secrets/dev/microsoft_client_id 2>/dev/null)" \
 		EMAILIBRIUM_MICROSOFT_CLIENT_SECRET="$$(cat secrets/dev/microsoft_client_secret 2>/dev/null)" \
 		JWT_SECRET="$$(cat secrets/dev/jwt_secret 2>/dev/null)" \
-		EMAILIBRIUM_ENCRYPTION_MASTER_PASSWORD="$$(cat secrets/dev/oauth_encryption_key 2>/dev/null)"; \
+		EMAILIBRIUM_ENCRYPTION_MASTER_PASSWORD="$$(cat secrets/dev/oauth_encryption_key 2>/dev/null)" \
+		RATE_LIMIT_PRESET=development; \
 		trap 'kill 0' INT TERM EXIT; \
 		$(MAKE) -C $(BACKEND_DIR) dev & \
 		$(MAKE) -C $(FRONTEND_DIR) dev & \
@@ -243,7 +244,8 @@ dev-llm: ## Start full stack with built-in LLM (downloads ~350MB model on first 
 		EMAILIBRIUM_MICROSOFT_CLIENT_ID="$$(cat secrets/dev/microsoft_client_id 2>/dev/null)" \
 		EMAILIBRIUM_MICROSOFT_CLIENT_SECRET="$$(cat secrets/dev/microsoft_client_secret 2>/dev/null)" \
 		JWT_SECRET="$$(cat secrets/dev/jwt_secret 2>/dev/null)" \
-		EMAILIBRIUM_ENCRYPTION_MASTER_PASSWORD="$$(cat secrets/dev/oauth_encryption_key 2>/dev/null)"; \
+		EMAILIBRIUM_ENCRYPTION_MASTER_PASSWORD="$$(cat secrets/dev/oauth_encryption_key 2>/dev/null)" \
+		RATE_LIMIT_PRESET=development; \
 		trap 'kill 0' INT TERM EXIT; \
 		$(MAKE) -C $(BACKEND_DIR) dev-llm & \
 		$(MAKE) -C $(FRONTEND_DIR) dev & \

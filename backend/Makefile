@@ -76,7 +76,7 @@ build-release: ## Build backend (release, optimized)
 
 .PHONY: dev
 dev: ## Start dev server
-	@$(CARGO) run
+	@RATE_LIMIT_PRESET=development $(CARGO) run
 
 .PHONY: check-llm-deps
 check-llm-deps: ## Check that cmake is installed (required for llama.cpp compilation)
