@@ -21,7 +21,7 @@ jobs:
     name: Rust Format
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
@@ -33,7 +33,7 @@ jobs:
     name: Rust Clippy
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
@@ -49,7 +49,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [rust-format, rust-clippy]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
@@ -65,7 +65,7 @@ jobs:
     name: Rust Security Audit
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: rustsec/audit-check@v2
         with:
           working-directory: backend
@@ -76,7 +76,7 @@ jobs:
     name: Frontend Install
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: pnpm/action-setup@v4
         with:
           version: 10
@@ -99,7 +99,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: frontend-install
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: pnpm/action-setup@v4
         with:
           version: 10
@@ -130,7 +130,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: frontend-quality
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: pnpm/action-setup@v4
         with:
           version: 10
@@ -157,7 +157,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: frontend-quality
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: pnpm/action-setup@v4
         with:
           version: 10
@@ -197,7 +197,7 @@ jobs:
     name: Validate Markdown
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: DavidAnson/markdownlint-cli2-action@v23
         with:
           globs: "**/*.md"
@@ -208,7 +208,7 @@ jobs:
     name: Validate YAML
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Install yamllint
         run: pip install yamllint
       - name: Lint YAML
@@ -218,7 +218,7 @@ jobs:
     name: Validate Shell Scripts
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: ShellCheck
         run: |
           find . -name "*.sh" -not -path "*/node_modules/*" -not -path "*/target/*" | while read -r script; do
