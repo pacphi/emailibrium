@@ -33,8 +33,8 @@ providers:
         chat_template: chatml
         rag_capable: true
         default_for_ram_mb: 4096
-        repo_id: "Qwen/Qwen3-1.7B-GGUF"
-        filename: "qwen3-1.7b-q4_k_m.gguf"
+        repo_id: "unsloth/Qwen3-1.7B-GGUF"
+        filename: "Qwen3-1.7B-Q4_K_M.gguf"
         tuning:
           temperature: 0.7
           top_p: 0.9
@@ -73,7 +73,7 @@ providers:
         chat_template: chatml
         rag_capable: true
         repo_id: "Qwen/Qwen3-4B-GGUF"
-        filename: "qwen3-4b-q4_k_m.gguf"
+        filename: "Qwen3-4B-Q4_K_M.gguf"
         tuning:
           temperature: 0.7
           top_p: 0.9
@@ -110,7 +110,7 @@ providers:
         chat_template: chatml
         rag_capable: true
         repo_id: "bartowski/microsoft_Phi-4-mini-instruct-GGUF"
-        filename: "Phi-4-mini-instruct-Q4_K_M.gguf"
+        filename: "microsoft_Phi-4-mini-instruct-Q4_K_M.gguf"
         tuning:
           temperature: 0.7
           top_p: 0.9
@@ -129,7 +129,7 @@ providers:
         rag_capable: true
         default_for_ram_mb: 16384
         repo_id: "Qwen/Qwen3-8B-GGUF"
-        filename: "qwen3-8b-q4_k_m.gguf"
+        filename: "Qwen3-8B-Q4_K_M.gguf"
         tuning:
           temperature: 0.7
           top_p: 0.9
@@ -168,7 +168,7 @@ providers:
         rag_capable: true
         default_for_ram_mb: 32768
         repo_id: "Qwen/Qwen3-14B-GGUF"
-        filename: "qwen3-14b-q4_k_m.gguf"
+        filename: "Qwen3-14B-Q4_K_M.gguf"
         tuning:
           temperature: 0.7
           top_p: 0.9
@@ -207,7 +207,7 @@ providers:
         rag_capable: true
         default_for_ram_mb: 65536
         repo_id: "Qwen/Qwen3-30B-A3B-GGUF"
-        filename: "qwen3-30b-a3b-q4_k_m.gguf"
+        filename: "Qwen3-30B-A3B-Q4_K_M.gguf"
         notes: "MoE: 30B total, 3B active per token. Best local RAG model of 2026."
         tuning:
           temperature: 0.7
@@ -227,7 +227,7 @@ providers:
         chat_template: chatml
         rag_capable: true
         repo_id: "Qwen/Qwen3-32B-GGUF"
-        filename: "qwen3-32b-q4_k_m.gguf"
+        filename: "Qwen3-32B-Q4_K_M.gguf"
         tuning:
           temperature: 0.7
           top_p: 0.9
