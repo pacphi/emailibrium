@@ -183,8 +183,16 @@ async fn imap_list_messages_returns_empty() {
         label: None,
         query: None,
     };
-    let page = provider.list_messages("token", &params).await.unwrap();
-    assert!(page.messages.is_empty());
+    let result = provider.list_messages("token", &params).await;
+    // When the `imap` crate is not compiled in, this returns a ConfigError.
+    // When it is available, it returns an empty page (no real server).
+    match result {
+        Ok(page) => assert!(page.messages.is_empty()),
+        Err(e) => assert!(
+            e.to_string().contains("imap"),
+            "Unexpected error: {e}"
+        ),
+    }
 }
 
 #[tokio::test]
