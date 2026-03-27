@@ -109,13 +109,34 @@ pub fn get_system_info() -> SystemInfo {
 }
 
 /// Check whether a model is cached, either in the HF cache or the app cache dir.
+///
+/// For HF cache, we check that the snapshots directory contains the actual GGUF
+/// file (not just that the model directory exists — HF creates the directory at
+/// the start of download before the file is complete).
 pub fn is_model_cached(repo_id: &str, filename: &str, cache_dir: &str) -> bool {
+    // Check app's own cache dir first (simple path check).
+    if std::path::Path::new(cache_dir).join(filename).exists() {
+        return true;
+    }
+
+    // Check HF cache: look for the actual file inside snapshots/<hash>/.
     let hf_cache = dirs::home_dir()
         .map(|h| h.join(".cache/huggingface/hub"))
         .unwrap_or_default();
     let cache_key = repo_id.replace('/', "--");
-    hf_cache.join(format!("models--{cache_key}")).exists()
-        || std::path::Path::new(cache_dir).join(filename).exists()
+    let model_dir = hf_cache.join(format!("models--{cache_key}"));
+    let snapshots_dir = model_dir.join("snapshots");
+
+    if let Ok(entries) = std::fs::read_dir(&snapshots_dir) {
+        for entry in entries.flatten() {
+            let gguf_path = entry.path().join(filename);
+            if gguf_path.exists() {
+                return true;
+            }
+        }
+    }
+
+    false
 }
 
 /// Full model catalog sourced from `config/models-llm.yaml` with

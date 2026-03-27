@@ -1,16 +1,10 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 
 interface ModelDownloadProgressProps {
   modelId: string;
 }
 
 type DownloadStatus = 'idle' | 'checking' | 'downloading' | 'ready' | 'error';
-
-interface DownloadProgress {
-  percent: number;
-  bytesDownloaded: number;
-  totalBytes: number;
-}
 
 interface ModelStatusResponse {
   modelId: string;
@@ -20,22 +14,53 @@ interface ModelStatusResponse {
 
 export function ModelDownloadProgress({ modelId }: ModelDownloadProgressProps) {
   const [status, setStatus] = useState<DownloadStatus>('checking');
-  const [progress, setProgress] = useState<DownloadProgress>({
-    percent: 0,
-    bytesDownloaded: 0,
-    totalBytes: 0,
-  });
   const [errorMessage, setErrorMessage] = useState('');
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Check model status from the backend API on mount and when modelId changes.
+  // Clean up polling on unmount or modelId change.
+  const stopPolling = useCallback(() => {
+    if (pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+  }, []);
+
+  // Start polling model-status until cached.
+  const startPolling = useCallback(() => {
+    stopPolling();
+    let polls = 0;
+    const maxPolls = 300; // 10 minutes at 2s intervals
+    pollRef.current = setInterval(async () => {
+      polls++;
+      if (polls > maxPolls) {
+        stopPolling();
+        setErrorMessage('Download timed out');
+        setStatus('error');
+        return;
+      }
+      try {
+        const res = await fetch(`/api/v1/ai/model-status/${modelId}`);
+        if (!res.ok) return;
+        const data: ModelStatusResponse = await res.json();
+        if (data.cached) {
+          stopPolling();
+          setStatus('ready');
+        }
+      } catch {
+        // Retry on next tick
+      }
+    }, 2000);
+  }, [modelId, stopPolling]);
+
+  // Check model status on mount and when modelId changes.
   useEffect(() => {
     if (!modelId) {
       setStatus('idle');
       return;
     }
 
-    let cancelled = false;
     setStatus('checking');
+    stopPolling();
 
     fetch(`/api/v1/ai/model-status/${modelId}`, { signal: AbortSignal.timeout(3000) })
       .then((res) => {
@@ -43,29 +68,28 @@ export function ModelDownloadProgress({ modelId }: ModelDownloadProgressProps) {
         return res.json() as Promise<ModelStatusResponse>;
       })
       .then((data) => {
-        if (cancelled) return;
         if (data.cached) {
           setStatus('ready');
         } else if (data.status === 'downloading') {
           setStatus('downloading');
+          startPolling();
         } else {
           setStatus('idle');
         }
       })
       .catch(() => {
-        if (!cancelled) setStatus('idle');
+        setStatus('idle');
       });
 
     return () => {
-      cancelled = true;
+      stopPolling();
     };
-  }, [modelId]);
+  }, [modelId, startPolling, stopPolling]);
 
   const handleDownload = useCallback(async () => {
     if (!modelId) return;
     setStatus('downloading');
     setErrorMessage('');
-    setProgress({ percent: 0, bytesDownloaded: 0, totalBytes: 0 });
     try {
       const res = await fetch('/api/v1/ai/switch-model', {
         method: 'POST',
@@ -78,39 +102,13 @@ export function ModelDownloadProgress({ modelId }: ModelDownloadProgressProps) {
         setStatus('ready');
         return;
       }
-      // Poll for download completion.
-      let polls = 0;
-      const maxPolls = 150;
-      const poll = setInterval(async () => {
-        polls++;
-        if (polls > maxPolls) {
-          clearInterval(poll);
-          setErrorMessage('Download timed out');
-          setStatus('error');
-          return;
-        }
-        try {
-          const statusRes = await fetch(`/api/v1/ai/model-status/${modelId}`);
-          if (!statusRes.ok) return;
-          const statusData: ModelStatusResponse = await statusRes.json();
-          setProgress((prev) => ({
-            ...prev,
-            percent: Math.min((polls / maxPolls) * 100, 95),
-          }));
-          if (statusData.cached) {
-            clearInterval(poll);
-            setProgress({ percent: 100, bytesDownloaded: 0, totalBytes: 0 });
-            setStatus('ready');
-          }
-        } catch {
-          // Retry on next tick
-        }
-      }, 2000);
+      // Start polling for completion.
+      startPolling();
     } catch (err) {
       setErrorMessage(err instanceof Error ? err.message : 'Download failed');
       setStatus('error');
     }
-  }, [modelId]);
+  }, [modelId, startPolling]);
 
   if (!modelId) {
     return null;
@@ -139,19 +137,11 @@ export function ModelDownloadProgress({ modelId }: ModelDownloadProgressProps) {
       {status === 'downloading' && (
         <div className="space-y-1">
           <div className="relative h-2 w-full overflow-hidden rounded-full bg-gray-200 dark:bg-gray-700">
-            <div
-              className="h-full bg-indigo-600 transition-all duration-200 dark:bg-indigo-400"
-              style={{ width: `${progress.percent}%` }}
-            />
+            <div className="h-full bg-indigo-600 dark:bg-indigo-400 animate-pulse w-full" />
           </div>
-          {progress.percent > 0 && (
-            <p className="text-xs text-gray-600 dark:text-gray-400 tabular-nums">
-              {progress.percent.toFixed(0)}% downloading...
-            </p>
-          )}
-          {progress.percent === 0 && (
-            <p className="text-xs text-gray-600 dark:text-gray-400">Starting download...</p>
-          )}
+          <p className="text-xs text-gray-600 dark:text-gray-400">
+            Downloading model... This may take a few minutes.
+          </p>
         </div>
       )}
 
