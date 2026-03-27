@@ -25,7 +25,8 @@ describe('withRetry', () => {
   });
 
   it('succeeds after transient failures', async () => {
-    const fn = vi.fn()
+    const fn = vi
+      .fn()
       .mockRejectedValueOnce(new Error('fail1'))
       .mockRejectedValueOnce(new Error('fail2'))
       .mockResolvedValueOnce('recovered');
@@ -48,7 +49,9 @@ describe('withRetry', () => {
 
   it('throws the last error after all retries exhausted', async () => {
     vi.spyOn(Math, 'random').mockReturnValue(0);
-    const fn = vi.fn().mockImplementation(async () => { throw new Error('persistent'); });
+    const fn = vi.fn().mockImplementation(async () => {
+      throw new Error('persistent');
+    });
 
     const promise = withRetry(fn, { maxRetries: 2, baseDelay: 50, maxDelay: 10000 });
 
@@ -82,9 +85,7 @@ describe('withRetry', () => {
     const fn = vi.fn().mockImplementation(() => Promise.reject(new Error('non-retryable')));
     const shouldRetry = vi.fn().mockReturnValue(false);
 
-    await expect(
-      withRetry(fn, { maxRetries: 5, shouldRetry }),
-    ).rejects.toThrow('non-retryable');
+    await expect(withRetry(fn, { maxRetries: 5, shouldRetry })).rejects.toThrow('non-retryable');
 
     expect(fn).toHaveBeenCalledTimes(1);
     expect(shouldRetry).toHaveBeenCalledWith(expect.any(Error), 0);
@@ -92,11 +93,11 @@ describe('withRetry', () => {
 
   it('respects shouldRetry allowing some retries then stopping', async () => {
     vi.spyOn(Math, 'random').mockReturnValue(0);
-    const fn = vi.fn().mockImplementation(async () => { throw new Error('fail'); });
+    const fn = vi.fn().mockImplementation(async () => {
+      throw new Error('fail');
+    });
     // Allow first retry (attempt 0), reject second (attempt 1)
-    const shouldRetry = vi.fn()
-      .mockReturnValueOnce(true)
-      .mockReturnValueOnce(false);
+    const shouldRetry = vi.fn().mockReturnValueOnce(true).mockReturnValueOnce(false);
 
     const promise = withRetry(fn, { maxRetries: 5, baseDelay: 50, maxDelay: 10000, shouldRetry });
 
@@ -118,7 +119,8 @@ describe('withRetry', () => {
   // -----------------------------------------------------------------------
 
   it('uses exponential backoff with delays doubling', async () => {
-    const fn = vi.fn()
+    const fn = vi
+      .fn()
       .mockRejectedValueOnce(new Error('1'))
       .mockRejectedValueOnce(new Error('2'))
       .mockRejectedValueOnce(new Error('3'))
@@ -153,9 +155,7 @@ describe('withRetry', () => {
   // -----------------------------------------------------------------------
 
   it('clamps delay to maxDelay', async () => {
-    const fn = vi.fn()
-      .mockRejectedValueOnce(new Error('1'))
-      .mockResolvedValueOnce('done');
+    const fn = vi.fn().mockRejectedValueOnce(new Error('1')).mockResolvedValueOnce('done');
 
     vi.spyOn(Math, 'random').mockReturnValue(0);
 
@@ -176,9 +176,7 @@ describe('withRetry', () => {
   // -----------------------------------------------------------------------
 
   it('adds jitter of 0-25% to the delay', async () => {
-    const fn = vi.fn()
-      .mockRejectedValueOnce(new Error('fail'))
-      .mockResolvedValueOnce('ok');
+    const fn = vi.fn().mockRejectedValueOnce(new Error('fail')).mockResolvedValueOnce('ok');
 
     // Math.random returns 1.0 => jitter = clampedDelay * 1.0 * 0.25 = 25%
     vi.spyOn(Math, 'random').mockReturnValue(1.0);
@@ -201,9 +199,7 @@ describe('withRetry', () => {
   });
 
   it('has zero jitter when Math.random returns 0', async () => {
-    const fn = vi.fn()
-      .mockRejectedValueOnce(new Error('fail'))
-      .mockResolvedValueOnce('ok');
+    const fn = vi.fn().mockRejectedValueOnce(new Error('fail')).mockResolvedValueOnce('ok');
 
     vi.spyOn(Math, 'random').mockReturnValue(0);
 

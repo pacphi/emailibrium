@@ -81,12 +81,7 @@ describe('useChat — API layer', () => {
       },
     );
 
-    const abort = await mockStreamChatMessage(
-      { message: 'Hi' },
-      onChunk,
-      onDone,
-      onError,
-    );
+    const abort = await mockStreamChatMessage({ message: 'Hi' }, onChunk, onDone, onError);
 
     expect(onChunk).toHaveBeenCalledTimes(2);
     expect(onChunk).toHaveBeenCalledWith('Hello');
@@ -102,12 +97,7 @@ describe('useChat — API layer', () => {
     const onError = vi.fn();
 
     mockStreamChatMessage.mockImplementation(
-      async (
-        _req: unknown,
-        _chunkCb: unknown,
-        _doneCb: unknown,
-        errCb: (e: string) => void,
-      ) => {
+      async (_req: unknown, _chunkCb: unknown, _doneCb: unknown, errCb: (e: string) => void) => {
         errCb('Chat request failed: 500');
         return vi.fn();
       },

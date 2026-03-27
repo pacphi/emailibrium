@@ -303,7 +303,9 @@ describe('model-downloader', () => {
     const controller = new AbortController();
     controller.abort();
     await expect(
-      downloadModel(TEST_MANIFEST_LARGE as ModelManifest, '/tmp/cache', { signal: controller.signal }),
+      downloadModel(TEST_MANIFEST_LARGE as ModelManifest, '/tmp/cache', {
+        signal: controller.signal,
+      }),
     ).rejects.toThrow(/abort/i);
   });
 });

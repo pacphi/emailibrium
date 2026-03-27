@@ -56,18 +56,14 @@ describe('syncStore', () => {
   // --- refreshAccounts ---
 
   it('refreshAccounts sets hasAccounts=true when active accounts exist', async () => {
-    mockGetAccounts.mockResolvedValue([
-      { id: '1', emailAddress: 'a@b.com', isActive: true },
-    ]);
+    mockGetAccounts.mockResolvedValue([{ id: '1', emailAddress: 'a@b.com', isActive: true }]);
 
     await useSyncStore.getState().refreshAccounts();
     expect(useSyncStore.getState().hasAccounts).toBe(true);
   });
 
   it('refreshAccounts sets hasAccounts=false when no active accounts', async () => {
-    mockGetAccounts.mockResolvedValue([
-      { id: '1', emailAddress: 'a@b.com', isActive: false },
-    ]);
+    mockGetAccounts.mockResolvedValue([{ id: '1', emailAddress: 'a@b.com', isActive: false }]);
 
     await useSyncStore.getState().refreshAccounts();
     expect(useSyncStore.getState().hasAccounts).toBe(false);
@@ -98,9 +94,7 @@ describe('syncStore', () => {
   });
 
   it('startSync sets hasAccounts=false when no active accounts', async () => {
-    mockGetAccounts.mockResolvedValue([
-      { id: '1', emailAddress: 'a@b.com', isActive: false },
-    ]);
+    mockGetAccounts.mockResolvedValue([{ id: '1', emailAddress: 'a@b.com', isActive: false }]);
 
     await useSyncStore.getState().startSync();
 
@@ -165,9 +159,7 @@ describe('syncStore', () => {
   });
 
   it('startSync completes successfully and clears syncing flag', async () => {
-    mockGetAccounts.mockResolvedValue([
-      { id: 'acc-1', emailAddress: 'a@b.com', isActive: true },
-    ]);
+    mockGetAccounts.mockResolvedValue([{ id: 'acc-1', emailAddress: 'a@b.com', isActive: true }]);
     mockStartIngestion.mockResolvedValue({ jobId: 'job-1' });
     mockGetEmails.mockResolvedValue({ emails: [], total: 5 });
 

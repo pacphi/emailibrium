@@ -4,7 +4,15 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 // Mock node-llama-cpp  (vitest 4: use vi.hoisted for mock factory refs)
 // ---------------------------------------------------------------------------
 
-const { mockSession, mockContext, mockModel, mockGrammar, mockLlama, mockGetLlama, mockLlamaChatSessionCtor } = vi.hoisted(() => {
+const {
+  mockSession,
+  mockContext,
+  mockModel,
+  mockGrammar,
+  mockLlama,
+  mockGetLlama,
+  mockLlamaChatSessionCtor,
+} = vi.hoisted(() => {
   const _mockSession = {
     prompt: vi.fn(),
     dispose: vi.fn(),
@@ -26,7 +34,9 @@ const { mockSession, mockContext, mockModel, mockGrammar, mockLlama, mockGetLlam
   };
   const _mockGetLlama = vi.fn().mockResolvedValue(_mockLlama);
   // Use a regular function (not arrow) so it can be called with `new`
-  const _mockLlamaChatSessionCtor = vi.fn().mockImplementation(function () { return _mockSession; });
+  const _mockLlamaChatSessionCtor = vi.fn().mockImplementation(function () {
+    return _mockSession;
+  });
   return {
     mockSession: _mockSession,
     mockContext: _mockContext,
@@ -80,7 +90,9 @@ describe('BuiltInLlmAdapter', () => {
     vi.clearAllMocks();
     // Re-setup mocks after clearAllMocks wipes them
     mockGetLlama.mockResolvedValue(mockLlama);
-    mockLlamaChatSessionCtor.mockImplementation(function () { return mockSession; });
+    mockLlamaChatSessionCtor.mockImplementation(function () {
+      return mockSession;
+    });
     mockLlama.loadModel.mockResolvedValue(mockModel);
     mockLlama.createGrammarForJsonSchema.mockResolvedValue(mockGrammar);
     mockModel.createContext.mockResolvedValue(mockContext);

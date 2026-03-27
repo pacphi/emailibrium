@@ -71,7 +71,11 @@ describe('useConsent — API integration', () => {
 
   it('requestDataExport triggers export and returns job info', async () => {
     const request = { format: 'json', scope: 'all' };
-    const response = { jobId: 'export-123', status: 'queued', estimatedCompletion: '2026-03-27T02:00:00Z' };
+    const response = {
+      jobId: 'export-123',
+      status: 'queued',
+      estimatedCompletion: '2026-03-27T02:00:00Z',
+    };
     mockRequestDataExport.mockResolvedValue(response);
 
     const result = await mockRequestDataExport(request);

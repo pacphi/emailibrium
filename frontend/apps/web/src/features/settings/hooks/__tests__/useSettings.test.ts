@@ -10,10 +10,18 @@ vi.hoisted(() => {
   const map = new Map<string, string>();
   const storage = {
     getItem: (key: string) => map.get(key) ?? null,
-    setItem: (key: string, value: string) => { map.set(key, value); },
-    removeItem: (key: string) => { map.delete(key); },
-    clear: () => { map.clear(); },
-    get length() { return map.size; },
+    setItem: (key: string, value: string) => {
+      map.set(key, value);
+    },
+    removeItem: (key: string) => {
+      map.delete(key);
+    },
+    clear: () => {
+      map.clear();
+    },
+    get length() {
+      return map.size;
+    },
     key: (index: number) => [...map.keys()][index] ?? null,
   };
   Object.defineProperty(globalThis, 'localStorage', {
@@ -152,9 +160,11 @@ describe('useSettings store', () => {
   });
 
   it('partialize excludes action functions from persisted state', () => {
-    const persistApi = (useSettings as unknown as {
-      persist: { getOptions: () => { partialize: (s: unknown) => Record<string, unknown> } }
-    }).persist;
+    const persistApi = (
+      useSettings as unknown as {
+        persist: { getOptions: () => { partialize: (s: unknown) => Record<string, unknown> } };
+      }
+    ).persist;
     const partialized = persistApi.getOptions().partialize(useSettings.getState());
 
     expect(partialized).toHaveProperty('llmProvider');
@@ -167,9 +177,11 @@ describe('useSettings store', () => {
   });
 
   it('migration from v0 sets llmProvider to builtin when missing or none', () => {
-    const persistApi = (useSettings as unknown as {
-      persist: { getOptions: () => { migrate: (state: unknown, version: number) => unknown } }
-    }).persist;
+    const persistApi = (
+      useSettings as unknown as {
+        persist: { getOptions: () => { migrate: (state: unknown, version: number) => unknown } };
+      }
+    ).persist;
     const { migrate } = persistApi.getOptions();
 
     const v0None = { llmProvider: 'none', theme: 'dark' };

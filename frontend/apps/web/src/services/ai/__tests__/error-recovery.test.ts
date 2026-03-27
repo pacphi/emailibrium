@@ -8,11 +8,7 @@ const { mockClassify } = vi.hoisted(() => ({
   mockClassify: vi.fn(),
 }));
 
-import {
-  classifyWithRecovery,
-  ClassificationQueue,
-  checkDiskSpace,
-} from '../error-recovery';
+import { classifyWithRecovery, ClassificationQueue, checkDiskSpace } from '../error-recovery';
 import type { ClassificationPrompt, ClassificationResult } from '../built-in-llm-adapter';
 import type { BuiltInLlmManager } from '../built-in-llm-manager';
 
@@ -65,9 +61,7 @@ describe('classifyWithRecovery', () => {
   });
 
   it('retries on failure and succeeds on second attempt', async () => {
-    mockClassify
-      .mockRejectedValueOnce(new Error('transient'))
-      .mockResolvedValueOnce(successResult);
+    mockClassify.mockRejectedValueOnce(new Error('transient')).mockResolvedValueOnce(successResult);
 
     const promise = classifyWithRecovery(makeManager(), makePrompt(), {
       maxRetries: 2,
@@ -244,9 +238,10 @@ describe('ClassificationQueue', () => {
   it('cancels pending work mid-flight', async () => {
     let resolveFirst: (() => void) | undefined;
     mockClassify.mockImplementationOnce(
-      () => new Promise((resolve) => {
-        resolveFirst = () => resolve(successResult);
-      }),
+      () =>
+        new Promise((resolve) => {
+          resolveFirst = () => resolve(successResult);
+        }),
     );
     mockClassify.mockResolvedValue(successResult);
 
