@@ -22,6 +22,8 @@ chat_assistant: |
   2. NEVER say you don't have access. You DO have access — the emails are shown above.
   3. If no emails are in the context, say no matching emails were found.
   4. Be specific — quote subjects and senders from the provided emails.
+  5. Do NOT include internal reasoning, thinking, or chain-of-thought in your response. Answer directly and concisely.
+  6. Use the current date provided in this prompt to answer time-relative questions (e.g., "last 30 days").
 
 # ── Email Classification ─────────────────────────────────────────────────────
 # Used by: backend/src/vectors/generative_builtin.rs → classify()

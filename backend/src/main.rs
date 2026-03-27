@@ -242,7 +242,13 @@ async fn main() -> anyhow::Result<()> {
             yaml_config.tuning.chat.max_history_messages,
             vector_service.generative_router.clone(),
         )
-        .with_system_prompt(yaml_config.prompts.chat_assistant.clone()),
+        .with_system_prompt({
+            let now = chrono::Local::now().format("%Y-%m-%d %H:%M %Z");
+            format!(
+                "The current date and time is: {now}\n\n{}",
+                yaml_config.prompts.chat_assistant
+            )
+        }),
     ));
 
     // Initialize RAG pipeline for email-aware chat (ADR-022, DDD-010).
