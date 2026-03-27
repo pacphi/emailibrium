@@ -379,8 +379,17 @@ impl GenerativeModel for BuiltInGenerativeModel {
              [User]\nClassify this email into one of: {cats_display}\n\nEmail: {text}"
         );
 
-        let response = self.generate(&prompt, 50).await?;
-        let trimmed = response.trim().trim_matches('"');
+        let response = self.generate(&prompt, 200).await?;
+        // Strip <think>...</think> blocks (Qwen 3 chain-of-thought) before matching.
+        let stripped = if let Some(end) = response.find("</think>") {
+            response[end + 8..].trim()
+        } else if response.starts_with("<think>") {
+            // Thinking block never closed — response is all thinking, no answer
+            ""
+        } else {
+            response.trim()
+        };
+        let trimmed = stripped.trim_matches('"');
 
         // Validate against known categories
         for cat in categories {
