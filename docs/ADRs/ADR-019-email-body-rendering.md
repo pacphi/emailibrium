@@ -23,13 +23,14 @@ Adopt the **sandboxed iframe with `srcdoc`** pattern for rendering untrusted HTM
 
 **Triple-layer security:**
 
-| Layer | Mechanism | Protection |
-|---|---|---|
-| 1 | `sandbox` attribute | Blocks JS execution, form submission, navigation. Whitelists only `allow-popups allow-popups-to-escape-sandbox allow-same-origin` |
-| 2 | CSP meta tag | `<meta http-equiv="Content-Security-Policy" content="script-src 'none'; object-src 'none'">` injected into iframe document head |
-| 3 | Referrer policy | `referrerPolicy="no-referrer"` prevents origin leakage to remote resources |
+| Layer | Mechanism           | Protection                                                                                                                        |
+| ----- | ------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| 1     | `sandbox` attribute | Blocks JS execution, form submission, navigation. Whitelists only `allow-popups allow-popups-to-escape-sandbox allow-same-origin` |
+| 2     | CSP meta tag        | `<meta http-equiv="Content-Security-Policy" content="script-src 'none'; object-src 'none'">` injected into iframe document head   |
+| 3     | Referrer policy     | `referrerPolicy="no-referrer"` prevents origin leakage to remote resources                                                        |
 
 **Additional properties:**
+
 - `<base target="_blank">` ensures all links open in a new tab
 - Auto-resize via `contentDocument.scrollHeight` polling on iframe `load` event
 - Full CSS isolation — email styles cannot leak into or from the host page
@@ -39,6 +40,7 @@ Adopt the **sandboxed iframe with `srcdoc`** pattern for rendering untrusted HTM
 Use `isomorphic-dompurify` for rendering email previews in the email list (collapsed state) and notification toasts. The iframe is only instantiated when the user expands a message.
 
 **Why isomorphic-dompurify:**
+
 - ~1.9M weekly npm downloads, wraps DOMPurify (~14K GitHub stars)
 - Works identically on server (jsdom) and client (native DOM)
 - Apache-2.0 / MPL-2.0 license
@@ -52,11 +54,11 @@ Use `isomorphic-dompurify` for rendering email previews in the email list (colla
 
 ### 4. Content Type Rendering Strategy
 
-| Content Available | Rendering Strategy |
-|---|---|
-| `bodyHtml` present | Sandboxed iframe (primary view) |
-| `bodyText` only | `<pre>` with `whitespace-pre-wrap` and monospace font |
-| Both (multipart/alternative) | Default to HTML with a toggle button for plain text |
+| Content Available            | Rendering Strategy                                    |
+| ---------------------------- | ----------------------------------------------------- |
+| `bodyHtml` present           | Sandboxed iframe (primary view)                       |
+| `bodyText` only              | `<pre>` with `whitespace-pre-wrap` and monospace font |
+| Both (multipart/alternative) | Default to HTML with a toggle button for plain text   |
 
 ### 5. Body Truncation Fix
 
@@ -82,11 +84,11 @@ Use `isomorphic-dompurify` for rendering email previews in the email list (colla
 
 ### Risks
 
-| Risk | Likelihood | Mitigation |
-|---|---|---|
-| Browser sandbox bypass (0-day) | Low | Triple-layer defense; server-side ammonia sanitization as backstop |
-| iframe auto-resize flicker | Medium | Set `minHeight: 200px`; debounce resize; use skeleton loader during iframe load |
-| Performance with many expanded emails | Low | Only one email expanded at a time in current UX; virtualization handles the list |
+| Risk                                  | Likelihood | Mitigation                                                                       |
+| ------------------------------------- | ---------- | -------------------------------------------------------------------------------- |
+| Browser sandbox bypass (0-day)        | Low        | Triple-layer defense; server-side ammonia sanitization as backstop               |
+| iframe auto-resize flicker            | Medium     | Set `minHeight: 200px`; debounce resize; use skeleton loader during iframe load  |
+| Performance with many expanded emails | Low        | Only one email expanded at a time in current UX; virtualization handles the list |
 
 ## Alternatives Considered
 

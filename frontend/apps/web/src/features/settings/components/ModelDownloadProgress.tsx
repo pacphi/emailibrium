@@ -1,12 +1,10 @@
-import { useState, useCallback } from 'react';
-import * as Progress from '@radix-ui/react-progress';
-import { getManifest, type ModelManifest } from '../../../services/ai/model-manifest';
+import { useState, useCallback, useEffect } from 'react';
 
 interface ModelDownloadProgressProps {
   modelId: string;
 }
 
-type DownloadStatus = 'idle' | 'downloading' | 'ready' | 'error';
+type DownloadStatus = 'idle' | 'checking' | 'downloading' | 'ready' | 'error';
 
 interface DownloadProgress {
   percent: number;
@@ -14,33 +12,14 @@ interface DownloadProgress {
   totalBytes: number;
 }
 
-function formatBytes(bytes: number): string {
-  if (bytes >= 1e9) return `${(bytes / 1e9).toFixed(1)} GB`;
-  if (bytes >= 1e6) return `${(bytes / 1e6).toFixed(0)} MB`;
-  return `${(bytes / 1e3).toFixed(0)} KB`;
-}
-
-/** Placeholder — will be wired to the real download manager in BL-3.05. */
-async function startDownload(
-  _manifest: ModelManifest,
-  onProgress: (p: DownloadProgress) => void,
-): Promise<void> {
-  // Simulate download progress for UI development.
-  // Replace with actual wasm-llm manager call in BL-3.05.
-  const total = _manifest.sizeBytes;
-  const steps = 20;
-  for (let i = 1; i <= steps; i++) {
-    await new Promise((r) => setTimeout(r, 150));
-    onProgress({
-      percent: (i / steps) * 100,
-      bytesDownloaded: (total / steps) * i,
-      totalBytes: total,
-    });
-  }
+interface ModelStatusResponse {
+  modelId: string;
+  status: 'cached' | 'downloading' | 'not_cached';
+  cached: boolean;
 }
 
 export function ModelDownloadProgress({ modelId }: ModelDownloadProgressProps) {
-  const [status, setStatus] = useState<DownloadStatus>('idle');
+  const [status, setStatus] = useState<DownloadStatus>('checking');
   const [progress, setProgress] = useState<DownloadProgress>({
     percent: 0,
     bytesDownloaded: 0,
@@ -48,32 +27,102 @@ export function ModelDownloadProgress({ modelId }: ModelDownloadProgressProps) {
   });
   const [errorMessage, setErrorMessage] = useState('');
 
-  const manifest = getManifest(modelId);
+  // Check model status from the backend API on mount and when modelId changes.
+  useEffect(() => {
+    if (!modelId) {
+      setStatus('idle');
+      return;
+    }
+
+    let cancelled = false;
+    setStatus('checking');
+
+    fetch(`/api/v1/ai/model-status/${modelId}`, { signal: AbortSignal.timeout(3000) })
+      .then((res) => {
+        if (!res.ok) throw new Error(`Status check failed: ${res.status}`);
+        return res.json() as Promise<ModelStatusResponse>;
+      })
+      .then((data) => {
+        if (cancelled) return;
+        if (data.cached) {
+          setStatus('ready');
+        } else if (data.status === 'downloading') {
+          setStatus('downloading');
+        } else {
+          setStatus('idle');
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setStatus('idle');
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [modelId]);
 
   const handleDownload = useCallback(async () => {
-    if (!manifest) return;
+    if (!modelId) return;
     setStatus('downloading');
     setErrorMessage('');
-    setProgress({ percent: 0, bytesDownloaded: 0, totalBytes: manifest.sizeBytes });
+    setProgress({ percent: 0, bytesDownloaded: 0, totalBytes: 0 });
     try {
-      await startDownload(manifest, setProgress);
-      setStatus('ready');
+      const res = await fetch('/api/v1/ai/switch-model', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ modelId }),
+      });
+      if (!res.ok) throw new Error(`Download request failed: ${res.status}`);
+      const data = await res.json();
+      if (data.status === 'ready') {
+        setStatus('ready');
+        return;
+      }
+      // Poll for download completion.
+      let polls = 0;
+      const maxPolls = 150;
+      const poll = setInterval(async () => {
+        polls++;
+        if (polls > maxPolls) {
+          clearInterval(poll);
+          setErrorMessage('Download timed out');
+          setStatus('error');
+          return;
+        }
+        try {
+          const statusRes = await fetch(`/api/v1/ai/model-status/${modelId}`);
+          if (!statusRes.ok) return;
+          const statusData: ModelStatusResponse = await statusRes.json();
+          setProgress((prev) => ({
+            ...prev,
+            percent: Math.min((polls / maxPolls) * 100, 95),
+          }));
+          if (statusData.cached) {
+            clearInterval(poll);
+            setProgress({ percent: 100, bytesDownloaded: 0, totalBytes: 0 });
+            setStatus('ready');
+          }
+        } catch {
+          // Retry on next tick
+        }
+      }, 2000);
     } catch (err) {
       setErrorMessage(err instanceof Error ? err.message : 'Download failed');
       setStatus('error');
     }
-  }, [manifest]);
+  }, [modelId]);
 
-  if (!manifest) {
-    return <p className="text-xs text-red-600 dark:text-red-400">Unknown model: {modelId}</p>;
+  if (!modelId) {
+    return null;
   }
 
   return (
     <div className="space-y-2">
-      <div className="text-xs text-gray-500 dark:text-gray-400">
-        {manifest.displayName} &middot; {formatBytes(manifest.sizeBytes)} download &middot;{' '}
-        {formatBytes(manifest.ramEstimateBytes)} RAM
-      </div>
+      <div className="text-xs text-gray-500 dark:text-gray-400">Model: {modelId}</div>
+
+      {status === 'checking' && (
+        <p className="text-xs text-gray-500 dark:text-gray-400">Checking model status...</p>
+      )}
 
       {status === 'idle' && (
         <button
@@ -89,20 +138,20 @@ export function ModelDownloadProgress({ modelId }: ModelDownloadProgressProps) {
 
       {status === 'downloading' && (
         <div className="space-y-1">
-          <Progress.Root
-            value={progress.percent}
-            max={100}
-            className="relative h-2 w-full overflow-hidden rounded-full bg-gray-200 dark:bg-gray-700"
-          >
-            <Progress.Indicator
-              className="h-full bg-indigo-600 transition-transform duration-200 dark:bg-indigo-400"
+          <div className="relative h-2 w-full overflow-hidden rounded-full bg-gray-200 dark:bg-gray-700">
+            <div
+              className="h-full bg-indigo-600 transition-all duration-200 dark:bg-indigo-400"
               style={{ width: `${progress.percent}%` }}
             />
-          </Progress.Root>
-          <p className="text-xs text-gray-600 dark:text-gray-400 tabular-nums">
-            {progress.percent.toFixed(0)}% &middot; {formatBytes(progress.bytesDownloaded)} /{' '}
-            {formatBytes(progress.totalBytes)}
-          </p>
+          </div>
+          {progress.percent > 0 && (
+            <p className="text-xs text-gray-600 dark:text-gray-400 tabular-nums">
+              {progress.percent.toFixed(0)}% downloading...
+            </p>
+          )}
+          {progress.percent === 0 && (
+            <p className="text-xs text-gray-600 dark:text-gray-400">Starting download...</p>
+          )}
         </div>
       )}
 

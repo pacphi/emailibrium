@@ -1,11 +1,11 @@
 # DDD-008: Email Operations Domain
 
-| Field   | Value              |
-| ------- | ------------------ |
-| Status  | Accepted           |
-| Date    | 2026-03-25         |
-| Type    | Core Domain        |
-| Context | Email Operations   |
+| Field   | Value            |
+| ------- | ---------------- |
+| Status  | Accepted         |
+| Date    | 2026-03-25       |
+| Type    | Core Domain      |
+| Context | Email Operations |
 
 ## Overview
 
@@ -31,28 +31,28 @@ Manages the lifecycle and state of a single email message within Emailibrium.
 
 **Root Entity: Email**
 
-| Field               | Type               | Description                                                  |
-| ------------------- | ------------------ | ------------------------------------------------------------ |
-| id                  | EmailId            | Provider's message ID (idempotent sync key)                  |
-| account_id          | AccountId          | The account this email belongs to                            |
-| provider            | Provider           | Gmail, Outlook, Imap, or Pop3                                |
-| message_id          | String             | RFC 2822 Message-ID header                                   |
-| thread_id           | Option\<String\>   | Provider thread/conversation ID                              |
-| subject             | String             | Email subject line                                           |
-| from_addr           | String             | Sender email address                                         |
-| from_name           | Option\<String\>   | Sender display name                                          |
-| to_addrs            | Vec\<String\>      | Recipient email addresses                                    |
-| cc_addrs            | Vec\<String\>      | CC recipient email addresses                                 |
-| received_at         | DateTime           | When the email was received                                  |
-| body_text           | Option\<String\>   | Plain-text body                                              |
-| body_html           | Option\<String\>   | HTML body                                                    |
-| labels              | String             | Comma-separated current folder/label state                   |
-| is_read             | bool               | Whether the email has been read                              |
-| is_starred          | bool               | Whether the email is starred/flagged                         |
-| has_attachments     | bool               | Whether the email has attachments                            |
-| embedding_status    | EmbeddingStatus    | Embedding pipeline state                                     |
-| category            | Option\<String\>   | Assigned category (from Email Intelligence)                  |
-| category_confidence | Option\<f32\>      | Confidence score of category assignment (0.0-1.0)            |
+| Field               | Type             | Description                                       |
+| ------------------- | ---------------- | ------------------------------------------------- |
+| id                  | EmailId          | Provider's message ID (idempotent sync key)       |
+| account_id          | AccountId        | The account this email belongs to                 |
+| provider            | Provider         | Gmail, Outlook, Imap, or Pop3                     |
+| message_id          | String           | RFC 2822 Message-ID header                        |
+| thread_id           | Option\<String\> | Provider thread/conversation ID                   |
+| subject             | String           | Email subject line                                |
+| from_addr           | String           | Sender email address                              |
+| from_name           | Option\<String\> | Sender display name                               |
+| to_addrs            | Vec\<String\>    | Recipient email addresses                         |
+| cc_addrs            | Vec\<String\>    | CC recipient email addresses                      |
+| received_at         | DateTime         | When the email was received                       |
+| body_text           | Option\<String\> | Plain-text body                                   |
+| body_html           | Option\<String\> | HTML body                                         |
+| labels              | String           | Comma-separated current folder/label state        |
+| is_read             | bool             | Whether the email has been read                   |
+| is_starred          | bool             | Whether the email is starred/flagged              |
+| has_attachments     | bool             | Whether the email has attachments                 |
+| embedding_status    | EmbeddingStatus  | Embedding pipeline state                          |
+| category            | Option\<String\> | Assigned category (from Email Intelligence)       |
+| category_confidence | Option\<f32\>    | Confidence score of category assignment (0.0-1.0) |
 
 **Invariants:**
 
@@ -81,13 +81,13 @@ Groups related emails into a conversation thread. This is a derived aggregate, n
 
 **Value Object: EmailThread**
 
-| Field         | Type             | Description                                    |
-| ------------- | ---------------- | ---------------------------------------------- |
-| thread_id     | String           | Provider thread/conversation ID                |
-| emails        | Vec\<EmailId\>   | Ordered list of email IDs in the thread        |
-| subject       | String           | Thread subject (from the first email)          |
-| participants  | Vec\<String\>    | All unique email addresses in the thread       |
-| last_activity | DateTime         | Timestamp of the most recent email in thread   |
+| Field         | Type           | Description                                  |
+| ------------- | -------------- | -------------------------------------------- |
+| thread_id     | String         | Provider thread/conversation ID              |
+| emails        | Vec\<EmailId\> | Ordered list of email IDs in the thread      |
+| subject       | String         | Thread subject (from the first email)        |
+| participants  | Vec\<String\>  | All unique email addresses in the thread     |
+| last_activity | DateTime       | Timestamp of the most recent email in thread |
 
 **Invariants:**
 
@@ -102,12 +102,12 @@ Represents a provider-specific organizational unit, unified through the `MoveKin
 
 **Value Object: FolderOrLabel**
 
-| Field     | Type      | Description                                        |
-| --------- | --------- | -------------------------------------------------- |
-| id        | String    | Provider-specific folder/label ID                  |
-| name      | String    | Display name                                       |
-| kind      | MoveKind  | Folder or Label                                    |
-| is_system | bool      | Whether this is a system folder (Inbox, Sent, etc) |
+| Field     | Type     | Description                                        |
+| --------- | -------- | -------------------------------------------------- |
+| id        | String   | Provider-specific folder/label ID                  |
+| name      | String   | Display name                                       |
+| kind      | MoveKind | Folder or Label                                    |
+| is_system | bool     | Whether this is a system folder (Inbox, Sent, etc) |
 
 **Invariants:**
 
@@ -121,7 +121,7 @@ Represents a provider-specific organizational unit, unified through the `MoveKin
 
 ### EmbeddingStatus
 
-```
+```rust
 enum EmbeddingStatus {
     Pending,    -- Email synced but not yet embedded
     Embedded,   -- Embedding generated and stored in vector DB
@@ -131,7 +131,7 @@ enum EmbeddingStatus {
 
 ### MoveKind
 
-```
+```rust
 enum MoveKind {
     Folder,  -- Mutually exclusive container (Inbox, Archive, Trash)
     Label,   -- Non-exclusive tag (can have multiple simultaneously)
@@ -142,26 +142,26 @@ enum MoveKind {
 
 ## Domain Events
 
-| Event         | Fields                                   | Published When                                |
-| ------------- | ---------------------------------------- | --------------------------------------------- |
-| EmailSynced   | email_id, account_id, thread_id          | New email ingested from provider sync         |
-| EmailMoved    | email_id, target_id, kind                | Email moved to a folder or label applied      |
-| EmailStarred  | email_id, starred (bool)                 | Email starred or unstarred                    |
-| EmailArchived | email_id                                 | Email archived in provider                    |
-| EmailDeleted  | email_id, permanent (bool)               | Email deleted (soft or permanent)             |
-| EmailRead     | email_id, is_read (bool)                 | Email marked as read or unread                |
-| EmailCategorized | email_id, category, confidence        | Category assigned by Email Intelligence       |
-| EmbeddingStatusChanged | email_id, old_status, new_status | Embedding status transitioned                 |
+| Event                  | Fields                           | Published When                           |
+| ---------------------- | -------------------------------- | ---------------------------------------- |
+| EmailSynced            | email_id, account_id, thread_id  | New email ingested from provider sync    |
+| EmailMoved             | email_id, target_id, kind        | Email moved to a folder or label applied |
+| EmailStarred           | email_id, starred (bool)         | Email starred or unstarred               |
+| EmailArchived          | email_id                         | Email archived in provider               |
+| EmailDeleted           | email_id, permanent (bool)       | Email deleted (soft or permanent)        |
+| EmailRead              | email_id, is_read (bool)         | Email marked as read or unread           |
+| EmailCategorized       | email_id, category, confidence   | Category assigned by Email Intelligence  |
+| EmbeddingStatusChanged | email_id, old_status, new_status | Embedding status transitioned            |
 
 ### Event Consumers
 
-| Event                  | Consumed By        | Purpose                                           |
-| ---------------------- | ------------------ | ------------------------------------------------- |
-| EmailSynced            | Email Intelligence | Triggers embedding generation for new email       |
-| EmailSynced            | Rules              | Triggers rule evaluation against new email        |
-| EmailCategorized       | UI/API             | Updates displayed category in the interface       |
-| EmbeddingStatusChanged | Email Intelligence | Re-embeds stale emails                            |
-| EmailDeleted           | Email Intelligence | Removes embedding from vector store               |
+| Event                  | Consumed By        | Purpose                                     |
+| ---------------------- | ------------------ | ------------------------------------------- |
+| EmailSynced            | Email Intelligence | Triggers embedding generation for new email |
+| EmailSynced            | Rules              | Triggers rule evaluation against new email  |
+| EmailCategorized       | UI/API             | Updates displayed category in the interface |
+| EmbeddingStatusChanged | Email Intelligence | Re-embeds stale emails                      |
+| EmailDeleted           | Email Intelligence | Removes embedding from vector store         |
 
 ---
 
@@ -197,7 +197,7 @@ The `EmailProvider` trait translates provider-specific APIs into a unified inter
 
 ### EmailOperationsProvider Trait
 
-```
+```rust
 trait EmailOperationsProvider {
     fn mark_read(email_id: &str, read: bool) -> Result<()>;
     fn star(email_id: &str, starred: bool) -> Result<()>;
@@ -213,14 +213,14 @@ trait EmailOperationsProvider {
 
 **MoveKind mapping:**
 
-| Operation    | Gmail                                         | Outlook                                 | IMAP                            | POP3                   |
-| ------------ | --------------------------------------------- | --------------------------------------- | ------------------------------- | ---------------------- |
-| Folder move  | `addLabelIds` + `removeLabelIds(INBOX)`       | `POST /messages/{id}/move`              | `COPY` + `DELETE`               | Local-only (no server) |
-| Label add    | `addLabelIds` only                            | `PATCH categories`                      | Not supported (emulated)        | Local-only (no server) |
-| Archive      | `removeLabelIds(INBOX)`                       | `POST /messages/{id}/move` to Archive   | `COPY` to Archive + `DELETE`    | Local-only (no server) |
-| Delete       | `addLabelIds(TRASH)` or `messages.delete`     | `DELETE /messages/{id}` or move to Deleted | `DELETE` flag + `EXPUNGE`    | Local-only (no server) |
-| Star         | `addLabelIds(STARRED)`                        | `PATCH {flag: {flagStatus: "flagged"}}` | `STORE +FLAGS (\Flagged)`       | Local-only (no server) |
-| Mark read    | `removeLabelIds(UNREAD)`                      | `PATCH {isRead: true}`                  | `STORE +FLAGS (\Seen)`          | Local-only (no server) |
+| Operation   | Gmail                                     | Outlook                                    | IMAP                         | POP3                   |
+| ----------- | ----------------------------------------- | ------------------------------------------ | ---------------------------- | ---------------------- |
+| Folder move | `addLabelIds` + `removeLabelIds(INBOX)`   | `POST /messages/{id}/move`                 | `COPY` + `DELETE`            | Local-only (no server) |
+| Label add   | `addLabelIds` only                        | `PATCH categories`                         | Not supported (emulated)     | Local-only (no server) |
+| Archive     | `removeLabelIds(INBOX)`                   | `POST /messages/{id}/move` to Archive      | `COPY` to Archive + `DELETE` | Local-only (no server) |
+| Delete      | `addLabelIds(TRASH)` or `messages.delete` | `DELETE /messages/{id}` or move to Deleted | `DELETE` flag + `EXPUNGE`    | Local-only (no server) |
+| Star        | `addLabelIds(STARRED)`                    | `PATCH {flag: {flagStatus: "flagged"}}`    | `STORE +FLAGS (\Flagged)`    | Local-only (no server) |
+| Mark read   | `removeLabelIds(UNREAD)`                  | `PATCH {isRead: true}`                     | `STORE +FLAGS (\Seen)`       | Local-only (no server) |
 
 **POP3 limitations:**
 
@@ -232,17 +232,17 @@ POP3 does not support server-side operations (move, label, archive, delete). All
 
 ### Upstream Dependencies
 
-| Context            | Relationship       | What It Provides                                         |
-| ------------------ | ------------------ | -------------------------------------------------------- |
-| Account Management | Customer/Supplier  | OAuth tokens, provider config, account status            |
+| Context            | Relationship      | What It Provides                              |
+| ------------------ | ----------------- | --------------------------------------------- |
+| Account Management | Customer/Supplier | OAuth tokens, provider config, account status |
 
 ### Downstream Consumers
 
-| Context            | Relationship       | What Email Operations Publishes                          |
-| ------------------ | ------------------ | -------------------------------------------------------- |
-| Email Intelligence | Published Language | EmailSynced triggers embedding; EmailDeleted cleans up   |
-| Rules              | Published Language | EmailSynced triggers rule evaluation                     |
-| UI/API             | Published Language | All events consumed for display and interaction          |
+| Context            | Relationship       | What Email Operations Publishes                        |
+| ------------------ | ------------------ | ------------------------------------------------------ |
+| Email Intelligence | Published Language | EmailSynced triggers embedding; EmailDeleted cleans up |
+| Rules              | Published Language | EmailSynced triggers rule evaluation                   |
+| UI/API             | Published Language | All events consumed for display and interaction        |
 
 ---
 
@@ -280,18 +280,18 @@ Tracks per-account sync progress. Shared with the Account Management context via
 
 ## Ubiquitous Language
 
-| Term                     | Definition                                                                                |
-| ------------------------ | ----------------------------------------------------------------------------------------- |
-| **Email**                | A synced email message with its metadata, body, and operational state                     |
-| **Thread**               | A group of related emails sharing a thread ID, displayed as a conversation                |
-| **Folder**               | A mutually exclusive email container (Inbox, Archive, Trash). An email is in one folder   |
-| **Label**                | A non-exclusive tag applied to emails. An email can have multiple labels simultaneously   |
-| **MoveKind**             | The abstraction that unifies provider-specific folder/label concepts                      |
-| **Archive**              | The action of removing an email from the inbox without deleting it                        |
-| **Embedding status**     | The state of an email's vector embedding (pending, embedded, stale)                       |
-| **Idempotent sync**      | Syncing the same email multiple times produces the same result (upsert by provider ID)    |
-| **Soft delete**          | Moving an email to trash (recoverable) vs. permanent deletion (irrecoverable)             |
-| **Provider translation** | The ACL process of converting a unified operation into a provider-specific API call        |
+| Term                     | Definition                                                                              |
+| ------------------------ | --------------------------------------------------------------------------------------- |
+| **Email**                | A synced email message with its metadata, body, and operational state                   |
+| **Thread**               | A group of related emails sharing a thread ID, displayed as a conversation              |
+| **Folder**               | A mutually exclusive email container (Inbox, Archive, Trash). An email is in one folder |
+| **Label**                | A non-exclusive tag applied to emails. An email can have multiple labels simultaneously |
+| **MoveKind**             | The abstraction that unifies provider-specific folder/label concepts                    |
+| **Archive**              | The action of removing an email from the inbox without deleting it                      |
+| **Embedding status**     | The state of an email's vector embedding (pending, embedded, stale)                     |
+| **Idempotent sync**      | Syncing the same email multiple times produces the same result (upsert by provider ID)  |
+| **Soft delete**          | Moving an email to trash (recoverable) vs. permanent deletion (irrecoverable)           |
+| **Provider translation** | The ACL process of converting a unified operation into a provider-specific API call     |
 
 ---
 

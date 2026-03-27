@@ -134,7 +134,7 @@ For a corpus of _N_ emails, the HNSW index provides:
 - **Construction**: O(_N_ log _N_) time, O(_N_ \* _M_) space, where _M_ is the number of links per node
 - **Query**: O(log _N_) time for a single nearest-neighbor search with beam width _ef_
 - **Insertion**: O(log _N_) amortized for adding a single vector
-- **Memory**: For 100,000 emails at 384 dimensions with fp32 precision: 100,000 _ 384 _ 4 bytes = ~147 MB for vectors alone, plus graph structure overhead
+- **Memory**: For 100,000 emails at 384 dimensions with fp32 precision: 100,000 _384_ 4 bytes = ~147 MB for vectors alone, plus graph structure overhead
 
 With scalar quantization (fp32 to int8), vector storage reduces to ~37 MB, validating the plan's claim of ~100 MB for 100K emails (including graph structure and metadata). The 4x compression ratio is consistent with published quantization results (Guo et al., 2020).
 

@@ -44,17 +44,17 @@ CREATE INDEX idx_attachments_content_id ON attachments(content_id) WHERE content
 
 Store attachment content on the local filesystem:
 
-```
+```text
 data/attachments/{account_id}/{email_id}/{sanitized_filename}
 ```
 
 **Rationale over alternatives:**
 
-| Strategy | Decision | Reason |
-|---|---|---|
-| Filesystem | **Adopted** | Simple, fast, supports streaming, works with Axum's `ReaderStream` |
-| SQLite BLOB | Rejected | Bloats database, prevents streaming, slow for large files |
-| S3/MinIO | Deferred | Added infrastructure complexity; revisit when cloud deployment is planned |
+| Strategy    | Decision    | Reason                                                                    |
+| ----------- | ----------- | ------------------------------------------------------------------------- |
+| Filesystem  | **Adopted** | Simple, fast, supports streaming, works with Axum's `ReaderStream`        |
+| SQLite BLOB | Rejected    | Bloats database, prevents streaming, slow for large files                 |
+| S3/MinIO    | Deferred    | Added infrastructure complexity; revisit when cloud deployment is planned |
 
 **Path sanitization**: Filenames must be sanitized to prevent directory traversal. Strip path separators, null bytes, and limit length to 255 characters. Generate a UUID-based fallback if the filename is empty or invalid.
 
@@ -62,11 +62,11 @@ data/attachments/{account_id}/{email_id}/{sanitized_filename}
 
 Three new Axum routes under the existing `/api/v1/emails` prefix:
 
-| Endpoint | Method | Response | Description |
-|---|---|---|---|
-| `/api/v1/emails/{id}/attachments` | GET | JSON array | List attachment metadata (id, filename, contentType, sizeBytes, isInline) |
-| `/api/v1/emails/{id}/attachments/{att_id}` | GET | Binary stream | Download single attachment with `Content-Disposition: attachment` |
-| `/api/v1/emails/{id}/attachments/zip` | GET | Binary stream | Download all non-inline attachments as a ZIP archive |
+| Endpoint                                   | Method | Response      | Description                                                               |
+| ------------------------------------------ | ------ | ------------- | ------------------------------------------------------------------------- |
+| `/api/v1/emails/{id}/attachments`          | GET    | JSON array    | List attachment metadata (id, filename, contentType, sizeBytes, isInline) |
+| `/api/v1/emails/{id}/attachments/{att_id}` | GET    | Binary stream | Download single attachment with `Content-Disposition: attachment`         |
+| `/api/v1/emails/{id}/attachments/zip`      | GET    | Binary stream | Download all non-inline attachments as a ZIP archive                      |
 
 **Streaming**: Both download endpoints use `tokio_util::io::ReaderStream` to stream file content directly from disk without buffering entire files in memory.
 
@@ -79,6 +79,7 @@ Use `async_zip` (native tokio support) to create ZIP archives streamed directly 
 - Compression: Deflate for reasonable size reduction without blocking the event loop excessively.
 
 **New Cargo dependency:**
+
 ```toml
 async_zip = { version = "0.0.17", features = ["tokio", "deflate"] }
 ```
@@ -101,6 +102,7 @@ async_zip = { version = "0.0.17", features = ["tokio", "deflate"] }
 #### Fetch Strategy
 
 **Lazy fetch with caching:**
+
 1. During email sync, store only attachment metadata (from the message payload) in the `attachments` table.
 2. On first download request, fetch the actual content from the provider API and cache to filesystem.
 3. Subsequent downloads serve from the filesystem cache.
@@ -133,7 +135,7 @@ interface Attachment {
 
 interface Email {
   // ... existing fields ...
-  attachments: Attachment[];  // replaces hasAttachments boolean
+  attachments: Attachment[]; // replaces hasAttachments boolean
 }
 ```
 
@@ -157,12 +159,12 @@ Retain `hasAttachments` as a computed getter (`attachments.length > 0`) for back
 
 ### Risks
 
-| Risk | Likelihood | Mitigation |
-|---|---|---|
-| Path traversal via malicious filename | Medium | Sanitize filenames; strip separators, null bytes; use UUID fallback |
-| Disk space exhaustion | Low | Monitor storage; implement LRU eviction in a future iteration |
-| Provider attachment format changes | Low | Abstracted behind provider trait; changes isolated to fetcher implementations |
-| ZIP bomb (maliciously nested attachments) | Very Low | ZIP is created from known attachments, not from untrusted ZIP input |
+| Risk                                      | Likelihood | Mitigation                                                                    |
+| ----------------------------------------- | ---------- | ----------------------------------------------------------------------------- |
+| Path traversal via malicious filename     | Medium     | Sanitize filenames; strip separators, null bytes; use UUID fallback           |
+| Disk space exhaustion                     | Low        | Monitor storage; implement LRU eviction in a future iteration                 |
+| Provider attachment format changes        | Low        | Abstracted behind provider trait; changes isolated to fetcher implementations |
+| ZIP bomb (maliciously nested attachments) | Very Low   | ZIP is created from known attachments, not from untrusted ZIP input           |
 
 ## Alternatives Considered
 

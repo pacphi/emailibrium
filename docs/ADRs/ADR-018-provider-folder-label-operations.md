@@ -116,12 +116,12 @@ The frontend does not need to know which provider the account uses. The `kind` f
 
 ## API Surface
 
-| Method | Endpoint                       | Description                                    |
-| ------ | ------------------------------ | ---------------------------------------------- |
-| GET    | `/api/v1/emails/labels`        | List folders and labels (`?accountId=X`)       |
-| POST   | `/api/v1/emails/:id/move`      | Move email (body: `accountId`, `targetId`, `kind`) |
-| POST   | `/api/v1/emails/:id/star`      | Toggle star/flag (provider-aware)              |
-| POST   | `/api/v1/emails/:id/archive`   | Archive email (provider-aware)                 |
+| Method | Endpoint                     | Description                                        |
+| ------ | ---------------------------- | -------------------------------------------------- |
+| GET    | `/api/v1/emails/labels`      | List folders and labels (`?accountId=X`)           |
+| POST   | `/api/v1/emails/:id/move`    | Move email (body: `accountId`, `targetId`, `kind`) |
+| POST   | `/api/v1/emails/:id/star`    | Toggle star/flag (provider-aware)                  |
+| POST   | `/api/v1/emails/:id/archive` | Archive email (provider-aware)                     |
 
 ## Alternatives Considered
 

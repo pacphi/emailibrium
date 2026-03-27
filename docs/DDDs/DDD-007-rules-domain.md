@@ -93,7 +93,7 @@ Manages the lifecycle and configuration of a single automation rule.
 
 ### ConditionGroup
 
-```
+```rust
 struct ConditionGroup {
     operator: LogicalOperator,  // AND | OR
     clauses: Vec<Clause>,
@@ -102,7 +102,7 @@ struct ConditionGroup {
 
 ### Clause
 
-```
+```rust
 enum Clause {
     Structural {
         field: EmailField,       // subject, sender, category, age_days, size_bytes, has_attachment, label
@@ -120,7 +120,7 @@ enum Clause {
 
 ### Action
 
-```
+```rust
 enum Action {
     Label { label: String },
     RemoveLabel { label: String },
@@ -179,7 +179,7 @@ Evaluates all enabled rules against incoming emails in priority order.
 
 ## Context Map Integration
 
-```
+```text
 Email Intelligence --[Published Language]--> Rules
   Events: EmailEmbedded (provides embedding for semantic condition evaluation)
   Purpose: Rules uses existing email embeddings for semantic matching

@@ -6,6 +6,8 @@ ignore: |
   node_modules/
   target/
   ruvector/
+  .claude/worktrees/
+  .claude/agents/
 
 rules:
   line-length:
@@ -16,6 +18,7 @@ rules:
     check-keys: false
   comments:
     min-spaces-from-content: 1
+  comments-indentation: disable
   indentation:
     spaces: 2
     indent-sequences: consistent

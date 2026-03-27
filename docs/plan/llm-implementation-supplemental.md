@@ -235,7 +235,7 @@ The implementation.md Sprints 1-7 establish the embedding trait, vector store, s
   - `generate()`: POST to `{ollama_url}/api/generate` with `model`, `prompt`, `stream: false`
   - `classify()`: constructs a structured prompt:
 
-    ```
+    ```text
     Classify the following email into exactly one of these categories: [{categories}].
     Respond with only the category name, nothing else.
 
@@ -313,6 +313,7 @@ The implementation.md Sprints 1-7 establish the embedding trait, vector store, s
 
 - [ ] **LLM-3.08**: Generative configuration schema
   - Add `GenerativeConfig` struct to config.rs:
+
     ```yaml
     ai:
       generative:
@@ -338,6 +339,7 @@ The implementation.md Sprints 1-7 establish the embedding trait, vector store, s
         audit_cloud_calls: true
         show_cloud_data_warning: true
     ```
+
   - Default `provider: "none"` ensures Tier 0 zero-config works out of the box
   - Add `GenerativeConfig` and `ConsentConfig` to `VectorConfig` struct
   - **File:** backend/src/vectors/config.rs

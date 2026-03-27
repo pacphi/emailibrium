@@ -1,0 +1,162 @@
+# Emailibrium Embedding Model Catalog
+# ============================================================================
+# Maintainers: edit this file to add/update/remove embedding models.
+# Changing the embedding model requires re-vectorizing all emails.
+#
+# Provider compatibility:
+#   - onnx: local ONNX models via fastembed (Rust backend)
+#   - ollama: embedding via Ollama server
+#   - openai: OpenAI text-embedding API
+#   - cohere: Cohere embed API
+# ============================================================================
+
+version: "1.0"
+
+providers:
+  # ── ONNX (local, via fastembed-rs) ─────────────────────────────────────────
+  onnx:
+    description: "Local ONNX models via fastembed — fast, private, no external service"
+    download_required: true
+    models:
+      - id: all-MiniLM-L6-v2
+        name: "MiniLM L6 v2"
+        fastembed_variant: AllMiniLML6V2
+        fastembed_quantized: AllMiniLML6V2Q
+        dimensions: 384
+        max_tokens: 512
+        disk_mb: 23
+        min_ram_mb: 100
+        quality: good
+        default: true
+        description: "Fast, lightweight English embedding (22M params). Best size/quality trade-off."
+
+      - id: all-MiniLM-L12-v2
+        name: "MiniLM L12 v2"
+        fastembed_variant: AllMiniLML12V2
+        fastembed_quantized: AllMiniLML12V2Q
+        dimensions: 384
+        max_tokens: 512
+        disk_mb: 33
+        min_ram_mb: 150
+        quality: good
+        description: "Slightly better than L6, slightly slower (33M params)."
+
+      - id: bge-small-en-v1.5
+        name: "BGE Small EN v1.5"
+        fastembed_variant: BGESmallENV15
+        fastembed_quantized: BGESmallENV15Q
+        dimensions: 384
+        max_tokens: 512
+        disk_mb: 33
+        min_ram_mb: 150
+        quality: good
+        description: "BAAI General Embedding. Strong for retrieval tasks."
+
+      - id: bge-base-en-v1.5
+        name: "BGE Base EN v1.5"
+        fastembed_variant: BGEBaseENV15
+        fastembed_quantized: BGEBaseENV15Q
+        dimensions: 768
+        max_tokens: 512
+        disk_mb: 130
+        min_ram_mb: 300
+        quality: excellent
+        description: "768-dim embeddings. Better quality, needs re-vectorization if switching from 384-dim."
+
+      - id: bge-large-en-v1.5
+        name: "BGE Large EN v1.5"
+        fastembed_variant: BGELargeENV15
+        dimensions: 1024
+        max_tokens: 512
+        disk_mb: 335
+        min_ram_mb: 500
+        quality: excellent
+        description: "1024-dim. Highest quality ONNX embedding. Slower."
+
+      - id: nomic-embed-text-v1.5
+        name: "Nomic Embed Text v1.5"
+        fastembed_variant: NomicEmbedTextV15
+        dimensions: 768
+        max_tokens: 8192
+        disk_mb: 130
+        min_ram_mb: 300
+        quality: excellent
+        description: "8192 token input window — excellent for long emails. Multilingual."
+
+      - id: mxbai-embed-large-v1
+        name: "Mixedbread Embed Large v1"
+        fastembed_variant: MxbaiEmbedLargeV1
+        dimensions: 1024
+        max_tokens: 512
+        disk_mb: 335
+        min_ram_mb: 500
+        quality: excellent
+        description: "Top performer on MTEB English benchmarks."
+
+  # ── Ollama (local server) ──────────────────────────────────────────────────
+  ollama:
+    description: "Embedding via Ollama server"
+    download_required: true
+    base_url: "http://localhost:11434"
+    models:
+      - id: nomic-embed-text
+        name: "Nomic Embed Text"
+        dimensions: 768
+        max_tokens: 8192
+        min_ram_mb: 500
+        quality: excellent
+        ollama_tag: "nomic-embed-text"
+        description: "Strong multilingual embedding with 8K context window."
+
+      - id: mxbai-embed-large
+        name: "Mixedbread Embed Large"
+        dimensions: 1024
+        max_tokens: 512
+        min_ram_mb: 700
+        quality: excellent
+        ollama_tag: "mxbai-embed-large"
+        description: "High quality English embedding via Ollama."
+
+  # ── OpenAI (cloud) ────────────────────────────────────────────────────────
+  openai:
+    description: "OpenAI embedding API — requires API key"
+    download_required: false
+    api_key_env: OPENAI_API_KEY
+    models:
+      - id: text-embedding-3-small
+        name: "Text Embedding 3 Small"
+        dimensions: 1536
+        max_tokens: 8191
+        quality: excellent
+        cost_per_1m_tokens: 0.02
+        description: "Fast, affordable. 1536 dimensions."
+
+      - id: text-embedding-3-large
+        name: "Text Embedding 3 Large"
+        dimensions: 3072
+        max_tokens: 8191
+        quality: excellent
+        cost_per_1m_tokens: 0.13
+        description: "Highest quality OpenAI embedding. 3072 dimensions."
+
+  # ── Cohere (cloud) ────────────────────────────────────────────────────────
+  cohere:
+    description: "Cohere embedding API — requires API key"
+    download_required: false
+    api_key_env: COHERE_API_KEY
+    models:
+      - id: embed-english-v3.0
+        name: "Embed English v3.0"
+        dimensions: 1024
+        max_tokens: 512
+        quality: excellent
+        cost_per_1m_tokens: 0.10
+        description: "Cohere's latest English embedding model."
+
+      - id: embed-multilingual-v3.0
+        name: "Embed Multilingual v3.0"
+        dimensions: 1024
+        max_tokens: 512
+        quality: excellent
+        cost_per_1m_tokens: 0.10
+        description: "Supports 100+ languages."

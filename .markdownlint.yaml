@@ -3,11 +3,8 @@
 
 default: true
 
-# Allow long lines (docs often have tables/URLs)
-MD013:
-  line_length: 200
-  tables: false
-  code_blocks: false
+# Allow long lines (docs often have tables/URLs/prose)
+MD013: false
 
 # Allow inline HTML (needed for some docs)
 MD033: false
@@ -24,3 +21,12 @@ MD025: false
 
 # Allow bare URLs
 MD034: false
+
+# Allow ordered lists with any prefix (ADR/DDD docs use sequential numbering)
+MD029: false
+
+# Allow emphasis as headings (common in ADR status lines)
+MD036: false
+
+# Allow mixed table column alignment styles
+MD060: false

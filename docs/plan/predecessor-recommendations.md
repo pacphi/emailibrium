@@ -309,7 +309,7 @@ These are areas where the predecessor should NOT influence direction — the cur
 
 ## Implementation Roadmap
 
-```
+```text
 Sprint N:   R-01 (Email Providers) — start, longest lead time
             R-05 (Security Middleware) — parallel, small scope
 

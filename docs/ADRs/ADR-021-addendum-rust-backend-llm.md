@@ -38,7 +38,7 @@ Add `llama-cpp-2` (Rust bindings for llama.cpp) as an optional dependency behind
 
 ### 3. Architecture
 
-```
+```text
 Frontend (browser)                    Rust Backend (:8080)
   POST /api/v1/vectors/classify  →  GenerativeRouter
   POST /api/v1/ai/chat           →    ├─ BuiltInGenerativeModel  [NEW — Tier 0.5]
@@ -83,7 +83,7 @@ builtin-llm-cuda = ["builtin-llm", "llama-cpp-2/cuda"]
 
 ### 7. GBNF Grammar for Classification
 
-```
+```ebnf
 root   ::= "{" ws q-cat ws ":" ws cat-val "," ws q-conf ws ":" ws number "}" ws
 q-cat  ::= "\"category\""
 q-conf ::= "\"confidence\""

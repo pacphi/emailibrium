@@ -107,7 +107,7 @@ Models follow the same lifecycle as ONNX embedding models (DDD-006 ModelRegistry
 
 **Settings → AI/LLM → LLM Provider** adds a new option:
 
-```
+```text
 ○ None (Rule-based)     [Default]
 ○ Built-in (Local)      [NEW — auto-downloads ~350 MB model]
 ○ Local (Ollama)
@@ -134,7 +134,7 @@ The `BuiltInLlmAdapter` implements the same `GenerativeModel` trait from DDD-006
 
 **Fallback chain update:**
 
-```
+```text
 Cloud → Ollama → Built-in LLM → Rule-based heuristics
 ```
 

@@ -81,7 +81,7 @@ Emailibrium is being reimagined as a **vector-native email intelligence platform
 
 ### 3.1 System Architecture (Reimagined)
 
-```
+```text
 ┌────────────────────────────────────────────────────────────────────────┐
 │              REACT TYPESCRIPT WEB APP (Pure SPA / PWA)                 │
 │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐  │
@@ -138,7 +138,7 @@ Emailibrium is being reimagined as a **vector-native email intelligence platform
 
 ### 3.2 Data Flow: Email Ingestion Pipeline
 
-```
+```text
 Email arrives (via provider sync)
   │
   ├─── 1. Parse & Extract metadata ──────── SQLite (structured data)
@@ -201,7 +201,7 @@ RuVector is a **Rust-native vector database** — same language as our backend, 
 
 New backend module: `backend/src/vectors/`
 
-```
+```text
 backend/src/vectors/
 ├── mod.rs              # VectorService facade (init, shutdown, health)
 ├── embedding.rs        # EmbeddingPipeline — text → f32 vector
@@ -255,7 +255,7 @@ backend/src/vectors/
 
 **Primary text embedding** (always generated):
 
-```
+```text
 {subject}\n
 From: {from_name} <{from_addr}>\n
 To: {to_addrs}\n
@@ -279,7 +279,7 @@ Labels: {labels}\n
 
 ### 4.4 Hybrid Search Algorithm
 
-```
+```text
 HybridSearch(query_text, filters) → Vec<ScoredEmail>
 
   1. embed(query_text) → query_vec [384D]                        ~5ms
@@ -293,7 +293,7 @@ HybridSearch(query_text, filters) → Vec<ScoredEmail>
 
 **Reciprocal Rank Fusion (RRF)**:
 
-```
+```text
 score(doc) = Σ 1 / (k + rank_i(doc))
 ```
 
@@ -404,7 +404,7 @@ pub enum RecurrencePattern {
 
 #### Best-in-Class React TypeScript Stack
 
-```
+```text
 RUNTIME & BUILD
 ├── React 19.2            # Concurrent rendering, Server Components ready
 ├── TypeScript 5.9+       # Satisfies, const type params, decorators
@@ -459,7 +459,7 @@ DEV TOOLS
 
 #### Monorepo Structure (Reimagined)
 
-```
+```text
 frontend/
 ├── apps/
 │   ├── web/                     # PRIMARY: React SPA (replaces desktop/)
@@ -737,7 +737,7 @@ CREATE TABLE ingestion_jobs (
 
 RuVector manages its own persistence via REDB (embedded key-value store). Stored at:
 
-```
+```text
 ~/.emailibrium/vectors/
 ├── hnsw.redb          # HNSW index + vectors
 ├── metadata.redb      # Document metadata (email_id → vector mapping)
@@ -762,7 +762,7 @@ pub struct EmailVector {
 
 ### 7.1 New API Endpoints
 
-```
+```text
 POST   /api/v1/search                    # Hybrid semantic + keyword search
 POST   /api/v1/search/semantic            # Pure vector search
 POST   /api/v1/search/similar/:email_id   # Find similar emails
@@ -936,7 +936,7 @@ impl IngestionPipeline {
 
 Emails contain far more than plain text. The multi-asset pipeline extracts, analyzes, and vectorizes **every searchable asset** in an email:
 
-```
+```text
 Email → Parse (mail-parser)
   │
   ├─── Body (text/plain)
@@ -970,7 +970,7 @@ Email → Parse (mail-parser)
 
 **New backend module**: `backend/src/content/`
 
-```
+```text
 backend/src/content/
 ├── mod.rs               # ContentPipeline facade
 ├── html_extractor.rs    # HTML → clean text + structured content (scraper, html2text, ammonia)
@@ -1042,7 +1042,7 @@ Parallelized across 4 workers: **10K emails in ~20 minutes** with full multi-ass
 
 The core strategy: **Gmail becomes a dumb store. Emailibrium is the smart interface.**
 
-```
+```text
 New email arrives in Gmail INBOX
   │
   ├─── Gmail watch() push notification ──── Pub/Sub → webhook
@@ -1096,7 +1096,7 @@ pub async fn batch_archive(&self, message_ids: &[String]) -> Result<()> {
 
 New API endpoints for email interaction:
 
-```
+```text
 # Reading
 GET    /api/v1/emails                     # List emails (with RuVector-powered sorting)
 GET    /api/v1/emails/:id                 # Get full email (body, attachments, headers)
@@ -1623,7 +1623,7 @@ This gives users:
 
 ### 9.1 Journey: First-Time Onboarding (One or More Accounts)
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────┐
 │ STEP 1: WELCOME (0:00)                                          │
 │                                                                 │
@@ -1660,7 +1660,7 @@ This gives users:
 
 **Gmail (OAuth 2.0 + PKCE):**
 
-```
+```text
 User clicks [Gmail] →
   Browser opens Google OAuth consent screen
   Scopes requested:
@@ -1676,7 +1676,7 @@ User clicks [Gmail] →
 
 **Outlook (OAuth 2.0 + PKCE via Microsoft Identity Platform):**
 
-```
+```text
 User clicks [Outlook] →
   Browser opens Microsoft login
   Scopes requested:
@@ -1692,7 +1692,7 @@ User clicks [Outlook] →
 
 **IMAP/Other (Manual Configuration):**
 
-```
+```text
 User clicks [IMAP] or [Other] →
   ┌─────────────────────────────────────────────────────────────┐
   │ IMAP Server Configuration                                    │
@@ -1721,7 +1721,7 @@ User clicks [IMAP] or [Other] →
 
 **Connecting Multiple Accounts:**
 
-```
+```text
 After first account connected:
 
 ┌─────────────────────────────────────────────────────────────────┐
@@ -1756,7 +1756,7 @@ User adds Outlook:
 
 #### Step 2: Ingest & Analyze (All Accounts)
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────┐
 │ STEP 2: ANALYZING YOUR INBOX (0:30 - 3:00)                     │
 │                                                                 │
@@ -1785,7 +1785,7 @@ User adds Outlook:
 
 The cleanup wizard, rule suggestions, and command center all operate on the **unified inbox** — all accounts merged. Topic clusters span accounts (e.g., "Project Alpha" may contain emails from both Gmail and Outlook). Categories and groups are global.
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────┐
 │ STEP 3: INBOX CLEANER WIZARD (3:00 - 8:00)                      │
 │                                                                 │
@@ -1867,7 +1867,7 @@ The cleanup wizard, rule suggestions, and command center all operate on the **un
 
 ### 9.1.1 Journey: Add Another Account (Post-Onboarding)
 
-```
+```text
 User clicks [➕ Add Account] from Command Center or Settings
   │
   ▼
@@ -1895,7 +1895,7 @@ User clicks [➕ Add Account] from Command Center or Settings
 
 ### 9.1.2 Unified Inbox Architecture
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────┐
 │ HOW MULTI-ACCOUNT WORKS                                         │
 │                                                                 │
@@ -1952,7 +1952,7 @@ Actions route to the correct provider automatically:
 
 ### 9.1.3 Account Switcher & Settings
 
-```
+```text
 ┌──────────────────────────────────────────────────────────────────────┐
 │ ◉ Emailibrium                    ☰ Menu    🔔 3    ⚙ Settings      │
 ├──────────────────────────────────────────────────────────────────────┤
@@ -2012,7 +2012,7 @@ Actions route to the correct provider automatically:
 
 ### 9.2 Journey: Power Search
 
-```
+```text
 User: Types "quarterly budget discussions from finance team last year"
 
 Command Center processes:
@@ -2045,7 +2045,7 @@ Results appear in < 100ms:
 
 ### 9.3 Journey: Subscription Management
 
-```
+```text
 User navigates to Insights → Subscriptions tab
 
   ┌─────────────────────────────────────────────────────────┐
@@ -2075,7 +2075,7 @@ User navigates to Insights → Subscriptions tab
 
 ### 9.4 Journey: Conversational Rule Building (Existing, Enhanced)
 
-````
+````text
 User opens Chat from Command Center
 
   User: "I keep getting pull request notifications from archived repos.
@@ -2118,7 +2118,7 @@ User opens Chat from Command Center
 
 ### 10.1 Command Center (Primary Screen)
 
-```
+```text
 ┌──────────────────────────────────────────────────────────────────────┐
 │ ◉ Emailibrium                    ☰ Menu    🔔 3    ⚙ Settings       │
 ├──────────────────────────────────────────────────────────────────────┤
@@ -2173,7 +2173,7 @@ User opens Chat from Command Center
 
 ### 10.2 Semantic Search Results
 
-```
+```text
 ┌──────────────────────────────────────────────────────────────────────┐
 │ ◉ Emailibrium                    ☰ Menu    🔔 3    ⚙ Settings       │
 ├──────────────────────────────────────────────────────────────────────┤
@@ -2235,7 +2235,7 @@ User opens Chat from Command Center
 
 ### 10.3 Inbox Cleaner Wizard
 
-```
+```text
 ┌──────────────────────────────────────────────────────────────────────┐
 │ ◉ Emailibrium                    ☰ Menu    🔔 3    ⚙ Settings      │
 ├──────────────────────────────────────────────────────────────────────┤
@@ -2294,7 +2294,7 @@ User opens Chat from Command Center
 
 ### 10.4 Insights Explorer
 
-```
+```text
 ┌──────────────────────────────────────────────────────────────────────┐
 │ ◉ Emailibrium                    ☰ Menu    🔔 3    ⚙ Settings      │
 ├──────────────────────────────────────────────────────────────────────┤
@@ -2357,7 +2357,7 @@ User opens Chat from Command Center
 
 ### 10.5 Ingestion Progress (Real-Time SSE)
 
-```
+```text
 ┌──────────────────────────────────────────────────────────────────────┐
 │ ◉ Emailibrium                    ☰ Menu    🔔 3    ⚙ Settings      │
 ├──────────────────────────────────────────────────────────────────────┤
@@ -2408,7 +2408,7 @@ User opens Chat from Command Center
 
 ### 10.6 Email Client — Thread View
 
-```
+```text
 ┌──────────────────────────────────────────────────────────────────────┐
 │ ◉ Emailibrium                    ☰ Menu    🔔 3    ⚙ Settings      │
 ├──────────┬───────────────────────────────────────────────────────────┤
@@ -2468,7 +2468,7 @@ User opens Chat from Command Center
 
 ### 10.7 Rules Studio (Enhanced)
 
-```
+```text
 ┌──────────────────────────────────────────────────────────────────────┐
 │ ◉ Emailibrium                    ☰ Menu    🔔 3    ⚙ Settings      │
 ├──────────────────────────────────────────────────────────────────────┤
@@ -2725,7 +2725,7 @@ The project already uses a **3-tier Makefile structure** (root → backend → f
 
 ### 14.1 Existing Makefile Structure (Preserved)
 
-```
+```text
 Makefile              # Root orchestrator — delegates to backend/ and frontend/
 ├── backend/Makefile  # Rust: cargo build/test/lint/bench, sqlx migrations, coverage
 └── frontend/Makefile # TypeScript: pnpm + turbo build/test/lint/typecheck, storybook
@@ -2748,30 +2748,30 @@ Makefile              # Root orchestrator — delegates to backend/ and frontend
 ```makefile
 # RuVector Development
 dev-vectors:
-	@cd $(BACKEND_DIR) && $(MAKE) dev-vectors
+ @cd $(BACKEND_DIR) && $(MAKE) dev-vectors
 
 # Web app (replaces desktop as primary)
 dev-web:
-	@cd $(FRONTEND_DIR) && $(MAKE) dev-web
+ @cd $(FRONTEND_DIR) && $(MAKE) dev-web
 
 # Full stack: backend + web app + vectors
 dev-full:
-	@echo "$(GREEN)Starting full development environment...$(NC)"
-	@$(DOCKER_COMPOSE) up -d redis
-	@cd $(BACKEND_DIR) && $(MAKE) dev &
-	@cd $(FRONTEND_DIR) && $(MAKE) dev-web &
-	@echo "$(GREEN)Backend: http://localhost:8080  Frontend: http://localhost:3000$(NC)"
+ @echo "$(GREEN)Starting full development environment...$(NC)"
+ @$(DOCKER_COMPOSE) up -d redis
+ @cd $(BACKEND_DIR) && $(MAKE) dev &
+ @cd $(FRONTEND_DIR) && $(MAKE) dev-web &
+ @echo "$(GREEN)Backend: http://localhost:8080  Frontend: http://localhost:3000$(NC)"
 
 # Ingestion test (end-to-end vector pipeline)
 test-ingestion:
-	@cd $(BACKEND_DIR) && $(MAKE) test-vectors
+ @cd $(BACKEND_DIR) && $(MAKE) test-vectors
 
 # Verify all dependency versions
 verify-deps:
-	@echo "$(GREEN)Verifying dependency versions...$(NC)"
-	@cd $(BACKEND_DIR) && $(MAKE) outdated-deps-direct
-	@cd $(FRONTEND_DIR) && $(PNPM) outdated -r
-	@echo "$(GREEN)✅ Dependency check complete$(NC)"
+ @echo "$(GREEN)Verifying dependency versions...$(NC)"
+ @cd $(BACKEND_DIR) && $(MAKE) outdated-deps-direct
+ @cd $(FRONTEND_DIR) && $(PNPM) outdated -r
+ @echo "$(GREEN)✅ Dependency check complete$(NC)"
 ```
 
 **Backend Makefile additions:**
@@ -2779,26 +2779,26 @@ verify-deps:
 ```makefile
 # RuVector-specific targets
 dev-vectors:
-	@echo "Starting backend with vector features enabled..."
-	@$(CARGO) watch -x 'run --features vectors' -w src
+ @echo "Starting backend with vector features enabled..."
+ @$(CARGO) watch -x 'run --features vectors' -w src
 
 test-vectors:
-	@echo "Running vector integration tests..."
-	@$(CARGO) test --features test-vectors -- vectors::
+ @echo "Running vector integration tests..."
+ @$(CARGO) test --features test-vectors -- vectors::
 
 bench-vectors:
-	@echo "Running vector performance benchmarks..."
-	@$(CARGO) bench --features vectors -- vectors
+ @echo "Running vector performance benchmarks..."
+ @$(CARGO) bench --features vectors -- vectors
 
 # Embedding pipeline
 embed-existing:
-	@echo "Batch embedding existing emails..."
-	@$(CARGO) run --features vectors -- embed --batch-size 500
+ @echo "Batch embedding existing emails..."
+ @$(CARGO) run --features vectors -- embed --batch-size 500
 
 # Database with vector schema
 db-migrate-vectors:
-	@$(SQLX) migrate run
-	@echo "✅ Vector schema migration complete"
+ @$(SQLX) migrate run
+ @echo "✅ Vector schema migration complete"
 ```
 
 **Frontend Makefile additions:**
@@ -2806,30 +2806,30 @@ db-migrate-vectors:
 ```makefile
 # Web app targets (primary — replaces desktop)
 dev-web:
-	@$(TURBO) dev --filter=@emailibrium/web
+ @$(TURBO) dev --filter=@emailibrium/web
 
 build-web:
-	@$(TURBO) build --filter=@emailibrium/web
+ @$(TURBO) build --filter=@emailibrium/web
 
 test-web:
-	@$(TURBO) test --filter=@emailibrium/web
+ @$(TURBO) test --filter=@emailibrium/web
 
 test-web-e2e:
-	@$(PNPM) --filter=@emailibrium/web test:e2e
+ @$(PNPM) --filter=@emailibrium/web test:e2e
 
 # PWA build
 build-pwa:
-	@NODE_ENV=production $(TURBO) build --filter=@emailibrium/web
-	@echo "✅ PWA build ready in apps/web/dist"
+ @NODE_ENV=production $(TURBO) build --filter=@emailibrium/web
+ @echo "✅ PWA build ready in apps/web/dist"
 
 # Storybook for new shadcn/ui components
 storybook-web:
-	@$(PNPM) --filter=@emailibrium/web storybook
+ @$(PNPM) --filter=@emailibrium/web storybook
 
 # PWA build
 build-pwa:
-	@NODE_ENV=production $(TURBO) build --filter=@emailibrium/web
-	@echo "✅ PWA build ready in apps/web/dist"
+ @NODE_ENV=production $(TURBO) build --filter=@emailibrium/web
+ @echo "✅ PWA build ready in apps/web/dist"
 ```
 
 ### 14.3 Developer Workflow Quick Reference
@@ -3193,7 +3193,7 @@ volumes:
 
 ### Secrets Directory Structure
 
-```
+```text
 secrets/
 ├── dev/                     # Development secrets (gitignored)
 │   ├── jwt_secret           # openssl rand -base64 32
@@ -3258,7 +3258,7 @@ exec "$@"
 
 ### Config File Hierarchy
 
-```
+```text
 configs/
 ├── config.yaml              # Base config — all settings with sane defaults
 ├── config.development.yaml  # Dev overrides (debug, relaxed limits, SQLite OK)
@@ -3269,7 +3269,7 @@ configs/
 
 **Loading order** (later overrides earlier, via `figment`):
 
-```
+```text
 config.yaml → config.{APP_ENV}.yaml → config.local.yaml → env vars → /run/secrets/
 ```
 
@@ -3393,7 +3393,7 @@ vectors:
 
 ### Ingestion Progress SSE Stream
 
-```
+```text
 event: progress
 data: {"jobId":"ing_001","total":12847,"processed":5432,"embedded":5432,"categorized":5100,"failed":3,"phase":"embedding","etaSeconds":142,"emailsPerSecond":523}
 

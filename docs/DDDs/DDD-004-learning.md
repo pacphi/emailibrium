@@ -127,7 +127,7 @@ Captures and processes user feedback signals.
 
 ### FeedbackAction
 
-```
+```rust
 enum FeedbackAction {
     Reclassify { from: Category, to: Category },  -- Explicit category correction
     MoveToGroup { group_id: GroupId },             -- Move email to a user group
@@ -140,7 +140,7 @@ enum FeedbackAction {
 
 ### FeedbackQuality
 
-```
+```rust
 FeedbackQuality(f32) -- bounded [0.0, 1.0]
 ```
 
@@ -173,7 +173,7 @@ Computed based on action type:
 
 ### LearningRate
 
-```
+```rust
 LearningRate(f32)
 ```
 
@@ -192,7 +192,7 @@ Applies immediate centroid adjustments on explicit user feedback.
 
 **Algorithm (EMA -- Exponential Moving Average):**
 
-```
+```text
 new_centroid = (1 - alpha) * current_centroid + alpha * feedback_embedding
 ```
 
@@ -239,6 +239,7 @@ Runs periodic consolidation jobs to stabilize the learning model.
 Identifies and mitigates degenerate learning patterns.
 
 **Detected Patterns:**
+
 | Pattern | Detection | Mitigation |
 |---------|-----------|------------|
 | Position bias | Top-ranked results always clicked regardless of query | Weight clicks by 1/log(rank) |

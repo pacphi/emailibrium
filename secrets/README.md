@@ -24,7 +24,7 @@ The `secrets/dev/` directory is gitignored. Use `secrets/dev.example/` as a temp
 
 ## Directory Structure
 
-```
+```text
 secrets/
 ├── dev/                     # Development secrets (gitignored)
 │   ├── jwt_secret           # openssl rand -base64 32

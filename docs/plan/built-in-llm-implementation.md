@@ -26,7 +26,7 @@ This plan can begin after LLM Sprint 1 (ONNX Embedding Default) from `llm-implem
 
 ### 1.2 Architecture Summary
 
-```
+```text
 ┌─────────────────────────────────────────────────────────┐
 │ Frontend (Electron / Next.js)                           │
 │                                                         │

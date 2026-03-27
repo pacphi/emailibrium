@@ -49,6 +49,10 @@ help:
 	@echo "  make setup             - Guided first-time setup wizard"
 	@echo "  make install           - Install all dependencies"
 	@echo "  make dev               - Start backend + frontend (native)"
+	@echo "  make dev-llm           - Start with built-in LLM (llama.cpp)"
+	@echo "  make models            - Show available LLM models"
+	@echo "  make embedding-models  - Show available embedding models"
+	@echo "  make download-model    - Download a model (MODEL=<id>)"
 	@echo "  make docker-up-dev     - Start full stack (Docker)"
 	@echo "  make ci                - Run full CI pipeline"
 	@echo "  make test              - Run all tests"
@@ -231,9 +235,44 @@ dev: ## Start full stack dev servers (native, loads secrets/dev/ as env vars)
 		$(MAKE) -C $(FRONTEND_DIR) dev & \
 		wait
 
+.PHONY: dev-llm
+dev-llm: ## Start full stack with built-in LLM (downloads ~350MB model on first run)
+	@echo "$(GREEN)Backend (LLM): http://localhost:8080  Frontend: http://localhost:3000$(RESET)"
+	@export EMAILIBRIUM_GOOGLE_CLIENT_ID="$$(cat secrets/dev/google_client_id 2>/dev/null)" \
+		EMAILIBRIUM_GOOGLE_CLIENT_SECRET="$$(cat secrets/dev/google_client_secret 2>/dev/null)" \
+		EMAILIBRIUM_MICROSOFT_CLIENT_ID="$$(cat secrets/dev/microsoft_client_id 2>/dev/null)" \
+		EMAILIBRIUM_MICROSOFT_CLIENT_SECRET="$$(cat secrets/dev/microsoft_client_secret 2>/dev/null)" \
+		JWT_SECRET="$$(cat secrets/dev/jwt_secret 2>/dev/null)" \
+		EMAILIBRIUM_ENCRYPTION_MASTER_PASSWORD="$$(cat secrets/dev/oauth_encryption_key 2>/dev/null)"; \
+		trap 'kill 0' INT TERM EXIT; \
+		$(MAKE) -C $(BACKEND_DIR) dev-llm & \
+		$(MAKE) -C $(FRONTEND_DIR) dev & \
+		wait
+
 .PHONY: clean
 clean: ## Clean all build artifacts
 	@$(MAKE) -C $(BACKEND_DIR) clean
+	@$(MAKE) -C $(FRONTEND_DIR) clean
+
+.PHONY: models
+models: ## Show available LLM models with hardware recommendations
+	@$(MAKE) -C $(BACKEND_DIR) models
+
+.PHONY: embedding-models
+embedding-models: ## Show available embedding models
+	@$(MAKE) -C $(BACKEND_DIR) embedding-models
+
+.PHONY: download-model
+download-model: ## Download a model (e.g., make download-model MODEL=qwen3-8b-q4km)
+	@$(MAKE) -C $(BACKEND_DIR) download-model MODEL=$(MODEL)
+
+.PHONY: clean-data
+clean-data: ## Remove all local data (DB, vectors) — fresh start
+	@$(MAKE) -C $(BACKEND_DIR) clean-data
+
+.PHONY: clean-all
+clean-all: ## Clean build artifacts + all local data
+	@$(MAKE) -C $(BACKEND_DIR) clean-all
 	@$(MAKE) -C $(FRONTEND_DIR) clean
 
 # ============================================================================
@@ -309,7 +348,7 @@ outdated: ## Show outdated dependencies (no changes)
 .PHONY: lint-md
 lint-md: ## Lint Markdown files
 	@echo "$(GREEN)Linting Markdown...$(RESET)"
-	@markdownlint-cli2 '**/*.md' '#**/node_modules' '#**/target' 2>/dev/null || echo "$(YELLOW)markdownlint-cli2 not installed. Run: npm i -g markdownlint-cli2$(RESET)"
+	@markdownlint-cli2 '**/*.md' '#**/node_modules' '#**/target' '#.claude/worktrees/**' '#ruvector/**' 2>/dev/null || echo "$(YELLOW)markdownlint-cli2 not installed. Run: npm i -g markdownlint-cli2$(RESET)"
 
 .PHONY: lint-yaml
 lint-yaml: ## Lint YAML files
@@ -321,12 +360,12 @@ lint-docs: lint-md lint-yaml ## Lint all docs (Markdown + YAML)
 
 .PHONY: format-md
 format-md: ## Format Markdown files
-	@npx prettier --write '**/*.md' --ignore-path .gitignore 2>/dev/null || \
+	@npx prettier --write '**/*.md' --ignore-path .gitignore --ignore-pattern 'ruvector/**' 2>/dev/null || \
 		cd $(FRONTEND_DIR) && npx prettier --write '../**/*.md' 2>/dev/null || true
 
 .PHONY: format-yaml
 format-yaml: ## Format YAML files
-	@npx prettier --write '**/*.{yaml,yml}' --ignore-path .gitignore 2>/dev/null || \
+	@npx prettier --write '**/*.{yaml,yml}' --ignore-path .gitignore --ignore-pattern 'ruvector/**' 2>/dev/null || \
 		cd $(FRONTEND_DIR) && npx prettier --write '../**/*.{yaml,yml}' 2>/dev/null || true
 
 .PHONY: format-docs
@@ -334,12 +373,12 @@ format-docs: format-md format-yaml
 
 .PHONY: format-check-md
 format-check-md:
-	@npx prettier --check '**/*.md' --ignore-path .gitignore 2>/dev/null || \
+	@npx prettier --check '**/*.md' --ignore-path .gitignore --ignore-pattern 'ruvector/**' 2>/dev/null || \
 		cd $(FRONTEND_DIR) && npx prettier --check '../**/*.md' 2>/dev/null || true
 
 .PHONY: format-check-yaml
 format-check-yaml:
-	@npx prettier --check '**/*.{yaml,yml}' --ignore-path .gitignore 2>/dev/null || \
+	@npx prettier --check '**/*.{yaml,yml}' --ignore-path .gitignore --ignore-pattern 'ruvector/**' 2>/dev/null || \
 		cd $(FRONTEND_DIR) && npx prettier --check '../**/*.{yaml,yml}' 2>/dev/null || true
 
 .PHONY: format-check-docs

@@ -141,10 +141,12 @@ Emailibrium connects to Gmail and Outlook via OAuth2. You must register your app
    - Authorized redirect URI: `http://localhost:8080/api/v1/auth/gmail/callback` (development) or `https://your-domain.com/api/v1/auth/gmail/callback` (production)
 5. Copy the **Client ID** and **Client Secret**
 6. Set them as environment variables:
+
    ```bash
    export EMAILIBRIUM_GOOGLE_CLIENT_ID="123456789-abc.apps.googleusercontent.com"
    export EMAILIBRIUM_GOOGLE_CLIENT_SECRET="GOCSPX-your-secret"
    ```
+
    Or place them in `secrets/dev/google_client_id` and `secrets/dev/google_client_secret` for Docker.
 
 #### Outlook (Microsoft Entra / Azure AD)
@@ -159,10 +161,12 @@ Emailibrium connects to Gmail and Outlook via OAuth2. You must register your app
 4. Under **Certificates & secrets**, create a new client secret
 5. Copy the **Application (client) ID** and **Client Secret value**
 6. Set them as environment variables:
+
    ```bash
    export EMAILIBRIUM_MICROSOFT_CLIENT_ID="your-app-client-id"
    export EMAILIBRIUM_MICROSOFT_CLIENT_SECRET="your-client-secret-value"
    ```
+
    Or place them in `secrets/dev/microsoft_client_id` and `secrets/dev/microsoft_client_secret` for Docker.
 
 #### IMAP (No OAuth Required)

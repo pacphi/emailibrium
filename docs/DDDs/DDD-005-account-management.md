@@ -105,7 +105,7 @@ Manages per-account synchronization state.
 
 ### Provider
 
-```
+```rust
 enum Provider {
     Gmail,    -- Google Gmail via Gmail API
     Outlook,  -- Microsoft Outlook/365 via Graph API
@@ -116,7 +116,7 @@ enum Provider {
 
 ### AuthType
 
-```
+```rust
 enum AuthType {
     OAuth2 {
         access_token: EncryptedString,
@@ -135,7 +135,7 @@ enum AuthType {
 
 ### ArchiveStrategy
 
-```
+```rust
 enum ArchiveStrategy {
     Instant,                    -- Archive immediately on classification
     Delayed { delay_secs: u32 }, -- Archive after a delay (default: 300s / 5 min)
@@ -145,7 +145,7 @@ enum ArchiveStrategy {
 
 ### SyncDepth
 
-```
+```rust
 enum SyncDepth {
     All,                -- Sync all available emails
     LastNDays(u32),     -- Sync only the last N days (default: 90)
@@ -154,7 +154,7 @@ enum SyncDepth {
 
 ### LabelPrefix
 
-```
+```rust
 LabelPrefix(String) -- default "EM/"
 ```
 
@@ -171,7 +171,7 @@ All Emailibrium-managed labels/categories in the email provider are prefixed wit
 
 ### AccountStatus
 
-```
+```rust
 enum AccountStatus {
     Connected,     -- Active and syncing
     Disconnected,  -- User-initiated disconnect
@@ -243,6 +243,7 @@ Creates and manages provider-specific labels.
 Tracks account health metrics.
 
 **Monitored Metrics:**
+
 | Metric | Threshold | Action |
 |--------|-----------|--------|
 | Consecutive sync failures | > 5 | Suspend account, emit AccountSuspended |
@@ -256,7 +257,7 @@ All email providers are wrapped behind a unified trait to isolate the domain fro
 
 ### EmailProvider Trait
 
-```
+```rust
 trait EmailProvider {
     fn list_emails(since: Option<DateTime>, page_token: Option<String>) -> Result<EmailPage>;
     fn get_email(provider_id: &str) -> Result<RawEmail>;

@@ -2,9 +2,11 @@
 // Ignore patterns for directories that should not be linted
 {
   "ignores": [
-    ".claude/",
-    "node_modules/",
-    "target/",
-    "ruvector/"
+    ".claude/**",
+    ".claude-flow/**",
+    "**/node_modules/**",
+    "**/target/**",
+    "ruvector/**",
+    ".claude/worktrees/**"
   ]
 }

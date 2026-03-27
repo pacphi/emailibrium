@@ -1,0 +1,76 @@
+# Emailibrium Classification Rules
+# ============================================================================
+# Maintainers: edit these rules to customize email classification behavior.
+#
+# The rule-based classifier (Tier 0) uses these keyword and domain patterns
+# as a fallback when no LLM is available. Categories here also define the
+# valid set of categories used across the application.
+#
+# Used by:
+#   - backend/src/vectors/generative.rs → RuleBasedClassifier
+#   - frontend/src/services/ai/generative-router.ts → ruleBasedClassify()
+#   - frontend/src/services/ai/error-recovery.ts → fallback classification
+# ============================================================================
+
+version: "1.0"
+
+# ── Valid Categories ─────────────────────────────────────────────────────────
+# These are the categories shown in the UI and used by both LLM and rule-based
+# classifiers. Add or remove categories here to change what's available.
+categories:
+  - Work
+  - Personal
+  - Finance
+  - Marketing
+  - Social
+  - Notification
+  - Newsletter
+  - Shopping
+  - Travel
+  - Uncategorized # Fallback when no rule matches and LLM is unavailable
+
+# ── Domain-Based Rules ───────────────────────────────────────────────────────
+# Match by sender email domain. First match wins.
+domain_rules:
+  - domains: ["github.com", "gitlab.com", "bitbucket.org"]
+    category: Notification
+
+  - domains: ["slack.com", "discord.com", "teams.microsoft.com"]
+    category: Notification
+
+  - domains: ["linkedin.com", "facebook.com", "twitter.com", "instagram.com"]
+    category: Social
+
+  - domains: ["paypal.com", "venmo.com", "stripe.com", "square.com"]
+    category: Finance
+
+  - domains: ["amazon.com", "ebay.com", "shopify.com", "etsy.com"]
+    category: Shopping
+
+  - domains: ["booking.com", "airbnb.com", "expedia.com", "kayak.com"]
+    category: Travel
+
+# ── Keyword-Based Rules ──────────────────────────────────────────────────────
+# Match by keywords in subject + body. Checked after domain rules.
+# Keywords are case-insensitive. First match wins.
+keyword_rules:
+  - keywords: ["invoice", "receipt", "payment", "billing", "statement"]
+    category: Finance
+
+  - keywords: ["sale", "discount", "offer", "promo", "coupon", "deal"]
+    category: Marketing
+
+  - keywords: ["meeting", "calendar", "schedule", "appointment"]
+    category: Work
+
+  - keywords: ["newsletter", "digest", "weekly update", "monthly roundup"]
+    category: Newsletter
+
+  - keywords: ["shipped", "delivery", "tracking", "order confirmed"]
+    category: Shopping
+
+  - keywords: ["flight", "hotel", "reservation", "itinerary", "boarding pass"]
+    category: Travel
+
+  - keywords: ["unsubscribe"]
+    category: Marketing

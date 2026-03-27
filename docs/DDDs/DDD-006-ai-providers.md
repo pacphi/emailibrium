@@ -174,7 +174,7 @@ Manages active inference sessions -- loaded models that are ready to serve reque
 
 ### ProviderType
 
-```
+```rust
 enum ProviderType {
     Onnx,     // Tier 0: In-process ONNX Runtime via fastembed
     Ollama,   // Tier 1: Local Ollama HTTP API
@@ -186,7 +186,7 @@ enum ProviderType {
 
 ### ProviderTier
 
-```
+```rust
 enum ProviderTier {
     Tier0,  // Zero-config default: ONNX embedding, no generative, no cloud
     Tier1,  // Local enhanced: ONNX embedding + Ollama generative
@@ -211,7 +211,7 @@ enum ProviderTier {
 
 ### ConsentStatus
 
-```
+```rust
 enum ConsentStatus {
     NotRequired,  // No cloud providers configured
     Pending,      // Cloud provider requested but consent not yet given
@@ -222,7 +222,7 @@ enum ConsentStatus {
 
 ### InferenceInput
 
-```
+```rust
 enum InferenceInput {
     Text(String),                    // Single text for embedding
     TextBatch(Vec<String>),          // Batch of texts for embedding
@@ -243,7 +243,7 @@ enum InferenceInput {
 
 ### InferenceResult
 
-```
+```rust
 enum InferenceResult {
     Embedding {
         vector: Vec<f32>,
@@ -297,7 +297,7 @@ enum InferenceResult {
 
 ### DownloadStatus
 
-```
+```rust
 enum DownloadStatus {
     NotStarted,   // Model registered but not yet downloaded
     Downloading,  // Download in progress
@@ -309,7 +309,7 @@ enum DownloadStatus {
 
 ### SessionStatus
 
-```
+```rust
 enum SessionStatus {
     Initializing,  // Model loading into memory
     Ready,         // Accepting inference requests
@@ -320,7 +320,7 @@ enum SessionStatus {
 
 ### ModelCapability
 
-```
+```rust
 enum ModelCapability {
     TextEmbedding,     // Produces vector embeddings from text
     ImageEmbedding,    // Produces vector embeddings from images
@@ -331,7 +331,7 @@ enum ModelCapability {
 
 ### CloudProvider
 
-```
+```rust
 enum CloudProvider {
     OpenAI,
     Cohere,
@@ -530,7 +530,7 @@ Wraps cloud generative APIs (Anthropic, OpenAI, Google) behind the `GenerativeMo
 
 ## Context Map Integration
 
-```
+```text
 Account Management ──[Published Language]──> AI Providers
   Events: ConsentStatusChanged, PerAccountProviderOverride
   Purpose: Account-level consent and provider preferences
@@ -640,7 +640,7 @@ Environment variable overrides use the `EMAILIBRIUM_AI__` prefix with double-und
 
 ### Provider Resolution Order
 
-```
+```text
 1. Read ai.embedding.provider from config (default: "onnx")
 2. If "onnx":
    a. Check if model files exist in model_path

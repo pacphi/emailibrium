@@ -415,7 +415,7 @@ Candle eliminates the ONNX Runtime C dependency entirely (pure Rust), but has sl
 
 ### 7.1 Overview
 
-```
+```text
 +-----------------------------------------------------------------------+
 |                         Emailibrium AI Layer                          |
 +-----------------------------------------------------------------------+
@@ -644,7 +644,7 @@ export ANTHROPIC_API_KEY="sk-ant-..."
 
 ### 8.3 Provider Resolution Logic
 
-```
+```text
 1. Read ai.embedding.provider from config (default: "onnx")
 2. If "onnx":
    a. Check if model files exist in model_path

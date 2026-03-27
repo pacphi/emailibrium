@@ -23,7 +23,7 @@ This document defines the bounded context map for Emailibrium, a vector-native e
 
 ## Context Map Diagram
 
-```
+```text
                   ┌─────────────────────────┐
                   │   Account Management    │
                   │      (Supporting)       │
@@ -194,7 +194,7 @@ The `email_id` is the correlation identifier across all contexts. It is generate
 
 All cross-context communication uses asynchronous domain events via an in-process event bus (for single-node deployment) with the option to externalize to a message broker for distributed deployment.
 
-```
+```text
 ┌─────────────────────────────────────────────────────┐
 │                    Event Bus                        │
 │                                                     │

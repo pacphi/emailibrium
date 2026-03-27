@@ -6,7 +6,7 @@
 
 Emailibrium is a **vector-native email intelligence platform** organized as a four-tier architecture (docs/plan/inception.md Section 3):
 
-```
+```text
 +------------------------------------------------------------------+
 |                    PRESENTATION TIER                               |
 |  React TypeScript SPA (Vite 8 + TanStack Router + shadcn/ui)     |
@@ -59,7 +59,7 @@ Emailibrium follows Domain-Driven Design with seven bounded contexts (DDD-000 th
 
 ### Context Map
 
-```
+```text
 Account Management --[Published Language]--> Ingestion
                                                |
                                     [Customer/Supplier]
@@ -84,7 +84,7 @@ Integration patterns:
 
 The email ingestion pipeline processes emails through six stages (docs/plan/inception.md Section 3.2):
 
-```
+```text
 Email arrives (via provider sync)
   |
   +--- 1. Parse & Extract metadata ----------> SQLite (structured data)
@@ -142,7 +142,7 @@ Throughput targets:
 
 ### Backend (`backend/src/`)
 
-```
+```text
 src/
   main.rs              # Axum server setup, middleware, startup
   lib.rs               # Public module re-exports for tests

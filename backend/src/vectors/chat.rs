@@ -54,8 +54,8 @@ pub struct ChatSession {
     pub messages: Vec<ChatMessage>,
     pub created_at: DateTime<Utc>,
     pub last_active: DateTime<Utc>,
-    /// Email IDs whose content should be included as context.
-    pub context_emails: Vec<String>,
+    /// Pre-formatted email context from the RAG pipeline (ADR-022).
+    pub email_context: Option<String>,
     /// Maximum number of messages kept in the sliding window.
     pub max_history: usize,
 }
@@ -68,7 +68,7 @@ impl ChatSession {
             messages: Vec::new(),
             created_at: now,
             last_active: now,
-            context_emails: Vec::new(),
+            email_context: None,
             max_history,
         }
     }
@@ -92,6 +92,7 @@ impl ChatSession {
 
 /// Lightweight summary returned when listing sessions.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SessionSummary {
     pub id: String,
     pub message_count: usize,
@@ -102,8 +103,11 @@ pub struct SessionSummary {
 
 /// Response from a chat turn.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ChatResponse {
     pub session_id: String,
+    /// The assistant's reply text (serialized as "message" to match the frontend contract).
+    #[serde(rename = "message")]
     pub reply: String,
     pub message_count: usize,
 }
@@ -118,6 +122,8 @@ pub struct ChatService {
     session_ttl: Duration,
     max_history: usize,
     generative: Arc<dyn GenerativeModel>,
+    /// System prompt loaded from YAML config.
+    system_prompt: String,
 }
 
 impl ChatService {
@@ -136,7 +142,14 @@ impl ChatService {
             session_ttl,
             max_history,
             generative,
+            system_prompt: email_assistant_system_prompt(),
         }
+    }
+
+    /// Create a new chat service with a custom system prompt (from YAML config).
+    pub fn with_system_prompt(mut self, prompt: String) -> Self {
+        self.system_prompt = prompt;
+        self
     }
 
     /// Get an existing session or create a new one.
@@ -149,11 +162,15 @@ impl ChatService {
     }
 
     /// Add a user message and generate an assistant response.
+    ///
+    /// `email_context` is a pre-formatted block of email snippets from the RAG
+    /// pipeline (ADR-022).  When `Some`, it is injected into the prompt so the
+    /// LLM can answer with real email data.
     pub async fn chat(
         &self,
         session_id: &str,
         user_message: &str,
-        email_context: Option<Vec<String>>,
+        email_context: Option<String>,
     ) -> Result<ChatResponse, VectorError> {
         // Ensure session exists.
         {
@@ -162,10 +179,8 @@ impl ChatService {
                 .entry(session_id.to_string())
                 .or_insert_with(|| ChatSession::new(session_id.to_string(), self.max_history));
 
-            // Update context emails if provided.
-            if let Some(ctx) = email_context {
-                session.context_emails = ctx;
-            }
+            // Update RAG context for this turn.
+            session.email_context = email_context;
 
             // Record the user message.
             session.push_message(ChatRole::User, user_message.to_string());
@@ -177,6 +192,18 @@ impl ChatService {
             let session = sessions.get(session_id).expect("session was just created");
             self.build_prompt(session, user_message)
         };
+
+        // Dump prompt for debugging RAG.
+        if prompt.contains("[Email Context]") {
+            tracing::info!(
+                prompt_len = prompt.len(),
+                "Chat prompt CONTAINS email context"
+            );
+            // Write full prompt to temp file for inspection.
+            let _ = std::fs::write("/tmp/emailibrium_last_prompt.txt", &prompt);
+        } else {
+            tracing::warn!("Chat prompt has NO email context — RAG may not be injecting");
+        }
 
         // Generate the response.
         let reply = self.generate_response(&prompt).await?;
@@ -207,14 +234,13 @@ impl ChatService {
         let mut parts: Vec<String> = Vec::new();
 
         // System prompt.
-        parts.push(format!("[System]\n{}", email_assistant_system_prompt()));
+        parts.push(format!("[System]\n{}", self.system_prompt));
 
-        // Email context (IDs only -- actual content would be fetched from DB in production).
-        if !session.context_emails.is_empty() {
-            let ids = session.context_emails.join(", ");
-            parts.push(format!(
-                "[Email Context]\nThe user is referencing these emails: {ids}"
-            ));
+        // Email context from RAG pipeline (ADR-022).
+        if let Some(ref ctx) = session.email_context {
+            if !ctx.is_empty() {
+                parts.push(format!("[Email Context]\n{ctx}"));
+            }
         }
 
         // Conversation history.
@@ -232,8 +258,9 @@ impl ChatService {
 
     /// Generate a response using the configured generative model.
     async fn generate_response(&self, prompt: &str) -> Result<String, VectorError> {
-        // 1024 tokens is a reasonable default for chat responses.
-        self.generative.generate(prompt, 1024).await
+        // 256 tokens keeps small models (0.5B) from generating filler.
+        // Larger models will stop at EOS well before hitting this limit.
+        self.generative.generate(prompt, 256).await
     }
 
     /// Remove sessions that have been inactive longer than `session_ttl`.
@@ -278,7 +305,13 @@ impl ChatService {
                 message_count: s.messages.len(),
                 created_at: s.created_at,
                 last_active: s.last_active,
-                context_email_count: s.context_emails.len(),
+                context_email_count: s.email_context.as_ref().map_or(0, |c| {
+                    if c.is_empty() {
+                        0
+                    } else {
+                        1
+                    }
+                }),
             })
             .collect()
     }
@@ -286,10 +319,13 @@ impl ChatService {
 
 /// Build the system prompt for the email assistant persona.
 fn email_assistant_system_prompt() -> String {
-    "You are Emailibrium's AI email assistant. You help users understand, organize, \
-     and manage their emails. You can answer questions about email content, suggest \
-     actions (archive, label, delete), help draft replies, and provide insights about \
-     email patterns. Be concise and helpful. Reference specific emails when relevant."
+    "You are an email assistant with full access to the user's inbox. \
+     The [Email Context] section contains REAL emails from the user's inbox that match their query. \
+     IMPORTANT RULES:\n\
+     1. If emails are shown in the context, answer YES and list them with sender, subject, and date.\n\
+     2. NEVER say you don't have access. You DO have access — the emails are shown above.\n\
+     3. If no emails are in the context, say no matching emails were found.\n\
+     4. Be specific — quote subjects and senders from the provided emails."
         .to_string()
 }
 
@@ -352,12 +388,14 @@ mod tests {
     #[tokio::test]
     async fn test_chat_with_email_context() {
         let svc = make_service();
-        let ctx = Some(vec!["email-001".to_string(), "email-002".to_string()]);
+        let ctx = Some(
+            "--- Email ---\nFrom: test@example.com\nSubject: Test\nDate: 2026-01-01".to_string(),
+        );
         let resp = svc.chat("s1", "Tell me about these", ctx).await.unwrap();
         assert!(resp.reply.contains("Mock response"));
 
         let session = svc.get_or_create_session("s1").await;
-        assert_eq!(session.context_emails.len(), 2);
+        assert!(session.email_context.is_some());
     }
 
     #[tokio::test]
@@ -459,7 +497,7 @@ mod tests {
     #[test]
     fn test_email_assistant_system_prompt() {
         let prompt = email_assistant_system_prompt();
-        assert!(prompt.contains("Emailibrium"));
         assert!(prompt.contains("email assistant"));
+        assert!(prompt.contains("Email Context"));
     }
 }

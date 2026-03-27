@@ -23,7 +23,7 @@ No cloud processing. No data leaving your machine. Just fast, private, intellige
 
 ## How It Works
 
-```
+```text
 Email arrives → Embed as vector → Classify via centroid similarity → Cluster by topic → Archive
                     ↓                        ↓                           ↓
               Searchable in <50ms    Learns from corrections    Groups evolve over time
@@ -55,7 +55,7 @@ make docker-up-dev    # start with hot-reload
 
 ## Architecture
 
-```
+```text
 React TypeScript SPA ──REST + SSE──→ Axum API Gateway
          │                                │
     TanStack Router                  Intelligence Layer

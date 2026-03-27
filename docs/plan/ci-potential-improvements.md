@@ -27,7 +27,7 @@ Add a dedicated Makefile target for running only the AI service tests (~124 test
 # Root Makefile
 .PHONY: test-ai
 test-ai: ## Run AI service tests only (fast)
-	@cd $(FRONTEND_DIR)/apps/web && npx vitest run src/services/ai/__tests__/
+ @cd $(FRONTEND_DIR)/apps/web && npx vitest run src/services/ai/__tests__/
 ```
 
 **Why:** Full test suite includes email, routing, and other tests. During LLM development, `make test-ai` gives faster feedback.
@@ -129,10 +129,10 @@ Add a summary line at the end of the CI pipeline showing which AI providers are 
 ```makefile
 # Append to existing `ci` target in root Makefile
 ci: format-check lint typecheck test
-	@echo ""
-	@echo "$(BOLD)AI Configuration:$(RESET)"
-	@grep -A1 'generative:' $(BACKEND_DIR)/config.yaml | head -2
-	@echo "$(GREEN)CI passed.$(RESET)"
+ @echo ""
+ @echo "$(BOLD)AI Configuration:$(RESET)"
+ @grep -A1 'generative:' $(BACKEND_DIR)/config.yaml | head -2
+ @echo "$(GREEN)CI passed.$(RESET)"
 ```
 
 **Why:** Catches accidental default changes (e.g., someone changing `provider: "builtin"` back to `"none"`) during code review.
@@ -149,7 +149,7 @@ When `llama-cpp-2` is added to the Rust backend (RBL-1), add a feature-gated tes
 # backend/Makefile
 .PHONY: test-llm
 test-llm: ## Run built-in LLM tests (requires builtin-llm feature)
-	cargo test --features builtin-llm -- builtin_llm
+ cargo test --features builtin-llm -- builtin_llm
 ```
 
 **Why:** `llama-cpp-2` tests require the feature flag enabled and potentially a cached model. Keeping them in a separate target prevents accidental CI failures.

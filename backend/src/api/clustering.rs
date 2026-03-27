@@ -38,6 +38,23 @@ pub struct ClusterListResponse {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ClusterTermResponse {
+    pub word: String,
+    pub score: f32,
+    pub count: usize,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RepresentativeEmail {
+    pub id: String,
+    pub subject: String,
+    pub from_addr: String,
+    pub from_name: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ClusterSummary {
     pub id: String,
     pub name: String,
@@ -45,6 +62,8 @@ pub struct ClusterSummary {
     pub email_count: usize,
     pub stability_score: f32,
     pub is_pinned: bool,
+    pub top_terms: Vec<ClusterTermResponse>,
+    pub representative_emails: Vec<RepresentativeEmail>,
 }
 
 #[derive(Debug, Serialize)]
@@ -81,15 +100,73 @@ async fn list_clusters(
 ) -> Result<Json<ClusterListResponse>, (StatusCode, String)> {
     let clusters = state.vector_service.cluster_engine.get_clusters().await;
 
+    // Batch-fetch representative email metadata from SQLite.
+    let all_rep_ids: Vec<String> = clusters
+        .iter()
+        .flat_map(|c| c.representative_email_ids.iter().cloned())
+        .collect();
+
+    let email_meta: std::collections::HashMap<String, (String, String, Option<String>)> =
+        if !all_rep_ids.is_empty() {
+            let placeholders: Vec<String> =
+                (1..=all_rep_ids.len()).map(|i| format!("?{i}")).collect();
+            let sql = format!(
+                "SELECT id, subject, from_addr, from_name FROM emails WHERE id IN ({})",
+                placeholders.join(", ")
+            );
+            let mut query = sqlx::query_as::<_, (String, String, String, Option<String>)>(&sql);
+            for id in &all_rep_ids {
+                query = query.bind(id);
+            }
+            query
+                .fetch_all(&state.db.pool)
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .map(|(id, subject, from_addr, from_name)| (id, (subject, from_addr, from_name)))
+                .collect()
+        } else {
+            std::collections::HashMap::new()
+        };
+
     let summaries: Vec<ClusterSummary> = clusters
         .iter()
-        .map(|c| ClusterSummary {
-            id: c.id.clone(),
-            name: c.name.clone(),
-            description: c.description.clone(),
-            email_count: c.email_count,
-            stability_score: c.stability_score,
-            is_pinned: c.is_pinned,
+        .map(|c| {
+            let top_terms = c
+                .top_terms
+                .iter()
+                .map(|t| ClusterTermResponse {
+                    word: t.word.clone(),
+                    score: t.score,
+                    count: t.count,
+                })
+                .collect();
+
+            let representative_emails = c
+                .representative_email_ids
+                .iter()
+                .filter_map(|id| {
+                    email_meta
+                        .get(id)
+                        .map(|(subject, from_addr, from_name)| RepresentativeEmail {
+                            id: id.clone(),
+                            subject: subject.clone(),
+                            from_addr: from_addr.clone(),
+                            from_name: from_name.clone(),
+                        })
+                })
+                .collect();
+
+            ClusterSummary {
+                id: c.id.clone(),
+                name: c.name.clone(),
+                description: c.description.clone(),
+                email_count: c.email_count,
+                stability_score: c.stability_score,
+                is_pinned: c.is_pinned,
+                top_terms,
+                representative_emails,
+            }
         })
         .collect();
 

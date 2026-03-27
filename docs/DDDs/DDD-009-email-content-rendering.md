@@ -1,11 +1,11 @@
 # DDD-009: Email Content & Attachments Domain
 
-| Field   | Value                          |
-| ------- | ------------------------------ |
-| Status  | Proposed                       |
-| Date    | 2026-03-25                     |
-| Type    | Core Domain                    |
-| Context | Email Content & Attachments    |
+| Field   | Value                       |
+| ------- | --------------------------- |
+| Status  | Proposed                    |
+| Date    | 2026-03-25                  |
+| Type    | Core Domain                 |
+| Context | Email Content & Attachments |
 
 ## Overview
 
@@ -13,31 +13,31 @@ The Email Content & Attachments bounded context handles the extraction, sanitiza
 
 ## Strategic Classification
 
-| Aspect              | Value                                                                  |
-| ------------------- | ---------------------------------------------------------------------- |
-| Domain type         | Core                                                                   |
-| Investment priority | Critical (email body rendering and attachments are table-stakes UX)    |
-| Complexity driver   | HTML sanitization security, MIME format diversity, provider API differences |
-| Change frequency    | Medium (new providers, new MIME types, security patches)               |
+| Aspect              | Value                                                                           |
+| ------------------- | ------------------------------------------------------------------------------- |
+| Domain type         | Core                                                                            |
+| Investment priority | Critical (email body rendering and attachments are table-stakes UX)             |
+| Complexity driver   | HTML sanitization security, MIME format diversity, provider API differences     |
+| Change frequency    | Medium (new providers, new MIME types, security patches)                        |
 | Risk                | XSS via unsanitized HTML, data loss on attachment fetch failure, path traversal |
 
 ---
 
 ## Ubiquitous Language
 
-| Term | Definition |
-|---|---|
-| **Body HTML** | The HTML representation of an email body, extracted from the provider and sanitized server-side with ammonia before storage |
-| **Body Text** | The plain-text representation of an email body, used for search indexing, previews, and fallback rendering |
-| **Content Type Strategy** | The rendering decision based on available content: HTML-primary with plain-text toggle, or plain-text-only |
-| **Inline Attachment** | An attachment embedded within the email body via CID reference (e.g., logos, signature images) |
-| **File Attachment** | A non-inline attachment that the user can download (documents, archives, media) |
-| **CID Resolution** | The process of replacing `cid:` URI references in HTML with base64 data URIs or API URLs |
-| **Sanitized HTML** | HTML that has passed through ammonia's whitelist-based sanitizer, safe for storage and rendering |
-| **Attachment Metadata** | The database record describing an attachment (filename, type, size, storage path) without the file content |
-| **Lazy Fetch** | The strategy of storing only attachment metadata during sync and fetching actual file content on first download request |
-| **Storage Path** | The filesystem location where attachment content is cached: `data/attachments/{account_id}/{email_id}/{filename}` |
-| **ZIP Stream** | A server-side streamed ZIP archive containing all file attachments for a single email |
+| Term                      | Definition                                                                                                                  |
+| ------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| **Body HTML**             | The HTML representation of an email body, extracted from the provider and sanitized server-side with ammonia before storage |
+| **Body Text**             | The plain-text representation of an email body, used for search indexing, previews, and fallback rendering                  |
+| **Content Type Strategy** | The rendering decision based on available content: HTML-primary with plain-text toggle, or plain-text-only                  |
+| **Inline Attachment**     | An attachment embedded within the email body via CID reference (e.g., logos, signature images)                              |
+| **File Attachment**       | A non-inline attachment that the user can download (documents, archives, media)                                             |
+| **CID Resolution**        | The process of replacing `cid:` URI references in HTML with base64 data URIs or API URLs                                    |
+| **Sanitized HTML**        | HTML that has passed through ammonia's whitelist-based sanitizer, safe for storage and rendering                            |
+| **Attachment Metadata**   | The database record describing an attachment (filename, type, size, storage path) without the file content                  |
+| **Lazy Fetch**            | The strategy of storing only attachment metadata during sync and fetching actual file content on first download request     |
+| **Storage Path**          | The filesystem location where attachment content is cached: `data/attachments/{account_id}/{email_id}/{filename}`           |
+| **ZIP Stream**            | A server-side streamed ZIP archive containing all file attachments for a single email                                       |
 
 ---
 
@@ -49,14 +49,14 @@ Manages the body content of an email message, including HTML sanitization and co
 
 **Root Entity: EmailContent**
 
-| Field         | Type             | Description                                                    |
-| ------------- | ---------------- | -------------------------------------------------------------- |
-| email_id      | EmailId          | Foreign key to the email message                               |
-| body_html     | Option\<String\> | Sanitized HTML body (ammonia-processed)                        |
-| body_text     | Option\<String\> | Plain text body                                                |
-| content_type  | ContentType      | `HtmlOnly`, `TextOnly`, `Multipart` (both available)           |
-| has_inline_images | bool         | Whether CID references exist and have been resolved            |
-| sanitized_at  | Timestamp        | When ammonia sanitization was last applied                     |
+| Field             | Type             | Description                                          |
+| ----------------- | ---------------- | ---------------------------------------------------- |
+| email_id          | EmailId          | Foreign key to the email message                     |
+| body_html         | Option\<String\> | Sanitized HTML body (ammonia-processed)              |
+| body_text         | Option\<String\> | Plain text body                                      |
+| content_type      | ContentType      | `HtmlOnly`, `TextOnly`, `Multipart` (both available) |
+| has_inline_images | bool             | Whether CID references exist and have been resolved  |
+| sanitized_at      | Timestamp        | When ammonia sanitization was last applied           |
 
 **Value Objects:**
 
@@ -65,11 +65,11 @@ Manages the body content of an email message, including HTML sanitization and co
 
 **Domain Events:**
 
-| Event | Trigger | Payload |
-|---|---|---|
-| `HtmlBodyExtracted` | Provider fetcher extracts HTML from API response | email_id, raw_html_length |
-| `HtmlBodySanitized` | Ammonia sanitization completes | email_id, sanitized_html_length, tags_removed_count |
-| `CidReferencesResolved` | Inline images replaced with data URIs | email_id, cid_count |
+| Event                   | Trigger                                          | Payload                                             |
+| ----------------------- | ------------------------------------------------ | --------------------------------------------------- |
+| `HtmlBodyExtracted`     | Provider fetcher extracts HTML from API response | email_id, raw_html_length                           |
+| `HtmlBodySanitized`     | Ammonia sanitization completes                   | email_id, sanitized_html_length, tags_removed_count |
+| `CidReferencesResolved` | Inline images replaced with data URIs            | email_id, cid_count                                 |
 
 **Invariants:**
 
@@ -85,19 +85,19 @@ Manages the lifecycle of email attachments from metadata extraction through cont
 
 **Root Entity: Attachment**
 
-| Field                  | Type             | Description                                           |
-| ---------------------- | ---------------- | ----------------------------------------------------- |
-| id                     | AttachmentId     | UUID, primary key                                     |
-| email_id               | EmailId          | Foreign key to the email message                      |
-| account_id             | AccountId        | The account this attachment belongs to                 |
+| Field                  | Type             | Description                                                  |
+| ---------------------- | ---------------- | ------------------------------------------------------------ |
+| id                     | AttachmentId     | UUID, primary key                                            |
+| email_id               | EmailId          | Foreign key to the email message                             |
+| account_id             | AccountId        | The account this attachment belongs to                       |
 | filename               | String           | Sanitized filename (path separators and null bytes stripped) |
-| content_type           | String           | MIME type (e.g., `application/pdf`, `image/png`)       |
-| size_bytes             | u64              | Size in bytes                                          |
-| is_inline              | bool             | Whether this is a CID-referenced inline image          |
-| content_id             | Option\<String\> | Content-ID header value for CID resolution             |
-| storage_path           | Option\<String\> | Filesystem path (None if not yet fetched from provider) |
-| provider_attachment_id | Option\<String\> | Provider-specific ID for lazy fetching                 |
-| fetch_status           | FetchStatus      | `Pending`, `Fetched`, `Failed`                         |
+| content_type           | String           | MIME type (e.g., `application/pdf`, `image/png`)             |
+| size_bytes             | u64              | Size in bytes                                                |
+| is_inline              | bool             | Whether this is a CID-referenced inline image                |
+| content_id             | Option\<String\> | Content-ID header value for CID resolution                   |
+| storage_path           | Option\<String\> | Filesystem path (None if not yet fetched from provider)      |
+| provider_attachment_id | Option\<String\> | Provider-specific ID for lazy fetching                       |
+| fetch_status           | FetchStatus      | `Pending`, `Fetched`, `Failed`                               |
 
 **Value Objects:**
 
@@ -107,13 +107,13 @@ Manages the lifecycle of email attachments from metadata extraction through cont
 
 **Domain Events:**
 
-| Event | Trigger | Payload |
-|---|---|---|
-| `AttachmentMetadataStored` | Email sync extracts attachment metadata from provider response | email_id, attachment_id, filename, size_bytes |
-| `AttachmentContentFetched` | Lazy fetch retrieves content from provider API | attachment_id, storage_path, fetch_duration_ms |
-| `AttachmentContentFailed` | Provider API fetch fails | attachment_id, error_message, retry_eligible |
-| `AttachmentDownloaded` | User downloads an attachment | attachment_id, download_type (single \| zip) |
-| `AttachmentsCleaned` | Cascade delete removes attachment files from disk | email_id, files_removed_count, bytes_freed |
+| Event                      | Trigger                                                        | Payload                                        |
+| -------------------------- | -------------------------------------------------------------- | ---------------------------------------------- |
+| `AttachmentMetadataStored` | Email sync extracts attachment metadata from provider response | email_id, attachment_id, filename, size_bytes  |
+| `AttachmentContentFetched` | Lazy fetch retrieves content from provider API                 | attachment_id, storage_path, fetch_duration_ms |
+| `AttachmentContentFailed`  | Provider API fetch fails                                       | attachment_id, error_message, retry_eligible   |
+| `AttachmentDownloaded`     | User downloads an attachment                                   | attachment_id, download_type (single \| zip)   |
+| `AttachmentsCleaned`       | Cascade delete removes attachment files from disk              | email_id, files_removed_count, bytes_freed     |
 
 **Invariants:**
 
@@ -131,39 +131,39 @@ Manages the lifecycle of email attachments from metadata extraction through cont
 
 Extracts HTML and plain-text bodies from provider API responses.
 
-| Operation | Input | Output | Notes |
-|---|---|---|---|
-| `extract_gmail_body` | Gmail message payload | (Option\<html\>, Option\<text\>) | Recursively traverses MIME parts for `text/html` and `text/plain`; base64url-decodes `body.data` |
-| `extract_outlook_body` | Graph API message body | (Option\<html\>, Option\<text\>) | Uses `body.content` when `body.contentType === "html"` |
-| `extract_imap_body` | Raw MIME bytes | (Option\<html\>, Option\<text\>) | Uses `mail-parser` crate for zero-copy MIME parsing |
+| Operation              | Input                  | Output                           | Notes                                                                                            |
+| ---------------------- | ---------------------- | -------------------------------- | ------------------------------------------------------------------------------------------------ |
+| `extract_gmail_body`   | Gmail message payload  | (Option\<html\>, Option\<text\>) | Recursively traverses MIME parts for `text/html` and `text/plain`; base64url-decodes `body.data` |
+| `extract_outlook_body` | Graph API message body | (Option\<html\>, Option\<text\>) | Uses `body.content` when `body.contentType === "html"`                                           |
+| `extract_imap_body`    | Raw MIME bytes         | (Option\<html\>, Option\<text\>) | Uses `mail-parser` crate for zero-copy MIME parsing                                              |
 
 ### HtmlSanitizationService
 
 Applies ammonia-based sanitization with an email-specific configuration.
 
-| Operation | Input | Output | Notes |
-|---|---|---|---|
-| `sanitize_email_html` | Raw HTML string | Sanitized HTML string | Whitelist: standard email tags (table, td, th, div, span, img, a, etc.). Allows `style`, `class`, `href`, `src` attributes. Sets `link_rel("noopener noreferrer")`. Allows `http`, `https`, `mailto`, `data` URL schemes. |
-| `resolve_cid_references` | HTML string + inline attachment map | HTML with data URIs | Replaces `cid:{id}` with `data:{type};base64,{content}`. Must run before `sanitize_email_html`. |
+| Operation                | Input                               | Output                | Notes                                                                                                                                                                                                                     |
+| ------------------------ | ----------------------------------- | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `sanitize_email_html`    | Raw HTML string                     | Sanitized HTML string | Whitelist: standard email tags (table, td, th, div, span, img, a, etc.). Allows `style`, `class`, `href`, `src` attributes. Sets `link_rel("noopener noreferrer")`. Allows `http`, `https`, `mailto`, `data` URL schemes. |
+| `resolve_cid_references` | HTML string + inline attachment map | HTML with data URIs   | Replaces `cid:{id}` with `data:{type};base64,{content}`. Must run before `sanitize_email_html`.                                                                                                                           |
 
 ### AttachmentFetchService
 
 Fetches attachment content from provider APIs on demand.
 
-| Operation | Input | Output | Notes |
-|---|---|---|---|
-| `fetch_gmail_attachment` | account credentials, message_id, attachment_id | bytes | `GET /gmail/v1/users/me/messages/{id}/attachments/{att_id}`; base64url-decode response `data` |
-| `fetch_outlook_attachment` | account credentials, message_id, attachment_id | bytes | `GET /me/messages/{id}/attachments/{att_id}/$value`; raw binary response |
-| `cache_to_filesystem` | bytes, target storage_path | StoragePath | Writes bytes to disk; creates parent directories; returns validated path |
+| Operation                  | Input                                          | Output      | Notes                                                                                         |
+| -------------------------- | ---------------------------------------------- | ----------- | --------------------------------------------------------------------------------------------- |
+| `fetch_gmail_attachment`   | account credentials, message_id, attachment_id | bytes       | `GET /gmail/v1/users/me/messages/{id}/attachments/{att_id}`; base64url-decode response `data` |
+| `fetch_outlook_attachment` | account credentials, message_id, attachment_id | bytes       | `GET /me/messages/{id}/attachments/{att_id}/$value`; raw binary response                      |
+| `cache_to_filesystem`      | bytes, target storage_path                     | StoragePath | Writes bytes to disk; creates parent directories; returns validated path                      |
 
 ### AttachmentServingService
 
 Serves attachment content to the frontend via streaming HTTP responses.
 
-| Operation | Input | Output | Notes |
-|---|---|---|---|
-| `stream_single` | attachment metadata | Axum streaming response | Sets `Content-Type`, `Content-Disposition: attachment`, `Content-Length` headers |
-| `stream_zip` | list of attachment metadata | Axum streaming response | Uses `async_zip` to create ZIP archive streamed via `tokio::io::duplex` |
+| Operation       | Input                       | Output                  | Notes                                                                            |
+| --------------- | --------------------------- | ----------------------- | -------------------------------------------------------------------------------- |
+| `stream_single` | attachment metadata         | Axum streaming response | Sets `Content-Type`, `Content-Disposition: attachment`, `Content-Length` headers |
+| `stream_zip`    | list of attachment metadata | Axum streaming response | Uses `async_zip` to create ZIP archive streamed via `tokio::io::duplex`          |
 
 ---
 
@@ -196,7 +196,7 @@ Serves attachment content to the frontend via streaming HTTP responses.
 
 This context should be added to DDD-000 (Context Map):
 
-```
+```text
                   ┌─────────────────────────┐
                   │   Email Content &       │
                   │   Attachments (Core)    │
@@ -224,17 +224,18 @@ This context should be added to DDD-000 (Context Map):
 
 Each provider returns attachment metadata in a different format:
 
-| Provider | Attachment ID Field | Content Field | Encoding |
-|---|---|---|---|
-| Gmail | `body.attachmentId` | `data` | base64url |
-| Outlook | `id` | `contentBytes` or `/$value` endpoint | base64 or raw |
-| IMAP | MIME part index | MIME part content | quoted-printable or base64 |
+| Provider | Attachment ID Field | Content Field                        | Encoding                   |
+| -------- | ------------------- | ------------------------------------ | -------------------------- |
+| Gmail    | `body.attachmentId` | `data`                               | base64url                  |
+| Outlook  | `id`                | `contentBytes` or `/$value` endpoint | base64 or raw              |
+| IMAP     | MIME part index     | MIME part content                    | quoted-printable or base64 |
 
 The `ContentExtractionService` and `AttachmentFetchService` act as the ACL, translating provider-specific structures into the domain's `EmailContent` and `Attachment` entities.
 
 ### Filename Sanitization ACL
 
 Provider filenames may contain:
+
 - Path traversal sequences (`../`, `..\\`)
 - Null bytes
 - OS-reserved characters

@@ -344,7 +344,8 @@ async fn list_accounts(
 
 /// DELETE /api/v1/auth/accounts/:id
 ///
-/// Disconnects an account, clearing tokens and setting status to disconnected.
+/// Disconnects an account and cleans up all associated local data:
+/// emails, vector embeddings, sync state, and account tokens.
 async fn disconnect_account(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -357,6 +358,43 @@ async fn disconnect_account(
         )
     })?;
 
+    // 1. Collect vector IDs, then delete emails + sync state from SQLite (fast).
+    let vector_ids: Vec<(String,)> = sqlx::query_as(
+        "SELECT vector_id FROM emails WHERE account_id = ?1 AND vector_id IS NOT NULL",
+    )
+    .bind(&id)
+    .fetch_all(&state.db.pool)
+    .await
+    .unwrap_or_default();
+
+    let emails_deleted = sqlx::query("DELETE FROM emails WHERE account_id = ?1")
+        .bind(&id)
+        .execute(&state.db.pool)
+        .await
+        .map(|r| r.rows_affected())
+        .unwrap_or(0);
+
+    let _ = sqlx::query("DELETE FROM sync_state WHERE account_id = ?1")
+        .bind(&id)
+        .execute(&state.db.pool)
+        .await;
+
+    // 2. Batch-delete vectors (async, non-blocking to the user).
+    let vectors_deleted = vector_ids.len() as u64;
+    let store = state.vector_service.store.clone();
+    tokio::spawn(async move {
+        for (vid,) in &vector_ids {
+            let vector_id =
+                crate::vectors::types::VectorId(uuid::Uuid::parse_str(vid).unwrap_or_default());
+            let _ = store.delete(&vector_id).await;
+        }
+        tracing::info!(
+            count = vector_ids.len(),
+            "Background vector cleanup complete"
+        );
+    });
+
+    // 4. Disconnect the account (clear tokens, set status to disconnected).
     state
         .oauth_manager
         .disconnect_account(&id)
@@ -368,7 +406,12 @@ async fn disconnect_account(
             other => (StatusCode::INTERNAL_SERVER_ERROR, other.to_string()),
         })?;
 
-    tracing::info!("Account disconnected: {}", id);
+    tracing::info!(
+        account_id = %id,
+        emails_deleted,
+        vectors_deleted,
+        "Account disconnected and local data cleaned up"
+    );
     Ok(StatusCode::NO_CONTENT)
 }
 

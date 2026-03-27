@@ -16,6 +16,8 @@ pub mod error;
 pub mod evaluation;
 pub mod ewc;
 pub mod generative;
+#[cfg(feature = "builtin-llm")]
+pub mod generative_builtin;
 pub mod generative_router;
 pub mod hdbscan;
 pub mod inference_session;
@@ -24,6 +26,7 @@ pub mod insights;
 pub mod interactions;
 pub mod learning;
 pub mod metrics;
+pub mod model_catalog;
 pub mod model_download;
 pub mod model_integrity;
 pub mod model_registry;
@@ -31,6 +34,7 @@ pub mod models;
 pub mod privacy;
 pub mod qdrant_store;
 pub mod quantization;
+pub mod rag;
 pub mod reindex;
 pub mod remote_wipe;
 pub mod ruvector_store;
@@ -39,6 +43,7 @@ pub mod sqlite_store;
 pub mod store;
 pub mod types;
 pub mod user_learning;
+pub mod yaml_config;
 
 use std::sync::Arc;
 
@@ -304,8 +309,75 @@ impl VectorService {
                 }
             },
             "builtin" => {
-                tracing::info!("Generative provider: builtin (rule-based classification in backend, LLM via frontend per ADR-021)");
-                None
+                #[cfg(feature = "builtin-llm")]
+                {
+                    match generative_builtin::BuiltInGenerativeModel::new(
+                        &config.generative.builtin,
+                    ) {
+                        Ok(model) => {
+                            tracing::info!(
+                                "Generative provider: builtin ({}) via llama.cpp",
+                                config.generative.builtin.model_id,
+                            );
+                            Some(Arc::new(model) as Arc<dyn generative::GenerativeModel>)
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                "Built-in LLM init failed: {e}, falling back to rule-based"
+                            );
+                            None
+                        }
+                    }
+                }
+                #[cfg(not(feature = "builtin-llm"))]
+                {
+                    tracing::info!(
+                        "Generative provider: builtin selected but 'builtin-llm' feature not enabled. \
+                         Rebuild with: cargo build --features builtin-llm"
+                    );
+                    None
+                }
+            }
+            "openrouter" => {
+                // OpenRouter uses the OpenAI-compatible API with extra headers.
+                // Read config from the YAML catalog (config/models-llm.yaml).
+                let yaml_cfg = yaml_config::load_yaml_config("../config")
+                    .unwrap_or_else(|_| yaml_config::YamlConfig::default());
+                let or_provider = yaml_cfg.llm_catalog.providers.get("openrouter");
+
+                let api_key_env = or_provider
+                    .and_then(|p| p.api_key_env.clone())
+                    .unwrap_or_else(|| "OPENROUTER_API_KEY".to_string());
+                let base_url = or_provider
+                    .and_then(|p| p.base_url.clone())
+                    .unwrap_or_else(|| "https://openrouter.ai/api/v1".to_string());
+                let extra_headers = or_provider
+                    .and_then(|p| p.required_headers.clone())
+                    .unwrap_or_default();
+
+                // Use the cloud config model field as the OpenRouter model ID.
+                let model_id = &config.generative.cloud.model;
+
+                match generative::OpenRouterGenerativeModel::new(
+                    &api_key_env,
+                    model_id,
+                    &base_url,
+                    extra_headers,
+                ) {
+                    Ok(model) => {
+                        tracing::info!(
+                            "Generative provider: openrouter ({model_id}) via {}",
+                            base_url,
+                        );
+                        Some(Arc::new(model) as Arc<dyn generative::GenerativeModel>)
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "OpenRouter generative model init failed: {e}, falling back to none"
+                        );
+                        None
+                    }
+                }
             }
             "none" => None,
             _ => {
@@ -319,6 +391,8 @@ impl VectorService {
 
         // Inject generative model into ingestion pipeline for categorize_with_fallback (DEFECT-2)
         ingestion_pipeline.set_generative(gen_model.clone());
+        // Inject cluster engine for post-ingestion clustering (ADR-009)
+        ingestion_pipeline.set_cluster_engine(cluster_engine.clone());
         let ingestion_pipeline = Arc::new(ingestion_pipeline);
 
         // Initialize consent manager
@@ -360,7 +434,9 @@ impl VectorService {
             let provider_type = match config.generative.provider.as_str() {
                 "ollama" => ProviderType::Ollama,
                 "cloud" => ProviderType::OpenAi,
-                "builtin" | "none" => ProviderType::None,
+                "openrouter" => ProviderType::OpenRouter,
+                "builtin" => ProviderType::BuiltIn,
+                "none" => ProviderType::None,
                 _ => ProviderType::None,
             };
             generative_router

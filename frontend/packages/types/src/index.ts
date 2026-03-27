@@ -8,7 +8,13 @@ export type {
   SearchResponse,
 } from './search.js';
 
-export type { Cluster, VectorStats, HealthStatus } from './vectors.js';
+export type {
+  Cluster,
+  ClusterTerm,
+  RepresentativeEmail,
+  VectorStats,
+  HealthStatus,
+} from './vectors.js';
 
 export type {
   RecurrencePattern,

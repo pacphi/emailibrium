@@ -20,7 +20,7 @@ For the full product vision, see [inception.md](./plan/inception.md). For the ac
 
 ## 2. Repository Layout
 
-```
+```text
 emailibrium/
   backend/                   Rust backend (Axum, SQLite, vector engine)
     src/

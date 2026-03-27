@@ -63,6 +63,7 @@ api-keys*
 
 # Claude Code internal state
 .claude-flow/
+.claude/worktrees/
 .swarm/
 .agentic-qe/
 

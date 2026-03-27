@@ -23,15 +23,16 @@ export function CommandCenter() {
   const clustersQuery = useQuery({
     queryKey: ['clusters'],
     queryFn: () => getClusters(),
-    staleTime: 60_000,
-    refetchInterval: 120_000,
+    staleTime: 10_000,
+    refetchInterval: 30_000,
   });
 
   // Fetch enriched categories to power "Recent Activity" with real data.
   const categoriesQuery = useQuery({
     queryKey: ['categories-enriched-cc'],
     queryFn: () => getEnrichedCategories(),
-    staleTime: 30_000,
+    staleTime: 10_000,
+    refetchInterval: 30_000,
   });
 
   // Global sync state — persists across navigation.
