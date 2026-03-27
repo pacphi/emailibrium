@@ -297,12 +297,17 @@ impl OnnxEmbeddingModel {
 
         let fe_model = match config.model.as_str() {
             "all-MiniLM-L6-v2" => FEModel::AllMiniLML6V2,
+            "all-MiniLM-L12-v2" => FEModel::AllMiniLML12V2,
             "bge-small-en-v1.5" => FEModel::BGESmallENV15,
             "bge-base-en-v1.5" => FEModel::BGEBaseENV15,
+            "bge-large-en-v1.5" => FEModel::BGELargeENV15,
+            "nomic-embed-text-v1.5" => FEModel::NomicEmbedTextV15,
+            "mxbai-embed-large-v1" => FEModel::MxbaiEmbedLargeV1,
             other => {
                 return Err(VectorError::ConfigError(format!(
                     "Unknown ONNX model: {other}. Supported: all-MiniLM-L6-v2, \
-                     bge-small-en-v1.5, bge-base-en-v1.5"
+                     all-MiniLM-L12-v2, bge-small-en-v1.5, bge-base-en-v1.5, \
+                     bge-large-en-v1.5, nomic-embed-text-v1.5, mxbai-embed-large-v1"
                 )));
             }
         };

@@ -1,7 +1,7 @@
 //! Model catalog for hardware-aware model selection (ADR-021).
 //!
-//! Provides metadata about available GGUF models and recommends the best
-//! model based on available system RAM.
+//! Sources all model metadata from `config/models-llm.yaml` — no hardcoded
+//! model list. The YAML catalog is the single source of truth.
 
 use serde::Serialize;
 
@@ -9,11 +9,11 @@ use serde::Serialize;
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelInfo {
-    /// Config key used in `config.yaml` (e.g., "qwen2.5-0.5b-q4km").
+    /// Config key (e.g., "qwen3-1.7b-q4km").
     pub id: String,
     /// Human-friendly display name.
     pub name: String,
-    /// Parameter count (e.g., "0.5B", "3B").
+    /// Parameter count (e.g., "1.7B", "8B").
     pub params: String,
     /// Approximate disk size of the GGUF file in MB.
     pub disk_mb: u32,
@@ -21,7 +21,7 @@ pub struct ModelInfo {
     pub ram_mb: u32,
     /// Context window size in tokens.
     pub context_size: u32,
-    /// Quality tier: "basic", "good", "excellent".
+    /// Quality tier: "fair", "good", "excellent".
     pub quality: String,
     /// Whether this model is recommended for the user's hardware.
     pub recommended: bool,
@@ -108,124 +108,73 @@ pub fn get_system_info() -> SystemInfo {
     }
 }
 
-/// Full model catalog with hardware-aware recommendations.
+/// Check whether a model is cached, either in the HF cache or the app cache dir.
+pub fn is_model_cached(repo_id: &str, filename: &str, cache_dir: &str) -> bool {
+    let hf_cache = dirs::home_dir()
+        .map(|h| h.join(".cache/huggingface/hub"))
+        .unwrap_or_default();
+    let cache_key = repo_id.replace('/', "--");
+    hf_cache.join(format!("models--{cache_key}")).exists()
+        || std::path::Path::new(cache_dir).join(filename).exists()
+}
+
+/// Full model catalog sourced from `config/models-llm.yaml` with
+/// hardware-aware recommendations and cache status.
 pub fn get_model_catalog(cache_dir: &str) -> Vec<ModelInfo> {
     let sys = get_system_info();
     let available = sys.available_for_model_mb;
 
-    let hf_cache = dirs::home_dir()
-        .map(|h| h.join(".cache/huggingface/hub"))
-        .unwrap_or_default();
+    let yaml = match super::yaml_config::load_yaml_config("../config") {
+        Ok(y) => y,
+        Err(e) => {
+            tracing::warn!("Failed to load config/models-llm.yaml: {e}");
+            return Vec::new();
+        }
+    };
 
-    let models = vec![
-        (
-            "qwen3-1.7b-q4km",
-            "Qwen 3 1.7B",
-            "1.7B",
-            1100,
-            1500,
-            32768,
-            "fair",
-            "unsloth/Qwen3-1.7B-GGUF",
-            "Qwen3-1.7B-Q4_K_M.gguf",
-        ),
-        (
-            "qwen2.5-1.5b-q4km",
-            "Qwen 2.5 1.5B Instruct",
-            "1.5B",
-            1100,
-            1200,
-            8192,
-            "good",
-            "Qwen/Qwen2.5-1.5B-Instruct-GGUF",
-            "qwen2.5-1.5b-instruct-q4_k_m.gguf",
-        ),
-        (
-            "qwen2.5-3b-q4km",
-            "Qwen 2.5 3B Instruct",
-            "3B",
-            2000,
-            2500,
-            8192,
-            "good",
-            "Qwen/Qwen2.5-3B-Instruct-GGUF",
-            "qwen2.5-3b-instruct-q4_k_m.gguf",
-        ),
-        (
-            "llama3.2-3b-q4km",
-            "Llama 3.2 3B Instruct",
-            "3B",
-            2000,
-            2500,
-            8192,
-            "good",
-            "bartowski/Llama-3.2-3B-Instruct-GGUF",
-            "Llama-3.2-3B-Instruct-Q4_K_M.gguf",
-        ),
-        (
-            "qwen2.5-7b-q4km",
-            "Qwen 2.5 7B Instruct",
-            "7B",
-            4700,
-            5000,
-            32768,
-            "excellent",
-            "Qwen/Qwen2.5-7B-Instruct-GGUF",
-            "qwen2.5-7b-instruct-q4_k_m.gguf",
-        ),
-    ];
+    let Some(builtin) = yaml.llm_catalog.providers.get("builtin") else {
+        tracing::warn!("No 'builtin' provider in config/models-llm.yaml");
+        return Vec::new();
+    };
 
-    models
-        .into_iter()
-        .map(
-            |(id, name, params, disk_mb, ram_mb, ctx, quality, repo, file)| {
-                let fits = (ram_mb as u64) <= available;
-                // Check HF cache for this model
-                let cache_key = repo.replace('/', "--");
-                let cached = hf_cache.join(format!("models--{cache_key}")).exists()
-                    || std::path::Path::new(cache_dir).join(file).exists();
+    builtin
+        .models
+        .iter()
+        .filter_map(|entry| {
+            let repo_id = entry.repo_id.as_deref().unwrap_or_default();
+            let filename = entry.filename.as_deref().unwrap_or_default();
+            if repo_id.is_empty() || filename.is_empty() {
+                return None;
+            }
 
-                ModelInfo {
-                    id: id.to_string(),
-                    name: name.to_string(),
-                    params: params.to_string(),
-                    disk_mb,
-                    ram_mb,
-                    context_size: ctx,
-                    quality: quality.to_string(),
-                    recommended: fits,
-                    cached,
-                    repo_id: repo.to_string(),
-                    filename: file.to_string(),
-                }
-            },
-        )
+            let disk_mb = entry.disk_mb.unwrap_or(0);
+            let min_ram_mb = entry.min_ram_mb.unwrap_or(0);
+            let fits = (min_ram_mb as u64) <= available;
+            let cached = is_model_cached(repo_id, filename, cache_dir);
+
+            Some(ModelInfo {
+                id: entry.id.clone(),
+                name: entry.name.clone(),
+                params: entry.params.clone().unwrap_or_default(),
+                disk_mb,
+                ram_mb: min_ram_mb,
+                context_size: entry.context_size,
+                quality: entry.quality.clone().unwrap_or_else(|| "good".to_string()),
+                recommended: fits,
+                cached,
+                repo_id: repo_id.to_string(),
+                filename: filename.to_string(),
+            })
+        })
         .collect()
 }
 
 /// Find the best model for the available hardware.
 /// Returns the largest model that fits, preferring quality.
 #[allow(dead_code)]
-pub fn recommend_model(cache_dir: &str) -> ModelInfo {
+pub fn recommend_model(cache_dir: &str) -> Option<ModelInfo> {
     let catalog = get_model_catalog(cache_dir);
     let recommended: Vec<_> = catalog.into_iter().filter(|m| m.recommended).collect();
-    recommended
-        .into_iter()
-        .next_back() // largest that fits (catalog is sorted by size)
-        .unwrap_or_else(|| {
-            // Fallback to smallest
-            ModelInfo {
-                id: "qwen3-1.7b-q4km".to_string(),
-                name: "Qwen 3 1.7B".to_string(),
-                params: "1.7B".to_string(),
-                disk_mb: 1100,
-                ram_mb: 1500,
-                context_size: 32768,
-                quality: "fair".to_string(),
-                recommended: true,
-                cached: false,
-                repo_id: "unsloth/Qwen3-1.7B-GGUF".to_string(),
-                filename: "Qwen3-1.7B-Q4_K_M.gguf".to_string(),
-            }
-        })
+    // Largest that fits (catalog preserves YAML order, which is sorted by size)
+    recommended.into_iter().next_back()
 }
