@@ -116,6 +116,8 @@ pub struct BuiltInGenerativeModel {
     config: BuiltInLlmConfig,
     model_path: PathBuf,
     inner: Arc<Mutex<Option<LoadedModel>>>,
+    /// Per-model `tuning.max_tokens` from `models-llm.yaml`, if configured.
+    model_max_tokens: Option<u32>,
 }
 
 impl BuiltInGenerativeModel {
@@ -124,10 +126,27 @@ impl BuiltInGenerativeModel {
     /// lazily on first inference request.
     pub fn new(config: &BuiltInLlmConfig) -> Result<Self, VectorError> {
         let model_path = resolve_model_path(config)?;
+
+        // Resolve per-model tuning.max_tokens from the YAML catalog.
+        let model_max_tokens = super::yaml_config::load_yaml_config("../config")
+            .ok()
+            .and_then(|yaml| {
+                yaml.llm_catalog
+                    .providers
+                    .get("builtin")?
+                    .models
+                    .iter()
+                    .find(|m| m.id == config.model_id)?
+                    .tuning
+                    .as_ref()?
+                    .max_tokens
+            });
+
         Ok(Self {
             config: config.clone(),
             model_path,
             inner: Arc::new(Mutex::new(None)),
+            model_max_tokens,
         })
     }
 
@@ -427,5 +446,9 @@ impl GenerativeModel for BuiltInGenerativeModel {
 
     async fn is_available(&self) -> bool {
         self.model_path.exists()
+    }
+
+    fn configured_max_tokens(&self) -> Option<u32> {
+        self.model_max_tokens
     }
 }

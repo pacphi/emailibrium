@@ -241,6 +241,7 @@ async fn main() -> anyhow::Result<()> {
             Duration::from_secs(yaml_config.tuning.chat.session_ttl_secs),
             yaml_config.tuning.chat.max_history_messages,
             vector_service.generative_router.clone(),
+            yaml_config.tuning.llm.chat_max_tokens as u32,
         )
         .with_system_prompt({
             let now = chrono::Local::now().format("%Y-%m-%d %H:%M %Z");

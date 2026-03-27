@@ -21,7 +21,7 @@ llm:
 
   # Context management
   default_context_size: 2048 # Fallback context window (overridden by model config)
-  chat_max_tokens: 256 # Max response tokens for chat (small models)
+  chat_max_tokens: 2048 # Max response tokens for chat (global default, overridden by per-model tuning)
 
   # Resource management
   idle_timeout_secs: 300 # Unload model after N seconds of inactivity

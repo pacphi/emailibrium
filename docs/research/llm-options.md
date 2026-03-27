@@ -561,7 +561,7 @@ ai:
       # Maximum tokens for classification responses
       classification_max_tokens: 50
       # Maximum tokens for chat responses
-      chat_max_tokens: 1024
+      chat_max_tokens: 2048
       # Temperature for classification (low = deterministic)
       classification_temperature: 0.1
       # Temperature for chat (higher = creative)

@@ -124,6 +124,9 @@ pub struct ChatService {
     generative: Arc<dyn GenerativeModel>,
     /// System prompt loaded from YAML config.
     system_prompt: String,
+    /// Max response tokens from `tuning.yaml` (`llm.chat_max_tokens`).
+    /// Per-model `tuning.max_tokens` from `models-llm.yaml` overrides this.
+    chat_max_tokens: u32,
 }
 
 impl ChatService {
@@ -132,10 +135,12 @@ impl ChatService {
     /// * `session_ttl` -- sessions expire after this duration of inactivity.
     /// * `max_history` -- default sliding-window size (messages per session).
     /// * `generative` -- the generative model used for response generation.
+    /// * `chat_max_tokens` -- global default from `tuning.yaml` (`llm.chat_max_tokens`).
     pub fn new(
         session_ttl: Duration,
         max_history: usize,
         generative: Arc<dyn GenerativeModel>,
+        chat_max_tokens: u32,
     ) -> Self {
         Self {
             sessions: Arc::new(Mutex::new(HashMap::new())),
@@ -143,6 +148,7 @@ impl ChatService {
             max_history,
             generative,
             system_prompt: email_assistant_system_prompt(),
+            chat_max_tokens,
         }
     }
 
@@ -258,10 +264,16 @@ impl ChatService {
     }
 
     /// Generate a response using the configured generative model.
+    ///
+    /// Token budget resolution order:
+    /// 1. Per-model `tuning.max_tokens` from `models-llm.yaml` (via `configured_max_tokens()`)
+    /// 2. Global `llm.chat_max_tokens` from `tuning.yaml`
     async fn generate_response(&self, prompt: &str) -> Result<String, VectorError> {
-        // 256 tokens keeps small models (0.5B) from generating filler.
-        // Larger models will stop at EOS well before hitting this limit.
-        self.generative.generate(prompt, 256).await
+        let max_tokens = self
+            .generative
+            .configured_max_tokens()
+            .unwrap_or(self.chat_max_tokens);
+        self.generative.generate(prompt, max_tokens).await
     }
 
     /// Remove sessions that have been inactive longer than `session_ttl`.
@@ -383,7 +395,7 @@ mod tests {
     }
 
     fn make_service() -> ChatService {
-        ChatService::new(Duration::from_secs(3600), 20, Arc::new(MockChatModel))
+        ChatService::new(Duration::from_secs(3600), 20, Arc::new(MockChatModel), 512)
     }
 
     #[tokio::test]
@@ -426,6 +438,7 @@ mod tests {
             Duration::from_secs(3600),
             4, // very small window
             Arc::new(MockChatModel),
+            512,
         );
 
         // Send 5 messages -> 10 total (user + assistant each), window = 4
@@ -462,6 +475,7 @@ mod tests {
             Duration::from_millis(1), // very short TTL
             20,
             Arc::new(MockChatModel),
+            512,
         );
         svc.chat("s1", "Hi", None).await.unwrap();
 

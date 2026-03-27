@@ -323,7 +323,7 @@ The implementation.md Sprints 1-7 establish the embedding trait, vector store, s
           classification_model: 'llama3.2:3b'
           chat_model: 'llama3.2:3b'
           classification_max_tokens: 50
-          chat_max_tokens: 1024
+          chat_max_tokens: 2048
           classification_temperature: 0.1
           chat_temperature: 0.7
         cloud:

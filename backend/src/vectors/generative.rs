@@ -31,6 +31,12 @@ pub trait GenerativeModel: Send + Sync {
 
     /// Check whether the model backend is reachable.
     async fn is_available(&self) -> bool;
+
+    /// Return the model's configured max response tokens (from per-model tuning),
+    /// or `None` to fall back to the global `chat_max_tokens` default.
+    fn configured_max_tokens(&self) -> Option<u32> {
+        None
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -252,6 +252,21 @@ impl GenerativeModel for GenerativeRouter {
     async fn is_available(&self) -> bool {
         self.best_provider().await.is_some()
     }
+
+    fn configured_max_tokens(&self) -> Option<u32> {
+        // Cannot async here (sync trait method), so check providers synchronously.
+        // Use try_read to avoid blocking; if lock is held, fall back to None.
+        if let Ok(providers) = self.providers.try_read() {
+            for p in providers.iter() {
+                if p.enabled {
+                    if let Some(tokens) = p.model.configured_max_tokens() {
+                        return Some(tokens);
+                    }
+                }
+            }
+        }
+        None
+    }
 }
 
 // ---------------------------------------------------------------------------

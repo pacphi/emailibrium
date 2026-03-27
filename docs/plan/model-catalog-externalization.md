@@ -65,7 +65,7 @@ providers:
           temperature: 0.7
           top_p: 0.9
           repeat_penalty: 1.1
-          max_tokens: 512
+          max_tokens: 4096
 
   ollama:
     description: 'Local models via Ollama server'
@@ -97,7 +97,7 @@ providers:
         cost_per_1k_output: 0.01
         tuning:
           temperature: 0.7
-          max_tokens: 1024
+          max_tokens: 4096
 
   anthropic:
     description: 'Anthropic cloud models'

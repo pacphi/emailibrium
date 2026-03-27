@@ -39,7 +39,7 @@ providers:
           temperature: 0.7
           top_p: 0.9
           repeat_penalty: 1.1
-          max_tokens: 512
+          max_tokens: 2048
 
       - id: qwen2.5-3b-q4km
         name: "Qwen 2.5 3B Instruct"
@@ -58,7 +58,7 @@ providers:
           temperature: 0.7
           top_p: 0.9
           repeat_penalty: 1.1
-          max_tokens: 512
+          max_tokens: 2048
 
       # Tier 2: 16GB RAM machines
       - id: qwen3-4b-q4km
@@ -78,7 +78,7 @@ providers:
           temperature: 0.7
           top_p: 0.9
           repeat_penalty: 1.1
-          max_tokens: 512
+          max_tokens: 4096
 
       - id: gemma3-4b-q4km
         name: "Gemma 3 4B IT"
@@ -96,7 +96,7 @@ providers:
         tuning:
           temperature: 0.7
           top_p: 0.9
-          max_tokens: 512
+          max_tokens: 4096
 
       - id: phi4-mini-q4km
         name: "Phi-4 Mini Instruct"
@@ -114,7 +114,7 @@ providers:
         tuning:
           temperature: 0.7
           top_p: 0.9
-          max_tokens: 512
+          max_tokens: 4096
 
       - id: qwen3-8b-q4km
         name: "Qwen 3 8B"
@@ -134,7 +134,7 @@ providers:
           temperature: 0.7
           top_p: 0.9
           repeat_penalty: 1.1
-          max_tokens: 1024
+          max_tokens: 4096
 
       # Tier 3: 32GB RAM machines
       - id: gemma3-12b-q4km
@@ -153,7 +153,7 @@ providers:
         tuning:
           temperature: 0.7
           top_p: 0.9
-          max_tokens: 1024
+          max_tokens: 8192
 
       - id: qwen3-14b-q4km
         name: "Qwen 3 14B"
@@ -173,7 +173,7 @@ providers:
           temperature: 0.7
           top_p: 0.9
           repeat_penalty: 1.1
-          max_tokens: 1024
+          max_tokens: 4096
 
       # Tier 4: 64-128GB RAM machines
       - id: mistral-small-24b-q4km
@@ -192,7 +192,7 @@ providers:
         tuning:
           temperature: 0.7
           top_p: 0.9
-          max_tokens: 1024
+          max_tokens: 8192
 
       - id: qwen3-30b-a3b-q4km
         name: "Qwen 3 30B-A3B (MoE)"
@@ -213,7 +213,7 @@ providers:
           temperature: 0.7
           top_p: 0.9
           repeat_penalty: 1.1
-          max_tokens: 1024
+          max_tokens: 4096
 
       - id: qwen3-32b-q4km
         name: "Qwen 3 32B"
@@ -232,7 +232,7 @@ providers:
           temperature: 0.7
           top_p: 0.9
           repeat_penalty: 1.1
-          max_tokens: 1024
+          max_tokens: 4096
 
   # ── Ollama (local server) ──────────────────────────────────────────────────
   ollama:

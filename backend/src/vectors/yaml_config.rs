@@ -122,7 +122,7 @@ pub struct LlmTuning {
     pub repeat_penalty: f32,
     #[serde(default = "default_2048_usize")]
     pub default_context_size: usize,
-    #[serde(default = "default_256_usize")]
+    #[serde(default = "default_2048_usize")]
     pub chat_max_tokens: usize,
     #[serde(default = "default_300_u64")]
     pub idle_timeout_secs: u64,
@@ -148,7 +148,7 @@ impl Default for LlmTuning {
             top_p: 0.9,
             repeat_penalty: 1.1,
             default_context_size: 2048,
-            chat_max_tokens: 256,
+            chat_max_tokens: 2048,
             idle_timeout_secs: 300,
             low_ram_idle_timeout_secs: 120,
             low_ram_threshold_gb: 8,
@@ -812,9 +812,6 @@ fn default_120_usize() -> usize {
 }
 fn default_200_usize() -> usize {
     200
-}
-fn default_256_usize() -> usize {
-    256
 }
 fn default_500_usize() -> usize {
     500
