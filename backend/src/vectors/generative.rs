@@ -147,6 +147,7 @@ impl RuleBasedClassifier {
     /// Legacy entry point that uses default `ClassificationConfig`.
     ///
     /// Prefer `classify_by_rules_with_config` when config is available.
+    #[allow(dead_code)]
     pub fn classify_by_rules(text: &str, from_addr: &str) -> Option<String> {
         Self::classify_by_rules_with_config(text, from_addr, &ClassificationConfig::default())
     }
@@ -183,11 +184,13 @@ pub struct OllamaGenerativeModel {
 }
 
 impl OllamaGenerativeModel {
+    #[allow(dead_code)]
     pub fn new(config: &OllamaGenerativeConfig) -> Self {
         Self::with_params(config, GenerationParams::default())
     }
 
     /// Create a new Ollama model with resolved generation parameters.
+    #[allow(dead_code)]
     pub fn with_params(config: &OllamaGenerativeConfig, params: GenerationParams) -> Self {
         Self::with_params_and_prompts(config, params, PromptsConfig::default())
     }
@@ -352,11 +355,13 @@ impl CloudGenerativeModel {
     ///
     /// Reads the API key from the environment variable named in `config.api_key_env`.
     /// For Gemini, reads from `config.gemini.api_key_env` instead.
+    #[allow(dead_code)]
     pub fn new(config: &CloudGenerativeConfig) -> Result<Self, VectorError> {
         Self::with_params(config, GenerationParams::default())
     }
 
     /// Create a new cloud generative model with resolved generation parameters.
+    #[allow(dead_code)]
     pub fn with_params(
         config: &CloudGenerativeConfig,
         params: GenerationParams,
@@ -660,6 +665,7 @@ impl OpenRouterGenerativeModel {
     ///
     /// Reads the API key from `OPENROUTER_API_KEY` env var (or the name specified
     /// in `api_key_env`). The `base_url` defaults to `https://openrouter.ai/api/v1`.
+    #[allow(dead_code)]
     pub fn new(
         api_key_env: &str,
         model: &str,
@@ -670,6 +676,7 @@ impl OpenRouterGenerativeModel {
     }
 
     /// Create a new OpenRouter generative model with resolved generation parameters.
+    #[allow(dead_code)]
     pub fn with_params(
         api_key_env: &str,
         model: &str,

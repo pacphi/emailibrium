@@ -1032,28 +1032,6 @@ impl IngestionPipelineHandle {
             .collect())
     }
 
-    async fn update_embedding_status(
-        &self,
-        email_id: &str,
-        vector_id: &str,
-        model: &str,
-    ) -> Result<(), VectorError> {
-        let now = Utc::now().to_rfc3339();
-        sqlx::query(
-            r#"UPDATE emails
-               SET embedding_status = 'embedded', embedded_at = ?, vector_id = ?, embedding_model = ?
-               WHERE id = ?"#,
-        )
-        .bind(&now)
-        .bind(vector_id)
-        .bind(model)
-        .bind(email_id)
-        .execute(&self.db.pool)
-        .await
-        .map_err(VectorError::DatabaseError)?;
-        Ok(())
-    }
-
     async fn update_category(
         &self,
         email_id: &str,
@@ -1085,16 +1063,6 @@ impl IngestionPipelineHandle {
         if let Some(ref mut job) = state.current_job {
             job.phase = phase;
         }
-    }
-
-    async fn is_paused(&self) -> bool {
-        self.state.read().await.paused
-    }
-
-    async fn wait_for_resume(&self) {
-        info!("Ingestion paused, waiting for resume signal");
-        self.resume_notify.notified().await;
-        info!("Ingestion resumed");
     }
 
     async fn mark_completed(&self) {
