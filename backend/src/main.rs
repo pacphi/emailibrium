@@ -399,6 +399,65 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
+    // ── Trash/spam retention auto-purge task ────────────────────────────
+    // Periodically hard-deletes emails that have been in trash or spam
+    // longer than the configured retention period (default: 30 days).
+    {
+        let db = state.db.clone();
+        let trash_days = yaml_config.app.email.trash_retention_days;
+        let spam_days = yaml_config.app.email.spam_retention_days;
+        tokio::spawn(async move {
+            // Run once per hour.
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
+            loop {
+                interval.tick().await;
+
+                // Purge expired trash.
+                if trash_days > 0 {
+                    let sql = format!(
+                        "DELETE FROM emails WHERE is_trash = 1 AND deleted_at < datetime('now', '-{} days')",
+                        trash_days
+                    );
+                    match sqlx::query(&sql).execute(&db.pool).await {
+                        Ok(result) if result.rows_affected() > 0 => {
+                            tracing::info!(
+                                purged = result.rows_affected(),
+                                retention_days = trash_days,
+                                "Auto-purged expired trash emails"
+                            );
+                        }
+                        Err(e) => tracing::warn!("Trash auto-purge failed: {e}"),
+                        _ => {}
+                    }
+                }
+
+                // Purge expired spam.
+                if spam_days > 0 {
+                    let sql = format!(
+                        "DELETE FROM emails WHERE is_spam = 1 AND deleted_at < datetime('now', '-{} days')",
+                        spam_days
+                    );
+                    match sqlx::query(&sql).execute(&db.pool).await {
+                        Ok(result) if result.rows_affected() > 0 => {
+                            tracing::info!(
+                                purged = result.rows_affected(),
+                                retention_days = spam_days,
+                                "Auto-purged expired spam emails"
+                            );
+                        }
+                        Err(e) => tracing::warn!("Spam auto-purge failed: {e}"),
+                        _ => {}
+                    }
+                }
+            }
+        });
+        tracing::info!(
+            trash_retention_days = trash_days,
+            spam_retention_days = spam_days,
+            "Trash/spam auto-purge task started (hourly check)"
+        );
+    }
+
     // ── CORS middleware (audit item #6) ────────────────────────────────
     let origins: Vec<HeaderValue> = config
         .security

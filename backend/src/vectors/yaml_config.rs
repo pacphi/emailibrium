@@ -507,6 +507,41 @@ pub struct AppConfig {
     pub security: AppSecurityConfig,
     #[serde(default)]
     pub hardware: HardwareConfig,
+    #[serde(default)]
+    pub email: EmailConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EmailConfig {
+    #[serde(default = "default_30_u32")]
+    pub trash_retention_days: u32,
+    #[serde(default = "default_30_u32")]
+    pub spam_retention_days: u32,
+    #[serde(default = "default_true")]
+    pub skip_trash_embedding: bool,
+    #[serde(default = "default_true")]
+    pub skip_spam_embedding: bool,
+    #[serde(default = "default_inbox_str")]
+    pub default_folder_filter: String,
+}
+
+fn default_30_u32() -> u32 {
+    30
+}
+fn default_inbox_str() -> String {
+    "INBOX".to_string()
+}
+
+impl Default for EmailConfig {
+    fn default() -> Self {
+        Self {
+            trash_retention_days: 30,
+            spam_retention_days: 30,
+            skip_trash_embedding: true,
+            skip_spam_embedding: true,
+            default_folder_filter: "INBOX".to_string(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
