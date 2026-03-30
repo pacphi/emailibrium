@@ -157,7 +157,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Initialize vector service (pass Redis for L2 embedding cache)
     let vector_service =
-        Arc::new(vectors::VectorService::new(config.clone(), db.clone(), redis.clone()).await?);
+        Arc::new(vectors::VectorService::new(config.clone(), db.clone(), redis.clone(), Some(&yaml_config)).await?);
 
     // ── Log AI configuration status ────────────────────────────────────
     tracing::info!(
@@ -309,7 +309,7 @@ async fn main() -> anyhow::Result<()> {
             Ok(synced)
         })
     });
-    let poll_handle = email::poll_scheduler::start(oauth_manager, sync_fn);
+    let poll_handle = email::poll_scheduler::start(oauth_manager, sync_fn, &yaml_config.app.sync);
     let state = AppState {
         poll_scheduler: Some(poll_handle),
         ..state
@@ -449,17 +449,21 @@ fn validate_provider_catalog(yaml_config: &vectors::yaml_config::YamlConfig) {
                 );
             }
             "ollama" => {
+                // Use the catalog base_url, falling back to app.yaml provider config.
+                let app_ollama_url = &yaml_config.app.providers.ollama.base_url;
                 let base_url = provider
                     .base_url
                     .as_deref()
-                    .unwrap_or("http://localhost:11434");
+                    .unwrap_or(app_ollama_url.as_str());
                 tracing::info!("Provider ollama: {total} models configured, base_url={base_url}");
                 // Non-blocking ping — spawn a task so it doesn't delay startup.
+                // Use the configured Ollama fetch timeout from app.yaml network settings.
                 let url = format!("{base_url}/api/tags");
+                let timeout_ms = yaml_config.app.network.ollama_fetch_timeout_ms;
                 tokio::spawn(async move {
                     match reqwest::Client::new()
                         .get(&url)
-                        .timeout(std::time::Duration::from_secs(3))
+                        .timeout(std::time::Duration::from_millis(timeout_ms))
                         .send()
                         .await
                     {

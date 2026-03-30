@@ -16,6 +16,7 @@ use tracing::{debug, info, warn};
 
 use super::oauth::OAuthManager;
 use super::types::AccountStatus;
+use crate::vectors::yaml_config::SyncConfig;
 
 // ---------------------------------------------------------------------------
 // Per-account tracking state
@@ -116,13 +117,38 @@ impl PollSchedulerHandle {
 }
 
 // ---------------------------------------------------------------------------
-// Constants
+// Constants (fallback defaults when no config is provided)
 // ---------------------------------------------------------------------------
 
 const MIN_POLL_INTERVAL_SECS: u64 = 60;
 const MAX_BACKOFF_SECS: u64 = 600;
 const DEFAULT_POLL_INTERVAL_SECS: u64 = 300;
 const TICK_INTERVAL_SECS: u64 = 15;
+
+/// Resolved configuration values for the poll scheduler, derived from
+/// `SyncConfig` (app.yaml) with fallback to compile-time constants.
+#[derive(Debug, Clone)]
+struct PollConfig {
+    tick_interval_secs: u64,
+    default_poll_interval_secs: u64,
+}
+
+impl PollConfig {
+    fn from_sync_config(sync: &SyncConfig) -> Self {
+        Self {
+            tick_interval_secs: if sync.poll_interval_secs > 0 {
+                sync.poll_interval_secs
+            } else {
+                TICK_INTERVAL_SECS
+            },
+            default_poll_interval_secs: if sync.default_sync_frequency_minutes > 0 {
+                sync.default_sync_frequency_minutes * 60
+            } else {
+                DEFAULT_POLL_INTERVAL_SECS
+            },
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Sync callback type
@@ -141,13 +167,25 @@ pub type SyncAccountFn =
 // ---------------------------------------------------------------------------
 
 /// Start the background poll scheduler. Returns a handle for status/control.
-pub fn start(oauth_manager: Arc<OAuthManager>, sync_fn: SyncAccountFn) -> PollSchedulerHandle {
+///
+/// Reads `poll_interval_secs` and `default_sync_frequency_minutes` from
+/// the YAML `SyncConfig` so that the tick interval and default per-account
+/// poll frequency are configurable via `config/app.yaml`.
+pub fn start(
+    oauth_manager: Arc<OAuthManager>,
+    sync_fn: SyncAccountFn,
+    sync_config: &SyncConfig,
+) -> PollSchedulerHandle {
     let handle = PollSchedulerHandle::new();
     let handle_clone = handle.clone();
+    let poll_cfg = PollConfig::from_sync_config(sync_config);
 
     tokio::spawn(async move {
-        info!("Background email poll scheduler started (tick every {TICK_INTERVAL_SECS}s)");
-        poll_loop(oauth_manager, sync_fn, handle_clone).await;
+        info!(
+            "Background email poll scheduler started (tick every {}s, default poll interval {}s)",
+            poll_cfg.tick_interval_secs, poll_cfg.default_poll_interval_secs
+        );
+        poll_loop(oauth_manager, sync_fn, handle_clone, &poll_cfg).await;
     });
 
     handle
@@ -157,8 +195,9 @@ async fn poll_loop(
     oauth_manager: Arc<OAuthManager>,
     sync_fn: SyncAccountFn,
     handle: PollSchedulerHandle,
+    poll_cfg: &PollConfig,
 ) {
-    let mut tick = tokio::time::interval(Duration::from_secs(TICK_INTERVAL_SECS));
+    let mut tick = tokio::time::interval(Duration::from_secs(poll_cfg.tick_interval_secs));
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
     loop {
@@ -186,7 +225,7 @@ async fn poll_loop(
             let configured_secs = if account.sync_frequency > 0 {
                 account.sync_frequency as u64
             } else {
-                DEFAULT_POLL_INTERVAL_SECS
+                poll_cfg.default_poll_interval_secs
             };
             let poll_interval = configured_secs.max(MIN_POLL_INTERVAL_SECS);
 
@@ -486,6 +525,32 @@ mod tests {
         assert_eq!(MAX_BACKOFF_SECS, 600);
         assert_eq!(DEFAULT_POLL_INTERVAL_SECS, 300);
         assert_eq!(TICK_INTERVAL_SECS, 15);
+    }
+
+    // -- PollConfig from SyncConfig -----------------------------------------
+
+    #[test]
+    fn test_poll_config_from_sync_config_uses_yaml_values() {
+        let sync = SyncConfig {
+            poll_interval_secs: 20,
+            default_sync_frequency_minutes: 10,
+            ..SyncConfig::default()
+        };
+        let cfg = PollConfig::from_sync_config(&sync);
+        assert_eq!(cfg.tick_interval_secs, 20);
+        assert_eq!(cfg.default_poll_interval_secs, 600); // 10 * 60
+    }
+
+    #[test]
+    fn test_poll_config_from_sync_config_falls_back_on_zero() {
+        let sync = SyncConfig {
+            poll_interval_secs: 0,
+            default_sync_frequency_minutes: 0,
+            ..SyncConfig::default()
+        };
+        let cfg = PollConfig::from_sync_config(&sync);
+        assert_eq!(cfg.tick_interval_secs, TICK_INTERVAL_SECS);
+        assert_eq!(cfg.default_poll_interval_secs, DEFAULT_POLL_INTERVAL_SECS);
     }
 
     // -- Clone semantics for handle -----------------------------------------

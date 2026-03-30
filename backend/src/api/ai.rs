@@ -52,6 +52,7 @@ pub fn routes() -> Router<AppState> {
         .route("/config/prompts", get(config_prompts))
         .route("/config/classification", get(config_classification))
         .route("/config/tuning", get(config_tuning))
+        .route("/config/app", get(config_app))
 }
 
 // ---------------------------------------------------------------------------
@@ -332,7 +333,8 @@ async fn chat_message_sse(
 
     // RAG: derive context budget from model's context window.
     let ctx_window = state.vector_service.config.generative.builtin.context_size as usize;
-    let rag_budget = ctx_window.saturating_sub(656);
+    let overhead = state.yaml_config.tuning.rag.overhead_tokens;
+    let rag_budget = ctx_window.saturating_sub(overhead);
 
     let email_context = if let Some(ref rag) = state.rag_pipeline {
         match rag.retrieve_context(&req.message, Some(rag_budget)).await {
@@ -482,7 +484,8 @@ async fn model_catalog(
     // If YAML has builtin provider models, serve those.
     if let Some(builtin) = yaml.llm_catalog.providers.get("builtin") {
         if !builtin.models.is_empty() {
-            let sys = crate::vectors::model_catalog::get_system_info();
+            let os_overhead = yaml.app.hardware.os_overhead_mb as u64;
+            let sys = crate::vectors::model_catalog::get_system_info_with_overhead(os_overhead);
             let available = sys.available_for_model_mb;
             let hf_cache = dirs::home_dir()
                 .map(|h| h.join(".cache/huggingface/hub"))
@@ -557,7 +560,8 @@ struct EmbeddingCatalogEntry {
 async fn embedding_catalog(State(state): State<AppState>) -> Json<Vec<EmbeddingCatalogEntry>> {
     let catalog = &state.yaml_config.embedding_catalog;
 
-    let sys = crate::vectors::model_catalog::get_system_info();
+    let os_overhead = state.yaml_config.app.hardware.os_overhead_mb as u64;
+    let sys = crate::vectors::model_catalog::get_system_info_with_overhead(os_overhead);
     let available_mb = sys.available_for_model_mb;
 
     let mut entries = Vec::new();
@@ -588,8 +592,11 @@ async fn embedding_catalog(State(state): State<AppState>) -> Json<Vec<EmbeddingC
 }
 
 /// GET /api/v1/ai/system-info — system hardware info for model selection.
-async fn system_info() -> Json<crate::vectors::model_catalog::SystemInfo> {
-    Json(crate::vectors::model_catalog::get_system_info())
+async fn system_info(
+    State(state): State<AppState>,
+) -> Json<crate::vectors::model_catalog::SystemInfo> {
+    let os_overhead = state.yaml_config.app.hardware.os_overhead_mb as u64;
+    Json(crate::vectors::model_catalog::get_system_info_with_overhead(os_overhead))
 }
 
 // ---------------------------------------------------------------------------
@@ -657,7 +664,11 @@ async fn switch_model(
     if is_cached {
         // Model is cached — activate immediately.
         tracing::info!(model_id = %req.model_id, "Switching to cached model");
-        let model = BuiltInGenerativeModel::new(&config).map_err(|e| {
+        let model = BuiltInGenerativeModel::with_prompts(
+            &config,
+            state.yaml_config.prompts.clone(),
+        )
+        .map_err(|e| {
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!("Model init failed: {e}"),
@@ -692,8 +703,9 @@ async fn switch_model(
 
     tracing::info!(model_id = %model_id, "Starting background model download");
     let router = state.vector_service.generative_router.clone();
+    let prompts_for_spawn = state.yaml_config.prompts.clone();
     tokio::spawn(async move {
-        match BuiltInGenerativeModel::new(&config) {
+        match BuiltInGenerativeModel::with_prompts(&config, prompts_for_spawn) {
             Ok(model) => {
                 router
                     .register(ProviderType::BuiltIn, std::sync::Arc::new(model), 1)
@@ -805,4 +817,16 @@ async fn config_tuning(
     State(state): State<AppState>,
 ) -> Json<crate::vectors::yaml_config::TuningConfig> {
     Json(state.yaml_config.tuning.clone())
+}
+
+/// GET /api/v1/ai/config/app — return application settings from YAML config.
+///
+/// Exposes sync, cache, network, defaults, hardware, security, and paths
+/// configuration to the frontend so it can read configurable values
+/// (e.g. polling intervals, stale times, theme defaults) instead of
+/// hardcoding them.
+async fn config_app(
+    State(state): State<AppState>,
+) -> Json<crate::vectors::yaml_config::AppConfig> {
+    Json(state.yaml_config.app.clone())
 }

@@ -19,6 +19,7 @@ use super::embedding::EmbeddingPipeline;
 use super::error::VectorError;
 use super::store::VectorStoreBackend;
 use super::types::{EmbeddingStatus, VectorCollection, VectorDocument, VectorId};
+use super::yaml_config::ClassificationConfig;
 
 /// Row tuple for ingestion checkpoint queries.
 type CheckpointRow = (String, String, String, i64, i64, i64, Option<String>);
@@ -203,9 +204,13 @@ pub struct IngestionPipeline {
     db: Arc<Database>,
     generative: Option<Arc<dyn crate::vectors::generative::GenerativeModel>>,
     cluster_engine: Option<Arc<crate::vectors::clustering::ClusterEngine>>,
+    classification_config: ClassificationConfig,
     progress_tx: broadcast::Sender<IngestionProgress>,
     state: Arc<RwLock<IngestionState>>,
     resume_notify: Arc<Notify>,
+    /// Tuning parameters from `config/tuning.yaml`.
+    ingestion_tuning: super::yaml_config::IngestionTuning,
+    error_recovery_tuning: super::yaml_config::ErrorRecoveryTuning,
 }
 
 impl IngestionPipeline {
@@ -215,6 +220,8 @@ impl IngestionPipeline {
         store: Arc<dyn VectorStoreBackend>,
         categorizer: Arc<VectorCategorizer>,
         db: Arc<Database>,
+        ingestion_tuning: super::yaml_config::IngestionTuning,
+        error_recovery_tuning: super::yaml_config::ErrorRecoveryTuning,
     ) -> Self {
         let (progress_tx, _) = broadcast::channel(128);
         Self {
@@ -224,12 +231,15 @@ impl IngestionPipeline {
             db,
             generative: None,
             cluster_engine: None,
+            classification_config: ClassificationConfig::default(),
             progress_tx,
             state: Arc::new(RwLock::new(IngestionState {
                 current_job: None,
                 paused: false,
             })),
             resume_notify: Arc::new(Notify::new()),
+            ingestion_tuning,
+            error_recovery_tuning,
         }
     }
 
@@ -239,6 +249,11 @@ impl IngestionPipeline {
         gen: Option<Arc<dyn crate::vectors::generative::GenerativeModel>>,
     ) {
         self.generative = gen;
+    }
+
+    /// Set the classification config for rule-based and LLM classification.
+    pub fn set_classification_config(&mut self, config: ClassificationConfig) {
+        self.classification_config = config;
     }
 
     /// Inject the cluster engine for the clustering phase of ingestion.
@@ -291,9 +306,12 @@ impl IngestionPipeline {
             db: self.db.clone(),
             generative: self.generative.clone(),
             cluster_engine: self.cluster_engine.clone(),
+            classification_config: self.classification_config.clone(),
             progress_tx: self.progress_tx.clone(),
             state: self.state.clone(),
             resume_notify: self.resume_notify.clone(),
+            ingestion_tuning: self.ingestion_tuning.clone(),
+            error_recovery_tuning: self.error_recovery_tuning.clone(),
         };
 
         let jid = job_id.clone();
@@ -441,9 +459,12 @@ impl IngestionPipeline {
             db: self.db.clone(),
             generative: self.generative.clone(),
             cluster_engine: self.cluster_engine.clone(),
+            classification_config: self.classification_config.clone(),
             progress_tx: self.progress_tx.clone(),
             state: self.state.clone(),
             resume_notify: self.resume_notify.clone(),
+            ingestion_tuning: self.ingestion_tuning.clone(),
+            error_recovery_tuning: self.error_recovery_tuning.clone(),
         };
 
         let jid = batch_id.clone();
@@ -500,9 +521,12 @@ struct IngestionPipelineHandle {
     db: Arc<Database>,
     generative: Option<Arc<dyn crate::vectors::generative::GenerativeModel>>,
     cluster_engine: Option<Arc<crate::vectors::clustering::ClusterEngine>>,
+    classification_config: ClassificationConfig,
     progress_tx: broadcast::Sender<IngestionProgress>,
     state: Arc<RwLock<IngestionState>>,
     resume_notify: Arc<Notify>,
+    ingestion_tuning: super::yaml_config::IngestionTuning,
+    error_recovery_tuning: super::yaml_config::ErrorRecoveryTuning,
 }
 
 impl IngestionPipelineHandle {
@@ -623,7 +647,7 @@ impl IngestionPipelineHandle {
         self.update_phase(IngestionPhase::Embedding).await;
         self.broadcast_progress(&job_id).await;
 
-        let batch_size = 64;
+        let batch_size = self.ingestion_tuning.embedding_batch_size;
         let start_time = std::time::Instant::now();
         let mut last_processed_id: Option<String> = None;
 
@@ -650,7 +674,20 @@ impl IngestionPipelineHandle {
                 })
                 .collect();
 
-            match self.embedding.embed_batch(&texts).await {
+            // Retry embedding with error_recovery tuning parameters.
+            let max_retries = self.error_recovery_tuning.max_retries;
+            let retry_delay = std::time::Duration::from_millis(self.error_recovery_tuning.retry_delay_ms);
+            let mut embed_result = self.embedding.embed_batch(&texts).await;
+            for attempt in 1..=max_retries {
+                if embed_result.is_ok() {
+                    break;
+                }
+                warn!(attempt, max_retries, "Embedding batch failed, retrying after delay");
+                tokio::time::sleep(retry_delay).await;
+                embed_result = self.embedding.embed_batch(&texts).await;
+            }
+
+            match embed_result {
                 Ok(vectors) => {
                     let mut docs = Vec::with_capacity(vectors.len());
                     for (i, vector) in vectors.into_iter().enumerate() {
@@ -773,7 +810,12 @@ impl IngestionPipelineHandle {
             let gen_ref = self.generative.as_deref();
             match self
                 .categorizer
-                .categorize_with_fallback(&text, &email.from_addr, gen_ref)
+                .categorize_with_fallback_config(
+                    &text,
+                    &email.from_addr,
+                    gen_ref,
+                    &self.classification_config,
+                )
                 .await
             {
                 Ok(result) => {
@@ -808,7 +850,7 @@ impl IngestionPipelineHandle {
             let state = self.state.read().await;
             state.current_job.as_ref().map(|j| j.embedded).unwrap_or(0)
         };
-        if embedded_count >= 50 {
+        if embedded_count >= self.ingestion_tuning.min_cluster_emails as u64 {
             if let Some(ref engine) = self.cluster_engine {
                 match engine.full_recluster().await {
                     Ok(report) => {
@@ -828,7 +870,7 @@ impl IngestionPipelineHandle {
                 debug!(job_id = %job_id, "Clustering phase: skipped (no cluster engine)");
             }
         } else {
-            debug!(job_id = %job_id, embedded = embedded_count, "Clustering phase: skipped (< 50 embedded emails)");
+            debug!(job_id = %job_id, embedded = embedded_count, min = self.ingestion_tuning.min_cluster_emails, "Clustering phase: skipped (below min_cluster_emails threshold)");
         }
 
         // Phase 5: Analyzing
@@ -1081,7 +1123,14 @@ mod tests {
             embedding.clone(),
             0.0, // low threshold so everything categorizes
         ));
-        let pipeline = IngestionPipeline::new(embedding.clone(), store.clone(), categorizer, db);
+        let pipeline = IngestionPipeline::new(
+            embedding.clone(),
+            store.clone(),
+            categorizer,
+            db,
+            crate::vectors::yaml_config::IngestionTuning::default(),
+            crate::vectors::yaml_config::ErrorRecoveryTuning::default(),
+        );
         (pipeline, store, embedding)
     }
 

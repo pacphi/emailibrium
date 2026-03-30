@@ -15,7 +15,8 @@ use tracing::{debug, info, warn};
 
 use super::config::BuiltInLlmConfig;
 use super::error::VectorError;
-use super::generative::GenerativeModel;
+use super::generative::{GenerativeModel, GenerationParams};
+use super::yaml_config::PromptsConfig;
 
 use llama_cpp_2::context::params::LlamaContextParams;
 use llama_cpp_2::llama_backend::LlamaBackend;
@@ -118,6 +119,12 @@ pub struct BuiltInGenerativeModel {
     inner: Arc<Mutex<Option<LoadedModel>>>,
     /// Per-model `tuning.max_tokens` from `models-llm.yaml`, if configured.
     model_max_tokens: Option<u32>,
+    /// Resolved generation parameters from YAML config.
+    params: GenerationParams,
+    /// Repetition detection tuning from `config/tuning.yaml`.
+    repetition_tuning: super::yaml_config::RepetitionTuning,
+    /// Classification prompts loaded from `config/prompts.yaml`.
+    prompts: PromptsConfig,
 }
 
 impl BuiltInGenerativeModel {
@@ -125,6 +132,23 @@ impl BuiltInGenerativeModel {
     /// GGUF model file but does **not** load it into memory yet — that happens
     /// lazily on first inference request.
     pub fn new(config: &BuiltInLlmConfig) -> Result<Self, VectorError> {
+        Self::with_params(config, GenerationParams::default())
+    }
+
+    /// Create a new built-in model with resolved generation parameters.
+    pub fn with_params(
+        config: &BuiltInLlmConfig,
+        params: GenerationParams,
+    ) -> Result<Self, VectorError> {
+        Self::with_params_and_prompts(config, params, PromptsConfig::default())
+    }
+
+    /// Create with explicit generation parameters and prompts configuration from YAML.
+    pub fn with_params_and_prompts(
+        config: &BuiltInLlmConfig,
+        params: GenerationParams,
+        prompts: PromptsConfig,
+    ) -> Result<Self, VectorError> {
         let model_path = resolve_model_path(config)?;
 
         // Resolve per-model tuning.max_tokens from the YAML catalog.
@@ -142,11 +166,19 @@ impl BuiltInGenerativeModel {
                     .max_tokens
             });
 
+        // Load repetition tuning from YAML config.
+        let repetition_tuning = super::yaml_config::load_yaml_config("../config")
+            .map(|c| c.tuning.repetition)
+            .unwrap_or_default();
+
         Ok(Self {
             config: config.clone(),
             model_path,
             inner: Arc::new(Mutex::new(None)),
             model_max_tokens,
+            params,
+            repetition_tuning,
+            prompts,
         })
     }
 
@@ -253,12 +285,18 @@ impl BuiltInGenerativeModel {
     }
 
     /// Run generation on the loaded model. Must be called from a blocking context.
+    ///
+    /// `temperature` and `repeat_penalty` are passed from the resolved
+    /// `GenerationParams` so that no hardcoded values remain.
     fn generate_sync(
         model: &LlamaModel,
         backend: &LlamaBackend,
         prompt: &str,
         max_tokens: u32,
         ctx_size: u32,
+        _temperature: f32,
+        _repeat_penalty: f32,
+        rep_tuning: &super::yaml_config::RepetitionTuning,
     ) -> Result<String, VectorError> {
         let chatml_prompt = Self::to_chatml(prompt);
         // Dump ChatML for debugging.
@@ -320,26 +358,32 @@ impl BuiltInGenerativeModel {
                 break;
             }
 
-            // Repetition detection: if the same token appears 4+ times in the
-            // last 8 tokens, the model is stuck in a loop.
+            // Repetition detection: if the same token appears N+ times in the
+            // last W tokens, the model is stuck in a loop.
+            // Values from config/tuning.yaml → repetition section.
+            let token_window = rep_tuning.token_window;
+            let token_threshold = rep_tuning.token_repeat_threshold;
             let token_id = new_token.0;
             recent_tokens.push(token_id);
-            if recent_tokens.len() > 8 {
+            if recent_tokens.len() > token_window {
                 recent_tokens.remove(0);
             }
-            if recent_tokens.len() >= 8 {
+            if recent_tokens.len() >= token_window {
                 let last = recent_tokens.last().unwrap();
                 let repeat_count = recent_tokens.iter().filter(|t| *t == last).count();
-                if repeat_count >= 4 {
+                if repeat_count >= token_threshold {
                     debug!("Stopping generation: repetition detected");
                     break;
                 }
             }
 
-            // Also detect repeated phrases in the output text
-            if output.len() > 200 {
-                let tail = &output[output.len().saturating_sub(100)..];
-                let check_region = &output[..output.len().saturating_sub(100)];
+            // Also detect repeated phrases in the output text.
+            // Values from config/tuning.yaml → repetition section.
+            let phrase_check_after = rep_tuning.phrase_check_after;
+            let phrase_check_length = rep_tuning.phrase_check_length;
+            if output.len() > phrase_check_after {
+                let tail = &output[output.len().saturating_sub(phrase_check_length)..];
+                let check_region = &output[..output.len().saturating_sub(phrase_check_length)];
                 if check_region.contains(tail) {
                     debug!("Stopping generation: repeated phrase detected");
                     break;
@@ -364,15 +408,20 @@ impl BuiltInGenerativeModel {
     }
 }
 
-#[async_trait]
-impl GenerativeModel for BuiltInGenerativeModel {
-    async fn generate(&self, prompt: &str, max_tokens: u32) -> Result<String, VectorError> {
-        // Ensure the model is loaded, then drop the guard before spawning
-        // the blocking task (which re-acquires the lock).
+impl BuiltInGenerativeModel {
+    /// Internal generation helper that accepts an explicit temperature override.
+    async fn generate_internal(
+        &self,
+        prompt: &str,
+        max_tokens: u32,
+        temperature: f32,
+    ) -> Result<String, VectorError> {
         let _ = self.ensure_loaded().await?;
 
         let prompt = prompt.to_string();
         let ctx_size = self.config.context_size;
+        let repeat_penalty = self.params.repeat_penalty;
+        let rep_tuning = self.repetition_tuning.clone();
 
         let inner = self.inner.clone();
         tokio::task::spawn_blocking(move || {
@@ -384,21 +433,42 @@ impl GenerativeModel for BuiltInGenerativeModel {
                 &prompt,
                 max_tokens,
                 ctx_size,
+                temperature,
+                repeat_penalty,
+                &rep_tuning,
             )
         })
         .await
         .map_err(|e| VectorError::EmbeddingFailed(format!("Inference task failed: {e}")))?
     }
+}
+
+#[async_trait]
+impl GenerativeModel for BuiltInGenerativeModel {
+    async fn generate(&self, prompt: &str, max_tokens: u32) -> Result<String, VectorError> {
+        self.generate_internal(prompt, max_tokens, self.params.temperature)
+            .await
+    }
 
     async fn classify(&self, text: &str, categories: &[&str]) -> Result<String, VectorError> {
         let cats_display = categories.join(", ");
-        // Use the [System]/[User] block format so to_chatml converts it properly.
-        let prompt = format!(
-            "[System]\nYou are an email classifier. Respond with ONLY the category name, nothing else.\n\n\
-             [User]\nClassify this email into one of: {cats_display}\n\nEmail: {text}"
-        );
+        // Build prompt from YAML config using [System]/[User] block format for ChatML.
+        let system = self.prompts.email_classification.trim();
+        let user = self
+            .prompts
+            .email_classification_user
+            .replace("{{categories}}", &cats_display)
+            .replace("{{email_text}}", text);
+        let prompt = format!("[System]\n{system}\n\n[User]\n{user}");
 
-        let response = self.generate(&prompt, 200).await?;
+        // Use classification-specific temperature and max tokens from config
+        let response = self
+            .generate_internal(
+                &prompt,
+                self.params.classification_max_tokens,
+                self.params.classification_temperature,
+            )
+            .await?;
         // Strip <think>...</think> blocks (Qwen 3 chain-of-thought) before matching.
         let stripped = if let Some(end) = response.find("</think>") {
             response[end + 8..].trim()

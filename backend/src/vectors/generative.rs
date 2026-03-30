@@ -11,6 +11,60 @@ use tracing::{debug, warn};
 
 use super::config::{CloudGenerativeConfig, OllamaGenerativeConfig};
 use super::error::VectorError;
+use super::yaml_config::{ClassificationConfig, LlmTuning, ModelTuning, PromptsConfig};
+
+// ---------------------------------------------------------------------------
+// Generation parameters (resolved from YAML config)
+// ---------------------------------------------------------------------------
+
+/// Resolved generation parameters for a model instance.
+///
+/// Built by merging per-model tuning (from `models-llm.yaml`) over global
+/// defaults (from `tuning.yaml`).  Every generative model stores one of these
+/// at construction time so that no hardcoded values remain in hot paths.
+#[derive(Debug, Clone)]
+pub struct GenerationParams {
+    /// Temperature for free-form / chat generation.
+    pub temperature: f32,
+    /// Temperature for classification calls (low for accuracy).
+    pub classification_temperature: f32,
+    /// Max tokens for classification output.
+    pub classification_max_tokens: u32,
+    /// Nucleus sampling threshold.
+    pub top_p: f32,
+    /// Repetition penalty (1.0 = none).
+    pub repeat_penalty: f32,
+}
+
+impl GenerationParams {
+    /// Resolve generation parameters by overlaying per-model tuning on top of
+    /// global `LlmTuning` defaults.
+    pub fn resolve(global: &LlmTuning, per_model: Option<&ModelTuning>) -> Self {
+        let temperature = per_model
+            .and_then(|t| t.temperature)
+            .unwrap_or(global.default_temperature);
+        let top_p = per_model
+            .and_then(|t| t.top_p)
+            .unwrap_or(global.top_p);
+        let repeat_penalty = per_model
+            .and_then(|t| t.repeat_penalty)
+            .unwrap_or(global.repeat_penalty);
+
+        Self {
+            temperature,
+            classification_temperature: global.classification_temperature,
+            classification_max_tokens: global.classification_max_tokens as u32,
+            top_p,
+            repeat_penalty,
+        }
+    }
+}
+
+impl Default for GenerationParams {
+    fn default() -> Self {
+        Self::resolve(&LlmTuning::default(), None)
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Trait
@@ -44,57 +98,32 @@ pub trait GenerativeModel: Send + Sync {
 // ---------------------------------------------------------------------------
 
 /// Rule-based classification fallback for Tier 0 (no generative model).
-/// Uses sender domain patterns and keyword heuristics.
+/// Uses domain and keyword rules loaded from `config/classification.yaml`.
 pub struct RuleBasedClassifier;
 
 impl RuleBasedClassifier {
-    /// Attempt to classify an email using domain and keyword heuristics.
+    /// Attempt to classify an email using config-driven domain and keyword rules.
     ///
+    /// Rules are read from `ClassificationConfig` (loaded from `config/classification.yaml`).
     /// Returns `None` when no rule matches.
-    pub fn classify_by_rules(text: &str, from_addr: &str) -> Option<String> {
+    pub fn classify_by_rules_with_config(
+        text: &str,
+        from_addr: &str,
+        config: &ClassificationConfig,
+    ) -> Option<String> {
         let domain = from_addr.split('@').next_back().unwrap_or("");
         let lower = text.to_lowercase();
 
-        // --- Domain-based rules ---
-        if domain.contains("github.com") || domain.contains("gitlab.com") {
-            return Some("Notification".into());
-        }
-        if domain.contains("linkedin.com") || domain.contains("facebook.com") {
-            return Some("Social".into());
-        }
-        if domain.contains("amazon.com") || domain.contains("ebay.com") {
-            return Some("Shopping".into());
-        }
-        if domain.contains("paypal.com") || domain.contains("stripe.com") {
-            return Some("Finance".into());
-        }
-        if domain.contains("substack.com") || domain.contains("medium.com") {
-            return Some("Newsletter".into());
-        }
-        if domain.contains("slack.com") || domain.contains("discord.com") {
-            return Some("Notification".into());
-        }
-        if domain.contains("twitter.com")
-            || domain.contains("x.com")
-            || domain.contains("instagram.com")
-            || domain.contains("tiktok.com")
-        {
-            return Some("Social".into());
-        }
-        if domain.contains("shopify.com") {
-            return Some("Shopping".into());
-        }
-        if domain.contains("mint.com") || domain.contains("venmo.com") {
-            return Some("Finance".into());
-        }
-        if domain.contains("mailchimp.com")
-            || domain.contains("sendgrid.net")
-            || domain.contains("constantcontact.com")
-        {
-            return Some("Marketing".into());
+        // --- Config-driven domain rules ---
+        for rule in &config.domain_rules {
+            for rule_domain in &rule.domains {
+                if domain.contains(rule_domain.as_str()) {
+                    return Some(rule.category.clone());
+                }
+            }
         }
 
-        // --- Sender prefix rules ---
+        // --- Sender prefix rules (built-in, not configurable) ---
         let local_part = from_addr.split('@').next().unwrap_or("");
         if local_part == "noreply" || local_part == "no-reply" {
             return Some("Notification".into());
@@ -103,53 +132,23 @@ impl RuleBasedClassifier {
             return Some("Newsletter".into());
         }
 
-        // --- Keyword-based rules ---
-        if lower.contains("invoice")
-            || lower.contains("receipt")
-            || lower.contains("payment")
-            || lower.contains("bank statement")
-        {
-            return Some("Finance".into());
-        }
-        if lower.contains("unsubscribe") || lower.contains("opt out") || lower.contains("opt-out") {
-            return Some("Marketing".into());
-        }
-        if lower.contains("meeting")
-            || lower.contains("calendar")
-            || lower.contains("schedule")
-            || lower.contains("standup")
-        {
-            return Some("Work".into());
-        }
-        if lower.contains("order shipped")
-            || lower.contains("delivery")
-            || lower.contains("tracking number")
-        {
-            return Some("Shopping".into());
-        }
-        if lower.contains("alert") || lower.contains("security notice") {
-            return Some("Alerts".into());
-        }
-        if lower.contains("promotion") || lower.contains("% off") || lower.contains("sale ends") {
-            return Some("Promotions".into());
-        }
-        if lower.contains("your order") || lower.contains("track your package") {
-            return Some("Shopping".into());
-        }
-        if lower.contains("security alert")
-            || lower.contains("unusual sign-in")
-            || lower.contains("verify your")
-        {
-            return Some("Alerts".into());
-        }
-        if lower.contains("weekly report") || lower.contains("monthly summary") {
-            return Some("Work".into());
-        }
-        if lower.contains("you're invited") || lower.contains("rsvp") {
-            return Some("Personal".into());
+        // --- Config-driven keyword rules ---
+        for rule in &config.keyword_rules {
+            for keyword in &rule.keywords {
+                if lower.contains(&keyword.to_lowercase()) {
+                    return Some(rule.category.clone());
+                }
+            }
         }
 
         None
+    }
+
+    /// Legacy entry point that uses default `ClassificationConfig`.
+    ///
+    /// Prefer `classify_by_rules_with_config` when config is available.
+    pub fn classify_by_rules(text: &str, from_addr: &str) -> Option<String> {
+        Self::classify_by_rules_with_config(text, from_addr, &ClassificationConfig::default())
     }
 
     /// Map Gmail built-in category labels to EmailCategory names.
@@ -177,15 +176,35 @@ pub struct OllamaGenerativeModel {
     base_url: String,
     classification_model: String,
     chat_model: String,
+    /// Resolved generation parameters from YAML config.
+    params: GenerationParams,
+    /// Classification prompts loaded from `config/prompts.yaml`.
+    prompts: PromptsConfig,
 }
 
 impl OllamaGenerativeModel {
     pub fn new(config: &OllamaGenerativeConfig) -> Self {
+        Self::with_params(config, GenerationParams::default())
+    }
+
+    /// Create a new Ollama model with resolved generation parameters.
+    pub fn with_params(config: &OllamaGenerativeConfig, params: GenerationParams) -> Self {
+        Self::with_params_and_prompts(config, params, PromptsConfig::default())
+    }
+
+    /// Create with explicit generation parameters and prompts configuration from YAML.
+    pub fn with_params_and_prompts(
+        config: &OllamaGenerativeConfig,
+        params: GenerationParams,
+        prompts: PromptsConfig,
+    ) -> Self {
         Self {
             client: reqwest::Client::new(),
             base_url: config.base_url.clone(),
             classification_model: config.classification_model.clone(),
             chat_model: config.chat_model.clone(),
+            params,
+            prompts,
         }
     }
 }
@@ -201,6 +220,9 @@ struct OllamaGenerateRequest<'a> {
 #[derive(Serialize)]
 struct OllamaOptions {
     num_predict: u32,
+    temperature: f32,
+    top_p: f32,
+    repeat_penalty: f32,
 }
 
 #[derive(Deserialize)]
@@ -208,9 +230,14 @@ struct OllamaGenerateResponse {
     response: String,
 }
 
-#[async_trait]
-impl GenerativeModel for OllamaGenerativeModel {
-    async fn generate(&self, prompt: &str, max_tokens: u32) -> Result<String, VectorError> {
+impl OllamaGenerativeModel {
+    /// Internal generation helper that accepts an explicit temperature override.
+    async fn generate_internal(
+        &self,
+        prompt: &str,
+        max_tokens: u32,
+        temperature: f32,
+    ) -> Result<String, VectorError> {
         let url = format!("{}/api/generate", self.base_url);
         let body = OllamaGenerateRequest {
             model: &self.chat_model,
@@ -218,6 +245,9 @@ impl GenerativeModel for OllamaGenerativeModel {
             stream: false,
             options: OllamaOptions {
                 num_predict: max_tokens,
+                temperature,
+                top_p: self.params.top_p,
+                repeat_penalty: self.params.repeat_penalty,
             },
         };
 
@@ -248,16 +278,34 @@ impl GenerativeModel for OllamaGenerativeModel {
 
         Ok(parsed.response)
     }
+}
+
+#[async_trait]
+impl GenerativeModel for OllamaGenerativeModel {
+    async fn generate(&self, prompt: &str, max_tokens: u32) -> Result<String, VectorError> {
+        self.generate_internal(prompt, max_tokens, self.params.temperature)
+            .await
+    }
 
     async fn classify(&self, text: &str, categories: &[&str]) -> Result<String, VectorError> {
         let cats = categories.join(", ");
-        let prompt = format!(
-            "Classify the following email into exactly one of these categories: [{cats}].\n\
-             Respond with only the category name, nothing else.\n\n\
-             Email:\n{text}"
-        );
+        // Build prompt from YAML config: system + user prompt with variable substitution.
+        let system = self.prompts.email_classification.trim();
+        let user = self
+            .prompts
+            .email_classification_user
+            .replace("{{categories}}", &cats)
+            .replace("{{email_text}}", text);
+        let prompt = format!("{system}\n\n{user}");
 
-        let response = self.generate(&prompt, 50).await?;
+        // Use classification-specific temperature and max tokens from config
+        let response = self
+            .generate_internal(
+                &prompt,
+                self.params.classification_max_tokens,
+                self.params.classification_temperature,
+            )
+            .await?;
         validate_classification(&response, categories, &cats)
     }
 
@@ -285,6 +333,10 @@ pub struct CloudGenerativeModel {
     base_url: String,
     /// Gemini-specific config for when provider == "gemini".
     gemini_config: Option<GeminiResolvedConfig>,
+    /// Resolved generation parameters from YAML config.
+    params: GenerationParams,
+    /// Classification prompts loaded from `config/prompts.yaml`.
+    prompts: PromptsConfig,
 }
 
 /// Resolved Gemini configuration (API key already read from env).
@@ -301,6 +353,23 @@ impl CloudGenerativeModel {
     /// Reads the API key from the environment variable named in `config.api_key_env`.
     /// For Gemini, reads from `config.gemini.api_key_env` instead.
     pub fn new(config: &CloudGenerativeConfig) -> Result<Self, VectorError> {
+        Self::with_params(config, GenerationParams::default())
+    }
+
+    /// Create a new cloud generative model with resolved generation parameters.
+    pub fn with_params(
+        config: &CloudGenerativeConfig,
+        params: GenerationParams,
+    ) -> Result<Self, VectorError> {
+        Self::with_params_and_prompts(config, params, PromptsConfig::default())
+    }
+
+    /// Create with explicit generation parameters and prompts configuration from YAML.
+    pub fn with_params_and_prompts(
+        config: &CloudGenerativeConfig,
+        params: GenerationParams,
+        prompts: PromptsConfig,
+    ) -> Result<Self, VectorError> {
         let (api_key, gemini_config) = if config.provider == "gemini" {
             let key = std::env::var(&config.gemini.api_key_env).map_err(|_| {
                 VectorError::ConfigError(format!(
@@ -331,6 +400,8 @@ impl CloudGenerativeModel {
             model: config.model.clone(),
             base_url: config.base_url.clone(),
             gemini_config,
+            params,
+            prompts,
         })
     }
 }
@@ -338,25 +409,28 @@ impl CloudGenerativeModel {
 #[async_trait]
 impl GenerativeModel for CloudGenerativeModel {
     async fn generate(&self, prompt: &str, max_tokens: u32) -> Result<String, VectorError> {
-        match self.provider.as_str() {
-            "openai" => self.generate_openai(prompt, max_tokens).await,
-            "anthropic" => self.generate_anthropic(prompt, max_tokens).await,
-            "gemini" => self.generate_gemini(prompt, max_tokens).await,
-            other => Err(VectorError::ConfigError(format!(
-                "Unknown cloud provider: {other}"
-            ))),
-        }
+        self.generate_internal(prompt, max_tokens, self.params.temperature)
+            .await
     }
 
     async fn classify(&self, text: &str, categories: &[&str]) -> Result<String, VectorError> {
         let cats = categories.join(", ");
-        let prompt = format!(
-            "Classify the following email into exactly one of these categories: [{cats}].\n\
-             Respond with only the category name, nothing else.\n\n\
-             Email:\n{text}"
-        );
+        let system = self.prompts.email_classification.trim();
+        let user = self
+            .prompts
+            .email_classification_user
+            .replace("{{categories}}", &cats)
+            .replace("{{email_text}}", text);
+        let prompt = format!("{system}\n\n{user}");
 
-        let response = self.generate(&prompt, 50).await?;
+        // Use classification-specific temperature and max tokens from config
+        let response = self
+            .generate_internal(
+                &prompt,
+                self.params.classification_max_tokens,
+                self.params.classification_temperature,
+            )
+            .await?;
         validate_classification(&response, categories, &cats)
     }
 
@@ -375,14 +449,37 @@ impl GenerativeModel for CloudGenerativeModel {
 }
 
 impl CloudGenerativeModel {
-    async fn generate_openai(&self, prompt: &str, max_tokens: u32) -> Result<String, VectorError> {
+    /// Internal dispatch that accepts an explicit temperature for the request.
+    async fn generate_internal(
+        &self,
+        prompt: &str,
+        max_tokens: u32,
+        temperature: f32,
+    ) -> Result<String, VectorError> {
+        match self.provider.as_str() {
+            "openai" => self.generate_openai(prompt, max_tokens, temperature).await,
+            "anthropic" => self.generate_anthropic(prompt, max_tokens, temperature).await,
+            "gemini" => self.generate_gemini(prompt, max_tokens, temperature).await,
+            other => Err(VectorError::ConfigError(format!(
+                "Unknown cloud provider: {other}"
+            ))),
+        }
+    }
+
+    async fn generate_openai(
+        &self,
+        prompt: &str,
+        max_tokens: u32,
+        temperature: f32,
+    ) -> Result<String, VectorError> {
         let url = format!("{}/v1/chat/completions", self.base_url);
 
         let body = serde_json::json!({
             "model": self.model,
             "messages": [{"role": "user", "content": prompt}],
             "max_tokens": max_tokens,
-            "temperature": 0.0,
+            "temperature": temperature,
+            "top_p": self.params.top_p,
         });
 
         debug!(model = %self.model, provider = "openai", "Cloud generate request");
@@ -424,6 +521,7 @@ impl CloudGenerativeModel {
         &self,
         prompt: &str,
         max_tokens: u32,
+        temperature: f32,
     ) -> Result<String, VectorError> {
         let url = format!("{}/v1/messages", self.base_url);
 
@@ -431,6 +529,8 @@ impl CloudGenerativeModel {
             "model": self.model,
             "max_tokens": max_tokens,
             "messages": [{"role": "user", "content": prompt}],
+            "temperature": temperature,
+            "top_p": self.params.top_p,
         });
 
         debug!(model = %self.model, provider = "anthropic", "Cloud generate request");
@@ -472,7 +572,12 @@ impl CloudGenerativeModel {
     ///
     /// Uses the `generateContent` endpoint with the model from `gemini_config`.
     /// Supports `gemini-2.0-flash`, `gemini-2.5-pro`, and other Gemini model IDs.
-    async fn generate_gemini(&self, prompt: &str, max_tokens: u32) -> Result<String, VectorError> {
+    async fn generate_gemini(
+        &self,
+        prompt: &str,
+        max_tokens: u32,
+        temperature: f32,
+    ) -> Result<String, VectorError> {
         let gc = self
             .gemini_config
             .as_ref()
@@ -487,7 +592,8 @@ impl CloudGenerativeModel {
             "contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {
                 "maxOutputTokens": max_tokens,
-                "temperature": 0.0,
+                "temperature": temperature,
+                "topP": self.params.top_p,
             }
         });
 
@@ -543,6 +649,10 @@ pub struct OpenRouterGenerativeModel {
     base_url: String,
     /// Extra headers required by OpenRouter (HTTP-Referer, X-Title).
     extra_headers: std::collections::HashMap<String, String>,
+    /// Resolved generation parameters from YAML config.
+    params: GenerationParams,
+    /// Classification prompts loaded from `config/prompts.yaml`.
+    prompts: PromptsConfig,
 }
 
 impl OpenRouterGenerativeModel {
@@ -555,6 +665,29 @@ impl OpenRouterGenerativeModel {
         model: &str,
         base_url: &str,
         extra_headers: std::collections::HashMap<String, String>,
+    ) -> Result<Self, VectorError> {
+        Self::with_params(api_key_env, model, base_url, extra_headers, GenerationParams::default())
+    }
+
+    /// Create a new OpenRouter generative model with resolved generation parameters.
+    pub fn with_params(
+        api_key_env: &str,
+        model: &str,
+        base_url: &str,
+        extra_headers: std::collections::HashMap<String, String>,
+        params: GenerationParams,
+    ) -> Result<Self, VectorError> {
+        Self::with_params_and_prompts(api_key_env, model, base_url, extra_headers, params, PromptsConfig::default())
+    }
+
+    /// Create with explicit generation parameters and prompts configuration from YAML.
+    pub fn with_params_and_prompts(
+        api_key_env: &str,
+        model: &str,
+        base_url: &str,
+        extra_headers: std::collections::HashMap<String, String>,
+        params: GenerationParams,
+        prompts: PromptsConfig,
     ) -> Result<Self, VectorError> {
         let env_name = if api_key_env.is_empty() {
             "OPENROUTER_API_KEY"
@@ -577,6 +710,8 @@ impl OpenRouterGenerativeModel {
             model: model.to_string(),
             base_url: resolved_base.to_string(),
             extra_headers,
+            params,
+            prompts,
         })
     }
 
@@ -585,6 +720,7 @@ impl OpenRouterGenerativeModel {
         &self,
         prompt: &str,
         max_tokens: u32,
+        temperature: f32,
     ) -> Result<String, VectorError> {
         let url = format!("{}/chat/completions", self.base_url);
 
@@ -592,7 +728,8 @@ impl OpenRouterGenerativeModel {
             "model": self.model,
             "messages": [{"role": "user", "content": prompt}],
             "max_tokens": max_tokens,
-            "temperature": 0.0,
+            "temperature": temperature,
+            "top_p": self.params.top_p,
         });
 
         debug!(model = %self.model, provider = "openrouter", "OpenRouter generate request");
@@ -636,18 +773,28 @@ impl OpenRouterGenerativeModel {
 #[async_trait]
 impl GenerativeModel for OpenRouterGenerativeModel {
     async fn generate(&self, prompt: &str, max_tokens: u32) -> Result<String, VectorError> {
-        self.generate_openai_compat(prompt, max_tokens).await
+        self.generate_openai_compat(prompt, max_tokens, self.params.temperature)
+            .await
     }
 
     async fn classify(&self, text: &str, categories: &[&str]) -> Result<String, VectorError> {
         let cats = categories.join(", ");
-        let prompt = format!(
-            "Classify the following email into exactly one of these categories: [{cats}].\n\
-             Respond with only the category name, nothing else.\n\n\
-             Email:\n{text}"
-        );
+        let system = self.prompts.email_classification.trim();
+        let user = self
+            .prompts
+            .email_classification_user
+            .replace("{{categories}}", &cats)
+            .replace("{{email_text}}", text);
+        let prompt = format!("{system}\n\n{user}");
 
-        let response = self.generate(&prompt, 50).await?;
+        // Use classification-specific temperature and max tokens from config
+        let response = self
+            .generate_openai_compat(
+                &prompt,
+                self.params.classification_max_tokens,
+                self.params.classification_temperature,
+            )
+            .await?;
         validate_classification(&response, categories, &cats)
     }
 

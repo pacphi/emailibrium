@@ -312,10 +312,134 @@ impl Default for ClassificationConfig {
     fn default() -> Self {
         Self {
             categories: default_categories(),
-            domain_rules: Vec::new(),
-            keyword_rules: Vec::new(),
+            domain_rules: default_domain_rules(),
+            keyword_rules: default_keyword_rules(),
         }
     }
+}
+
+fn default_domain_rules() -> Vec<DomainRule> {
+    vec![
+        DomainRule {
+            domains: vec![
+                "github.com".into(),
+                "gitlab.com".into(),
+                "bitbucket.org".into(),
+            ],
+            category: "Notification".into(),
+        },
+        DomainRule {
+            domains: vec![
+                "slack.com".into(),
+                "discord.com".into(),
+                "teams.microsoft.com".into(),
+            ],
+            category: "Notification".into(),
+        },
+        DomainRule {
+            domains: vec![
+                "linkedin.com".into(),
+                "facebook.com".into(),
+                "twitter.com".into(),
+                "instagram.com".into(),
+            ],
+            category: "Social".into(),
+        },
+        DomainRule {
+            domains: vec![
+                "paypal.com".into(),
+                "venmo.com".into(),
+                "stripe.com".into(),
+                "square.com".into(),
+            ],
+            category: "Finance".into(),
+        },
+        DomainRule {
+            domains: vec![
+                "amazon.com".into(),
+                "ebay.com".into(),
+                "shopify.com".into(),
+                "etsy.com".into(),
+            ],
+            category: "Shopping".into(),
+        },
+        DomainRule {
+            domains: vec![
+                "booking.com".into(),
+                "airbnb.com".into(),
+                "expedia.com".into(),
+                "kayak.com".into(),
+            ],
+            category: "Travel".into(),
+        },
+    ]
+}
+
+fn default_keyword_rules() -> Vec<KeywordRule> {
+    vec![
+        KeywordRule {
+            keywords: vec![
+                "invoice".into(),
+                "receipt".into(),
+                "payment".into(),
+                "billing".into(),
+                "statement".into(),
+            ],
+            category: "Finance".into(),
+        },
+        KeywordRule {
+            keywords: vec![
+                "sale".into(),
+                "discount".into(),
+                "offer".into(),
+                "promo".into(),
+                "coupon".into(),
+                "deal".into(),
+            ],
+            category: "Marketing".into(),
+        },
+        KeywordRule {
+            keywords: vec![
+                "meeting".into(),
+                "calendar".into(),
+                "schedule".into(),
+                "appointment".into(),
+            ],
+            category: "Work".into(),
+        },
+        KeywordRule {
+            keywords: vec![
+                "newsletter".into(),
+                "digest".into(),
+                "weekly update".into(),
+                "monthly roundup".into(),
+            ],
+            category: "Newsletter".into(),
+        },
+        KeywordRule {
+            keywords: vec![
+                "shipped".into(),
+                "delivery".into(),
+                "tracking".into(),
+                "order confirmed".into(),
+            ],
+            category: "Shopping".into(),
+        },
+        KeywordRule {
+            keywords: vec![
+                "flight".into(),
+                "hotel".into(),
+                "reservation".into(),
+                "itinerary".into(),
+                "boarding pass".into(),
+            ],
+            category: "Travel".into(),
+        },
+        KeywordRule {
+            keywords: vec!["unsubscribe".into()],
+            category: "Marketing".into(),
+        },
+    ]
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -409,6 +533,10 @@ pub struct NetworkConfig {
     pub model_catalog_fetch_timeout_ms: u64,
     #[serde(default = "default_300000_u64")]
     pub ingestion_start_timeout_ms: u64,
+    #[serde(default = "default_2000_u64")]
+    pub model_switch_poll_interval_ms: u64,
+    #[serde(default = "default_150_usize")]
+    pub model_switch_max_polls: usize,
 }
 
 impl Default for NetworkConfig {
@@ -417,6 +545,8 @@ impl Default for NetworkConfig {
             ollama_fetch_timeout_ms: 3000,
             model_catalog_fetch_timeout_ms: 3000,
             ingestion_start_timeout_ms: 300000,
+            model_switch_poll_interval_ms: 2000,
+            model_switch_max_polls: 150,
         }
     }
 }
@@ -810,6 +940,9 @@ fn default_100_usize() -> usize {
 fn default_120_usize() -> usize {
     120
 }
+fn default_150_usize() -> usize {
+    150
+}
 fn default_200_usize() -> usize {
     200
 }
@@ -846,6 +979,9 @@ fn default_300_u64() -> u64 {
 }
 fn default_1000_u64() -> u64 {
     1000
+}
+fn default_2000_u64() -> u64 {
+    2000
 }
 fn default_3000_u64() -> u64 {
     3000

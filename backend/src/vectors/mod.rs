@@ -53,9 +53,11 @@ use audit::CloudApiAuditLogger;
 use config::VectorConfig;
 use embedding::EmbeddingPipeline;
 use evaluation::EvaluationEngine;
+use generative::GenerationParams;
 use generative_router::GenerativeRouter;
 use inference_session::InferenceSessionManager;
 use store::VectorStoreBackend;
+use yaml_config::YamlConfig;
 
 /// Top-level vector service facade (DDD-001: EmbeddingAggregate + ClassificationAggregate).
 ///
@@ -92,10 +94,15 @@ impl VectorService {
     ///
     /// `redis` is optional -- when provided, the embedding pipeline uses it as
     /// an L2 cache to avoid re-computing embeddings across restarts.
+    ///
+    /// `yaml_config` provides global LLM tuning parameters and the model catalog
+    /// so that per-model and global generation settings are plumbed into every
+    /// generative model implementation (no hardcoded values).
     pub async fn new(
         config: VectorConfig,
         db: Arc<Database>,
         redis: Option<Arc<RedisCache>>,
+        yaml_config: Option<&YamlConfig>,
     ) -> Result<Self, error::VectorError> {
         // Initialize embedding pipeline with fallback chain + optional Redis L2 cache
         let embedding = Arc::new(
@@ -207,6 +214,11 @@ impl VectorService {
             Err(e) => tracing::warn!("Failed to load category centroids: {e}"),
         }
 
+        // Load tuning parameters from YAML config for ingestion, clustering, and error recovery.
+        let yaml_tuning = yaml_config::load_yaml_config("../config")
+            .map(|c| c.tuning)
+            .unwrap_or_default();
+
         // Initialize hybrid search
         let hybrid_search = Arc::new(search::HybridSearch::new(
             store.clone(),
@@ -215,11 +227,12 @@ impl VectorService {
             config.search.clone(),
         ));
 
-        // Initialize cluster engine
-        let cluster_engine = Arc::new(clustering::ClusterEngine::new(
+        // Initialize cluster engine with tuning parameters from YAML config
+        let cluster_engine = Arc::new(clustering::ClusterEngine::new_with_tuning(
             store.clone(),
             db.clone(),
             config.clustering.clone(),
+            yaml_tuning.clustering.clone(),
         ));
 
         // Initialize SONA learning engine
@@ -290,7 +303,34 @@ impl VectorService {
             store.clone(),
             categorizer.clone(),
             db.clone(),
+            yaml_tuning.ingestion.clone(),
+            yaml_tuning.error_recovery.clone(),
         );
+
+        // ── Resolve LLM tuning parameters ────────────────────────────────
+        // Global defaults from tuning.yaml, with per-model overrides from
+        // models-llm.yaml resolved at construction time.
+        let default_yaml = YamlConfig::default();
+        let yaml_ref = yaml_config.unwrap_or(&default_yaml);
+        let llm_tuning = &yaml_ref.tuning.llm;
+
+        // Helper: look up per-model tuning from the LLM catalog for a given
+        // provider name and model ID.
+        let find_model_tuning =
+            |provider_name: &str, model_id: &str| -> Option<yaml_config::ModelTuning> {
+                yaml_ref
+                    .llm_catalog
+                    .providers
+                    .get(provider_name)?
+                    .models
+                    .iter()
+                    .find(|m| m.id == model_id)?
+                    .tuning
+                    .clone()
+            };
+
+        // Resolve prompts from YAML config (or defaults).
+        let prompts_cfg = yaml_ref.prompts.clone();
 
         // Initialize generative model based on config (ADR-012)
         let gen_model: Option<Arc<dyn generative::GenerativeModel>> = match config
@@ -298,10 +338,21 @@ impl VectorService {
             .provider
             .as_str()
         {
-            "ollama" => Some(Arc::new(generative::OllamaGenerativeModel::new(
-                &config.generative.ollama,
-            ))),
-            "cloud" => match generative::CloudGenerativeModel::new(&config.generative.cloud) {
+            "ollama" => {
+                let per_model =
+                    find_model_tuning("ollama", &config.generative.ollama.chat_model);
+                let params = GenerationParams::resolve(llm_tuning, per_model.as_ref());
+                Some(Arc::new(generative::OllamaGenerativeModel::with_params_and_prompts(
+                    &config.generative.ollama,
+                    params,
+                    prompts_cfg.clone(),
+                )))
+            }
+            "cloud" => match generative::CloudGenerativeModel::with_params_and_prompts(
+                &config.generative.cloud,
+                GenerationParams::resolve(llm_tuning, None),
+                prompts_cfg.clone(),
+            ) {
                 Ok(model) => Some(Arc::new(model)),
                 Err(e) => {
                     tracing::warn!("Cloud generative model init failed: {e}, falling back to none");
@@ -311,8 +362,12 @@ impl VectorService {
             "builtin" => {
                 #[cfg(feature = "builtin-llm")]
                 {
-                    match generative_builtin::BuiltInGenerativeModel::new(
+                    let per_model = find_model_tuning("builtin", &config.generative.builtin.model_id);
+                    let params = GenerationParams::resolve(llm_tuning, per_model.as_ref());
+                    match generative_builtin::BuiltInGenerativeModel::with_params_and_prompts(
                         &config.generative.builtin,
+                        params,
+                        prompts_cfg.clone(),
                     ) {
                         Ok(model) => {
                             tracing::info!(
@@ -340,29 +395,40 @@ impl VectorService {
             }
             "openrouter" => {
                 // OpenRouter uses the OpenAI-compatible API with extra headers.
-                // Read config from the YAML catalog (config/models-llm.yaml).
-                let yaml_cfg = yaml_config::load_yaml_config("../config")
-                    .unwrap_or_else(|_| yaml_config::YamlConfig::default());
-                let or_provider = yaml_cfg.llm_catalog.providers.get("openrouter");
+                // Read config from the already-loaded YAML catalog.
+                let or_provider = yaml_ref.llm_catalog.providers.get("openrouter");
 
+                // Fall back through: catalog → app.yaml providers → hardcoded default
+                let app_or = &yaml_ref.app.providers.openrouter;
                 let api_key_env = or_provider
                     .and_then(|p| p.api_key_env.clone())
-                    .unwrap_or_else(|| "OPENROUTER_API_KEY".to_string());
+                    .unwrap_or_else(|| {
+                        if app_or.api_key_env.is_empty() {
+                            "OPENROUTER_API_KEY".to_string()
+                        } else {
+                            app_or.api_key_env.clone()
+                        }
+                    });
                 let base_url = or_provider
                     .and_then(|p| p.base_url.clone())
-                    .unwrap_or_else(|| "https://openrouter.ai/api/v1".to_string());
+                    .unwrap_or_else(|| app_or.base_url.clone());
                 let extra_headers = or_provider
                     .and_then(|p| p.required_headers.clone())
-                    .unwrap_or_default();
+                    .unwrap_or_else(|| app_or.required_headers.clone());
 
                 // Use the cloud config model field as the OpenRouter model ID.
                 let model_id = &config.generative.cloud.model;
 
-                match generative::OpenRouterGenerativeModel::new(
+                let per_model = find_model_tuning("openrouter", model_id);
+                let params = GenerationParams::resolve(llm_tuning, per_model.as_ref());
+
+                match generative::OpenRouterGenerativeModel::with_params_and_prompts(
                     &api_key_env,
                     model_id,
                     &base_url,
                     extra_headers,
+                    params,
+                    prompts_cfg.clone(),
                 ) {
                     Ok(model) => {
                         tracing::info!(
@@ -391,6 +457,10 @@ impl VectorService {
 
         // Inject generative model into ingestion pipeline for categorize_with_fallback (DEFECT-2)
         ingestion_pipeline.set_generative(gen_model.clone());
+        // Inject classification config from YAML (categories + domain/keyword rules)
+        if let Some(yc) = yaml_config {
+            ingestion_pipeline.set_classification_config(yc.classification.clone());
+        }
         // Inject cluster engine for post-ingestion clustering (ADR-009)
         ingestion_pipeline.set_cluster_engine(cluster_engine.clone());
         let ingestion_pipeline = Arc::new(ingestion_pipeline);

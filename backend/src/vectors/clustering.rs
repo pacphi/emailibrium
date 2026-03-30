@@ -792,6 +792,8 @@ pub struct ClusterEngine {
     clusters: RwLock<Vec<TopicCluster>>,
     /// Email -> current cluster assignment for hysteresis checks.
     assignments: RwLock<HashMap<String, String>>,
+    /// Tuning parameters from `config/tuning.yaml` clustering section.
+    clustering_tuning: super::yaml_config::ClusteringTuning,
 }
 
 impl ClusterEngine {
@@ -807,6 +809,24 @@ impl ClusterEngine {
             config,
             clusters: RwLock::new(Vec::new()),
             assignments: RwLock::new(HashMap::new()),
+            clustering_tuning: super::yaml_config::ClusteringTuning::default(),
+        }
+    }
+
+    /// Create a new clustering engine with explicit tuning parameters.
+    pub fn new_with_tuning(
+        store: Arc<dyn VectorStoreBackend>,
+        db: Arc<Database>,
+        config: ClusterConfig,
+        clustering_tuning: super::yaml_config::ClusteringTuning,
+    ) -> Self {
+        Self {
+            store,
+            db,
+            config,
+            clusters: RwLock::new(Vec::new()),
+            assignments: RwLock::new(HashMap::new()),
+            clustering_tuning,
         }
     }
 
@@ -829,6 +849,7 @@ impl ClusterEngine {
             config,
             clusters: RwLock::new(clusters),
             assignments: RwLock::new(assignments_map),
+            clustering_tuning: super::yaml_config::ClusteringTuning::default(),
         }
     }
 
@@ -1069,12 +1090,12 @@ impl ClusterEngine {
         let mut new_clusters: Vec<TopicCluster> = Vec::new();
         for cd in &cluster_data {
             let name = generate_cluster_name(&cd.cluster_subjects);
-            let top_terms = compute_tfidf_terms(&cd.cluster_subjects, &all_cluster_subjects, 20);
+            let top_terms = compute_tfidf_terms(&cd.cluster_subjects, &all_cluster_subjects, self.clustering_tuning.tfidf_max_terms);
 
             let member_embeddings: Vec<&Vec<f32>> =
                 cd.member_indices.iter().map(|&i| &embeddings[i]).collect();
             let representative_email_ids =
-                find_representative_emails(&cd.centroid, &cd.email_ids, &member_embeddings, 5);
+                find_representative_emails(&cd.centroid, &cd.email_ids, &member_embeddings, self.clustering_tuning.representative_emails);
 
             new_clusters.push(TopicCluster {
                 id: uuid::Uuid::new_v4().to_string(),

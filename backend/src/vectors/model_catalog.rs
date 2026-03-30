@@ -94,12 +94,28 @@ fn detect_gpu() -> String {
     }
 }
 
+/// Default OS overhead in MB (used when no config is provided).
+const DEFAULT_OS_OVERHEAD_MB: u64 = 4096;
+
 /// Get system hardware info.
+///
+/// The `os_overhead_mb` parameter comes from `app.yaml → hardware.os_overhead_mb`
+/// and specifies how much RAM to reserve for the OS and application before
+/// recommending models. Falls back to [`DEFAULT_OS_OVERHEAD_MB`] (4 GB).
 pub fn get_system_info() -> SystemInfo {
+    get_system_info_with_overhead(DEFAULT_OS_OVERHEAD_MB)
+}
+
+/// Get system hardware info with a configurable OS overhead.
+pub fn get_system_info_with_overhead(os_overhead_mb: u64) -> SystemInfo {
     let total_bytes = get_total_ram_bytes();
     let total_mb = total_bytes / (1024 * 1024);
-    // Reserve ~4GB for OS + app + embedding model
-    let available = total_mb.saturating_sub(4096);
+    let overhead = if os_overhead_mb > 0 {
+        os_overhead_mb
+    } else {
+        DEFAULT_OS_OVERHEAD_MB
+    };
+    let available = total_mb.saturating_sub(overhead);
 
     SystemInfo {
         total_ram_mb: total_mb,
@@ -142,9 +158,6 @@ pub fn is_model_cached(repo_id: &str, filename: &str, cache_dir: &str) -> bool {
 /// Full model catalog sourced from `config/models-llm.yaml` with
 /// hardware-aware recommendations and cache status.
 pub fn get_model_catalog(cache_dir: &str) -> Vec<ModelInfo> {
-    let sys = get_system_info();
-    let available = sys.available_for_model_mb;
-
     let yaml = match super::yaml_config::load_yaml_config("../config") {
         Ok(y) => y,
         Err(e) => {
@@ -152,6 +165,10 @@ pub fn get_model_catalog(cache_dir: &str) -> Vec<ModelInfo> {
             return Vec::new();
         }
     };
+
+    let os_overhead = yaml.app.hardware.os_overhead_mb as u64;
+    let sys = get_system_info_with_overhead(os_overhead);
+    let available = sys.available_for_model_mb;
 
     let Some(builtin) = yaml.llm_catalog.providers.get("builtin") else {
         tracing::warn!("No 'builtin' provider in config/models-llm.yaml");

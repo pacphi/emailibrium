@@ -18,6 +18,7 @@ use super::error::VectorError;
 use super::generative::{GenerativeModel, RuleBasedClassifier};
 use super::store::VectorStoreBackend;
 use super::types::*;
+use super::yaml_config::ClassificationConfig;
 use crate::db::Database;
 
 /// Compute the cosine similarity between two vectors.
@@ -162,11 +163,32 @@ impl VectorCategorizer {
     /// 2. If below threshold and a generative model is available, use LLM
     /// 3. If no generative model, try rule-based heuristics
     /// 4. If all fail, return Uncategorized
+    ///
+    /// Categories and rules are loaded from `ClassificationConfig`
+    /// (`config/classification.yaml`). When `classification_config` is `None`,
+    /// the compiled-in defaults are used.
     pub async fn categorize_with_fallback(
         &self,
         email_text: &str,
         from_addr: &str,
         generative: Option<&dyn GenerativeModel>,
+    ) -> Result<CategoryResult, VectorError> {
+        self.categorize_with_fallback_config(
+            email_text,
+            from_addr,
+            generative,
+            &ClassificationConfig::default(),
+        )
+        .await
+    }
+
+    /// Classify an email with tiered fallback using explicit config.
+    pub async fn categorize_with_fallback_config(
+        &self,
+        email_text: &str,
+        from_addr: &str,
+        generative: Option<&dyn GenerativeModel>,
+        classification_config: &ClassificationConfig,
     ) -> Result<CategoryResult, VectorError> {
         // Step 1: Try vector centroid classification.
         let result = self.categorize(email_text).await?;
@@ -180,20 +202,14 @@ impl VectorCategorizer {
         );
 
         // Step 2: If generative model available, try LLM classification.
+        // Use categories from YAML config.
         if let Some(gen) = generative {
-            let categories = &[
-                "Work",
-                "Personal",
-                "Finance",
-                "Shopping",
-                "Social",
-                "Newsletter",
-                "Marketing",
-                "Notification",
-                "Alerts",
-                "Promotions",
-            ];
-            match gen.classify(email_text, categories).await {
+            let cat_refs: Vec<&str> = classification_config
+                .categories
+                .iter()
+                .map(|s| s.as_str())
+                .collect();
+            match gen.classify(email_text, &cat_refs).await {
                 Ok(cat_name) => {
                     if let Some(category) = parse_email_category(&cat_name) {
                         debug!(category = %cat_name, "LLM fallback classified email");
@@ -211,8 +227,10 @@ impl VectorCategorizer {
             }
         }
 
-        // Step 3: Rule-based fallback.
-        if let Some(cat_name) = RuleBasedClassifier::classify_by_rules(email_text, from_addr) {
+        // Step 3: Rule-based fallback using config-driven rules.
+        if let Some(cat_name) =
+            RuleBasedClassifier::classify_by_rules_with_config(email_text, from_addr, classification_config)
+        {
             if let Some(category) = parse_email_category(&cat_name) {
                 debug!(category = %cat_name, "Rule-based fallback classified email");
                 return Ok(CategoryResult {
