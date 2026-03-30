@@ -1,6 +1,7 @@
 import { useState, useCallback, useMemo } from 'react';
-import { Plus } from 'lucide-react';
+import { Plus, Trash2 } from 'lucide-react';
 import { submitFeedback } from '@emailibrium/api';
+import type { EmailViewContext } from './EmailActions';
 import { EmailSidebar } from './EmailSidebar';
 import type { SidebarGroup } from './EmailSidebar';
 import { EmailList } from './EmailList';
@@ -24,7 +25,13 @@ import {
   useLabelsQuery,
   useMoveEmail,
   useMarkRead,
+  useMarkAsSpam,
+  useUnmarkSpam,
+  useRestoreEmail,
+  useEmptyTrash,
+  usePermanentDelete,
 } from './hooks/useEmails';
+import { useToast } from '@/shared/hooks/useToast';
 
 function groupToQueryParam(groupId: string): { category?: string; label?: string } {
   if (groupId === 'inbox') return {};
@@ -41,7 +48,9 @@ export function EmailClient() {
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
   const [isComposeOpen, setIsComposeOpen] = useState(false);
   const [mobilePanel, setMobilePanel] = useState<'sidebar' | 'list' | 'thread'>('list');
-  const [filter, setFilter] = useState<'all' | 'read' | 'unread' | 'starred'>('all');
+  const [filter, setFilter] = useState<'all' | 'read' | 'unread' | 'starred' | 'spam' | 'trash'>(
+    'all',
+  );
   const [isGrouped, setIsGrouped] = useState(false);
   const [expandedDomains, setExpandedDomains] = useState<Set<string>>(new Set());
   const [expandedSenders, setExpandedSenders] = useState<Set<string>>(new Set());
@@ -53,6 +62,8 @@ export function EmailClient() {
     if (filter === 'read') return { ...base, isRead: true };
     if (filter === 'unread') return { ...base, isRead: false };
     if (filter === 'starred') return { ...base, isStarred: true };
+    if (filter === 'spam') return { ...base, is_spam: true };
+    if (filter === 'trash') return { ...base, is_trash: true };
     return base;
   }, [activeGroup, filter]);
   const emailsQuery = useEmailsQuery(queryParams);
@@ -98,6 +109,12 @@ export function EmailClient() {
   const bulkDeleteMutation = useBulkDelete();
   const moveMutation = useMoveEmail();
   const markReadMutation = useMarkRead();
+  const markAsSpamMutation = useMarkAsSpam();
+  const unmarkSpamMutation = useUnmarkSpam();
+  const restoreEmailMutation = useRestoreEmail();
+  const emptyTrashMutation = useEmptyTrash();
+  const permanentDeleteMutation = usePermanentDelete();
+  const { toast } = useToast();
 
   // Determine account ID from the first email for label fetching.
   const currentAccountId = emails.length > 0 ? emails[0]?.accountId : undefined;
@@ -192,12 +209,20 @@ export function EmailClient() {
     setExpandedSenders(new Set());
   }, []);
 
-  const handleGroupSelect = useCallback((groupId: string) => {
-    setActiveGroup(groupId);
-    setSelectedEmailId(null);
-    setCheckedIds(new Set());
-    setMobilePanel('list');
-  }, []);
+  const handleGroupSelect = useCallback(
+    (groupId: string) => {
+      // Toggle off if clicking the already-active filter (but not inbox — it's the default).
+      if (groupId === activeGroup && groupId !== 'inbox') {
+        setActiveGroup('inbox');
+      } else {
+        setActiveGroup(groupId);
+      }
+      setSelectedEmailId(null);
+      setCheckedIds(new Set());
+      setMobilePanel('list');
+    },
+    [activeGroup],
+  );
 
   const handleSelectEmail = useCallback(
     (emailId: string) => {
@@ -282,6 +307,60 @@ export function EmailClient() {
     [markReadMutation],
   );
 
+  // Derive the current view context for the actions bar.
+  const viewContext: EmailViewContext = useMemo(() => {
+    if (filter === 'spam') return 'spam';
+    if (filter === 'trash') return 'trash';
+    return 'inbox';
+  }, [filter]);
+
+  const handleSpamEmail = useCallback(
+    (emailId: string) => {
+      markAsSpamMutation.mutate(emailId, {
+        onSuccess: () => toast('Email marked as spam', 'success'),
+      });
+      if (selectedEmailId === emailId) setSelectedEmailId(null);
+    },
+    [markAsSpamMutation, selectedEmailId, toast],
+  );
+
+  const handleRestoreEmail = useCallback(
+    (emailId: string) => {
+      if (filter === 'spam') {
+        unmarkSpamMutation.mutate(emailId, {
+          onSuccess: () => toast('Email restored from spam', 'success'),
+        });
+      } else {
+        restoreEmailMutation.mutate(emailId, {
+          onSuccess: () => toast('Email restored from trash', 'success'),
+        });
+      }
+      if (selectedEmailId === emailId) setSelectedEmailId(null);
+    },
+    [filter, unmarkSpamMutation, restoreEmailMutation, selectedEmailId, toast],
+  );
+
+  const handlePermanentDelete = useCallback(
+    (emailId: string) => {
+      permanentDeleteMutation.mutate(emailId, {
+        onSuccess: () => toast('Email permanently deleted', 'success'),
+      });
+      if (selectedEmailId === emailId) setSelectedEmailId(null);
+    },
+    [permanentDeleteMutation, selectedEmailId, toast],
+  );
+
+  const [showEmptyTrashConfirm, setShowEmptyTrashConfirm] = useState(false);
+
+  const handleEmptyTrash = useCallback(() => {
+    emptyTrashMutation.mutate(undefined, {
+      onSuccess: () => {
+        toast('Trash emptied', 'success');
+        setShowEmptyTrashConfirm(false);
+      },
+    });
+  }, [emptyTrashMutation, toast]);
+
   // Move dialog state — supports single email or bulk.
   const [moveDialogEmailId, setMoveDialogEmailId] = useState<string | null>(null);
   const [bulkMoveIds, setBulkMoveIds] = useState<string[] | null>(null);
@@ -358,6 +437,24 @@ export function EmailClient() {
       setSelectedEmailId(null);
     }
   }, [checkedIds, selectedEmailId, bulkDeleteMutation, deleteMutation]);
+
+  const handleThreadSpam = useCallback(() => {
+    if (selectedEmailId) {
+      handleSpamEmail(selectedEmailId);
+    }
+  }, [selectedEmailId, handleSpamEmail]);
+
+  const handleThreadRestore = useCallback(() => {
+    if (selectedEmailId) {
+      handleRestoreEmail(selectedEmailId);
+    }
+  }, [selectedEmailId, handleRestoreEmail]);
+
+  const handleThreadPermanentDelete = useCallback(() => {
+    if (selectedEmailId) {
+      handlePermanentDelete(selectedEmailId);
+    }
+  }, [selectedEmailId, handlePermanentDelete]);
 
   const handleReclassify = useCallback(
     async (category: string) => {
@@ -451,12 +548,12 @@ export function EmailClient() {
             </button>
           </div>
           {/* Filter pills */}
-          <div className="flex items-center gap-1 px-3 pb-2">
+          <div className="flex flex-wrap items-center gap-1 px-3 pb-2">
             {(['all', 'unread', 'read', 'starred'] as const).map((f) => (
               <button
                 key={f}
                 type="button"
-                onClick={() => setFilter(f)}
+                onClick={() => setFilter((prev) => (prev === f ? 'all' : f))}
                 className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
                   filter === f
                     ? 'bg-indigo-600 text-white'
@@ -466,6 +563,33 @@ export function EmailClient() {
                 {f.charAt(0).toUpperCase() + f.slice(1)}
               </button>
             ))}
+            {/* Divider */}
+            <div className="mx-1 h-4 w-px bg-gray-300 dark:bg-gray-600" />
+            {/* Spam pill */}
+            <button
+              type="button"
+              onClick={() => setFilter((prev) => (prev === 'spam' ? 'all' : 'spam'))}
+              className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
+                filter === 'spam'
+                  ? 'bg-amber-500 text-white'
+                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600'
+              }`}
+            >
+              Spam{countsQuery.data?.spam_count != null ? ` (${countsQuery.data.spam_count})` : ''}
+            </button>
+            {/* Trash pill */}
+            <button
+              type="button"
+              onClick={() => setFilter((prev) => (prev === 'trash' ? 'all' : 'trash'))}
+              className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
+                filter === 'trash'
+                  ? 'bg-red-600 text-white'
+                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600'
+              }`}
+            >
+              Trash
+              {countsQuery.data?.trash_count != null ? ` (${countsQuery.data.trash_count})` : ''}
+            </button>
             {/* Divider */}
             <div className="mx-1 h-4 w-px bg-gray-300 dark:bg-gray-600" />
             {/* Grouped toggle */}
@@ -482,6 +606,46 @@ export function EmailClient() {
               Grouped
             </button>
           </div>
+          {/* Empty Trash button -- visible only in Trash view */}
+          {filter === 'trash' && (
+            <div className="flex items-center gap-2 px-3 pb-2">
+              {!showEmptyTrashConfirm ? (
+                <button
+                  type="button"
+                  onClick={() => setShowEmptyTrashConfirm(true)}
+                  className="flex items-center gap-1 rounded-md bg-red-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-red-700"
+                >
+                  <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                  Empty Trash
+                </button>
+              ) : (
+                <div className="flex items-center gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 dark:border-red-800 dark:bg-red-900/20">
+                  <span className="text-xs text-red-700 dark:text-red-300">
+                    Permanently delete all
+                    {countsQuery.data?.trash_count != null
+                      ? ` ${countsQuery.data.trash_count}`
+                      : ''}{' '}
+                    emails in trash?
+                  </span>
+                  <button
+                    type="button"
+                    onClick={handleEmptyTrash}
+                    disabled={emptyTrashMutation.isPending}
+                    className="rounded-md bg-red-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-red-700 disabled:opacity-50"
+                  >
+                    {emptyTrashMutation.isPending ? 'Deleting...' : 'Yes, delete all'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowEmptyTrashConfirm(false)}
+                    className="rounded-md bg-gray-100 px-2.5 py-1 text-xs font-medium text-gray-700 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-300"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
           {/* Search filter bar */}
           <div className="flex items-center gap-2 px-3 pb-2">
             <select
@@ -576,6 +740,7 @@ export function EmailClient() {
           thread={threadQuery.data}
           isLoading={threadQuery.isLoading}
           isError={threadQuery.isError}
+          viewContext={viewContext}
           onBack={handleBackToList}
           onArchive={handleThreadArchive}
           onStar={handleThreadStar}
@@ -585,6 +750,9 @@ export function EmailClient() {
           onSendReply={handleSendReply}
           onSendForward={handleSendForward}
           isSendingReply={replyMutation.isPending || forwardMutation.isPending}
+          onSpam={handleThreadSpam}
+          onRestore={handleThreadRestore}
+          onPermanentDelete={handleThreadPermanentDelete}
         />
       </div>
 

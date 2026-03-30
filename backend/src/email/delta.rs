@@ -165,6 +165,10 @@ pub struct OutlookDeltaMessage {
     pub from: Option<serde_json::Value>,
     #[serde(rename = "toRecipients")]
     pub to_recipients: Option<Vec<serde_json::Value>>,
+    /// The ID of the parent folder (present in delta responses when the
+    /// message has moved between folders).
+    #[serde(rename = "parentFolderId")]
+    pub parent_folder_id: Option<String>,
 }
 
 /// Reason a message was removed in a delta response.
@@ -184,12 +188,24 @@ pub struct OutlookDeltaResponse {
     pub delta_link: Option<String>,
 }
 
+/// A detected folder move from an Outlook delta response.
+#[derive(Debug, Clone)]
+pub struct OutlookFolderMove {
+    pub message_id: String,
+    /// The well-known folder name (e.g. "deleteditems", "junkemail", "inbox").
+    /// Derived from the parentFolderId if it matches a well-known ID pattern,
+    /// otherwise stored as-is for lookup by the caller.
+    pub folder_name: String,
+}
+
 /// Aggregated result of processing Outlook delta responses.
 #[derive(Debug, Clone, Default)]
 pub struct OutlookDeltaResult {
     pub added_or_modified_ids: Vec<String>,
     pub deleted_ids: Vec<String>,
     pub delta_link: Option<String>,
+    /// Folder moves detected from `parentFolderId` changes in modified messages.
+    pub folder_moves: Vec<OutlookFolderMove>,
 }
 
 /// Parse an Outlook delta query JSON response into an aggregated result.
@@ -207,10 +223,49 @@ pub fn parse_outlook_delta(resp: &serde_json::Value) -> Result<OutlookDeltaResul
             result.deleted_ids.push(msg.id.clone());
         } else {
             result.added_or_modified_ids.push(msg.id.clone());
+
+            // Track folder moves when parentFolderId is present.
+            if let Some(ref folder_id) = msg.parent_folder_id {
+                // Outlook well-known folder IDs end with recognizable suffixes
+                // or the delta response may include the full folder path. Map
+                // common patterns to canonical names.
+                let folder_name = outlook_folder_id_to_name(folder_id);
+                result.folder_moves.push(OutlookFolderMove {
+                    message_id: msg.id.clone(),
+                    folder_name,
+                });
+            }
         }
     }
 
     Ok(result)
+}
+
+/// Map an Outlook parentFolderId to a well-known folder name.
+///
+/// Outlook well-known folder IDs contain recognizable substrings for system
+/// folders. If the ID does not match a known pattern, returns the raw ID
+/// so the caller can perform a Graph API lookup if needed.
+fn outlook_folder_id_to_name(folder_id: &str) -> String {
+    let lower = folder_id.to_lowercase();
+
+    // Well-known folder ID patterns used by Microsoft Graph.
+    if lower.contains("deleteditems") {
+        "deleteditems".to_string()
+    } else if lower.contains("junkemail") {
+        "junkemail".to_string()
+    } else if lower.contains("inbox") {
+        "inbox".to_string()
+    } else if lower.contains("sentitems") {
+        "sentitems".to_string()
+    } else if lower.contains("drafts") {
+        "drafts".to_string()
+    } else if lower.contains("archive") {
+        "archive".to_string()
+    } else {
+        // Return the raw ID — caller may resolve via Graph API.
+        folder_id.to_string()
+    }
 }
 
 // ---------------------------------------------------------------------------

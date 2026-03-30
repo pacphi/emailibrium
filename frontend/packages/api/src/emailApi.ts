@@ -7,6 +7,8 @@ export interface GetEmailsParams {
   label?: string;
   isRead?: boolean;
   isStarred?: boolean;
+  is_spam?: boolean;
+  is_trash?: boolean;
   limit?: number;
   offset?: number;
 }
@@ -116,6 +118,8 @@ export async function getEnrichedCategories(): Promise<EnrichedCategory[]> {
 export interface EmailCounts {
   total: number;
   unread: number;
+  spam_count: number;
+  trash_count: number;
   byCategory: Array<{ category: string; total: number; unread: number }>;
 }
 
@@ -128,6 +132,26 @@ export async function moveEmail(
   body: { accountId: string; targetId: string; kind: 'folder' | 'label' },
 ): Promise<void> {
   await api.post(`emails/${id}/move`, { json: body });
+}
+
+export async function markAsSpam(id: string): Promise<void> {
+  await api.post(`emails/${id}/spam`);
+}
+
+export async function unmarkSpam(id: string): Promise<void> {
+  await api.post(`emails/${id}/unspam`);
+}
+
+export async function restoreEmail(id: string): Promise<void> {
+  await api.post(`emails/${id}/restore`);
+}
+
+export async function emptyTrash(): Promise<void> {
+  await api.delete('emails/trash');
+}
+
+export async function permanentDelete(id: string): Promise<void> {
+  await api.delete(`emails/${id}`, { searchParams: { permanent: 'true' } });
 }
 
 export async function getAttachments(emailId: string): Promise<Attachment[]> {

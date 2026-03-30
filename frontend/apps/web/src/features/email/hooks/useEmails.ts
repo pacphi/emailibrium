@@ -15,6 +15,11 @@ import {
   getLabels,
   moveEmail,
   markEmailRead,
+  markAsSpam,
+  unmarkSpam,
+  restoreEmail,
+  emptyTrash,
+  permanentDelete,
 } from '@emailibrium/api';
 import type { GetEmailsParams, SendEmailDraft, FolderOrLabel } from '@emailibrium/api';
 import type { Email, EmailThread } from '@emailibrium/types';
@@ -193,6 +198,61 @@ export function useMoveEmail() {
     },
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ['emails'] });
+    },
+  });
+}
+
+export function useMarkAsSpam() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: markAsSpam,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['emails'] });
+      queryClient.invalidateQueries({ queryKey: ['email-counts'] });
+    },
+  });
+}
+
+export function useUnmarkSpam() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: unmarkSpam,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['emails'] });
+      queryClient.invalidateQueries({ queryKey: ['email-counts'] });
+    },
+  });
+}
+
+export function useRestoreEmail() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: restoreEmail,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['emails'] });
+      queryClient.invalidateQueries({ queryKey: ['email-counts'] });
+    },
+  });
+}
+
+export function useEmptyTrash() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: emptyTrash,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['emails'] });
+      queryClient.invalidateQueries({ queryKey: ['email-counts'] });
+    },
+  });
+}
+
+export function usePermanentDelete() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: permanentDelete,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['emails'] });
+      queryClient.invalidateQueries({ queryKey: ['email-counts'] });
     },
   });
 }

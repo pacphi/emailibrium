@@ -53,6 +53,11 @@ export {
   getAllLabels,
   getEnrichedCategories,
   getEmailCounts,
+  markAsSpam,
+  unmarkSpam,
+  restoreEmail,
+  emptyTrash,
+  permanentDelete,
 } from './emailApi.js';
 export type {
   GetEmailsParams,

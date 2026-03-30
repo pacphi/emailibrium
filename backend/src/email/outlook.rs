@@ -792,6 +792,7 @@ impl OutlookProvider {
         Ok(super::delta::OutlookDeltaResult {
             added_or_modified_ids: all_added,
             deleted_ids: all_deleted,
+            folder_moves: Vec::new(),
             delta_link: final_delta_link,
         })
     }

@@ -21,6 +21,8 @@ export interface Email {
   embeddingStatus: EmbeddingStatus;
   category: string;
   categoryConfidence?: number;
+  isSpam?: boolean;
+  isTrashed?: boolean;
 }
 
 export interface Attachment {

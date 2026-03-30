@@ -1,12 +1,17 @@
 //! Email listing endpoints (read from local DB after sync/ingestion).
 //!
-//! - GET  /api/v1/emails         -- list emails with pagination and filters
-//! - GET  /api/v1/emails/:id     -- get a single email by ID
+//! - GET    /api/v1/emails              -- list emails with pagination and filters
+//! - GET    /api/v1/emails/:id          -- get a single email by ID
+//! - DELETE /api/v1/emails/:id          -- soft-delete (or permanent with ?permanent=true)
+//! - POST   /api/v1/emails/:id/spam    -- mark as spam
+//! - POST   /api/v1/emails/:id/unspam  -- remove from spam
+//! - POST   /api/v1/emails/:id/restore -- restore from trash
+//! - DELETE /api/v1/emails/trash        -- empty trash (permanent delete all)
 
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
-    routing::{get, post},
+    routing::{delete, get, post},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
@@ -27,6 +32,7 @@ pub fn routes() -> Router<AppState> {
         .route("/categories/enriched", get(list_enriched_categories))
         .route("/categories", get(list_categories))
         .route("/counts", get(email_counts))
+        .route("/trash", delete(empty_trash))
         .route("/thread/{thread_id}", get(get_thread))
         .nest("/{id}/attachments", super::attachments::routes())
         .route("/{id}", get(get_email).delete(delete_email))
@@ -34,6 +40,9 @@ pub fn routes() -> Router<AppState> {
         .route("/{id}/star", post(star_email))
         .route("/{id}/read", post(mark_read_email))
         .route("/{id}/move", post(move_email))
+        .route("/{id}/spam", post(spam_email))
+        .route("/{id}/unspam", post(unspam_email))
+        .route("/{id}/restore", post(restore_email))
 }
 
 #[derive(Debug, Deserialize)]
@@ -414,30 +423,61 @@ async fn mark_read_email(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// DELETE /api/v1/emails/:id — delete email from local DB.
+#[derive(Debug, Deserialize)]
+pub struct DeleteEmailParams {
+    pub permanent: Option<bool>,
+}
+
+/// DELETE /api/v1/emails/:id — soft-delete (default) or permanent delete (?permanent=true).
 async fn delete_email(
     State(state): State<AppState>,
     Path(id): Path<String>,
-) -> Result<StatusCode, (StatusCode, String)> {
-    debug!(email_id = %id, "Deleting email");
+    Query(params): Query<DeleteEmailParams>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let permanent = params.permanent.unwrap_or(false);
+    debug!(email_id = %id, permanent, "Deleting email");
 
-    // Try to move to trash on provider (best-effort).
-    if let Ok(account_id) = get_email_account_id(&state, &id).await {
-        if let Ok((provider, token, _)) = resolve_provider_and_token(&state, &account_id).await {
-            if let Err(e) = provider
-                .move_message(&token, &id, "TRASH", MoveKind::Folder)
-                .await
+    if permanent {
+        // Permanent delete: remove from DB + clean up attachments.
+        hard_delete_email(&state, &id).await?;
+        debug!(email_id = %id, "Email permanently deleted");
+        Ok(Json(serde_json::json!({ "status": "permanently_deleted" })))
+    } else {
+        // Soft-delete: mark as trash.
+        // Try to move to trash on provider (best-effort).
+        if let Ok(account_id) = get_email_account_id(&state, &id).await {
+            if let Ok((provider, token, _)) = resolve_provider_and_token(&state, &account_id).await
             {
-                debug!(email_id = %id, "Provider trash failed (continuing locally): {e}");
+                if let Err(e) = provider
+                    .move_message(&token, &id, "TRASH", MoveKind::Folder)
+                    .await
+                {
+                    debug!(email_id = %id, "Provider trash failed (continuing locally): {e}");
+                }
             }
         }
-    }
 
+        let now = chrono::Utc::now().to_rfc3339();
+        let rows =
+            crate::db::update_email_state(&state.db.pool, &id, true, false, "TRASH", Some(&now))
+                .await
+                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+        if rows == 0 {
+            return Err((StatusCode::NOT_FOUND, "Email not found".to_string()));
+        }
+        debug!(email_id = %id, "Email soft-deleted (moved to trash)");
+        Ok(Json(serde_json::json!({ "status": "trashed" })))
+    }
+}
+
+/// Hard-delete a single email: remove attachments then DELETE from DB.
+async fn hard_delete_email(state: &AppState, email_id: &str) -> Result<(), (StatusCode, String)> {
     // Clean up attachment files before deleting the email (DB rows cascade).
     let att_paths: Vec<(Option<String>,)> = sqlx::query_as(
         "SELECT storage_path FROM attachments WHERE email_id = ?1 AND storage_path IS NOT NULL",
     )
-    .bind(&id)
+    .bind(email_id)
     .fetch_all(&state.db.pool)
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -448,10 +488,10 @@ async fn delete_email(
         }
     }
     // Also try to remove the per-email attachment directory.
-    let _ = tokio::fs::remove_dir(format!("data/attachments/{}", id)).await;
+    let _ = tokio::fs::remove_dir(format!("data/attachments/{}", email_id)).await;
 
     let rows = sqlx::query("DELETE FROM emails WHERE id = ?1")
-        .bind(&id)
+        .bind(email_id)
         .execute(&state.db.pool)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -459,8 +499,168 @@ async fn delete_email(
     if rows.rows_affected() == 0 {
         return Err((StatusCode::NOT_FOUND, "Email not found".to_string()));
     }
-    debug!(email_id = %id, "Email deleted");
-    Ok(StatusCode::NO_CONTENT)
+    Ok(())
+}
+
+/// POST /api/v1/emails/:id/spam — mark email as spam.
+async fn spam_email(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    debug!(email_id = %id, "Marking email as spam");
+
+    // Move to spam on provider (best-effort).
+    if let Ok(account_id) = get_email_account_id(&state, &id).await {
+        if let Ok((provider, token, _)) = resolve_provider_and_token(&state, &account_id).await {
+            if let Err(e) = provider
+                .move_message(&token, &id, "SPAM", MoveKind::Folder)
+                .await
+            {
+                debug!(email_id = %id, "Provider spam move failed (continuing locally): {e}");
+            }
+        }
+    }
+
+    let rows = crate::db::update_email_state(&state.db.pool, &id, false, true, "SPAM", None)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    if rows == 0 {
+        return Err((StatusCode::NOT_FOUND, "Email not found".to_string()));
+    }
+    debug!(email_id = %id, "Email marked as spam");
+    Ok(Json(serde_json::json!({ "status": "marked_as_spam" })))
+}
+
+/// POST /api/v1/emails/:id/unspam — remove email from spam.
+async fn unspam_email(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    debug!(email_id = %id, "Removing email from spam");
+
+    // Move back to inbox on provider (best-effort).
+    if let Ok(account_id) = get_email_account_id(&state, &id).await {
+        if let Ok((provider, token, _)) = resolve_provider_and_token(&state, &account_id).await {
+            if let Err(e) = provider
+                .move_message(&token, &id, "INBOX", MoveKind::Folder)
+                .await
+            {
+                debug!(email_id = %id, "Provider unspam move failed (continuing locally): {e}");
+            }
+        }
+    }
+
+    let rows = crate::db::update_email_state(&state.db.pool, &id, false, false, "INBOX", None)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    if rows == 0 {
+        return Err((StatusCode::NOT_FOUND, "Email not found".to_string()));
+    }
+    debug!(email_id = %id, "Email removed from spam");
+    Ok(Json(serde_json::json!({ "status": "removed_from_spam" })))
+}
+
+/// POST /api/v1/emails/:id/restore — restore email from trash.
+async fn restore_email(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    debug!(email_id = %id, "Restoring email from trash");
+
+    // Move back to inbox on provider (best-effort).
+    if let Ok(account_id) = get_email_account_id(&state, &id).await {
+        if let Ok((provider, token, _)) = resolve_provider_and_token(&state, &account_id).await {
+            if let Err(e) = provider
+                .move_message(&token, &id, "INBOX", MoveKind::Folder)
+                .await
+            {
+                debug!(email_id = %id, "Provider restore move failed (continuing locally): {e}");
+            }
+        }
+    }
+
+    let rows = crate::db::update_email_state(&state.db.pool, &id, false, false, "INBOX", None)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    if rows == 0 {
+        return Err((StatusCode::NOT_FOUND, "Email not found".to_string()));
+    }
+    debug!(email_id = %id, "Email restored from trash");
+    Ok(Json(serde_json::json!({ "status": "restored" })))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EmptyTrashParams {
+    pub account_id: Option<String>,
+}
+
+/// DELETE /api/v1/emails/trash — permanently delete all trashed emails.
+async fn empty_trash(
+    State(state): State<AppState>,
+    Query(params): Query<EmptyTrashParams>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    debug!("Emptying trash");
+
+    // Find all trashed emails, optionally filtered by account.
+    let (sql, ids): (_, Vec<String>) = if let Some(ref account_id) = params.account_id {
+        let rows: Vec<(String,)> =
+            sqlx::query_as("SELECT id FROM emails WHERE is_trash = 1 AND account_id = ?1")
+                .bind(account_id)
+                .fetch_all(&state.db.pool)
+                .await
+                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        (
+            "DELETE FROM emails WHERE is_trash = 1 AND account_id = ?1".to_string(),
+            rows.into_iter().map(|(id,)| id).collect(),
+        )
+    } else {
+        let rows: Vec<(String,)> = sqlx::query_as("SELECT id FROM emails WHERE is_trash = 1")
+            .fetch_all(&state.db.pool)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        (
+            "DELETE FROM emails WHERE is_trash = 1".to_string(),
+            rows.into_iter().map(|(id,)| id).collect(),
+        )
+    };
+
+    // Clean up attachment files for each trashed email.
+    for email_id in &ids {
+        let att_paths: Vec<(Option<String>,)> = sqlx::query_as(
+            "SELECT storage_path FROM attachments WHERE email_id = ?1 AND storage_path IS NOT NULL",
+        )
+        .bind(email_id)
+        .fetch_all(&state.db.pool)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+        for (path,) in &att_paths {
+            if let Some(p) = path {
+                let _ = tokio::fs::remove_file(p).await;
+            }
+        }
+        let _ = tokio::fs::remove_dir(format!("data/attachments/{}", email_id)).await;
+    }
+
+    // Hard delete all trashed emails.
+    let result = if let Some(account_id) = &params.account_id {
+        sqlx::query(&sql)
+            .bind(account_id)
+            .execute(&state.db.pool)
+            .await
+    } else {
+        sqlx::query(&sql).execute(&state.db.pool).await
+    };
+
+    let rows = result.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let deleted_count = rows.rows_affected();
+
+    debug!(deleted_count, "Trash emptied");
+    Ok(Json(serde_json::json!({ "deleted_count": deleted_count })))
 }
 
 // --- Categories endpoint ---
@@ -541,9 +741,24 @@ async fn move_email(
         .await
         .map_err(|e| (StatusCode::BAD_GATEWAY, format!("Move failed: {e}")))?;
 
-    // Update local DB labels.
+    // Update local DB labels and state columns.
     match body.kind {
         MoveKind::Folder => {
+            // Derive state from the target folder name.
+            let target_upper = body.target_id.to_uppercase();
+            let (is_trash, is_spam, folder) = match target_upper.as_str() {
+                "TRASH" => (true, false, "TRASH"),
+                "SPAM" => (false, true, "SPAM"),
+                "INBOX" => (false, false, "INBOX"),
+                "SENT" => (false, false, "SENT"),
+                "DRAFT" | "DRAFTS" => (false, false, "DRAFT"),
+                _ => (false, false, "INBOX"),
+            };
+            crate::db::update_email_state(&state.db.pool, &id, is_trash, is_spam, folder, None)
+                .await
+                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+            // Also update the labels column.
             sqlx::query("UPDATE emails SET labels = ?1 WHERE id = ?2")
                 .bind(&body.target_id)
                 .bind(&id)
@@ -571,6 +786,13 @@ async fn move_email(
                     .bind(&new_labels)
                     .bind(&id)
                     .execute(&state.db.pool)
+                    .await
+                    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+                // Derive state from the combined labels.
+                let label_vec: Vec<String> = new_labels.split(',').map(|s| s.to_string()).collect();
+                let (is_trash, is_spam, folder) = crate::db::derive_state_from_labels(&label_vec);
+                crate::db::update_email_state(&state.db.pool, &id, is_trash, is_spam, folder, None)
                     .await
                     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
             }

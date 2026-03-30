@@ -593,6 +593,7 @@ mod tests {
             sync_completion_stable_checks: 5,
             sync_completion_check_interval_ms: 5000,
             max_sync_wait_polls: 200,
+            fetch_page_delay_ms: 200,
         };
         let cfg = PollConfig::from_sync_config(&sync);
         assert_eq!(cfg.tick_interval_secs, 20);
@@ -610,6 +611,7 @@ mod tests {
             sync_completion_stable_checks: 0,
             sync_completion_check_interval_ms: 0,
             max_sync_wait_polls: 0,
+            fetch_page_delay_ms: 0,
         };
         let cfg = PollConfig::from_sync_config(&sync);
         assert_eq!(cfg.tick_interval_secs, TICK_INTERVAL_SECS);

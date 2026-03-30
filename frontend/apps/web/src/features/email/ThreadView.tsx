@@ -1,13 +1,14 @@
 import { ArrowLeft, Loader2 } from 'lucide-react';
 import type { EmailThread } from '@emailibrium/types';
 import { MessageBubble } from './MessageBubble';
-import { EmailActions } from './EmailActions';
+import { EmailActions, type EmailViewContext } from './EmailActions';
 import { ReplyBox } from './ReplyBox';
 
 interface ThreadViewProps {
   thread: EmailThread | undefined;
   isLoading: boolean;
   isError: boolean;
+  viewContext?: EmailViewContext;
   onBack: () => void;
   onArchive: () => void;
   onStar: () => void;
@@ -17,12 +18,16 @@ interface ThreadViewProps {
   onSendReply: (body: string) => void;
   onSendForward: (to: string, body: string) => void;
   isSendingReply: boolean;
+  onSpam?: () => void;
+  onRestore?: () => void;
+  onPermanentDelete?: () => void;
 }
 
 export function ThreadView({
   thread,
   isLoading,
   isError,
+  viewContext = 'inbox',
   onBack,
   onArchive,
   onStar,
@@ -32,6 +37,9 @@ export function ThreadView({
   onSendReply,
   onSendForward,
   isSendingReply,
+  onSpam,
+  onRestore,
+  onPermanentDelete,
 }: ThreadViewProps) {
   if (isLoading) {
     return (
@@ -88,11 +96,15 @@ export function ThreadView({
       <EmailActions
         emailId={thread.threadId}
         selectedCount={0}
+        viewContext={viewContext}
         onArchive={onArchive}
         onStar={onStar}
         onDelete={onDelete}
         onReclassify={onReclassify}
         onMove={onMove}
+        onSpam={onSpam}
+        onRestore={onRestore}
+        onPermanentDelete={onPermanentDelete}
       />
 
       {/* Messages */}

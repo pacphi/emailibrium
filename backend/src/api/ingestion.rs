@@ -430,7 +430,7 @@ async fn incremental_sync_delta(
     history_id: &str,
 ) -> Result<u64, String> {
     // Call the appropriate delta API based on provider type.
-    let delta = match provider_str {
+    let (delta, gmail_label_changes) = match provider_str {
         "gmail" => {
             let url = format!(
                 "https://gmail.googleapis.com/gmail/v1/users/me/history?startHistoryId={history_id}"
@@ -454,12 +454,16 @@ async fn incremental_sync_delta(
                 .iter()
                 .map(|lc| lc.message_id.clone())
                 .collect();
-            crate::email::sync::DeltaResult {
-                new_message_ids: gmail_delta.added_message_ids,
-                updated_message_ids: updated_ids,
-                deleted_message_ids: gmail_delta.deleted_message_ids,
-                new_history_id: gmail_delta.new_history_id,
-            }
+            let label_changes = gmail_delta.label_changes.clone();
+            (
+                crate::email::sync::DeltaResult {
+                    new_message_ids: gmail_delta.added_message_ids,
+                    updated_message_ids: updated_ids,
+                    deleted_message_ids: gmail_delta.deleted_message_ids,
+                    new_history_id: gmail_delta.new_history_id,
+                },
+                label_changes,
+            )
         }
         "outlook" => {
             let url = format!(
@@ -477,12 +481,35 @@ async fn incremental_sync_delta(
 
             let outlook_delta =
                 crate::email::delta::parse_outlook_delta(&resp).map_err(|e| e.to_string())?;
-            crate::email::sync::DeltaResult {
-                new_message_ids: outlook_delta.added_or_modified_ids,
-                updated_message_ids: Vec::new(),
-                deleted_message_ids: outlook_delta.deleted_ids,
-                new_history_id: outlook_delta.delta_link,
+
+            // Build label-change equivalents from Outlook folder info.
+            let mut label_changes = Vec::new();
+            for fm in &outlook_delta.folder_moves {
+                let folder_upper = fm.folder_name.to_uppercase();
+                let mut added = Vec::new();
+                if folder_upper == "DELETEDITEMS" || folder_upper == "TRASH" {
+                    added.push("TRASH".to_string());
+                } else if folder_upper == "JUNKEMAIL" || folder_upper == "SPAM" {
+                    added.push("SPAM".to_string());
+                }
+                if !added.is_empty() {
+                    label_changes.push(crate::email::delta::GmailLabelDelta {
+                        message_id: fm.message_id.clone(),
+                        added_labels: added,
+                        removed_labels: Vec::new(),
+                    });
+                }
             }
+
+            (
+                crate::email::sync::DeltaResult {
+                    new_message_ids: outlook_delta.added_or_modified_ids,
+                    updated_message_ids: Vec::new(),
+                    deleted_message_ids: outlook_delta.deleted_ids,
+                    new_history_id: outlook_delta.delta_link,
+                },
+                label_changes,
+            )
         }
         _ => return Err(format!("Incremental sync not supported for {provider_str}")),
     };
@@ -528,13 +555,77 @@ async fn incremental_sync_delta(
         }
     }
 
-    // Handle remote deletions.
+    // Handle remote deletions — soft-delete by marking as trashed with a
+    // deleted_at timestamp instead of permanently removing rows.
+    let now_iso = chrono::Utc::now().to_rfc3339();
     for msg_id in deleted_ids {
-        let _ = sqlx::query("DELETE FROM emails WHERE id = ? AND account_id = ?")
-            .bind(msg_id)
-            .bind(account_id)
-            .execute(&state.db.pool)
+        if let Err(e) = crate::db::update_email_state(
+            &state.db.pool,
+            msg_id,
+            true,
+            false,
+            "TRASH",
+            Some(&now_iso),
+        )
+        .await
+        {
+            warn!(email_id = %msg_id, "Failed to soft-delete email during delta sync: {e}");
+        }
+    }
+
+    // Process label changes — map TRASH/SPAM label additions/removals to
+    // local email state updates.
+    for lc in &gmail_label_changes {
+        let has_added = |name: &str| lc.added_labels.iter().any(|l| l.eq_ignore_ascii_case(name));
+        let has_removed = |name: &str| {
+            lc.removed_labels
+                .iter()
+                .any(|l| l.eq_ignore_ascii_case(name))
+        };
+
+        if has_added("TRASH") {
+            let _ = crate::db::update_email_state(
+                &state.db.pool,
+                &lc.message_id,
+                true,
+                false,
+                "TRASH",
+                None,
+            )
             .await;
+        } else if has_removed("TRASH") {
+            let _ = crate::db::update_email_state(
+                &state.db.pool,
+                &lc.message_id,
+                false,
+                false,
+                "INBOX",
+                None,
+            )
+            .await;
+        }
+
+        if has_added("SPAM") {
+            let _ = crate::db::update_email_state(
+                &state.db.pool,
+                &lc.message_id,
+                false,
+                true,
+                "SPAM",
+                None,
+            )
+            .await;
+        } else if has_removed("SPAM") {
+            let _ = crate::db::update_email_state(
+                &state.db.pool,
+                &lc.message_id,
+                false,
+                false,
+                "INBOX",
+                None,
+            )
+            .await;
+        }
     }
 
     // Update sync state with new history marker.
@@ -570,18 +661,27 @@ async fn upsert_email(
 ) -> u64 {
     let is_starred = msg.labels.iter().any(|l| l == "STARRED");
     let has_attachments = false;
+
+    // Derive is_trash, is_spam, folder from provider labels.
+    let (is_trash, is_spam, folder) = crate::db::derive_state_from_labels(&msg.labels);
+
     let result = sqlx::query(
         r#"INSERT INTO emails
            (id, account_id, provider, message_id, thread_id, subject,
             from_addr, to_addrs, received_at, body_text, body_html, labels,
-            is_read, is_starred, has_attachments, embedding_status)
-           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, 'pending')
+            is_read, is_starred, has_attachments, embedding_status,
+            is_trash, is_spam, folder)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, 'pending',
+                   ?16, ?17, ?18)
            ON CONFLICT(id) DO UPDATE SET
             body_html = CASE WHEN length(excluded.body_html) > 0 THEN excluded.body_html ELSE emails.body_html END,
             body_text = CASE WHEN length(excluded.body_text) > 0 THEN excluded.body_text ELSE emails.body_text END,
             labels = excluded.labels,
             is_read = excluded.is_read,
-            is_starred = excluded.is_starred"#,
+            is_starred = excluded.is_starred,
+            is_trash = excluded.is_trash,
+            is_spam = excluded.is_spam,
+            folder = excluded.folder"#,
     )
     .bind(&msg.id)
     .bind(account_id)
@@ -598,6 +698,9 @@ async fn upsert_email(
     .bind(msg.is_read)
     .bind(is_starred)
     .bind(has_attachments)
+    .bind(is_trash)
+    .bind(is_spam)
+    .bind(folder)
     .execute(&state.db.pool)
     .await;
 
