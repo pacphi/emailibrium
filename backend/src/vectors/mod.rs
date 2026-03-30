@@ -77,6 +77,10 @@ pub struct VectorService {
     pub ingestion_pipeline: Arc<ingestion::IngestionPipeline>,
     pub reindex_orchestrator: Arc<reindex::ReindexOrchestrator>,
     pub generative: Option<Arc<dyn generative::GenerativeModel>>,
+    /// Handle to the built-in LLM (if configured) for idle-timeout monitoring.
+    /// This is `None` when the generative provider is not "builtin".
+    #[cfg(feature = "builtin-llm")]
+    pub builtin_model: Option<Arc<generative_builtin::BuiltInGenerativeModel>>,
     pub consent_manager: Arc<consent::ConsentManager>,
     pub remote_wipe_service: Arc<remote_wipe::RemoteWipeService>,
     pub privacy_service: Arc<privacy::PrivacyService>,
@@ -333,6 +337,10 @@ impl VectorService {
         let prompts_cfg = yaml_ref.prompts.clone();
 
         // Initialize generative model based on config (ADR-012)
+        // Also track the concrete builtin model handle for idle-timeout monitoring.
+        #[cfg(feature = "builtin-llm")]
+        let mut builtin_model_handle: Option<Arc<generative_builtin::BuiltInGenerativeModel>> = None;
+
         let gen_model: Option<Arc<dyn generative::GenerativeModel>> = match config
             .generative
             .provider
@@ -374,7 +382,9 @@ impl VectorService {
                                 "Generative provider: builtin ({}) via llama.cpp",
                                 config.generative.builtin.model_id,
                             );
-                            Some(Arc::new(model) as Arc<dyn generative::GenerativeModel>)
+                            let arc_model = Arc::new(model);
+                            builtin_model_handle = Some(arc_model.clone());
+                            Some(arc_model as Arc<dyn generative::GenerativeModel>)
                         }
                         Err(e) => {
                             tracing::warn!(
@@ -550,6 +560,8 @@ impl VectorService {
             ingestion_pipeline,
             reindex_orchestrator,
             generative: gen_model,
+            #[cfg(feature = "builtin-llm")]
+            builtin_model: builtin_model_handle,
             consent_manager,
             remote_wipe_service,
             privacy_service,

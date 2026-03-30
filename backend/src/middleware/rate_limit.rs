@@ -203,6 +203,10 @@ pub struct RateLimitConfig {
     // User rate limiting
     pub enable_user_limits: bool,
     pub user_limit_multiplier: f64,
+
+    // app.yaml fallback values (used when env/preset doesn't specify global limits)
+    yaml_global_capacity: Option<usize>,
+    yaml_global_refill_per_sec: Option<f64>,
 }
 
 impl Default for RateLimitConfig {
@@ -224,6 +228,8 @@ impl RateLimitConfig {
                 redis_fallback: true,
                 enable_user_limits: false,
                 user_limit_multiplier: 1.0,
+                yaml_global_capacity: None,
+                yaml_global_refill_per_sec: None,
             },
             RateLimitPreset::Staging => Self {
                 auth_start_limit: 20,
@@ -235,6 +241,8 @@ impl RateLimitConfig {
                 redis_fallback: true,
                 enable_user_limits: true,
                 user_limit_multiplier: 2.0,
+                yaml_global_capacity: None,
+                yaml_global_refill_per_sec: None,
             },
             RateLimitPreset::Production => Self {
                 auth_start_limit: 10,
@@ -246,6 +254,8 @@ impl RateLimitConfig {
                 redis_fallback: true,
                 enable_user_limits: true,
                 user_limit_multiplier: 3.0,
+                yaml_global_capacity: None,
+                yaml_global_refill_per_sec: None,
             },
         }
     }
@@ -315,26 +325,51 @@ impl RateLimitConfig {
         config
     }
 
+    /// Build config from environment variables with `app.yaml` security values
+    /// as fallback defaults for capacity and refill rate.
+    ///
+    /// Priority: env vars > preset > app.yaml fallback.
+    pub fn from_env_with_yaml_fallback(yaml_capacity: usize, yaml_refill_per_sec: f64) -> Self {
+        let mut config = Self::from_env();
+        // Store YAML fallback values for use in get_capacity_and_rate.
+        config.yaml_global_capacity = Some(yaml_capacity);
+        config.yaml_global_refill_per_sec = Some(yaml_refill_per_sec);
+        config
+    }
+
     pub fn get_capacity_and_rate(&self, endpoint: &str) -> (f64, f64) {
         let limit = match endpoint {
             "auth_start" => self.auth_start_limit,
             "auth_callback" => self.auth_callback_limit,
             "session_status" => self.session_status_limit,
             "token_refresh" => self.token_refresh_limit,
-            // Default: use session_status_limit (high) for dev, 60 for production
+            // Default: use session_status_limit (high) for dev, yaml fallback, or 60 for production
             _ => {
                 if !self.enable_user_limits {
                     // Development mode — use generous default
                     self.session_status_limit.max(200)
+                } else if let Some(yaml_cap) = self.yaml_global_capacity {
+                    // Use app.yaml rate_limit_capacity as the global default
+                    yaml_cap as u32
                 } else {
                     60
                 }
             }
         };
 
-        // Capacity is the burst limit, rate is tokens per second
+        // Capacity is the burst limit, rate is tokens per second.
+        // For the global endpoint, prefer app.yaml refill rate if available.
         let capacity = limit as f64;
-        let refill_rate = limit as f64 / 60.0; // Per-minute limit converted to per-second
+        let refill_rate = match endpoint {
+            "auth_start" | "auth_callback" | "session_status" | "token_refresh" => {
+                limit as f64 / 60.0
+            }
+            _ => {
+                // Use app.yaml rate_limit_refill_per_sec if available
+                self.yaml_global_refill_per_sec
+                    .unwrap_or(limit as f64 / 60.0)
+            }
+        };
 
         (capacity, refill_rate)
     }
@@ -601,6 +636,27 @@ mod tests {
         let (capacity, rate) = config.get_capacity_and_rate("unknown_endpoint");
         assert_eq!(capacity, 60.0);
         assert!((rate - 1.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn get_capacity_and_rate_uses_yaml_fallback_for_global() {
+        let mut config = RateLimitConfig::from_preset(RateLimitPreset::Production);
+        config.yaml_global_capacity = Some(100);
+        config.yaml_global_refill_per_sec = Some(2.0);
+        let (capacity, rate) = config.get_capacity_and_rate("global");
+        assert_eq!(capacity, 100.0);
+        assert!((rate - 2.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn get_capacity_and_rate_yaml_fallback_does_not_affect_named_endpoints() {
+        let mut config = RateLimitConfig::from_preset(RateLimitPreset::Production);
+        config.yaml_global_capacity = Some(100);
+        config.yaml_global_refill_per_sec = Some(2.0);
+        // Named endpoints still use their preset values
+        let (capacity, rate) = config.get_capacity_and_rate("auth_start");
+        assert_eq!(capacity, 10.0);
+        assert!((rate - 10.0 / 60.0).abs() < f64::EPSILON);
     }
 
     // -----------------------------------------------------------------------

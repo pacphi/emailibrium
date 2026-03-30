@@ -49,6 +49,30 @@ impl Default for AccountPollState {
 #[derive(Clone)]
 pub struct PollSchedulerHandle {
     inner: Arc<RwLock<PollSchedulerInner>>,
+    /// Sync completion config from app.yaml, exposed for API consumers
+    /// that need to poll for sync completion.
+    sync_completion: Arc<SyncCompletionConfig>,
+}
+
+/// Sync completion polling parameters derived from `app.yaml`.
+#[derive(Debug, Clone)]
+pub struct SyncCompletionConfig {
+    /// Number of consecutive stable count checks before declaring sync complete.
+    pub stable_checks: usize,
+    /// Interval (ms) between sync completion stability checks.
+    pub check_interval_ms: u64,
+    /// Maximum polls before giving up on sync completion.
+    pub max_wait_polls: usize,
+}
+
+impl Default for SyncCompletionConfig {
+    fn default() -> Self {
+        Self {
+            stable_checks: 2,
+            check_interval_ms: 3000,
+            max_wait_polls: 120,
+        }
+    }
 }
 
 struct PollSchedulerInner {
@@ -79,7 +103,7 @@ pub struct AccountPollStatus {
 }
 
 impl PollSchedulerHandle {
-    fn new() -> Self {
+    fn new(sync_completion: SyncCompletionConfig) -> Self {
         Self {
             inner: Arc::new(RwLock::new(PollSchedulerInner {
                 enabled: true,
@@ -87,7 +111,13 @@ impl PollSchedulerHandle {
                 total_polls: 0,
                 total_errors: 0,
             })),
+            sync_completion: Arc::new(sync_completion),
         }
+    }
+
+    /// Access sync completion configuration from `app.yaml`.
+    pub fn sync_completion_config(&self) -> &SyncCompletionConfig {
+        &self.sync_completion
     }
 
     pub async fn status(&self) -> PollStatus {
@@ -131,6 +161,12 @@ const TICK_INTERVAL_SECS: u64 = 15;
 struct PollConfig {
     tick_interval_secs: u64,
     default_poll_interval_secs: u64,
+    /// Number of consecutive stable count checks before declaring sync complete.
+    sync_completion_stable_checks: usize,
+    /// Interval (ms) between sync completion stability checks.
+    sync_completion_check_interval_ms: u64,
+    /// Maximum polls before giving up on sync completion.
+    max_sync_wait_polls: usize,
 }
 
 impl PollConfig {
@@ -145,6 +181,21 @@ impl PollConfig {
                 sync.default_sync_frequency_minutes * 60
             } else {
                 DEFAULT_POLL_INTERVAL_SECS
+            },
+            sync_completion_stable_checks: if sync.sync_completion_stable_checks > 0 {
+                sync.sync_completion_stable_checks
+            } else {
+                2
+            },
+            sync_completion_check_interval_ms: if sync.sync_completion_check_interval_ms > 0 {
+                sync.sync_completion_check_interval_ms
+            } else {
+                3000
+            },
+            max_sync_wait_polls: if sync.max_sync_wait_polls > 0 {
+                sync.max_sync_wait_polls
+            } else {
+                120
             },
         }
     }
@@ -176,9 +227,14 @@ pub fn start(
     sync_fn: SyncAccountFn,
     sync_config: &SyncConfig,
 ) -> PollSchedulerHandle {
-    let handle = PollSchedulerHandle::new();
-    let handle_clone = handle.clone();
     let poll_cfg = PollConfig::from_sync_config(sync_config);
+    let sync_completion = SyncCompletionConfig {
+        stable_checks: poll_cfg.sync_completion_stable_checks,
+        check_interval_ms: poll_cfg.sync_completion_check_interval_ms,
+        max_wait_polls: poll_cfg.max_sync_wait_polls,
+    };
+    let handle = PollSchedulerHandle::new(sync_completion);
+    let handle_clone = handle.clone();
 
     tokio::spawn(async move {
         info!(
@@ -326,7 +382,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_creation_defaults() {
-        let handle = PollSchedulerHandle::new();
+        let handle = PollSchedulerHandle::new(SyncCompletionConfig::default());
         let status = handle.status().await;
         assert!(status.enabled);
         assert_eq!(status.total_polls, 0);
@@ -338,7 +394,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_set_enabled_false() {
-        let handle = PollSchedulerHandle::new();
+        let handle = PollSchedulerHandle::new(SyncCompletionConfig::default());
         handle.set_enabled(false).await;
         let status = handle.status().await;
         assert!(!status.enabled);
@@ -346,7 +402,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_set_enabled_toggle() {
-        let handle = PollSchedulerHandle::new();
+        let handle = PollSchedulerHandle::new(SyncCompletionConfig::default());
         handle.set_enabled(false).await;
         assert!(!handle.status().await.enabled);
         handle.set_enabled(true).await;
@@ -373,7 +429,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_add_account_tracking() {
-        let handle = PollSchedulerHandle::new();
+        let handle = PollSchedulerHandle::new(SyncCompletionConfig::default());
         {
             let mut inner = handle.inner.write().await;
             inner
@@ -388,7 +444,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_remove_account_tracking() {
-        let handle = PollSchedulerHandle::new();
+        let handle = PollSchedulerHandle::new(SyncCompletionConfig::default());
         {
             let mut inner = handle.inner.write().await;
             inner
@@ -476,7 +532,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_poll_counters_on_success() {
-        let handle = PollSchedulerHandle::new();
+        let handle = PollSchedulerHandle::new(SyncCompletionConfig::default());
         {
             let mut inner = handle.inner.write().await;
             inner
@@ -497,7 +553,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_poll_counters_on_failure() {
-        let handle = PollSchedulerHandle::new();
+        let handle = PollSchedulerHandle::new(SyncCompletionConfig::default());
         {
             let mut inner = handle.inner.write().await;
             inner
@@ -534,11 +590,16 @@ mod tests {
         let sync = SyncConfig {
             poll_interval_secs: 20,
             default_sync_frequency_minutes: 10,
-            ..SyncConfig::default()
+            sync_completion_stable_checks: 5,
+            sync_completion_check_interval_ms: 5000,
+            max_sync_wait_polls: 200,
         };
         let cfg = PollConfig::from_sync_config(&sync);
         assert_eq!(cfg.tick_interval_secs, 20);
         assert_eq!(cfg.default_poll_interval_secs, 600); // 10 * 60
+        assert_eq!(cfg.sync_completion_stable_checks, 5);
+        assert_eq!(cfg.sync_completion_check_interval_ms, 5000);
+        assert_eq!(cfg.max_sync_wait_polls, 200);
     }
 
     #[test]
@@ -546,18 +607,38 @@ mod tests {
         let sync = SyncConfig {
             poll_interval_secs: 0,
             default_sync_frequency_minutes: 0,
-            ..SyncConfig::default()
+            sync_completion_stable_checks: 0,
+            sync_completion_check_interval_ms: 0,
+            max_sync_wait_polls: 0,
         };
         let cfg = PollConfig::from_sync_config(&sync);
         assert_eq!(cfg.tick_interval_secs, TICK_INTERVAL_SECS);
         assert_eq!(cfg.default_poll_interval_secs, DEFAULT_POLL_INTERVAL_SECS);
+        assert_eq!(cfg.sync_completion_stable_checks, 2);
+        assert_eq!(cfg.sync_completion_check_interval_ms, 3000);
+        assert_eq!(cfg.max_sync_wait_polls, 120);
+    }
+
+    // -- SyncCompletionConfig accessible via handle -------------------------
+
+    #[tokio::test]
+    async fn test_sync_completion_config_from_handle() {
+        let handle = PollSchedulerHandle::new(SyncCompletionConfig {
+            stable_checks: 3,
+            check_interval_ms: 4000,
+            max_wait_polls: 100,
+        });
+        let scc = handle.sync_completion_config();
+        assert_eq!(scc.stable_checks, 3);
+        assert_eq!(scc.check_interval_ms, 4000);
+        assert_eq!(scc.max_wait_polls, 100);
     }
 
     // -- Clone semantics for handle -----------------------------------------
 
     #[tokio::test]
     async fn test_handle_clone_shares_state() {
-        let handle1 = PollSchedulerHandle::new();
+        let handle1 = PollSchedulerHandle::new(SyncCompletionConfig::default());
         let handle2 = handle1.clone();
 
         handle1.set_enabled(false).await;

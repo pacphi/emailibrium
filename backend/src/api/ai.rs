@@ -491,13 +491,17 @@ async fn model_catalog(
                 .map(|h| h.join(".cache/huggingface/hub"))
                 .unwrap_or_default();
 
+            // Apply memory_safety_margin from tuning.yaml when checking model fit.
+            let safety_margin = yaml.tuning.llm.memory_safety_margin;
+
             let models: Vec<crate::vectors::model_catalog::ModelInfo> = builtin
                 .models
                 .iter()
                 .map(|m| {
                     let ram_mb = m.min_ram_mb.unwrap_or(500);
                     let disk_mb = m.disk_mb.unwrap_or(0);
-                    let fits = (ram_mb as u64) <= available;
+                    let required_with_margin = (ram_mb as f32 * safety_margin) as u64;
+                    let fits = required_with_margin <= available;
                     let repo = m.repo_id.as_deref().unwrap_or("");
                     let file = m.filename.as_deref().unwrap_or("");
                     let cache_key = repo.replace('/', "--");
@@ -516,6 +520,13 @@ async fn model_catalog(
                         cached,
                         repo_id: repo.to_string(),
                         filename: file.to_string(),
+                        family: m.family.clone(),
+                        chat_template: m.chat_template.clone(),
+                        rag_capable: m.rag_capable,
+                        default_for_ram_mb: m.default_for_ram_mb,
+                        notes: m.notes.clone(),
+                        cost_per_1m_input: m.cost_per_1m_input,
+                        cost_per_1m_output: m.cost_per_1m_output,
                     }
                 })
                 .collect();
@@ -554,6 +565,26 @@ struct EmbeddingCatalogEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
     cost_per_1m_tokens: Option<f64>,
     download_required: bool,
+    /// Provider-level description (e.g., "In-process ONNX embeddings via fastembed").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    provider_description: Option<String>,
+    /// fastembed model variant name (for ONNX providers).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fastembed_variant: Option<String>,
+    /// fastembed quantization mode (e.g., "true", "false").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fastembed_quantized: Option<String>,
+    /// Whether this model is the default for its provider.
+    is_default: bool,
+    /// Ollama model tag for pulling (for Ollama embedding providers).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ollama_tag: Option<String>,
+    /// Provider base URL (for non-ONNX providers).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    base_url: Option<String>,
+    /// Environment variable name for the API key (for cloud providers).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    api_key_env: Option<String>,
 }
 
 /// GET /api/v1/ai/embedding-catalog — list available embedding models grouped by provider.
@@ -572,6 +603,11 @@ async fn embedding_catalog(State(state): State<AppState>) -> Json<Vec<EmbeddingC
             if ram_mb > 0 && (ram_mb as u64) > available_mb {
                 continue;
             }
+            let provider_desc = if provider.description.is_empty() {
+                None
+            } else {
+                Some(provider.description.clone())
+            };
             entries.push(EmbeddingCatalogEntry {
                 id: model.id.clone(),
                 name: model.name.clone(),
@@ -584,6 +620,13 @@ async fn embedding_catalog(State(state): State<AppState>) -> Json<Vec<EmbeddingC
                 min_ram_mb: model.min_ram_mb,
                 cost_per_1m_tokens: model.cost_per_1m_tokens,
                 download_required: provider.download_required,
+                provider_description: provider_desc,
+                fastembed_variant: model.fastembed_variant.clone(),
+                fastembed_quantized: model.fastembed_quantized.clone(),
+                is_default: model.is_default,
+                ollama_tag: model.ollama_tag.clone(),
+                base_url: provider.base_url.clone(),
+                api_key_env: provider.api_key_env.clone(),
             });
         }
     }

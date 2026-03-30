@@ -18,6 +18,9 @@ use tracing::debug;
 /// Global CSP policy cache
 static CSP_POLICY: OnceLock<String> = OnceLock::new();
 
+/// Global security headers config cache (initialized from `main.rs` with yaml fallback)
+static SECURITY_CONFIG: OnceLock<SecurityHeadersConfig> = OnceLock::new();
+
 /// Security headers configuration
 #[derive(Debug, Clone)]
 pub struct SecurityHeadersConfig {
@@ -67,6 +70,30 @@ impl SecurityHeadersConfig {
                 .map(|s| s.split(',').map(|s| s.trim().to_string()).collect())
                 .unwrap_or_default(),
         }
+    }
+
+    /// Load configuration from environment variables with `app.yaml` `hsts_max_age_secs`
+    /// as the fallback default.
+    ///
+    /// Priority: `HSTS_MAX_AGE` env var > `yaml_hsts_max_age` > compile-time default (1 year).
+    pub fn from_env_with_yaml_fallback(yaml_hsts_max_age: u64) -> Self {
+        let mut config = Self::from_env();
+        // Only override if the env var was NOT set (i.e. we got the compile-time default)
+        if std::env::var("HSTS_MAX_AGE").is_err() {
+            config.hsts_max_age = yaml_hsts_max_age;
+        }
+        config
+    }
+
+    /// Initialize the global security config cache with app.yaml fallback values.
+    ///
+    /// Call this once from `main.rs` before the security headers middleware is used.
+    /// Subsequent calls are no-ops (first writer wins).
+    pub fn init_global(yaml_hsts_max_age: u64) {
+        let config = Self::from_env_with_yaml_fallback(yaml_hsts_max_age);
+        // Cache the CSP policy built from this config
+        let _ = CSP_POLICY.set(config.build_csp_policy());
+        let _ = SECURITY_CONFIG.set(config);
     }
 
     /// Build CSP policy string
@@ -129,12 +156,20 @@ impl SecurityHeadersConfig {
     }
 }
 
-/// Get or initialize CSP policy
+/// Get or initialize CSP policy.
+///
+/// If `init_global` was called (recommended), returns the cached policy.
+/// Otherwise falls back to `from_env()`.
 fn get_csp_policy() -> &'static str {
     CSP_POLICY.get_or_init(|| {
         let config = SecurityHeadersConfig::from_env();
         config.build_csp_policy()
     })
+}
+
+/// Get or initialize the global security config.
+fn get_security_config() -> &'static SecurityHeadersConfig {
+    SECURITY_CONFIG.get_or_init(SecurityHeadersConfig::from_env)
 }
 
 /// Security headers middleware
@@ -159,8 +194,9 @@ pub async fn security_headers_middleware(req: Request, next: Next) -> Response {
 
     let headers = response.headers_mut();
 
-    // Load config from environment (cached in CSP_POLICY)
-    let config = SecurityHeadersConfig::from_env();
+    // Load config from global cache (initialized via init_global in main.rs),
+    // falling back to from_env() if init_global was never called.
+    let config = get_security_config();
 
     // 1. Strict-Transport-Security (HSTS)
     // Forces HTTPS for all future requests to this domain
@@ -373,5 +409,19 @@ mod tests {
         let policy = config.build_csp_policy();
         assert!(policy.contains("https://custom-api.example.com"));
         assert!(policy.contains("https://other.example.com"));
+    }
+
+    // -----------------------------------------------------------------------
+    // YAML fallback
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn yaml_fallback_overrides_hsts_when_env_not_set() {
+        // When HSTS_MAX_AGE env var is not set, the yaml fallback should be used.
+        // We test the from_env_with_yaml_fallback method with a custom value.
+        // This test works because HSTS_MAX_AGE is not set in the test environment.
+        let config = SecurityHeadersConfig::from_env_with_yaml_fallback(63072000);
+        // Should use the yaml fallback (63072000 = 2 years) instead of compile default (1 year)
+        assert_eq!(config.hsts_max_age, 63072000);
     }
 }

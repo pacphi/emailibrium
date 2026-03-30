@@ -677,15 +677,32 @@ async fn start_ingestion(
         });
 
         // Phase 0: Sync emails from the provider into local DB.
+        // Use app.yaml `network.ingestion_start_timeout_ms` as the overall
+        // sync timeout so a stalled provider doesn't block the pipeline forever.
         let mut synced_count = 0u64;
         if bg_account_id != "default" {
-            match sync_emails_from_provider(&bg_state, &bg_account_id).await {
-                Ok(n) => {
+            let timeout_ms = bg_state.yaml_config.app.network.ingestion_start_timeout_ms;
+            let sync_timeout = Duration::from_millis(timeout_ms);
+            match tokio::time::timeout(
+                sync_timeout,
+                sync_emails_from_provider(&bg_state, &bg_account_id),
+            )
+            .await
+            {
+                Ok(Ok(n)) => {
                     synced_count = n;
                     info!(account_id = %bg_account_id, synced = n, "Provider sync complete");
                 }
-                Err((_status, msg)) => {
+                Ok(Err((_status, msg))) => {
                     warn!(account_id = %bg_account_id, "Provider sync failed: {msg}");
+                }
+                Err(_) => {
+                    warn!(
+                        account_id = %bg_account_id,
+                        timeout_ms = timeout_ms,
+                        "Provider sync timed out after {}ms",
+                        timeout_ms,
+                    );
                 }
             }
         }

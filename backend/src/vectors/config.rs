@@ -105,6 +105,56 @@ impl VectorConfig {
 
         Ok(config)
     }
+
+    /// Apply `app.yaml` path overrides as fallback defaults.
+    ///
+    /// When a Figment config field still has its compile-time default value,
+    /// the corresponding `app.yaml` path is used instead.  This allows users
+    /// to centralise path configuration in `config/app.yaml` without having
+    /// to duplicate values in `config.yaml`.
+    pub fn apply_yaml_path_defaults(&mut self, paths: &crate::vectors::yaml_config::PathsConfig) {
+        // store.path  ←  paths.vector_data_dir
+        if self.store.path == default_store_path() && paths.vector_data_dir != default_store_path()
+        {
+            tracing::debug!(
+                "Overriding store.path with app.yaml paths.vector_data_dir: {}",
+                paths.vector_data_dir
+            );
+            self.store.path = paths.vector_data_dir.clone();
+        }
+
+        // generative.builtin.cache_dir  ←  paths.llm_cache_dir
+        if self.generative.builtin.cache_dir == default_builtin_cache_dir()
+            && paths.llm_cache_dir != default_builtin_cache_dir()
+        {
+            tracing::debug!(
+                "Overriding generative.builtin.cache_dir with app.yaml paths.llm_cache_dir: {}",
+                paths.llm_cache_dir
+            );
+            self.generative.builtin.cache_dir = paths.llm_cache_dir.clone();
+        }
+
+        // embedding.onnx.cache_dir  ←  paths.embedding_cache_dir
+        let yaml_embed = &paths.embedding_cache_dir;
+        if self.embedding.onnx.cache_dir.is_none() && yaml_embed != ".fastembed_cache" {
+            tracing::debug!(
+                "Overriding embedding.onnx.cache_dir with app.yaml paths.embedding_cache_dir: {}",
+                yaml_embed
+            );
+            self.embedding.onnx.cache_dir = Some(yaml_embed.clone());
+        }
+
+        // database_url  ←  paths.database_file
+        let default_db = default_database_url();
+        if self.database_url == default_db && paths.database_file != "emailibrium.db" {
+            let new_url = format!("sqlite:{}?mode=rwc", paths.database_file);
+            tracing::debug!(
+                "Overriding database_url with app.yaml paths.database_file: {}",
+                new_url
+            );
+            self.database_url = new_url;
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1183,5 +1233,40 @@ mod tests {
         let config = VectorConfig::default();
         assert!(!config.redis.enabled);
         assert_eq!(config.redis.url, "redis://127.0.0.1:6379");
+    }
+
+    // -- apply_yaml_path_defaults -------------------------------------------
+
+    #[test]
+    fn test_apply_yaml_path_defaults_overrides_when_different() {
+        let mut config = VectorConfig::default();
+        let paths = crate::vectors::yaml_config::PathsConfig {
+            llm_cache_dir: "/custom/llm".to_string(),
+            embedding_cache_dir: "/custom/embeddings".to_string(),
+            vector_data_dir: "/custom/vectors".to_string(),
+            database_file: "custom.db".to_string(),
+        };
+        config.apply_yaml_path_defaults(&paths);
+        assert_eq!(config.generative.builtin.cache_dir, "/custom/llm");
+        assert_eq!(
+            config.embedding.onnx.cache_dir,
+            Some("/custom/embeddings".to_string())
+        );
+        assert_eq!(config.store.path, "/custom/vectors");
+        assert_eq!(config.database_url, "sqlite:custom.db?mode=rwc");
+    }
+
+    #[test]
+    fn test_apply_yaml_path_defaults_noop_when_same_as_compile_defaults() {
+        let mut config = VectorConfig::default();
+        let paths = crate::vectors::yaml_config::PathsConfig::default();
+        let orig_store_path = config.store.path.clone();
+        let orig_cache_dir = config.generative.builtin.cache_dir.clone();
+        let orig_db_url = config.database_url.clone();
+        config.apply_yaml_path_defaults(&paths);
+        assert_eq!(config.store.path, orig_store_path);
+        assert_eq!(config.generative.builtin.cache_dir, orig_cache_dir);
+        assert_eq!(config.database_url, orig_db_url);
+        assert!(config.embedding.onnx.cache_dir.is_none());
     }
 }

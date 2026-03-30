@@ -131,8 +131,10 @@ async fn main() -> anyhow::Result<()> {
     // ── Provider validation summary (Phase 1) ──────────────────────────
     validate_provider_catalog(&yaml_config);
 
-    // Load configuration
-    let config = VectorConfig::load()?;
+    // Load configuration from Figment (config.yaml + env vars), then apply
+    // app.yaml path overrides as fallback defaults.
+    let mut config = VectorConfig::load()?;
+    config.apply_yaml_path_defaults(&yaml_config.app.paths);
 
     // Initialize database
     let db = Arc::new(db::Database::connect(&config.database_url).await?);
@@ -315,6 +317,86 @@ async fn main() -> anyhow::Result<()> {
         ..state
     };
 
+    // ── Built-in LLM idle timeout + memory monitoring task ───────────
+    // Spawns a periodic background task that:
+    //   1. Unloads the built-in model if idle longer than configured timeout
+    //   2. Uses shorter timeout on low-RAM machines
+    //   3. Logs warnings when system memory usage exceeds threshold
+    #[cfg(feature = "builtin-llm")]
+    {
+        if let Some(ref builtin_model) = state.vector_service.builtin_model {
+            let model = builtin_model.clone();
+            let llm_tuning = yaml_config.tuning.llm.clone();
+            let os_overhead_mb = yaml_config.app.hardware.os_overhead_mb as u64;
+
+            tokio::spawn(async move {
+                let interval_secs = llm_tuning.memory_monitor_interval_secs;
+                let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
+                // Skip the first tick (fires immediately).
+                interval.tick().await;
+
+                tracing::info!(
+                    interval_secs,
+                    idle_timeout = llm_tuning.idle_timeout_secs,
+                    low_ram_idle_timeout = llm_tuning.low_ram_idle_timeout_secs,
+                    low_ram_threshold_gb = llm_tuning.low_ram_threshold_gb,
+                    "LLM memory monitor started"
+                );
+
+                loop {
+                    interval.tick().await;
+
+                    // Determine effective idle timeout based on system RAM.
+                    let total_ram_bytes =
+                        vectors::model_catalog::get_total_ram_bytes();
+                    let total_ram_gb =
+                        total_ram_bytes / (1024 * 1024 * 1024);
+                    let idle_timeout_secs = if total_ram_gb
+                        <= llm_tuning.low_ram_threshold_gb as u64
+                    {
+                        tracing::debug!(
+                            total_ram_gb,
+                            threshold_gb = llm_tuning.low_ram_threshold_gb,
+                            "Low RAM detected — using shorter idle timeout"
+                        );
+                        llm_tuning.low_ram_idle_timeout_secs
+                    } else {
+                        llm_tuning.idle_timeout_secs
+                    };
+
+                    // Check idle timeout and unload if needed.
+                    if model.is_loaded().await {
+                        model
+                            .unload_if_idle(Duration::from_secs(idle_timeout_secs))
+                            .await;
+                    }
+
+                    // Log memory warning if usage exceeds threshold.
+                    let total_ram_mb = total_ram_bytes / (1024 * 1024);
+                    let available_mb = total_ram_mb.saturating_sub(os_overhead_mb);
+                    let used_ratio = if total_ram_mb > 0 {
+                        1.0 - (available_mb as f32 / total_ram_mb as f32)
+                    } else {
+                        0.0
+                    };
+                    if used_ratio > llm_tuning.memory_warning_threshold {
+                        tracing::warn!(
+                            used_ratio = format!("{:.1}%", used_ratio * 100.0),
+                            threshold = format!(
+                                "{:.0}%",
+                                llm_tuning.memory_warning_threshold * 100.0
+                            ),
+                            total_ram_mb,
+                            available_mb,
+                            "System memory usage exceeds warning threshold \
+                             (periodic monitor)"
+                        );
+                    }
+                }
+            });
+        }
+    }
+
     // ── CORS middleware (audit item #6) ────────────────────────────────
     let origins: Vec<HeaderValue> = config
         .security
@@ -346,23 +428,34 @@ async fn main() -> anyhow::Result<()> {
     // Uses the comprehensive security_headers_middleware which sets CSP,
     // X-Content-Type-Options, X-Frame-Options, X-XSS-Protection,
     // Referrer-Policy, Permissions-Policy, and HSTS in one middleware.
+    // The app.yaml `security.hsts_max_age_secs` is used as the fallback
+    // default when the HSTS_MAX_AGE env var is not set.
     if config.security.csp_enabled {
-        // Exercise SecurityHeadersConfig::from_env() for env-based overrides
-        let _sec_cfg = middleware::security_headers::SecurityHeadersConfig::from_env();
+        middleware::security_headers::SecurityHeadersConfig::init_global(
+            yaml_config.app.security.hsts_max_age_secs,
+        );
         app = app.layer(axum::middleware::from_fn(
             middleware::security_headers::security_headers_middleware,
         ));
     }
 
     // ── HSTS header (R-05) ────────────────────────────────────────────
+    // Figment config (`config.yaml`) takes priority; app.yaml `security.hsts_max_age_secs`
+    // is used as fallback when the Figment value is the compile-time default.
     if config.security.hsts.enabled {
+        let hsts_max_age = if config.security.hsts.max_age_secs == 63_072_000 {
+            // Figment default matches compile-time default — prefer app.yaml value
+            yaml_config.app.security.hsts_max_age_secs
+        } else {
+            config.security.hsts.max_age_secs
+        };
         app = app.layer(middleware::hsts::hsts_layer(
-            config.security.hsts.max_age_secs,
+            hsts_max_age,
             config.security.hsts.include_subdomains,
         ));
         tracing::info!(
             "HSTS enabled (max-age={}s, includeSubDomains={})",
-            config.security.hsts.max_age_secs,
+            hsts_max_age,
             config.security.hsts.include_subdomains,
         );
     }
@@ -373,8 +466,13 @@ async fn main() -> anyhow::Result<()> {
     ));
 
     // ── Rate limiting (R-05) ──────────────────────────────────────────
+    // app.yaml `security.rate_limit_capacity` and `security.rate_limit_refill_per_sec`
+    // serve as fallback defaults when env vars / presets don't specify global limits.
     if config.security.rate_limit.enabled {
-        let rl_config = middleware::rate_limit::RateLimitConfig::from_env();
+        let rl_config = middleware::rate_limit::RateLimitConfig::from_env_with_yaml_fallback(
+            yaml_config.app.security.rate_limit_capacity,
+            yaml_config.app.security.rate_limit_refill_per_sec,
+        );
         let (capacity, refill_rate) = rl_config.get_capacity_and_rate("global");
         let limiter = std::sync::Arc::new(middleware::rate_limit::RateLimiter::new_in_memory(
             capacity,
@@ -387,7 +485,7 @@ async fn main() -> anyhow::Result<()> {
             ))
             .layer(axum::Extension(limiter));
         tracing::info!(
-            "Rate limiting enabled (capacity={}, refill_rate={:.2}/s, preset=env)",
+            "Rate limiting enabled (capacity={}, refill_rate={:.2}/s, preset=env+app.yaml)",
             capacity,
             refill_rate,
         );

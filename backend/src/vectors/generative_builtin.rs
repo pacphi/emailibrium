@@ -8,6 +8,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Instant;
 
 use async_trait::async_trait;
 use tokio::sync::Mutex;
@@ -125,6 +126,11 @@ pub struct BuiltInGenerativeModel {
     repetition_tuning: super::yaml_config::RepetitionTuning,
     /// Classification prompts loaded from `config/prompts.yaml`.
     prompts: PromptsConfig,
+    /// Tracks when the model was last accessed for idle-timeout unloading.
+    last_accessed: Arc<Mutex<Instant>>,
+    /// Effective context size, incorporating the global `default_context_size`
+    /// fallback from `tuning.yaml` when the per-model config uses the default.
+    effective_context_size: u32,
 }
 
 impl BuiltInGenerativeModel {
@@ -151,25 +157,44 @@ impl BuiltInGenerativeModel {
     ) -> Result<Self, VectorError> {
         let model_path = resolve_model_path(config)?;
 
+        let yaml = super::yaml_config::load_yaml_config("../config").ok();
+
         // Resolve per-model tuning.max_tokens from the YAML catalog.
-        let model_max_tokens = super::yaml_config::load_yaml_config("../config")
-            .ok()
-            .and_then(|yaml| {
-                yaml.llm_catalog
-                    .providers
-                    .get("builtin")?
-                    .models
-                    .iter()
-                    .find(|m| m.id == config.model_id)?
-                    .tuning
-                    .as_ref()?
-                    .max_tokens
-            });
+        let model_max_tokens = yaml.as_ref().and_then(|y| {
+            y.llm_catalog
+                .providers
+                .get("builtin")?
+                .models
+                .iter()
+                .find(|m| m.id == config.model_id)?
+                .tuning
+                .as_ref()?
+                .max_tokens
+        });
 
         // Load repetition tuning from YAML config.
-        let repetition_tuning = super::yaml_config::load_yaml_config("../config")
-            .map(|c| c.tuning.repetition)
+        let repetition_tuning = yaml
+            .as_ref()
+            .map(|c| c.tuning.repetition.clone())
             .unwrap_or_default();
+
+        // Resolve effective context size: use per-model config if explicitly set
+        // (non-default), otherwise fall back to tuning.yaml `default_context_size`.
+        let global_default_ctx = yaml
+            .as_ref()
+            .map(|c| c.tuning.llm.default_context_size as u32)
+            .unwrap_or(2048);
+        let effective_context_size = if config.context_size > 0 {
+            config.context_size
+        } else {
+            global_default_ctx
+        };
+        debug!(
+            config_ctx = config.context_size,
+            global_default = global_default_ctx,
+            effective = effective_context_size,
+            "Resolved effective context size for built-in LLM"
+        );
 
         Ok(Self {
             config: config.clone(),
@@ -179,6 +204,8 @@ impl BuiltInGenerativeModel {
             params,
             repetition_tuning,
             prompts,
+            last_accessed: Arc::new(Mutex::new(Instant::now())),
+            effective_context_size,
         })
     }
 
@@ -186,11 +213,14 @@ impl BuiltInGenerativeModel {
     async fn ensure_loaded(
         &self,
     ) -> Result<tokio::sync::MutexGuard<'_, Option<LoadedModel>>, VectorError> {
+        // Update last-accessed timestamp for idle-timeout tracking.
+        *self.last_accessed.lock().await = Instant::now();
+
         let mut guard = self.inner.lock().await;
         if guard.is_none() {
             let path = self.model_path.clone();
             let gpu_layers = self.config.gpu_layers;
-            let ctx_size = self.config.context_size;
+            let ctx_size = self.effective_context_size;
 
             // Model loading is CPU-intensive; run on blocking thread
             let loaded = tokio::task::spawn_blocking(move || {
@@ -409,6 +439,29 @@ impl BuiltInGenerativeModel {
 }
 
 impl BuiltInGenerativeModel {
+    /// Unload the model from memory if it has been idle longer than the
+    /// given `timeout`. Returns `true` if the model was unloaded.
+    pub async fn unload_if_idle(&self, timeout: std::time::Duration) -> bool {
+        let last = *self.last_accessed.lock().await;
+        if last.elapsed() >= timeout {
+            let mut guard = self.inner.lock().await;
+            if guard.is_some() {
+                *guard = None;
+                info!(
+                    idle_secs = last.elapsed().as_secs(),
+                    "Built-in LLM unloaded due to idle timeout"
+                );
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Check whether the model is currently loaded in memory.
+    pub async fn is_loaded(&self) -> bool {
+        self.inner.lock().await.is_some()
+    }
+
     /// Internal generation helper that accepts an explicit temperature override.
     async fn generate_internal(
         &self,
@@ -419,7 +472,7 @@ impl BuiltInGenerativeModel {
         let _ = self.ensure_loaded().await?;
 
         let prompt = prompt.to_string();
-        let ctx_size = self.config.context_size;
+        let ctx_size = self.effective_context_size;
         let repeat_penalty = self.params.repeat_penalty;
         let rep_tuning = self.repetition_tuning.clone();
 
