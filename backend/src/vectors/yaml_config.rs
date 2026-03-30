@@ -211,6 +211,18 @@ pub struct IngestionTuning {
     pub embedding_batch_size: usize,
     #[serde(default = "default_50_usize")]
     pub min_cluster_emails: usize,
+    #[serde(default = "default_10_usize")]
+    pub sidecar_write_interval: usize,
+    #[serde(default = "default_2_usize")]
+    pub pipeline_channel_buffer: usize,
+    #[serde(default = "default_true")]
+    pub onboarding_mode: bool,
+    #[serde(default = "default_10_usize")]
+    pub backfill_batch_size: usize,
+    #[serde(default = "default_8_usize")]
+    pub backfill_concurrency: usize,
+    #[serde(default = "default_50_u64")]
+    pub backfill_delay_between_ms: u64,
 }
 
 impl Default for IngestionTuning {
@@ -218,6 +230,12 @@ impl Default for IngestionTuning {
         Self {
             embedding_batch_size: 64,
             min_cluster_emails: 50,
+            sidecar_write_interval: 10,
+            pipeline_channel_buffer: 2,
+            onboarding_mode: true,
+            backfill_batch_size: 10,
+            backfill_concurrency: 8,
+            backfill_delay_between_ms: 50,
         }
     }
 }
@@ -916,6 +934,9 @@ fn default_5_usize() -> usize {
 fn default_8_usize() -> usize {
     8
 }
+fn default_10_usize() -> usize {
+    10
+}
 fn default_14_usize() -> usize {
     14
 }
@@ -970,6 +991,9 @@ fn default_15_u64() -> u64 {
 }
 fn default_30_u64() -> u64 {
     30
+}
+fn default_50_u64() -> u64 {
+    50
 }
 fn default_120_u64() -> u64 {
     120

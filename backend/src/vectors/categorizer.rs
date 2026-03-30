@@ -160,8 +160,8 @@ impl VectorCategorizer {
     /// Classify an email with tiered fallback (ADR-012).
     ///
     /// 1. Try vector centroid classification (existing `categorize`)
-    /// 2. If below threshold and a generative model is available, use LLM
-    /// 3. If no generative model, try rule-based heuristics
+    /// 2. Try rule-based heuristics (fast — 1-5ms, handles ~50% of emails)
+    /// 3. If rules can't classify and a generative model is available, use LLM
     /// 4. If all fail, return Uncategorized
     ///
     /// Categories and rules are loaded from `ClassificationConfig`
@@ -201,7 +201,21 @@ impl VectorCategorizer {
             "Below threshold, trying fallback classification"
         );
 
-        // Step 2: If generative model available, try LLM classification.
+        // Step 2: Rule-based fallback using config-driven rules (fast — 1-5ms).
+        if let Some(cat_name) =
+            RuleBasedClassifier::classify_by_rules_with_config(email_text, from_addr, classification_config)
+        {
+            if let Some(category) = parse_email_category(&cat_name) {
+                debug!(category = %cat_name, "Rule-based fallback classified email");
+                return Ok(CategoryResult {
+                    category,
+                    confidence: result.confidence,
+                    method: "rule_based".to_string(),
+                });
+            }
+        }
+
+        // Step 3: If generative model available, try LLM classification.
         // Use categories from YAML config.
         if let Some(gen) = generative {
             let cat_refs: Vec<&str> = classification_config
@@ -222,22 +236,8 @@ impl VectorCategorizer {
                     warn!(category = %cat_name, "LLM returned unparseable category");
                 }
                 Err(e) => {
-                    warn!(error = %e, "LLM classification failed, trying rules");
+                    warn!(error = %e, "LLM classification failed");
                 }
-            }
-        }
-
-        // Step 3: Rule-based fallback using config-driven rules.
-        if let Some(cat_name) =
-            RuleBasedClassifier::classify_by_rules_with_config(email_text, from_addr, classification_config)
-        {
-            if let Some(category) = parse_email_category(&cat_name) {
-                debug!(category = %cat_name, "Rule-based fallback classified email");
-                return Ok(CategoryResult {
-                    category,
-                    confidence: result.confidence,
-                    method: "rule_based".to_string(),
-                });
             }
         }
 

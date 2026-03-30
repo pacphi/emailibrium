@@ -94,6 +94,10 @@ struct RuVectorInner {
     hnsw_config: HnswConfig,
     /// Embedding dimensions (must be consistent across all inserts).
     dimensions: usize,
+    /// How many batch_insert calls between sidecar writes. 1 = write every time.
+    sidecar_write_interval: usize,
+    /// Counter of batch_insert calls since last sidecar write.
+    batches_since_sidecar: usize,
 }
 
 impl RuVectorStore {
@@ -101,10 +105,13 @@ impl RuVectorStore {
     ///
     /// Initialises one HNSW index per collection on disk under `store_config.path`.
     /// HNSW parameters are drawn from `index_config`; dimensions from `dimensions`.
+    /// `sidecar_write_interval` controls how many batch inserts occur between
+    /// sidecar (documents.json) persistence writes. Use 1 to write every time.
     pub fn new(
         store_config: &StoreConfig,
         index_config: &IndexConfig,
         dimensions: usize,
+        sidecar_write_interval: usize,
     ) -> Result<Self, VectorError> {
         let base_path = PathBuf::from(&store_config.path);
         std::fs::create_dir_all(&base_path).map_err(|e| {
@@ -165,14 +172,43 @@ impl RuVectorStore {
             );
         }
 
+        // Ensure interval is at least 1 to avoid division-by-zero or never-write.
+        let interval = sidecar_write_interval.max(1);
+
         Ok(Self {
             inner: Arc::new(RwLock::new(RuVectorInner {
                 collections,
                 base_path,
                 hnsw_config,
                 dimensions,
+                sidecar_write_interval: interval,
+                batches_since_sidecar: 0,
             })),
         })
+    }
+
+    /// Flush all dirty sidecar data to disk.
+    ///
+    /// Call this on graceful shutdown to ensure no document metadata is lost
+    /// when sidecar writes are deferred via `sidecar_write_interval > 1`.
+    pub async fn flush(&self) {
+        let inner = self.inner.read().await;
+        for coll in inner.collections.values() {
+            coll.save_sidecar();
+        }
+        tracing::info!("RuVector sidecar data flushed to disk");
+    }
+}
+
+impl Drop for RuVectorStore {
+    fn drop(&mut self) {
+        // Best-effort synchronous flush on drop. Since `Drop` cannot be async,
+        // we try_write to avoid blocking if the lock is held elsewhere.
+        if let Ok(inner) = self.inner.try_write() {
+            for coll in inner.collections.values() {
+                coll.save_sidecar();
+            }
+        }
     }
 }
 
@@ -235,45 +271,82 @@ impl super::store::VectorStoreBackend for RuVectorStore {
             }
         }
 
-        let mut inner = self.inner.write().await;
-        let mut ids = Vec::with_capacity(docs.len());
+        // Phase 1: Acquire write lock, do HNSW inserts, snapshot sidecar data.
+        let (ids, sidecar_snapshots) = {
+            let mut inner = self.inner.write().await;
+            let mut ids = Vec::with_capacity(docs.len());
 
-        // Group by collection to batch inserts.
-        let mut by_collection: HashMap<
-            VectorCollection,
-            Vec<(String, VectorEntry, VectorDocument)>,
-        > = HashMap::new();
+            // Group by collection to batch inserts.
+            let mut by_collection: HashMap<
+                VectorCollection,
+                Vec<(String, VectorEntry, VectorDocument)>,
+            > = HashMap::new();
 
-        for doc in docs {
-            let rv_id = doc.id.0.to_string();
-            let entry = VectorEntry {
-                id: Some(rv_id.clone()),
-                vector: doc.vector.clone(),
-                metadata: Some(to_rv_metadata(&doc.metadata)),
-            };
-            by_collection
-                .entry(doc.collection.clone())
-                .or_default()
-                .push((rv_id, entry, doc));
-        }
-
-        for (collection, entries) in by_collection {
-            let coll = inner
-                .collections
-                .get_mut(&collection)
-                .ok_or_else(|| VectorError::CollectionNotFound(collection.to_string()))?;
-
-            let rv_entries: Vec<VectorEntry> = entries.iter().map(|(_, e, _)| e.clone()).collect();
-
-            coll.db.insert_batch(rv_entries).map_err(|e| {
-                VectorError::StoreFailed(format!("ruvector batch insert failed: {e}"))
-            })?;
-
-            for (rv_id, _, doc) in entries {
-                ids.push(doc.id.clone());
-                coll.documents.insert(rv_id, doc);
+            for doc in docs {
+                let rv_id = doc.id.0.to_string();
+                let entry = VectorEntry {
+                    id: Some(rv_id.clone()),
+                    vector: doc.vector.clone(),
+                    metadata: Some(to_rv_metadata(&doc.metadata)),
+                };
+                by_collection
+                    .entry(doc.collection.clone())
+                    .or_default()
+                    .push((rv_id, entry, doc));
             }
-            coll.save_sidecar();
+
+            let mut dirty_collections: Vec<VectorCollection> = Vec::new();
+
+            for (collection, entries) in by_collection {
+                let coll = inner
+                    .collections
+                    .get_mut(&collection)
+                    .ok_or_else(|| VectorError::CollectionNotFound(collection.to_string()))?;
+
+                let rv_entries: Vec<VectorEntry> =
+                    entries.iter().map(|(_, e, _)| e.clone()).collect();
+
+                coll.db.insert_batch(rv_entries).map_err(|e| {
+                    VectorError::StoreFailed(format!("ruvector batch insert failed: {e}"))
+                })?;
+
+                for (rv_id, _, doc) in entries {
+                    ids.push(doc.id.clone());
+                    coll.documents.insert(rv_id, doc);
+                }
+                dirty_collections.push(collection);
+            }
+
+            // P4: only write sidecar every N batches.
+            inner.batches_since_sidecar += 1;
+            let snapshots = if inner.batches_since_sidecar >= inner.sidecar_write_interval {
+                inner.batches_since_sidecar = 0;
+                // P5: Clone sidecar data while holding the lock (fast),
+                // actual disk I/O happens after lock release.
+                dirty_collections
+                    .iter()
+                    .filter_map(|c| {
+                        let coll = inner.collections.get(c)?;
+                        let json = serde_json::to_string(&coll.documents).ok()?;
+                        Some((coll.sidecar_path.clone(), json))
+                    })
+                    .collect::<Vec<_>>()
+            } else {
+                Vec::new()
+            };
+
+            (ids, snapshots)
+            // Write lock dropped here.
+        };
+
+        // Phase 2: Write sidecar outside the lock so searches aren't blocked (P5).
+        for (path, json) in &sidecar_snapshots {
+            if let Err(e) = std::fs::write(path, json) {
+                tracing::warn!(
+                    path = %path.display(),
+                    "Failed to persist document sidecar: {e}"
+                );
+            }
         }
 
         Ok(ids)
@@ -536,7 +609,8 @@ mod tests {
     #[tokio::test]
     async fn test_insert_and_get() {
         let dir = TempDir::new().unwrap();
-        let store = RuVectorStore::new(&test_store_config(&dir), &test_index_config(), 3).unwrap();
+        let store =
+            RuVectorStore::new(&test_store_config(&dir), &test_index_config(), 3, 1).unwrap();
 
         let doc = make_doc("email-1", vec![1.0, 0.0, 0.0], VectorCollection::EmailText);
         let id = doc.id.clone();
@@ -552,7 +626,7 @@ mod tests {
     #[tokio::test]
     async fn test_search_returns_results() {
         let dir = TempDir::new().unwrap();
-        let store = RuVectorStore::new(&test_store_config(&dir), &test_index_config(), 3).unwrap();
+        let store = RuVectorStore::new(&test_store_config(&dir), &test_index_config(), 3, 1).unwrap();
 
         store
             .insert(make_doc(
@@ -596,7 +670,7 @@ mod tests {
     #[tokio::test]
     async fn test_delete() {
         let dir = TempDir::new().unwrap();
-        let store = RuVectorStore::new(&test_store_config(&dir), &test_index_config(), 2).unwrap();
+        let store = RuVectorStore::new(&test_store_config(&dir), &test_index_config(), 2, 1).unwrap();
 
         let doc = make_doc("email-1", vec![1.0, 0.0], VectorCollection::EmailText);
         let id = doc.id.clone();
@@ -610,7 +684,7 @@ mod tests {
     #[tokio::test]
     async fn test_stats_reports_hnsw_index_type() {
         let dir = TempDir::new().unwrap();
-        let store = RuVectorStore::new(&test_store_config(&dir), &test_index_config(), 3).unwrap();
+        let store = RuVectorStore::new(&test_store_config(&dir), &test_index_config(), 3, 1).unwrap();
 
         store
             .insert(make_doc(
@@ -630,7 +704,7 @@ mod tests {
     #[tokio::test]
     async fn test_empty_vector_rejected() {
         let dir = TempDir::new().unwrap();
-        let store = RuVectorStore::new(&test_store_config(&dir), &test_index_config(), 3).unwrap();
+        let store = RuVectorStore::new(&test_store_config(&dir), &test_index_config(), 3, 1).unwrap();
 
         let doc = make_doc("e1", vec![], VectorCollection::EmailText);
         assert!(store.insert(doc).await.is_err());

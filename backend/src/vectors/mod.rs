@@ -114,6 +114,11 @@ impl VectorService {
                 .with_redis(redis, config.redis.cache_ttl_secs),
         );
 
+        // Load tuning parameters from YAML config for ingestion, clustering, and error recovery.
+        let yaml_tuning = yaml_config::load_yaml_config("../config")
+            .map(|c| c.tuning)
+            .unwrap_or_default();
+
         // Initialize vector store backend based on config (ADR-003).
         // Fallback chain: ruvector (default) -> qdrant -> sqlite -> memory.
         let raw_store: Arc<dyn VectorStoreBackend> = match config.store.backend.as_str() {
@@ -179,6 +184,7 @@ impl VectorService {
                     &config.store,
                     &config.index,
                     config.embedding.dimensions,
+                    yaml_tuning.ingestion.sidecar_write_interval,
                 ) {
                     Ok(rv) => {
                         tracing::info!("Vector store: RuVector HNSW backend");
@@ -217,11 +223,6 @@ impl VectorService {
             Ok(loaded) => tracing::info!("Loaded {loaded} category centroids from database"),
             Err(e) => tracing::warn!("Failed to load category centroids: {e}"),
         }
-
-        // Load tuning parameters from YAML config for ingestion, clustering, and error recovery.
-        let yaml_tuning = yaml_config::load_yaml_config("../config")
-            .map(|c| c.tuning)
-            .unwrap_or_default();
 
         // Initialize hybrid search
         let hybrid_search = Arc::new(search::HybridSearch::new(

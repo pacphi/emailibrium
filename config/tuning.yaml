@@ -50,6 +50,12 @@ chat:
 ingestion:
   embedding_batch_size: 64 # Emails per embedding batch
   min_cluster_emails: 50 # Minimum embedded emails before clustering runs
+  sidecar_write_interval: 10 # Write sidecar every N batches (0 = every batch)
+  pipeline_channel_buffer: 2 # Embed→insert channel depth (pipelining)
+  onboarding_mode: true # During bulk sync: rules-only classification, LLM backfill async
+  backfill_batch_size: 10 # LLM batch size for async classification backfill
+  backfill_concurrency: 8 # Parallel LLM calls during backfill
+  backfill_delay_between_ms: 50 # Throttle between backfill batches (ms)
 
 # ── Clustering ───────────────────────────────────────────────────────────────
 clustering:

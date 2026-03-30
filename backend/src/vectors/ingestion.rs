@@ -4,11 +4,13 @@
 //! Cluster -> Analyze -> Complete. Supports pause/resume and broadcasts
 //! progress updates for SSE streaming.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
+use futures::stream::{self, StreamExt};
 use serde::Serialize;
-use tokio::sync::{broadcast, Notify, RwLock};
+use tokio::sync::{broadcast, mpsc, Notify, RwLock};
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
@@ -651,76 +653,150 @@ impl IngestionPipelineHandle {
         let start_time = std::time::Instant::now();
         let mut last_processed_id: Option<String> = None;
 
-        for chunk in emails.chunks(batch_size) {
-            // Check pause
-            if self.is_paused().await {
-                self.save_checkpoint(
-                    &job_id,
-                    &account_id,
-                    "embedding",
-                    "paused",
-                    last_processed_id.as_deref(),
-                    None,
-                )
-                .await;
-                self.broadcast_progress(&job_id).await;
-                self.wait_for_resume().await;
-            }
+        // --- Pipelined embedding + insertion via tokio channel ---
+        // The producer embeds batch N+1 while the consumer inserts batch N.
+        let channel_buffer = self.ingestion_tuning.pipeline_channel_buffer;
 
-            let texts: Vec<String> = chunk
-                .iter()
-                .map(|e| {
-                    EmbeddingPipeline::prepare_email_text(&e.subject, &e.from_addr, &e.body_text)
-                })
-                .collect();
+        // Message type: Ok((docs, last_email_id, batch_len)) or Err((batch_len, error_msg))
+        type EmbedMsg = Result<(Vec<VectorDocument>, Option<String>, u64), (u64, String)>;
+        let (tx, mut rx): (mpsc::Sender<EmbedMsg>, mpsc::Receiver<EmbedMsg>) =
+            mpsc::channel(channel_buffer);
 
-            // Retry embedding with error_recovery tuning parameters.
-            let max_retries = self.error_recovery_tuning.max_retries;
-            let retry_delay = std::time::Duration::from_millis(self.error_recovery_tuning.retry_delay_ms);
-            let mut embed_result = self.embedding.embed_batch(&texts).await;
-            for attempt in 1..=max_retries {
-                if embed_result.is_ok() {
-                    break;
+        // Shared counter so the consumer can read how many the producer has embedded.
+        let producer_embedded = Arc::new(AtomicU64::new(0));
+        let producer_embedded_consumer = producer_embedded.clone();
+
+        // Clone Arcs for the producer task.
+        let embedding = self.embedding.clone();
+        let db = self.db.clone();
+        let state_ref = self.state.clone();
+        let resume_notify = self.resume_notify.clone();
+        let max_retries = self.error_recovery_tuning.max_retries;
+        let retry_delay_ms = self.error_recovery_tuning.retry_delay_ms;
+        let model_name = self.embedding_model_name().to_string();
+
+        // Build owned batch data for the producer (avoids borrowing `emails`).
+        struct BatchInput {
+            texts: Vec<String>,
+            email_ids: Vec<String>,
+            subjects: Vec<String>,
+            from_addrs: Vec<String>,
+            last_email_id: Option<String>,
+            batch_len: u64,
+        }
+
+        let batches: Vec<BatchInput> = emails
+            .chunks(batch_size)
+            .map(|chunk| {
+                let texts: Vec<String> = chunk
+                    .iter()
+                    .map(|e| {
+                        EmbeddingPipeline::prepare_email_text(
+                            &e.subject,
+                            &e.from_addr,
+                            &e.body_text,
+                        )
+                    })
+                    .collect();
+                BatchInput {
+                    texts,
+                    email_ids: chunk.iter().map(|e| e.id.clone()).collect(),
+                    subjects: chunk.iter().map(|e| e.subject.clone()).collect(),
+                    from_addrs: chunk.iter().map(|e| e.from_addr.clone()).collect(),
+                    last_email_id: chunk.last().map(|e| e.id.clone()),
+                    batch_len: chunk.len() as u64,
                 }
-                warn!(attempt, max_retries, "Embedding batch failed, retrying after delay");
-                tokio::time::sleep(retry_delay).await;
-                embed_result = self.embedding.embed_batch(&texts).await;
-            }
+            })
+            .collect();
 
-            match embed_result {
-                Ok(vectors) => {
-                    let mut docs = Vec::with_capacity(vectors.len());
-                    for (i, vector) in vectors.into_iter().enumerate() {
-                        let email = &chunk[i];
-                        let vector_id = VectorId::new();
-                        let mut metadata = std::collections::HashMap::new();
-                        metadata.insert("subject".to_string(), email.subject.clone());
-                        metadata.insert("from_addr".to_string(), email.from_addr.clone());
+        // Producer task: embed each batch and send docs through the channel.
+        let producer = tokio::spawn(async move {
+            for batch in batches {
+                // Respect pause/cancel state.
+                {
+                    let is_paused = state_ref.read().await.paused;
+                    if is_paused {
+                        info!("Embedding producer paused, waiting for resume signal");
+                        resume_notify.notified().await;
+                        info!("Embedding producer resumed");
+                    }
+                }
 
-                        let doc = VectorDocument {
-                            id: vector_id.clone(),
-                            email_id: email.id.clone(),
-                            vector,
-                            metadata,
-                            collection: VectorCollection::EmailText,
-                            created_at: Utc::now(),
-                        };
-                        docs.push(doc);
+                // Retry embedding with error_recovery tuning parameters.
+                let retry_delay = std::time::Duration::from_millis(retry_delay_ms);
+                let mut embed_result = embedding.embed_batch(&batch.texts).await;
+                for attempt in 1..=max_retries {
+                    if embed_result.is_ok() {
+                        break;
+                    }
+                    warn!(attempt, max_retries, "Embedding batch failed, retrying after delay");
+                    tokio::time::sleep(retry_delay).await;
+                    embed_result = embedding.embed_batch(&batch.texts).await;
+                }
 
-                        // Update DB
-                        if let Err(err) = self
-                            .update_embedding_status(
-                                &email.id,
+                match embed_result {
+                    Ok(vectors) => {
+                        let mut docs = Vec::with_capacity(vectors.len());
+                        for (i, vector) in vectors.into_iter().enumerate() {
+                            let vector_id = VectorId::new();
+                            let mut metadata = std::collections::HashMap::new();
+                            metadata
+                                .insert("subject".to_string(), batch.subjects[i].clone());
+                            metadata.insert(
+                                "from_addr".to_string(),
+                                batch.from_addrs[i].clone(),
+                            );
+
+                            let doc = VectorDocument {
+                                id: vector_id.clone(),
+                                email_id: batch.email_ids[i].clone(),
+                                vector,
+                                metadata,
+                                collection: VectorCollection::EmailText,
+                                created_at: Utc::now(),
+                            };
+                            docs.push(doc);
+
+                            // Update DB embedding status in the producer.
+                            if let Err(err) = update_embedding_status_standalone(
+                                &db,
+                                &batch.email_ids[i],
                                 &vector_id.to_string(),
-                                self.embedding_model_name(),
+                                &model_name,
                             )
                             .await
+                            {
+                                warn!(email_id = %batch.email_ids[i], "Failed to update embedding status: {err}");
+                            }
+                        }
+
+                        producer_embedded.fetch_add(batch.batch_len, Ordering::Relaxed);
+
+                        if tx
+                            .send(Ok((docs, batch.last_email_id, batch.batch_len)))
+                            .await
+                            .is_err()
                         {
-                            warn!(email_id = %email.id, "Failed to update embedding status: {err}");
+                            warn!("Consumer dropped, stopping embedding producer");
+                            break;
                         }
                     }
+                    Err(err) => {
+                        let msg = err.to_string();
+                        if tx.send(Err((batch.batch_len, msg))).await.is_err() {
+                            warn!("Consumer dropped, stopping embedding producer");
+                            break;
+                        }
+                    }
+                }
+            }
+            // tx is dropped here, closing the channel.
+        });
 
-                    // Batch insert into vector store
+        // Consumer: receive embedded batches and insert into the vector store.
+        while let Some(msg) = rx.recv().await {
+            match msg {
+                Ok((docs, batch_last_id, batch_len)) => {
                     match self.store.batch_insert(docs).await {
                         Ok(ids) => {
                             let count = ids.len() as u64;
@@ -738,23 +814,23 @@ impl IngestionPipelineHandle {
                             warn!("Batch insert failed: {err}");
                             let mut state = self.state.write().await;
                             if let Some(ref mut job) = state.current_job {
-                                job.failed += chunk.len() as u64;
-                                job.processed += chunk.len() as u64;
+                                job.failed += batch_len;
+                                job.processed += batch_len;
                             }
                         }
                     }
 
                     // Track the last successfully processed email for checkpointing.
-                    if let Some(last_email) = chunk.last() {
-                        last_processed_id = Some(last_email.id.clone());
+                    if batch_last_id.is_some() {
+                        last_processed_id = batch_last_id;
                     }
                 }
-                Err(err) => {
-                    warn!("Batch embedding failed: {err}");
+                Err((batch_len, err_msg)) => {
+                    warn!("Batch embedding failed: {err_msg}");
                     let mut state = self.state.write().await;
                     if let Some(ref mut job) = state.current_job {
-                        job.failed += chunk.len() as u64;
-                        job.processed += chunk.len() as u64;
+                        job.failed += batch_len;
+                        job.processed += batch_len;
                     }
 
                     // Save checkpoint on batch failure so we can resume.
@@ -764,7 +840,7 @@ impl IngestionPipelineHandle {
                         "embedding",
                         "failed",
                         last_processed_id.as_deref(),
-                        Some(&err.to_string()),
+                        Some(&err_msg),
                     )
                     .await;
                 }
@@ -783,6 +859,18 @@ impl IngestionPipelineHandle {
             self.broadcast_progress(&job_id).await;
         }
 
+        // Ensure the producer task has completed.
+        if let Err(err) = producer.await {
+            error!("Embedding producer task panicked: {err}");
+        }
+
+        // Log pipeline stats.
+        let total_embedded = producer_embedded_consumer.load(Ordering::Relaxed);
+        debug!(
+            total_embedded,
+            channel_buffer, "Pipelined embedding phase complete"
+        );
+
         // Phase 3: Categorize
         self.update_phase(IngestionPhase::Categorizing).await;
         self.save_checkpoint(
@@ -796,39 +884,61 @@ impl IngestionPipelineHandle {
         .await;
         self.broadcast_progress(&job_id).await;
 
-        for email in &emails {
-            if self.is_paused().await {
-                self.wait_for_resume().await;
-            }
+        let concurrency = self.ingestion_tuning.backfill_concurrency;
+        let categorizer = self.categorizer.clone();
+        let generative = self.generative.clone();
+        let classification_config = self.classification_config.clone();
 
-            let text = EmbeddingPipeline::prepare_email_text(
-                &email.subject,
-                &email.from_addr,
-                &email.body_text,
-            );
+        // Pre-extract owned data from emails to avoid lifetime issues with buffer_unordered.
+        let email_inputs: Vec<(String, String, String)> = emails
+            .iter()
+            .map(|e| {
+                let text = EmbeddingPipeline::prepare_email_text(
+                    &e.subject,
+                    &e.from_addr,
+                    &e.body_text,
+                );
+                (e.id.clone(), e.from_addr.clone(), text)
+            })
+            .collect();
 
-            let gen_ref = self.generative.as_deref();
-            match self
-                .categorizer
-                .categorize_with_fallback_config(
-                    &text,
-                    &email.from_addr,
-                    gen_ref,
-                    &self.classification_config,
-                )
-                .await
-            {
-                Ok(result) => {
+        let results: Vec<(String, Result<super::types::CategoryResult, VectorError>)> =
+            stream::iter(email_inputs)
+                .map(|(email_id, from_addr, text)| {
+                    let categorizer = categorizer.clone();
+                    let generative = generative.clone();
+                    let classification_config = classification_config.clone();
+                    async move {
+                        let gen_ref = generative.as_deref();
+                        let result = categorizer
+                            .categorize_with_fallback_config(
+                                &text,
+                                &from_addr,
+                                gen_ref,
+                                &classification_config,
+                            )
+                            .await;
+                        (email_id, result)
+                    }
+                })
+                .buffer_unordered(concurrency)
+                .collect()
+                .await;
+
+        // Apply DB updates and progress tracking after collecting all results.
+        for (email_id, result) in &results {
+            match result {
+                Ok(cat_result) => {
                     if let Err(err) = self
                         .update_category(
-                            &email.id,
-                            &result.category.to_string(),
-                            result.confidence,
-                            &result.method,
+                            email_id,
+                            &cat_result.category.to_string(),
+                            cat_result.confidence,
+                            &cat_result.method,
                         )
                         .await
                     {
-                        warn!(email_id = %email.id, "Failed to update category: {err}");
+                        warn!(email_id = %email_id, "Failed to update category: {err}");
                     }
                     let mut state = self.state.write().await;
                     if let Some(ref mut job) = state.current_job {
@@ -836,7 +946,7 @@ impl IngestionPipelineHandle {
                     }
                 }
                 Err(err) => {
-                    debug!(email_id = %email.id, "Categorization failed: {err}");
+                    debug!(email_id = %email_id, "Categorization failed: {err}");
                 }
             }
         }
@@ -1072,6 +1182,33 @@ impl IngestionPipelineHandle {
             let _ = self.progress_tx.send(progress);
         }
     }
+}
+
+/// Standalone helper for updating embedding status from a spawned task.
+///
+/// This mirrors `IngestionPipelineHandle::update_embedding_status` but takes a
+/// `Database` reference directly so it can be called from the producer task
+/// without requiring `&self`.
+async fn update_embedding_status_standalone(
+    db: &Database,
+    email_id: &str,
+    vector_id: &str,
+    model: &str,
+) -> Result<(), VectorError> {
+    let now = Utc::now().to_rfc3339();
+    sqlx::query(
+        r#"UPDATE emails
+           SET embedding_status = 'embedded', embedded_at = ?, vector_id = ?, embedding_model = ?
+           WHERE id = ?"#,
+    )
+    .bind(&now)
+    .bind(vector_id)
+    .bind(model)
+    .bind(email_id)
+    .execute(&db.pool)
+    .await
+    .map_err(VectorError::DatabaseError)?;
+    Ok(())
 }
 
 /// Estimate remaining time based on current throughput.
