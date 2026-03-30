@@ -300,7 +300,7 @@ impl RagPipeline {
         }
 
         let body_budget_from_chars = max_chars - header.len() - 10; // 10 for "\nBody: " + "..."
-        // Also respect max_body_chars from config
+                                                                    // Also respect max_body_chars from config
         let body_budget = body_budget_from_chars.min(self.config.max_body_chars);
         let body = email.body_text.as_deref().unwrap_or("");
         let body = if body.len() > body_budget {

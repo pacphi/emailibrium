@@ -242,9 +242,11 @@ impl VectorCategorizer {
         );
 
         // Step 2: Rule-based fallback using config-driven rules (fast — 1-5ms).
-        if let Some(cat_name) =
-            RuleBasedClassifier::classify_by_rules_with_config(email_text, from_addr, classification_config)
-        {
+        if let Some(cat_name) = RuleBasedClassifier::classify_by_rules_with_config(
+            email_text,
+            from_addr,
+            classification_config,
+        ) {
             if let Some(category) = parse_email_category(&cat_name) {
                 debug!(category = %cat_name, "Rule-based fallback classified email");
                 return Ok(CategoryResult {
@@ -1148,11 +1150,7 @@ mod tests {
         let cat = make_categorizer(0.99, 0.1, 0);
         let emails: Vec<(&str, &str)> = vec![];
         let results = cat
-            .categorize_batch_with_fallback_config(
-                &emails,
-                None,
-                &ClassificationConfig::default(),
-            )
+            .categorize_batch_with_fallback_config(&emails, None, &ClassificationConfig::default())
             .await;
         assert!(results.is_empty());
     }

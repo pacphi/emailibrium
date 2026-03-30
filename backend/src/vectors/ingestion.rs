@@ -732,7 +732,10 @@ impl IngestionPipelineHandle {
                     if embed_result.is_ok() {
                         break;
                     }
-                    warn!(attempt, max_retries, "Embedding batch failed, retrying after delay");
+                    warn!(
+                        attempt,
+                        max_retries, "Embedding batch failed, retrying after delay"
+                    );
                     tokio::time::sleep(retry_delay).await;
                     embed_result = embedding.embed_batch(&batch.texts).await;
                 }
@@ -743,12 +746,8 @@ impl IngestionPipelineHandle {
                         for (i, vector) in vectors.into_iter().enumerate() {
                             let vector_id = VectorId::new();
                             let mut metadata = std::collections::HashMap::new();
-                            metadata
-                                .insert("subject".to_string(), batch.subjects[i].clone());
-                            metadata.insert(
-                                "from_addr".to_string(),
-                                batch.from_addrs[i].clone(),
-                            );
+                            metadata.insert("subject".to_string(), batch.subjects[i].clone());
+                            metadata.insert("from_addr".to_string(), batch.from_addrs[i].clone());
 
                             let doc = VectorDocument {
                                 id: vector_id.clone(),
@@ -910,11 +909,8 @@ impl IngestionPipelineHandle {
         let email_inputs: Vec<(String, String, String)> = emails
             .iter()
             .map(|e| {
-                let text = EmbeddingPipeline::prepare_email_text(
-                    &e.subject,
-                    &e.from_addr,
-                    &e.body_text,
-                );
+                let text =
+                    EmbeddingPipeline::prepare_email_text(&e.subject, &e.from_addr, &e.body_text);
                 (e.id.clone(), e.from_addr.clone(), text)
             })
             .collect();
@@ -929,11 +925,7 @@ impl IngestionPipelineHandle {
                     async move {
                         let result = if onboarding {
                             categorizer
-                                .categorize_rules_only(
-                                    &text,
-                                    &from_addr,
-                                    &classification_config,
-                                )
+                                .categorize_rules_only(&text, &from_addr, &classification_config)
                                 .await
                         } else {
                             let gen_ref = generative.as_deref();
@@ -1131,10 +1123,7 @@ impl IngestionPipelineHandle {
                                 let gen_ref = gen.as_deref();
                                 let result = cat
                                     .categorize_with_fallback_config(
-                                        &text,
-                                        &from_addr,
-                                        gen_ref,
-                                        &cfg,
+                                        &text, &from_addr, gen_ref, &cfg,
                                     )
                                     .await;
                                 (email_id, result)

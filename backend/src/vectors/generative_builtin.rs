@@ -16,7 +16,7 @@ use tracing::{debug, info, warn};
 
 use super::config::BuiltInLlmConfig;
 use super::error::VectorError;
-use super::generative::{GenerativeModel, GenerationParams};
+use super::generative::{GenerationParams, GenerativeModel};
 use super::yaml_config::PromptsConfig;
 
 use llama_cpp_2::context::params::LlamaContextParams;
@@ -613,8 +613,7 @@ impl GenerativeModel for BuiltInGenerativeModel {
             response.trim()
         };
 
-        let parsed =
-            super::generative::parse_batch_response(stripped, texts.len(), categories);
+        let parsed = super::generative::parse_batch_response(stripped, texts.len(), categories);
         let mut results = Vec::with_capacity(texts.len());
         for (i, r) in parsed.into_iter().enumerate() {
             match r {

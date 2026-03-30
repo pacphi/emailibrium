@@ -629,7 +629,8 @@ mod tests {
     #[tokio::test]
     async fn test_search_returns_results() {
         let dir = TempDir::new().unwrap();
-        let store = RuVectorStore::new(&test_store_config(&dir), &test_index_config(), 3, 1).unwrap();
+        let store =
+            RuVectorStore::new(&test_store_config(&dir), &test_index_config(), 3, 1).unwrap();
 
         store
             .insert(make_doc(
@@ -673,7 +674,8 @@ mod tests {
     #[tokio::test]
     async fn test_delete() {
         let dir = TempDir::new().unwrap();
-        let store = RuVectorStore::new(&test_store_config(&dir), &test_index_config(), 2, 1).unwrap();
+        let store =
+            RuVectorStore::new(&test_store_config(&dir), &test_index_config(), 2, 1).unwrap();
 
         let doc = make_doc("email-1", vec![1.0, 0.0], VectorCollection::EmailText);
         let id = doc.id.clone();
@@ -687,7 +689,8 @@ mod tests {
     #[tokio::test]
     async fn test_stats_reports_hnsw_index_type() {
         let dir = TempDir::new().unwrap();
-        let store = RuVectorStore::new(&test_store_config(&dir), &test_index_config(), 3, 1).unwrap();
+        let store =
+            RuVectorStore::new(&test_store_config(&dir), &test_index_config(), 3, 1).unwrap();
 
         store
             .insert(make_doc(
@@ -707,7 +710,8 @@ mod tests {
     #[tokio::test]
     async fn test_empty_vector_rejected() {
         let dir = TempDir::new().unwrap();
-        let store = RuVectorStore::new(&test_store_config(&dir), &test_index_config(), 3, 1).unwrap();
+        let store =
+            RuVectorStore::new(&test_store_config(&dir), &test_index_config(), 3, 1).unwrap();
 
         let doc = make_doc("e1", vec![], VectorCollection::EmailText);
         assert!(store.insert(doc).await.is_err());

@@ -1090,12 +1090,20 @@ impl ClusterEngine {
         let mut new_clusters: Vec<TopicCluster> = Vec::new();
         for cd in &cluster_data {
             let name = generate_cluster_name(&cd.cluster_subjects);
-            let top_terms = compute_tfidf_terms(&cd.cluster_subjects, &all_cluster_subjects, self.clustering_tuning.tfidf_max_terms);
+            let top_terms = compute_tfidf_terms(
+                &cd.cluster_subjects,
+                &all_cluster_subjects,
+                self.clustering_tuning.tfidf_max_terms,
+            );
 
             let member_embeddings: Vec<&Vec<f32>> =
                 cd.member_indices.iter().map(|&i| &embeddings[i]).collect();
-            let representative_email_ids =
-                find_representative_emails(&cd.centroid, &cd.email_ids, &member_embeddings, self.clustering_tuning.representative_emails);
+            let representative_email_ids = find_representative_emails(
+                &cd.centroid,
+                &cd.email_ids,
+                &member_embeddings,
+                self.clustering_tuning.representative_emails,
+            );
 
             new_clusters.push(TopicCluster {
                 id: uuid::Uuid::new_v4().to_string(),

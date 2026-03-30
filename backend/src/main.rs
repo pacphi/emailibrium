@@ -158,8 +158,15 @@ async fn main() -> anyhow::Result<()> {
     };
 
     // Initialize vector service (pass Redis for L2 embedding cache)
-    let vector_service =
-        Arc::new(vectors::VectorService::new(config.clone(), db.clone(), redis.clone(), Some(&yaml_config)).await?);
+    let vector_service = Arc::new(
+        vectors::VectorService::new(
+            config.clone(),
+            db.clone(),
+            redis.clone(),
+            Some(&yaml_config),
+        )
+        .await?,
+    );
 
     // ── Log AI configuration status ────────────────────────────────────
     tracing::info!(
@@ -347,22 +354,19 @@ async fn main() -> anyhow::Result<()> {
                     interval.tick().await;
 
                     // Determine effective idle timeout based on system RAM.
-                    let total_ram_bytes =
-                        vectors::model_catalog::get_total_ram_bytes();
-                    let total_ram_gb =
-                        total_ram_bytes / (1024 * 1024 * 1024);
-                    let idle_timeout_secs = if total_ram_gb
-                        <= llm_tuning.low_ram_threshold_gb as u64
-                    {
-                        tracing::debug!(
-                            total_ram_gb,
-                            threshold_gb = llm_tuning.low_ram_threshold_gb,
-                            "Low RAM detected — using shorter idle timeout"
-                        );
-                        llm_tuning.low_ram_idle_timeout_secs
-                    } else {
-                        llm_tuning.idle_timeout_secs
-                    };
+                    let total_ram_bytes = vectors::model_catalog::get_total_ram_bytes();
+                    let total_ram_gb = total_ram_bytes / (1024 * 1024 * 1024);
+                    let idle_timeout_secs =
+                        if total_ram_gb <= llm_tuning.low_ram_threshold_gb as u64 {
+                            tracing::debug!(
+                                total_ram_gb,
+                                threshold_gb = llm_tuning.low_ram_threshold_gb,
+                                "Low RAM detected — using shorter idle timeout"
+                            );
+                            llm_tuning.low_ram_idle_timeout_secs
+                        } else {
+                            llm_tuning.idle_timeout_secs
+                        };
 
                     // Check idle timeout and unload if needed.
                     if model.is_loaded().await {
@@ -382,10 +386,8 @@ async fn main() -> anyhow::Result<()> {
                     if used_ratio > llm_tuning.memory_warning_threshold {
                         tracing::warn!(
                             used_ratio = format!("{:.1}%", used_ratio * 100.0),
-                            threshold = format!(
-                                "{:.0}%",
-                                llm_tuning.memory_warning_threshold * 100.0
-                            ),
+                            threshold =
+                                format!("{:.0}%", llm_tuning.memory_warning_threshold * 100.0),
                             total_ram_mb,
                             available_mb,
                             "System memory usage exceeds warning threshold \

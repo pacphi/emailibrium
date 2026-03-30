@@ -240,11 +240,11 @@ Identifies and mitigates degenerate learning patterns.
 
 **Detected Patterns:**
 
-| Pattern | Detection | Mitigation |
-|---------|-----------|------------|
-| Position bias | Top-ranked results always clicked regardless of query | Weight clicks by 1/log(rank) |
-| Feedback loop | Same emails repeatedly reinforced | Cap per-email feedback influence |
-| Centroid collapse | Multiple centroids converging to same point | Trigger CentroidDriftAlarm |
+| Pattern             | Detection                                              | Mitigation                         |
+| ------------------- | ------------------------------------------------------ | ---------------------------------- |
+| Position bias       | Top-ranked results always clicked regardless of query  | Weight clicks by 1/log(rank)       |
+| Feedback loop       | Same emails repeatedly reinforced                      | Cap per-email feedback influence   |
+| Centroid collapse   | Multiple centroids converging to same point            | Trigger CentroidDriftAlarm         |
 | Category starvation | A category receiving no feedback, centroid going stale | Protect stale centroids from drift |
 
 **Responsibilities:**

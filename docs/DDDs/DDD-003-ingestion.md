@@ -195,13 +195,13 @@ Extracts text content from file attachments.
 
 **Supported Formats:**
 
-| Format | Tool |
-|--------|------|
-| PDF | `pdf-extract` crate |
-| DOCX | `dotext` crate |
-| XLSX/CSV | `calamine` crate |
-| Plain text | Direct read |
-| Other | File type detection via `infer` crate; unsupported types are skipped |
+| Format     | Tool                                                                 |
+| ---------- | -------------------------------------------------------------------- |
+| PDF        | `pdf-extract` crate                                                  |
+| DOCX       | `dotext` crate                                                       |
+| XLSX/CSV   | `calamine` crate                                                     |
+| Plain text | Direct read                                                          |
+| Other      | File type detection via `infer` crate; unsupported types are skipped |
 
 **Responsibilities:**
 

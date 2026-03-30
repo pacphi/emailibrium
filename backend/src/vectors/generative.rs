@@ -43,9 +43,7 @@ impl GenerationParams {
         let temperature = per_model
             .and_then(|t| t.temperature)
             .unwrap_or(global.default_temperature);
-        let top_p = per_model
-            .and_then(|t| t.top_p)
-            .unwrap_or(global.top_p);
+        let top_p = per_model.and_then(|t| t.top_p).unwrap_or(global.top_p);
         let repeat_penalty = per_model
             .and_then(|t| t.repeat_penalty)
             .unwrap_or(global.repeat_penalty);
@@ -356,7 +354,10 @@ impl GenerativeModel for OllamaGenerativeModel {
             match r {
                 Ok(cat) => results.push(cat),
                 Err(_) => {
-                    debug!(index = i, "Batch parse failed, falling back to individual classify");
+                    debug!(
+                        index = i,
+                        "Batch parse failed, falling back to individual classify"
+                    );
                     results.push(self.classify(texts[i], categories).await?);
                 }
             }
@@ -517,7 +518,10 @@ impl GenerativeModel for CloudGenerativeModel {
             match r {
                 Ok(cat) => results.push(cat),
                 Err(_) => {
-                    debug!(index = i, "Batch parse failed, falling back to individual classify");
+                    debug!(
+                        index = i,
+                        "Batch parse failed, falling back to individual classify"
+                    );
                     results.push(self.classify(texts[i], categories).await?);
                 }
             }
@@ -549,7 +553,10 @@ impl CloudGenerativeModel {
     ) -> Result<String, VectorError> {
         match self.provider.as_str() {
             "openai" => self.generate_openai(prompt, max_tokens, temperature).await,
-            "anthropic" => self.generate_anthropic(prompt, max_tokens, temperature).await,
+            "anthropic" => {
+                self.generate_anthropic(prompt, max_tokens, temperature)
+                    .await
+            }
             "gemini" => self.generate_gemini(prompt, max_tokens, temperature).await,
             other => Err(VectorError::ConfigError(format!(
                 "Unknown cloud provider: {other}"
@@ -758,7 +765,13 @@ impl OpenRouterGenerativeModel {
         base_url: &str,
         extra_headers: std::collections::HashMap<String, String>,
     ) -> Result<Self, VectorError> {
-        Self::with_params(api_key_env, model, base_url, extra_headers, GenerationParams::default())
+        Self::with_params(
+            api_key_env,
+            model,
+            base_url,
+            extra_headers,
+            GenerationParams::default(),
+        )
     }
 
     /// Create a new OpenRouter generative model with resolved generation parameters.
@@ -770,7 +783,14 @@ impl OpenRouterGenerativeModel {
         extra_headers: std::collections::HashMap<String, String>,
         params: GenerationParams,
     ) -> Result<Self, VectorError> {
-        Self::with_params_and_prompts(api_key_env, model, base_url, extra_headers, params, PromptsConfig::default())
+        Self::with_params_and_prompts(
+            api_key_env,
+            model,
+            base_url,
+            extra_headers,
+            params,
+            PromptsConfig::default(),
+        )
     }
 
     /// Create with explicit generation parameters and prompts configuration from YAML.
@@ -917,7 +937,10 @@ impl GenerativeModel for OpenRouterGenerativeModel {
             match r {
                 Ok(cat) => results.push(cat),
                 Err(_) => {
-                    debug!(index = i, "Batch parse failed, falling back to individual classify");
+                    debug!(
+                        index = i,
+                        "Batch parse failed, falling back to individual classify"
+                    );
                     results.push(self.classify(texts[i], categories).await?);
                 }
             }
@@ -942,7 +965,11 @@ impl GenerativeModel for OpenRouterGenerativeModel {
 ///
 /// The prompt includes the system classification instruction followed by the
 /// batch user template with numbered emails separated by "---".
-pub(crate) fn build_batch_prompt(prompts: &PromptsConfig, texts: &[&str], categories: &[&str]) -> String {
+pub(crate) fn build_batch_prompt(
+    prompts: &PromptsConfig,
+    texts: &[&str],
+    categories: &[&str],
+) -> String {
     let cats = categories.join(", ");
     let system = prompts.email_classification.trim();
     let user = prompts

@@ -340,7 +340,9 @@ impl VectorService {
         // Initialize generative model based on config (ADR-012)
         // Also track the concrete builtin model handle for idle-timeout monitoring.
         #[cfg(feature = "builtin-llm")]
-        let mut builtin_model_handle: Option<Arc<generative_builtin::BuiltInGenerativeModel>> = None;
+        let mut builtin_model_handle: Option<
+            Arc<generative_builtin::BuiltInGenerativeModel>,
+        > = None;
 
         let gen_model: Option<Arc<dyn generative::GenerativeModel>> = match config
             .generative
@@ -348,14 +350,15 @@ impl VectorService {
             .as_str()
         {
             "ollama" => {
-                let per_model =
-                    find_model_tuning("ollama", &config.generative.ollama.chat_model);
+                let per_model = find_model_tuning("ollama", &config.generative.ollama.chat_model);
                 let params = GenerationParams::resolve(llm_tuning, per_model.as_ref());
-                Some(Arc::new(generative::OllamaGenerativeModel::with_params_and_prompts(
-                    &config.generative.ollama,
-                    params,
-                    prompts_cfg.clone(),
-                )))
+                Some(Arc::new(
+                    generative::OllamaGenerativeModel::with_params_and_prompts(
+                        &config.generative.ollama,
+                        params,
+                        prompts_cfg.clone(),
+                    ),
+                ))
             }
             "cloud" => match generative::CloudGenerativeModel::with_params_and_prompts(
                 &config.generative.cloud,
@@ -371,7 +374,8 @@ impl VectorService {
             "builtin" => {
                 #[cfg(feature = "builtin-llm")]
                 {
-                    let per_model = find_model_tuning("builtin", &config.generative.builtin.model_id);
+                    let per_model =
+                        find_model_tuning("builtin", &config.generative.builtin.model_id);
                     let params = GenerationParams::resolve(llm_tuning, per_model.as_ref());
                     match generative_builtin::BuiltInGenerativeModel::with_params_and_prompts(
                         &config.generative.builtin,

@@ -244,12 +244,12 @@ Tracks account health metrics.
 
 **Monitored Metrics:**
 
-| Metric | Threshold | Action |
-|--------|-----------|--------|
-| Consecutive sync failures | > 5 | Suspend account, emit AccountSuspended |
-| Token expiry approaching | < 1 hour | Preemptive refresh |
-| API quota usage | > 80% | Reduce sync frequency |
-| Sync latency | > 5 minutes | Log warning |
+| Metric                    | Threshold   | Action                                 |
+| ------------------------- | ----------- | -------------------------------------- |
+| Consecutive sync failures | > 5         | Suspend account, emit AccountSuspended |
+| Token expiry approaching  | < 1 hour    | Preemptive refresh                     |
+| API quota usage           | > 80%       | Reduce sync frequency                  |
+| Sync latency              | > 5 minutes | Log warning                            |
 
 ## Anti-Corruption Layers
 

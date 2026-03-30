@@ -166,7 +166,10 @@ impl RedisCache {
         pipe.query_async::<()>(&mut conn)
             .await
             .map_err(|e| RedisError::Command(format!("MSET pipeline: {e}")))?;
-        debug!(count = pairs.len(), ttl_secs, "Redis MSET pipeline executed");
+        debug!(
+            count = pairs.len(),
+            ttl_secs, "Redis MSET pipeline executed"
+        );
         Ok(())
     }
 

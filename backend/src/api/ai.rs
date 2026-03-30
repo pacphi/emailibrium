@@ -753,7 +753,11 @@ async fn switch_model(
     let router = state.vector_service.generative_router.clone();
     let prompts_for_spawn = state.yaml_config.prompts.clone();
     tokio::spawn(async move {
-        match BuiltInGenerativeModel::with_params_and_prompts(&config, GenerationParams::default(), prompts_for_spawn) {
+        match BuiltInGenerativeModel::with_params_and_prompts(
+            &config,
+            GenerationParams::default(),
+            prompts_for_spawn,
+        ) {
             Ok(model) => {
                 router
                     .register(ProviderType::BuiltIn, std::sync::Arc::new(model), 1)
@@ -790,10 +794,8 @@ async fn model_status(
     Path(model_id): Path<String>,
 ) -> Json<ModelStatusResponse> {
     let cache_dir = &state.vector_service.config.generative.builtin.cache_dir;
-    let catalog = crate::vectors::model_catalog::get_model_catalog_with_config(
-        cache_dir,
-        &state.yaml_config,
-    );
+    let catalog =
+        crate::vectors::model_catalog::get_model_catalog_with_config(cache_dir, &state.yaml_config);
     let is_cached = catalog.iter().any(|m| m.id == model_id && m.cached);
     let is_downloading = DOWNLOADING.read().await.contains(&model_id);
 
@@ -876,8 +878,6 @@ async fn config_tuning(
 /// configuration to the frontend so it can read configurable values
 /// (e.g. polling intervals, stale times, theme defaults) instead of
 /// hardcoding them.
-async fn config_app(
-    State(state): State<AppState>,
-) -> Json<crate::vectors::yaml_config::AppConfig> {
+async fn config_app(State(state): State<AppState>) -> Json<crate::vectors::yaml_config::AppConfig> {
     Json(state.yaml_config.app.clone())
 }

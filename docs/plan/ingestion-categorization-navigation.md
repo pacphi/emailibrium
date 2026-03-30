@@ -336,6 +336,7 @@ self.broadcast_progress(&job_id).await;
   ```
 
   Group assignment can be rule-based on the backend (mapping table) or derived from cluster properties.
+
 - **Frontend:** Replace hardcoded sets with the backend-provided `group` field.
 - **Backend:** New endpoint `GET /api/v1/emails/categories/enriched` returning the enriched list.
 

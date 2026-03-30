@@ -234,8 +234,7 @@ impl ProviderSync {
                 Err(err) if Self::is_rate_limit_error(&err) => {
                     // All retries exhausted for this page. Gracefully degrade:
                     // return whatever pages we successfully fetched so far.
-                    let fetched_count: usize =
-                        pages.iter().map(|p| p.messages.len()).sum();
+                    let fetched_count: usize = pages.iter().map(|p| p.messages.len()).sum();
                     tracing::warn!(
                         page = page_number,
                         emails_fetched = fetched_count,
@@ -266,11 +265,13 @@ impl ProviderSync {
         for attempt in 0..=self.retry_config.max_retries {
             match self.provider.list_messages(access_token, params).await {
                 Ok(page) => return Ok(page),
-                Err(err) if Self::is_rate_limit_error(&err) && attempt < self.retry_config.max_retries => {
+                Err(err)
+                    if Self::is_rate_limit_error(&err)
+                        && attempt < self.retry_config.max_retries =>
+                {
                     // Exponential backoff: base_delay * 3^attempt
                     // attempt 0 → base_delay, attempt 1 → base*3, attempt 2 → base*9
-                    let delay_ms =
-                        self.retry_config.retry_base_delay_ms * 3u64.pow(attempt as u32);
+                    let delay_ms = self.retry_config.retry_base_delay_ms * 3u64.pow(attempt as u32);
                     let delay_secs = delay_ms as f64 / 1000.0;
 
                     let attempt_num = attempt + 1;
@@ -628,13 +629,11 @@ mod tests {
             _token: &str,
             _params: &ListParams,
         ) -> Result<EmailPage, ProviderError> {
-            let remaining = self
-                .fail_count
-                .fetch_update(
-                    std::sync::atomic::Ordering::SeqCst,
-                    std::sync::atomic::Ordering::SeqCst,
-                    |n| if n > 0 { Some(n - 1) } else { None },
-                );
+            let remaining = self.fail_count.fetch_update(
+                std::sync::atomic::Ordering::SeqCst,
+                std::sync::atomic::Ordering::SeqCst,
+                |n| if n > 0 { Some(n - 1) } else { None },
+            );
             if remaining.is_ok() {
                 return Err(ProviderError::RateLimited {
                     retry_after_secs: 60,
@@ -646,11 +645,7 @@ mod tests {
                 result_size_estimate: Some(self.messages.len() as u32),
             })
         }
-        async fn get_message(
-            &self,
-            _token: &str,
-            id: &str,
-        ) -> Result<EmailMessage, ProviderError> {
+        async fn get_message(&self, _token: &str, id: &str) -> Result<EmailMessage, ProviderError> {
             self.messages
                 .iter()
                 .find(|m| m.id == id)
@@ -694,12 +689,7 @@ mod tests {
         // Fail once then succeed — retry should recover.
         let msgs = MockProvider::with_messages(3).messages;
         let provider = Arc::new(RateLimitMockProvider::new(msgs, 1));
-        let sync = ProviderSync::with_retry_config(
-            provider,
-            50,
-            None,
-            make_fast_retry_config(),
-        );
+        let sync = ProviderSync::with_retry_config(provider, 50, None, make_fast_retry_config());
         let state = make_sync_state("acct-1");
 
         let result = sync.sync_account("acct-1", "token", &state).await.unwrap();
@@ -712,12 +702,7 @@ mod tests {
         let msgs = MockProvider::with_messages(3).messages;
         // fail_count = 10, but max_retries = 3 => all retries exhausted on first page
         let provider = Arc::new(RateLimitMockProvider::new(msgs, 10));
-        let sync = ProviderSync::with_retry_config(
-            provider,
-            50,
-            None,
-            make_fast_retry_config(),
-        );
+        let sync = ProviderSync::with_retry_config(provider, 50, None, make_fast_retry_config());
         let state = make_sync_state("acct-1");
 
         // Should succeed (graceful degradation) with 0 emails.
@@ -752,11 +737,7 @@ mod tests {
             ) -> Result<EmailMessage, ProviderError> {
                 unimplemented!()
             }
-            async fn archive_message(
-                &self,
-                _token: &str,
-                _id: &str,
-            ) -> Result<(), ProviderError> {
+            async fn archive_message(&self, _token: &str, _id: &str) -> Result<(), ProviderError> {
                 unimplemented!()
             }
             async fn label_message(
@@ -785,12 +766,7 @@ mod tests {
         }
 
         let provider = Arc::new(AlwaysFailProvider);
-        let sync = ProviderSync::with_retry_config(
-            provider,
-            50,
-            None,
-            make_fast_retry_config(),
-        );
+        let sync = ProviderSync::with_retry_config(provider, 50, None, make_fast_retry_config());
         let state = make_sync_state("acct-1");
 
         let err = sync
