@@ -316,8 +316,9 @@ impl BuiltInGenerativeModel {
 
     /// Run generation on the loaded model. Must be called from a blocking context.
     ///
-    /// `temperature` and `repeat_penalty` are passed from the resolved
+    /// `params` carries temperature and repeat_penalty from the resolved
     /// `GenerationParams` so that no hardcoded values remain.
+    #[allow(clippy::too_many_arguments)]
     fn generate_sync(
         model: &LlamaModel,
         backend: &LlamaBackend,

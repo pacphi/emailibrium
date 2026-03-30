@@ -689,6 +689,7 @@ async fn switch_model(
     State(state): State<AppState>,
     Json(req): Json<SwitchModelRequest>,
 ) -> Result<Json<SwitchModelResponse>, (StatusCode, String)> {
+    use crate::vectors::generative::GenerationParams;
     use crate::vectors::generative_builtin::BuiltInGenerativeModel;
     use crate::vectors::model_registry::ProviderType;
 
@@ -710,8 +711,9 @@ async fn switch_model(
     if is_cached {
         // Model is cached — activate immediately.
         tracing::info!(model_id = %req.model_id, "Switching to cached model");
-        let model = BuiltInGenerativeModel::with_prompts(
+        let model = BuiltInGenerativeModel::with_params_and_prompts(
             &config,
+            GenerationParams::default(),
             state.yaml_config.prompts.clone(),
         )
         .map_err(|e| {
@@ -751,7 +753,7 @@ async fn switch_model(
     let router = state.vector_service.generative_router.clone();
     let prompts_for_spawn = state.yaml_config.prompts.clone();
     tokio::spawn(async move {
-        match BuiltInGenerativeModel::with_prompts(&config, prompts_for_spawn) {
+        match BuiltInGenerativeModel::with_params_and_prompts(&config, GenerationParams::default(), prompts_for_spawn) {
             Ok(model) => {
                 router
                     .register(ProviderType::BuiltIn, std::sync::Arc::new(model), 1)
