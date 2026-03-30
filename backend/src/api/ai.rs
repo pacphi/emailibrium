@@ -695,8 +695,11 @@ async fn switch_model(
     let mut config = state.vector_service.config.generative.builtin.clone();
     config.model_id = req.model_id.clone();
 
-    // Look up context_size from the catalog.
-    let catalog = crate::vectors::model_catalog::get_model_catalog(&config.cache_dir);
+    // Look up context_size from the catalog (use pre-loaded config to avoid re-reading YAML).
+    let catalog = crate::vectors::model_catalog::get_model_catalog_with_config(
+        &config.cache_dir,
+        &state.yaml_config,
+    );
     if let Some(entry) = catalog.iter().find(|m| m.id == req.model_id) {
         config.context_size = entry.context_size;
     }
@@ -785,7 +788,10 @@ async fn model_status(
     Path(model_id): Path<String>,
 ) -> Json<ModelStatusResponse> {
     let cache_dir = &state.vector_service.config.generative.builtin.cache_dir;
-    let catalog = crate::vectors::model_catalog::get_model_catalog(cache_dir);
+    let catalog = crate::vectors::model_catalog::get_model_catalog_with_config(
+        cache_dir,
+        &state.yaml_config,
+    );
     let is_cached = catalog.iter().any(|m| m.id == model_id && m.cached);
     let is_downloading = DOWNLOADING.read().await.contains(&model_id);
 

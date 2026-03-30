@@ -189,7 +189,14 @@ pub fn get_model_catalog(cache_dir: &str) -> Vec<ModelInfo> {
             return Vec::new();
         }
     };
+    get_model_catalog_with_config(cache_dir, &yaml)
+}
 
+/// Build the model catalog using an already-loaded YAML config (avoids re-reading from disk).
+pub fn get_model_catalog_with_config(
+    cache_dir: &str,
+    yaml: &super::yaml_config::YamlConfig,
+) -> Vec<ModelInfo> {
     let os_overhead = yaml.app.hardware.os_overhead_mb as u64;
     let sys = get_system_info_with_overhead(os_overhead);
     let available = sys.available_for_model_mb;
