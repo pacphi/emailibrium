@@ -1090,6 +1090,16 @@ fn check_error_response(resp: &serde_json::Value) -> Result<(), ProviderError> {
                 retry_after_secs: 60,
             });
         }
+        // Gmail returns 403 with "Quota exceeded" or "Rate Limit Exceeded"
+        // for per-user quota violations (~250 queries/minute).
+        if code == 403 {
+            let msg_lower = message.to_lowercase();
+            if msg_lower.contains("quota") || msg_lower.contains("rate limit") {
+                return Err(ProviderError::RateLimited {
+                    retry_after_secs: 60,
+                });
+            }
+        }
         if code == 401 {
             return Err(ProviderError::TokenExpired(message.to_string()));
         }
@@ -1168,6 +1178,44 @@ mod tests {
                 retry_after_secs: 60
             }
         ));
+    }
+
+    #[test]
+    fn test_check_error_response_403_quota_exceeded() {
+        let resp = serde_json::json!({
+            "error": { "code": 403, "message": "Quota exceeded for quota metric" }
+        });
+        let err = check_error_response(&resp).unwrap_err();
+        assert!(matches!(
+            err,
+            ProviderError::RateLimited {
+                retry_after_secs: 60
+            }
+        ));
+    }
+
+    #[test]
+    fn test_check_error_response_403_rate_limit_exceeded() {
+        let resp = serde_json::json!({
+            "error": { "code": 403, "message": "Rate Limit Exceeded" }
+        });
+        let err = check_error_response(&resp).unwrap_err();
+        assert!(matches!(
+            err,
+            ProviderError::RateLimited {
+                retry_after_secs: 60
+            }
+        ));
+    }
+
+    #[test]
+    fn test_check_error_response_403_non_quota() {
+        // A 403 that is not quota-related should remain a generic RequestFailed.
+        let resp = serde_json::json!({
+            "error": { "code": 403, "message": "Insufficient Permission" }
+        });
+        let err = check_error_response(&resp).unwrap_err();
+        assert!(matches!(err, ProviderError::RequestFailed(_)));
     }
 
     #[test]

@@ -521,6 +521,11 @@ pub struct SyncConfig {
     pub sync_completion_check_interval_ms: u64,
     #[serde(default = "default_120_usize")]
     pub max_sync_wait_polls: usize,
+    /// Delay in milliseconds between successive page fetches during email sync.
+    /// Throttles requests to stay within provider rate limits (e.g. Gmail ~250 queries/min).
+    /// Default: 200ms.
+    #[serde(default = "default_200_u64")]
+    pub fetch_page_delay_ms: u64,
 }
 
 impl Default for SyncConfig {
@@ -531,6 +536,7 @@ impl Default for SyncConfig {
             sync_completion_stable_checks: 2,
             sync_completion_check_interval_ms: 3000,
             max_sync_wait_polls: 120,
+            fetch_page_delay_ms: 200,
         }
     }
 }
@@ -1006,6 +1012,9 @@ fn default_50_u64() -> u64 {
 }
 fn default_120_u64() -> u64 {
     120
+}
+fn default_200_u64() -> u64 {
+    200
 }
 fn default_300_u64() -> u64 {
     300
