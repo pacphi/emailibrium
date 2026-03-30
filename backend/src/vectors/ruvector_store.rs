@@ -8,6 +8,7 @@
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -79,25 +80,21 @@ impl CollectionIndex {
 
 /// RuVector-backed vector store using per-collection HNSW indices.
 ///
-/// Thread-safe via `RwLock` over the inner state. The HNSW parameters
-/// (M, ef_construction, ef_search) are taken from the application config.
+/// Thread-safe via per-collection `RwLock`s. Each collection gets its own
+/// independent lock so that concurrent operations on different collections
+/// never block each other. The HNSW parameters (M, ef_construction,
+/// ef_search) are taken from the application config.
 pub struct RuVectorStore {
-    inner: Arc<RwLock<RuVectorInner>>,
-}
-
-struct RuVectorInner {
-    /// One HNSW index per collection.
-    collections: HashMap<VectorCollection, CollectionIndex>,
-    /// Base path for persistence.
-    base_path: PathBuf,
+    /// One independently-locked HNSW index per collection.
+    collections: HashMap<VectorCollection, Arc<RwLock<CollectionIndex>>>,
     /// HNSW configuration applied to every collection index.
     hnsw_config: HnswConfig,
     /// Embedding dimensions (must be consistent across all inserts).
     dimensions: usize,
     /// How many batch_insert calls between sidecar writes. 1 = write every time.
     sidecar_write_interval: usize,
-    /// Counter of batch_insert calls since last sidecar write.
-    batches_since_sidecar: usize,
+    /// Counter of batch_insert calls since last sidecar write (shared across collections).
+    batches_since_sidecar: Arc<AtomicUsize>,
 }
 
 impl RuVectorStore {
@@ -164,11 +161,11 @@ impl RuVectorStore {
 
             collections.insert(
                 collection.clone(),
-                CollectionIndex {
+                Arc::new(RwLock::new(CollectionIndex {
                     db,
                     documents,
                     sidecar_path,
-                },
+                })),
             );
         }
 
@@ -176,14 +173,11 @@ impl RuVectorStore {
         let interval = sidecar_write_interval.max(1);
 
         Ok(Self {
-            inner: Arc::new(RwLock::new(RuVectorInner {
-                collections,
-                base_path,
-                hnsw_config,
-                dimensions,
-                sidecar_write_interval: interval,
-                batches_since_sidecar: 0,
-            })),
+            collections,
+            hnsw_config,
+            dimensions,
+            sidecar_write_interval: interval,
+            batches_since_sidecar: Arc::new(AtomicUsize::new(0)),
         })
     }
 
@@ -192,8 +186,8 @@ impl RuVectorStore {
     /// Call this on graceful shutdown to ensure no document metadata is lost
     /// when sidecar writes are deferred via `sidecar_write_interval > 1`.
     pub async fn flush(&self) {
-        let inner = self.inner.read().await;
-        for coll in inner.collections.values() {
+        for coll_lock in self.collections.values() {
+            let coll = coll_lock.read().await;
             coll.save_sidecar();
         }
         tracing::info!("RuVector sidecar data flushed to disk");
@@ -203,9 +197,9 @@ impl RuVectorStore {
 impl Drop for RuVectorStore {
     fn drop(&mut self) {
         // Best-effort synchronous flush on drop. Since `Drop` cannot be async,
-        // we try_write to avoid blocking if the lock is held elsewhere.
-        if let Ok(inner) = self.inner.try_write() {
-            for coll in inner.collections.values() {
+        // we try_read each per-collection lock to avoid blocking.
+        for coll_lock in self.collections.values() {
+            if let Ok(coll) = coll_lock.try_read() {
                 coll.save_sidecar();
             }
         }
@@ -245,12 +239,12 @@ impl super::store::VectorStoreBackend for RuVectorStore {
             metadata: Some(to_rv_metadata(&doc.metadata)),
         };
 
-        let mut inner = self.inner.write().await;
-        let coll = inner
+        let coll_lock = self
             .collections
-            .get_mut(&doc.collection)
+            .get(&doc.collection)
             .ok_or_else(|| VectorError::CollectionNotFound(doc.collection.to_string()))?;
 
+        let mut coll = coll_lock.write().await;
         coll.db
             .insert(entry)
             .map_err(|e| VectorError::StoreFailed(format!("ruvector insert failed: {e}")))?;
@@ -271,37 +265,45 @@ impl super::store::VectorStoreBackend for RuVectorStore {
             }
         }
 
-        // Phase 1: Acquire write lock, do HNSW inserts, snapshot sidecar data.
-        let (ids, sidecar_snapshots) = {
-            let mut inner = self.inner.write().await;
-            let mut ids = Vec::with_capacity(docs.len());
+        // Group by collection to batch inserts.
+        let mut by_collection: HashMap<
+            VectorCollection,
+            Vec<(String, VectorEntry, VectorDocument)>,
+        > = HashMap::new();
 
-            // Group by collection to batch inserts.
-            let mut by_collection: HashMap<
-                VectorCollection,
-                Vec<(String, VectorEntry, VectorDocument)>,
-            > = HashMap::new();
+        for doc in docs {
+            let rv_id = doc.id.0.to_string();
+            let entry = VectorEntry {
+                id: Some(rv_id.clone()),
+                vector: doc.vector.clone(),
+                metadata: Some(to_rv_metadata(&doc.metadata)),
+            };
+            by_collection
+                .entry(doc.collection.clone())
+                .or_default()
+                .push((rv_id, entry, doc));
+        }
 
-            for doc in docs {
-                let rv_id = doc.id.0.to_string();
-                let entry = VectorEntry {
-                    id: Some(rv_id.clone()),
-                    vector: doc.vector.clone(),
-                    metadata: Some(to_rv_metadata(&doc.metadata)),
-                };
-                by_collection
-                    .entry(doc.collection.clone())
-                    .or_default()
-                    .push((rv_id, entry, doc));
-            }
+        // Phase 1: Acquire per-collection write locks, do HNSW inserts, snapshot sidecar data.
+        let mut ids = Vec::new();
+        let mut sidecar_snapshots: Vec<(PathBuf, String)> = Vec::new();
 
-            let mut dirty_collections: Vec<VectorCollection> = Vec::new();
+        // Determine whether to write sidecars this batch.
+        let prev = self.batches_since_sidecar.fetch_add(1, Ordering::Relaxed);
+        let should_write_sidecar = (prev + 1) >= self.sidecar_write_interval;
+        if should_write_sidecar {
+            self.batches_since_sidecar.store(0, Ordering::Relaxed);
+        }
 
-            for (collection, entries) in by_collection {
-                let coll = inner
-                    .collections
-                    .get_mut(&collection)
-                    .ok_or_else(|| VectorError::CollectionNotFound(collection.to_string()))?;
+        for (collection, entries) in by_collection {
+            let coll_lock = self
+                .collections
+                .get(&collection)
+                .ok_or_else(|| VectorError::CollectionNotFound(collection.to_string()))?;
+
+            // Scope the write lock to just this collection's insert.
+            let snapshot = {
+                let mut coll = coll_lock.write().await;
 
                 let rv_entries: Vec<VectorEntry> =
                     entries.iter().map(|(_, e, _)| e.clone()).collect();
@@ -314,32 +316,25 @@ impl super::store::VectorStoreBackend for RuVectorStore {
                     ids.push(doc.id.clone());
                     coll.documents.insert(rv_id, doc);
                 }
-                dirty_collections.push(collection);
-            }
 
-            // P4: only write sidecar every N batches.
-            inner.batches_since_sidecar += 1;
-            let snapshots = if inner.batches_since_sidecar >= inner.sidecar_write_interval {
-                inner.batches_since_sidecar = 0;
                 // P5: Clone sidecar data while holding the lock (fast),
                 // actual disk I/O happens after lock release.
-                dirty_collections
-                    .iter()
-                    .filter_map(|c| {
-                        let coll = inner.collections.get(c)?;
-                        let json = serde_json::to_string(&coll.documents).ok()?;
-                        Some((coll.sidecar_path.clone(), json))
-                    })
-                    .collect::<Vec<_>>()
-            } else {
-                Vec::new()
+                if should_write_sidecar {
+                    serde_json::to_string(&coll.documents)
+                        .ok()
+                        .map(|json| (coll.sidecar_path.clone(), json))
+                } else {
+                    None
+                }
+                // Per-collection write lock dropped here.
             };
 
-            (ids, snapshots)
-            // Write lock dropped here.
-        };
+            if let Some(s) = snapshot {
+                sidecar_snapshots.push(s);
+            }
+        }
 
-        // Phase 2: Write sidecar outside the lock so searches aren't blocked (P5).
+        // Phase 2: Write sidecars outside all locks so reads aren't blocked (P5).
         for (path, json) in &sidecar_snapshots {
             if let Err(e) = std::fs::write(path, json) {
                 tracing::warn!(
@@ -359,11 +354,12 @@ impl super::store::VectorStoreBackend for RuVectorStore {
             ));
         }
 
-        let inner = self.inner.read().await;
-        let coll = inner
+        let coll_lock = self
             .collections
             .get(&params.collection)
             .ok_or_else(|| VectorError::CollectionNotFound(params.collection.to_string()))?;
+
+        let coll = coll_lock.read().await;
 
         // Over-fetch to account for metadata filtering and min_score pruning.
         let fetch_k = if params.filters.is_some() {
@@ -377,7 +373,7 @@ impl super::store::VectorStoreBackend for RuVectorStore {
             vector: params.vector.clone(),
             k: fetch_k,
             filter: None, // We handle metadata filtering ourselves for exact semantics.
-            ef_search: Some(inner.hnsw_config.ef_search),
+            ef_search: Some(self.hnsw_config.ef_search),
         };
 
         let rv_results = coll
@@ -426,10 +422,10 @@ impl super::store::VectorStoreBackend for RuVectorStore {
     }
 
     async fn get(&self, id: &VectorId) -> Result<Option<VectorDocument>, VectorError> {
-        let inner = self.inner.read().await;
         let rv_id = id.0.to_string();
 
-        for coll in inner.collections.values() {
+        for coll_lock in self.collections.values() {
+            let coll = coll_lock.read().await;
             if let Some(doc) = coll.documents.get(&rv_id) {
                 return Ok(Some(doc.clone()));
             }
@@ -438,8 +434,8 @@ impl super::store::VectorStoreBackend for RuVectorStore {
     }
 
     async fn get_by_email_id(&self, email_id: &str) -> Result<Option<VectorDocument>, VectorError> {
-        let inner = self.inner.read().await;
-        for coll in inner.collections.values() {
+        for coll_lock in self.collections.values() {
+            let coll = coll_lock.read().await;
             for doc in coll.documents.values() {
                 if doc.email_id == email_id {
                     return Ok(Some(doc.clone()));
@@ -450,10 +446,10 @@ impl super::store::VectorStoreBackend for RuVectorStore {
     }
 
     async fn delete(&self, id: &VectorId) -> Result<bool, VectorError> {
-        let mut inner = self.inner.write().await;
         let rv_id = id.0.to_string();
 
-        for coll in inner.collections.values_mut() {
+        for coll_lock in self.collections.values() {
+            let mut coll = coll_lock.write().await;
             if coll.documents.remove(&rv_id).is_some() {
                 let _ = coll.db.delete(&rv_id).map_err(|e| {
                     VectorError::StoreFailed(format!("ruvector delete failed: {e}"))
@@ -472,13 +468,14 @@ impl super::store::VectorStoreBackend for RuVectorStore {
             ));
         }
 
-        let mut inner = self.inner.write().await;
         let rv_id = doc.id.0.to_string();
 
-        let coll = inner
+        let coll_lock = self
             .collections
-            .get_mut(&doc.collection)
+            .get(&doc.collection)
             .ok_or_else(|| VectorError::CollectionNotFound(doc.collection.to_string()))?;
+
+        let mut coll = coll_lock.write().await;
 
         if !coll.documents.contains_key(&rv_id) {
             return Err(VectorError::NotFound(format!(
@@ -505,28 +502,30 @@ impl super::store::VectorStoreBackend for RuVectorStore {
     }
 
     async fn health(&self) -> Result<bool, VectorError> {
-        let _inner = self.inner.read().await;
+        // Verify we can acquire a read lock on every collection.
+        for coll_lock in self.collections.values() {
+            let _coll = coll_lock.read().await;
+        }
         Ok(true)
     }
 
     async fn stats(&self) -> Result<VectorStats, VectorError> {
-        let inner = self.inner.read().await;
-
         let mut total_vectors: u64 = 0;
         let mut collections: HashMap<String, u64> = HashMap::new();
 
-        for (collection, coll_idx) in &inner.collections {
-            let count = coll_idx.documents.len() as u64;
+        for (collection, coll_lock) in &self.collections {
+            let coll = coll_lock.read().await;
+            let count = coll.documents.len() as u64;
             if count > 0 {
                 collections.insert(collection.to_string(), count);
             }
             total_vectors += count;
         }
 
-        let dimensions = inner.dimensions;
+        let dimensions = self.dimensions;
         let vector_bytes = total_vectors * (dimensions as u64) * 4;
         // HNSW graph overhead: ~M * 2 * 4 bytes per node for neighbor lists.
-        let hnsw_overhead = total_vectors * (inner.hnsw_config.m as u64) * 2 * 4;
+        let hnsw_overhead = total_vectors * (self.hnsw_config.m as u64) * 2 * 4;
         let metadata_overhead = total_vectors * 128;
         let memory_bytes = vector_bytes + hnsw_overhead + metadata_overhead;
 
@@ -540,9 +539,12 @@ impl super::store::VectorStoreBackend for RuVectorStore {
     }
 
     async fn count(&self) -> Result<u64, VectorError> {
-        let inner = self.inner.read().await;
-        let total: usize = inner.collections.values().map(|c| c.documents.len()).sum();
-        Ok(total as u64)
+        let mut total: u64 = 0;
+        for coll_lock in self.collections.values() {
+            let coll = coll_lock.read().await;
+            total += coll.documents.len() as u64;
+        }
+        Ok(total)
     }
 
     async fn list_by_collection(
@@ -551,11 +553,12 @@ impl super::store::VectorStoreBackend for RuVectorStore {
         limit: usize,
         offset: usize,
     ) -> Result<Vec<VectorDocument>, VectorError> {
-        let inner = self.inner.read().await;
-        let coll = inner
+        let coll_lock = self
             .collections
             .get(collection)
             .ok_or_else(|| VectorError::CollectionNotFound(collection.to_string()))?;
+
+        let coll = coll_lock.read().await;
 
         let docs: Vec<VectorDocument> = coll
             .documents

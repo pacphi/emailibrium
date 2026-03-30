@@ -563,6 +563,73 @@ impl GenerativeModel for BuiltInGenerativeModel {
         )))
     }
 
+    async fn classify_batch(
+        &self,
+        texts: &[&str],
+        categories: &[&str],
+    ) -> Result<Vec<String>, VectorError> {
+        if texts.len() <= 1 {
+            let mut results = Vec::with_capacity(texts.len());
+            for text in texts {
+                results.push(self.classify(text, categories).await?);
+            }
+            return Ok(results);
+        }
+
+        // Build batch prompt (includes system + user batch template + emails).
+        // Wrap in [System]/[User] blocks for ChatML conversion.
+        let cats = categories.join(", ");
+        let system = self.prompts.email_classification.trim();
+        let user_template = self
+            .prompts
+            .email_classification_batch
+            .replace("{{categories}}", &cats)
+            .replace("{{count}}", &texts.len().to_string());
+        let mut user_prompt = format!("{user_template}\n\n");
+        for (i, text) in texts.iter().enumerate() {
+            if i > 0 {
+                user_prompt.push_str("---\n");
+            }
+            user_prompt.push_str(&format!("Email {}:\n{}\n", i + 1, text));
+        }
+        let chatml_prompt = format!("[System]\n{system}\n\n[User]\n{user_prompt}");
+        let max_tokens = self.params.classification_max_tokens * texts.len() as u32;
+
+        let response = self
+            .generate_internal(
+                &chatml_prompt,
+                max_tokens,
+                self.params.classification_temperature,
+            )
+            .await?;
+
+        // Strip <think>...</think> blocks (Qwen 3 chain-of-thought).
+        let stripped = if let Some(end) = response.find("</think>") {
+            response[end + 8..].trim()
+        } else if response.starts_with("<think>") {
+            ""
+        } else {
+            response.trim()
+        };
+
+        let parsed =
+            super::generative::parse_batch_response(stripped, texts.len(), categories);
+        let mut results = Vec::with_capacity(texts.len());
+        for (i, r) in parsed.into_iter().enumerate() {
+            match r {
+                Ok(cat) => results.push(cat),
+                Err(_) => {
+                    tracing::debug!(
+                        index = i,
+                        "Batch parse failed, falling back to individual classify"
+                    );
+                    results.push(self.classify(texts[i], categories).await?);
+                }
+            }
+        }
+        Ok(results)
+    }
+
     fn model_name(&self) -> &str {
         &self.config.model_id
     }

@@ -45,6 +45,8 @@ pub struct PromptsConfig {
     pub email_classification_user: String,
     #[serde(default = "default_email_classification_json")]
     pub email_classification_json: String,
+    #[serde(default = "default_email_classification_batch")]
+    pub email_classification_batch: String,
 }
 
 fn default_chat_assistant() -> String {
@@ -73,6 +75,12 @@ fn default_email_classification_json() -> String {
         .to_string()
 }
 
+fn default_email_classification_batch() -> String {
+    "Classify each of the following emails into exactly one of: {{categories}}\n\
+     Respond with exactly {{count}} category names, one per line, nothing else."
+        .to_string()
+}
+
 impl Default for PromptsConfig {
     fn default() -> Self {
         Self {
@@ -80,6 +88,7 @@ impl Default for PromptsConfig {
             email_classification: default_email_classification(),
             email_classification_user: default_email_classification_user(),
             email_classification_json: default_email_classification_json(),
+            email_classification_batch: default_email_classification_batch(),
         }
     }
 }

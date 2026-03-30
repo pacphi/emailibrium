@@ -74,6 +74,7 @@ pub enum IngestionPhase {
     Categorizing,
     Clustering,
     Analyzing,
+    Backfilling,
     Complete,
 }
 
@@ -85,6 +86,7 @@ impl std::fmt::Display for IngestionPhase {
             IngestionPhase::Categorizing => write!(f, "categorizing"),
             IngestionPhase::Clustering => write!(f, "clustering"),
             IngestionPhase::Analyzing => write!(f, "analyzing"),
+            IngestionPhase::Backfilling => write!(f, "backfilling"),
             IngestionPhase::Complete => write!(f, "complete"),
         }
     }
@@ -443,6 +445,7 @@ impl IngestionPipeline {
                 "categorizing" => IngestionPhase::Categorizing,
                 "clustering" => IngestionPhase::Clustering,
                 "analyzing" => IngestionPhase::Analyzing,
+                "backfilling" => IngestionPhase::Backfilling,
                 _ => IngestionPhase::Syncing,
             },
             started_at: Utc::now(),
@@ -884,6 +887,20 @@ impl IngestionPipelineHandle {
         .await;
         self.broadcast_progress(&job_id).await;
 
+        // Determine whether to use onboarding mode (rules-only, skip LLM).
+        // Onboarding mode activates when the config flag is set AND this is a
+        // bulk sync (email count exceeds the embedding batch size threshold).
+        let use_onboarding_mode = self.ingestion_tuning.onboarding_mode
+            && total > self.ingestion_tuning.embedding_batch_size as u64;
+
+        if use_onboarding_mode {
+            info!(
+                job_id = %job_id,
+                total,
+                "Onboarding mode: using rules-only classification (LLM backfill will run async)"
+            );
+        }
+
         let concurrency = self.ingestion_tuning.backfill_concurrency;
         let categorizer = self.categorizer.clone();
         let generative = self.generative.clone();
@@ -902,6 +919,7 @@ impl IngestionPipelineHandle {
             })
             .collect();
 
+        let onboarding = use_onboarding_mode;
         let results: Vec<(String, Result<super::types::CategoryResult, VectorError>)> =
             stream::iter(email_inputs)
                 .map(|(email_id, from_addr, text)| {
@@ -909,15 +927,25 @@ impl IngestionPipelineHandle {
                     let generative = generative.clone();
                     let classification_config = classification_config.clone();
                     async move {
-                        let gen_ref = generative.as_deref();
-                        let result = categorizer
-                            .categorize_with_fallback_config(
-                                &text,
-                                &from_addr,
-                                gen_ref,
-                                &classification_config,
-                            )
-                            .await;
+                        let result = if onboarding {
+                            categorizer
+                                .categorize_rules_only(
+                                    &text,
+                                    &from_addr,
+                                    &classification_config,
+                                )
+                                .await
+                        } else {
+                            let gen_ref = generative.as_deref();
+                            categorizer
+                                .categorize_with_fallback_config(
+                                    &text,
+                                    &from_addr,
+                                    gen_ref,
+                                    &classification_config,
+                                )
+                                .await
+                        };
                         (email_id, result)
                     }
                 })
@@ -1003,6 +1031,176 @@ impl IngestionPipelineHandle {
         self.broadcast_progress(&job_id).await;
 
         info!(job_id = %job_id, "Ingestion complete");
+
+        // Spawn background backfill for pending_backfill emails (onboarding mode).
+        if use_onboarding_mode {
+            self.spawn_backfill_task(job_id, account_id);
+        }
+    }
+
+    /// Spawn a fire-and-forget async task that processes emails marked with
+    /// `category_method = 'pending_backfill'` through the full LLM classification
+    /// pipeline. Processes in configurable batches with throttling to avoid
+    /// overloading the LLM provider.
+    fn spawn_backfill_task(&self, job_id: String, account_id: String) {
+        let db = self.db.clone();
+        let categorizer = self.categorizer.clone();
+        let generative = self.generative.clone();
+        let classification_config = self.classification_config.clone();
+        let progress_tx = self.progress_tx.clone();
+        let batch_size = self.ingestion_tuning.backfill_batch_size;
+        let concurrency = self.ingestion_tuning.backfill_concurrency;
+        let delay_ms = self.ingestion_tuning.backfill_delay_between_ms;
+
+        tokio::spawn(async move {
+            info!(
+                job_id = %job_id,
+                account_id = %account_id,
+                batch_size,
+                concurrency,
+                "Starting background LLM backfill for pending_backfill emails"
+            );
+
+            let mut total_backfilled: u64 = 0;
+            let mut total_failed: u64 = 0;
+
+            loop {
+                // Fetch next batch of pending_backfill emails.
+                type BackfillRow = (String, Option<String>, Option<String>, Option<String>);
+                let rows: Result<Vec<BackfillRow>, _> = sqlx::query_as(
+                    r#"SELECT id, subject, from_addr, body_text
+                       FROM emails
+                       WHERE account_id = ? AND category_method = 'pending_backfill'
+                       ORDER BY received_at DESC
+                       LIMIT ?"#,
+                )
+                .bind(&account_id)
+                .bind(batch_size as i64)
+                .fetch_all(&db.pool)
+                .await;
+
+                let batch = match rows {
+                    Ok(b) => b,
+                    Err(err) => {
+                        error!(job_id = %job_id, "Backfill DB query failed: {err}");
+                        break;
+                    }
+                };
+
+                if batch.is_empty() {
+                    info!(
+                        job_id = %job_id,
+                        total_backfilled,
+                        total_failed,
+                        "Backfill complete: no more pending_backfill emails"
+                    );
+                    break;
+                }
+
+                let batch_len = batch.len();
+                debug!(
+                    job_id = %job_id,
+                    batch_size = batch_len,
+                    "Processing backfill batch"
+                );
+
+                // Build input tuples for parallel processing.
+                let email_inputs: Vec<(String, String, String)> = batch
+                    .into_iter()
+                    .map(|(id, subject, from_addr, body_text)| {
+                        let text = EmbeddingPipeline::prepare_email_text(
+                            &subject.unwrap_or_default(),
+                            &from_addr.clone().unwrap_or_default(),
+                            &body_text.unwrap_or_default(),
+                        );
+                        (id, from_addr.unwrap_or_default(), text)
+                    })
+                    .collect();
+
+                let cat = categorizer.clone();
+                let gen = generative.clone();
+                let cfg = classification_config.clone();
+
+                let results: Vec<(String, Result<super::types::CategoryResult, VectorError>)> =
+                    stream::iter(email_inputs)
+                        .map(|(email_id, from_addr, text)| {
+                            let cat = cat.clone();
+                            let gen = gen.clone();
+                            let cfg = cfg.clone();
+                            async move {
+                                let gen_ref = gen.as_deref();
+                                let result = cat
+                                    .categorize_with_fallback_config(
+                                        &text,
+                                        &from_addr,
+                                        gen_ref,
+                                        &cfg,
+                                    )
+                                    .await;
+                                (email_id, result)
+                            }
+                        })
+                        .buffer_unordered(concurrency)
+                        .collect()
+                        .await;
+
+                // Apply DB updates.
+                for (email_id, result) in &results {
+                    match result {
+                        Ok(cat_result) => {
+                            let update_result = sqlx::query(
+                                r#"UPDATE emails
+                                   SET category = ?, category_confidence = ?, category_method = ?
+                                   WHERE id = ?"#,
+                            )
+                            .bind(cat_result.category.to_string())
+                            .bind(cat_result.confidence)
+                            .bind(&cat_result.method)
+                            .bind(email_id)
+                            .execute(&db.pool)
+                            .await;
+
+                            if let Err(err) = update_result {
+                                warn!(email_id = %email_id, "Backfill DB update failed: {err}");
+                                total_failed += 1;
+                            } else {
+                                total_backfilled += 1;
+                            }
+                        }
+                        Err(err) => {
+                            debug!(email_id = %email_id, "Backfill categorization failed: {err}");
+                            total_failed += 1;
+                        }
+                    }
+                }
+
+                // Broadcast backfill progress via SSE.
+                let progress = IngestionProgress {
+                    job_id: job_id.clone(),
+                    total: 0, // unknown total for backfill
+                    processed: total_backfilled + total_failed,
+                    embedded: 0,
+                    categorized: total_backfilled,
+                    failed: total_failed,
+                    phase: "backfilling".to_string(),
+                    eta_seconds: None,
+                    emails_per_second: 0.0,
+                };
+                let _ = progress_tx.send(progress);
+
+                // Throttle between batches.
+                if delay_ms > 0 {
+                    tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+                }
+            }
+
+            info!(
+                job_id = %job_id,
+                total_backfilled,
+                total_failed,
+                "Background LLM backfill finished"
+            );
+        });
     }
 
     async fn fetch_pending_emails(

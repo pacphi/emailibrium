@@ -103,6 +103,73 @@ impl RedisCache {
         Ok(())
     }
 
+    /// Batch-retrieve multiple JSON-serialized values by key.
+    ///
+    /// Returns a `Vec` of the same length as `keys`, with `Some(T)` for cache
+    /// hits and `None` for misses.  Uses a single Redis `MGET` round-trip.
+    pub async fn mget<T: DeserializeOwned>(
+        &self,
+        keys: &[String],
+    ) -> Result<Vec<Option<T>>, RedisError> {
+        if keys.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut conn = self.conn.clone();
+        let raw_values: Vec<Option<String>> = conn
+            .mget(keys)
+            .await
+            .map_err(|e| RedisError::Command(format!("MGET: {e}")))?;
+
+        let mut results = Vec::with_capacity(raw_values.len());
+        for (i, raw) in raw_values.into_iter().enumerate() {
+            match raw {
+                Some(json) => match serde_json::from_str(&json) {
+                    Ok(value) => {
+                        debug!(key = %keys[i], "Redis MGET cache hit");
+                        results.push(Some(value));
+                    }
+                    Err(e) => {
+                        warn!(key = %keys[i], "Redis MGET deserialization failed: {e}");
+                        results.push(None);
+                    }
+                },
+                None => results.push(None),
+            }
+        }
+        Ok(results)
+    }
+
+    /// Batch-store multiple JSON-serialized key-value pairs with a TTL.
+    ///
+    /// Uses a Redis pipeline to issue all `SET EX` commands in a single
+    /// round-trip, preserving per-key TTL semantics.
+    pub async fn mset<T: Serialize>(
+        &self,
+        pairs: &[(String, T)],
+        ttl_secs: u64,
+    ) -> Result<(), RedisError> {
+        if pairs.is_empty() {
+            return Ok(());
+        }
+        let mut pipe = redis::pipe();
+        for (key, value) in pairs {
+            let json = serde_json::to_string(value)
+                .map_err(|e| RedisError::Serialization(format!("serialize {key}: {e}")))?;
+            pipe.cmd("SET")
+                .arg(key)
+                .arg(json)
+                .arg("EX")
+                .arg(ttl_secs)
+                .ignore();
+        }
+        let mut conn = self.conn.clone();
+        pipe.query_async::<()>(&mut conn)
+            .await
+            .map_err(|e| RedisError::Command(format!("MSET pipeline: {e}")))?;
+        debug!(count = pairs.len(), ttl_secs, "Redis MSET pipeline executed");
+        Ok(())
+    }
+
     /// Health check via PING.
     pub async fn health(&self) -> Result<bool, RedisError> {
         let mut conn = self.conn.clone();

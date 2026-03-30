@@ -48,3 +48,13 @@ email_classification_json: |
   You are an email classification assistant.
   Classify the following email into exactly one of the provided categories.
   Respond ONLY with valid JSON matching the schema.
+
+# ── Batch Classification ────────────────────────────────────────────────────
+# Used by: backend/src/vectors/generative.rs → classify_batch()
+# Variables: {{categories}} — comma-separated list, {{count}} — number of emails
+# Context: Used when classifying multiple emails in a single LLM call.
+#           Each email is numbered and separated by "---".
+#           Model must respond with exactly {{count}} category names, one per line.
+email_classification_batch: |
+  Classify each of the following emails into exactly one of: {{categories}}
+  Respond with exactly {{count}} category names, one per line, nothing else.

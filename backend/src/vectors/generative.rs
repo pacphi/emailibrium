@@ -86,6 +86,22 @@ pub trait GenerativeModel: Send + Sync {
     /// Check whether the model backend is reachable.
     async fn is_available(&self) -> bool;
 
+    /// Classify multiple texts in a single LLM call, returning one category per text.
+    ///
+    /// The default implementation falls back to individual `classify()` calls.
+    /// Providers override this to send a single batched prompt for efficiency.
+    async fn classify_batch(
+        &self,
+        texts: &[&str],
+        categories: &[&str],
+    ) -> Result<Vec<String>, VectorError> {
+        let mut results = Vec::with_capacity(texts.len());
+        for text in texts {
+            results.push(self.classify(text, categories).await?);
+        }
+        Ok(results)
+    }
+
     /// Return the model's configured max response tokens (from per-model tuning),
     /// or `None` to fall back to the global `chat_max_tokens` default.
     fn configured_max_tokens(&self) -> Option<u32> {
@@ -312,6 +328,42 @@ impl GenerativeModel for OllamaGenerativeModel {
         validate_classification(&response, categories, &cats)
     }
 
+    async fn classify_batch(
+        &self,
+        texts: &[&str],
+        categories: &[&str],
+    ) -> Result<Vec<String>, VectorError> {
+        if texts.len() <= 1 {
+            // Not worth batching a single email.
+            let mut results = Vec::with_capacity(texts.len());
+            for text in texts {
+                results.push(self.classify(text, categories).await?);
+            }
+            return Ok(results);
+        }
+
+        let prompt = build_batch_prompt(&self.prompts, texts, categories);
+        let max_tokens = self.params.classification_max_tokens * texts.len() as u32;
+
+        let response = self
+            .generate_internal(&prompt, max_tokens, self.params.classification_temperature)
+            .await?;
+
+        let parsed = parse_batch_response(&response, texts.len(), categories);
+        // Collect results; for any parse failures, fall back to individual classify.
+        let mut results = Vec::with_capacity(texts.len());
+        for (i, r) in parsed.into_iter().enumerate() {
+            match r {
+                Ok(cat) => results.push(cat),
+                Err(_) => {
+                    debug!(index = i, "Batch parse failed, falling back to individual classify");
+                    results.push(self.classify(texts[i], categories).await?);
+                }
+            }
+        }
+        Ok(results)
+    }
+
     fn model_name(&self) -> &str {
         &self.classification_model
     }
@@ -437,6 +489,40 @@ impl GenerativeModel for CloudGenerativeModel {
             )
             .await?;
         validate_classification(&response, categories, &cats)
+    }
+
+    async fn classify_batch(
+        &self,
+        texts: &[&str],
+        categories: &[&str],
+    ) -> Result<Vec<String>, VectorError> {
+        if texts.len() <= 1 {
+            let mut results = Vec::with_capacity(texts.len());
+            for text in texts {
+                results.push(self.classify(text, categories).await?);
+            }
+            return Ok(results);
+        }
+
+        let prompt = build_batch_prompt(&self.prompts, texts, categories);
+        let max_tokens = self.params.classification_max_tokens * texts.len() as u32;
+
+        let response = self
+            .generate_internal(&prompt, max_tokens, self.params.classification_temperature)
+            .await?;
+
+        let parsed = parse_batch_response(&response, texts.len(), categories);
+        let mut results = Vec::with_capacity(texts.len());
+        for (i, r) in parsed.into_iter().enumerate() {
+            match r {
+                Ok(cat) => results.push(cat),
+                Err(_) => {
+                    debug!(index = i, "Batch parse failed, falling back to individual classify");
+                    results.push(self.classify(texts[i], categories).await?);
+                }
+            }
+        }
+        Ok(results)
     }
 
     fn model_name(&self) -> &str {
@@ -805,6 +891,40 @@ impl GenerativeModel for OpenRouterGenerativeModel {
         validate_classification(&response, categories, &cats)
     }
 
+    async fn classify_batch(
+        &self,
+        texts: &[&str],
+        categories: &[&str],
+    ) -> Result<Vec<String>, VectorError> {
+        if texts.len() <= 1 {
+            let mut results = Vec::with_capacity(texts.len());
+            for text in texts {
+                results.push(self.classify(text, categories).await?);
+            }
+            return Ok(results);
+        }
+
+        let prompt = build_batch_prompt(&self.prompts, texts, categories);
+        let max_tokens = self.params.classification_max_tokens * texts.len() as u32;
+
+        let response = self
+            .generate_openai_compat(&prompt, max_tokens, self.params.classification_temperature)
+            .await?;
+
+        let parsed = parse_batch_response(&response, texts.len(), categories);
+        let mut results = Vec::with_capacity(texts.len());
+        for (i, r) in parsed.into_iter().enumerate() {
+            match r {
+                Ok(cat) => results.push(cat),
+                Err(_) => {
+                    debug!(index = i, "Batch parse failed, falling back to individual classify");
+                    results.push(self.classify(texts[i], categories).await?);
+                }
+            }
+        }
+        Ok(results)
+    }
+
     fn model_name(&self) -> &str {
         &self.model
     }
@@ -817,6 +937,91 @@ impl GenerativeModel for OpenRouterGenerativeModel {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// Build a batch classification prompt from the prompt template, texts, and categories.
+///
+/// The prompt includes the system classification instruction followed by the
+/// batch user template with numbered emails separated by "---".
+pub(crate) fn build_batch_prompt(prompts: &PromptsConfig, texts: &[&str], categories: &[&str]) -> String {
+    let cats = categories.join(", ");
+    let system = prompts.email_classification.trim();
+    let user = prompts
+        .email_classification_batch
+        .replace("{{categories}}", &cats)
+        .replace("{{count}}", &texts.len().to_string());
+
+    let mut prompt = format!("{system}\n\n{user}\n\n");
+    for (i, text) in texts.iter().enumerate() {
+        if i > 0 {
+            prompt.push_str("---\n");
+        }
+        prompt.push_str(&format!("Email {}:\n{}\n", i + 1, text));
+    }
+    prompt
+}
+
+/// Parse a batch classification response into individual category results.
+///
+/// Expects one category per line. Lines that don't match any known category
+/// are returned as errors for that position; valid lines are returned as `Ok`.
+pub(crate) fn parse_batch_response(
+    response: &str,
+    expected_count: usize,
+    categories: &[&str],
+) -> Vec<Result<String, VectorError>> {
+    let cats_display = categories.join(", ");
+    let lines: Vec<&str> = response
+        .lines()
+        .map(|l| l.trim())
+        .filter(|l| !l.is_empty())
+        .collect();
+
+    let mut results = Vec::with_capacity(expected_count);
+    for i in 0..expected_count {
+        if let Some(line) = lines.get(i) {
+            // Try exact match (case-insensitive)
+            let mut matched = false;
+            for cat in categories {
+                if line.eq_ignore_ascii_case(cat) {
+                    results.push(Ok(cat.to_string()));
+                    matched = true;
+                    break;
+                }
+            }
+            if !matched {
+                // Try fuzzy: check if line contains a category name
+                let mut fuzzy_matched = false;
+                for cat in categories {
+                    if line.to_lowercase().contains(&cat.to_lowercase()) {
+                        results.push(Ok(cat.to_string()));
+                        fuzzy_matched = true;
+                        break;
+                    }
+                }
+                if !fuzzy_matched {
+                    warn!(
+                        line = *line,
+                        index = i,
+                        "Batch classification line didn't match any category"
+                    );
+                    results.push(Err(VectorError::CategorizationFailed(format!(
+                        "Batch line {}: '{}' not one of: {}",
+                        i + 1,
+                        line,
+                        cats_display
+                    ))));
+                }
+            }
+        } else {
+            results.push(Err(VectorError::CategorizationFailed(format!(
+                "Batch response missing line {} (expected {})",
+                i + 1,
+                expected_count
+            ))));
+        }
+    }
+    results
+}
 
 /// Validate that an LLM response matches one of the expected categories.
 fn validate_classification(
@@ -1093,5 +1298,80 @@ mod tests {
         .unwrap();
         assert_eq!(model.model_name(), "meta-llama/llama-4-scout");
         std::env::remove_var("OPENROUTER_API_KEY");
+    }
+
+    // -- Batch classification helper tests -----------------------------------
+
+    #[test]
+    fn test_build_batch_prompt_structure() {
+        let prompts = PromptsConfig::default();
+        let texts = &["Hello from HR", "Your invoice is ready"];
+        let categories = &["Work", "Finance", "Personal"];
+
+        let prompt = build_batch_prompt(&prompts, texts, categories);
+        assert!(prompt.contains("Work, Finance, Personal"));
+        assert!(prompt.contains("Email 1:"));
+        assert!(prompt.contains("Email 2:"));
+        assert!(prompt.contains("Hello from HR"));
+        assert!(prompt.contains("Your invoice is ready"));
+        assert!(prompt.contains("---"));
+        assert!(prompt.contains("2 category names"));
+    }
+
+    #[test]
+    fn test_parse_batch_response_exact_match() {
+        let response = "Work\nFinance\nPersonal";
+        let categories = &["Work", "Finance", "Personal"];
+        let results = parse_batch_response(response, 3, categories);
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0].as_ref().unwrap(), "Work");
+        assert_eq!(results[1].as_ref().unwrap(), "Finance");
+        assert_eq!(results[2].as_ref().unwrap(), "Personal");
+    }
+
+    #[test]
+    fn test_parse_batch_response_case_insensitive() {
+        let response = "work\nFINANCE";
+        let categories = &["Work", "Finance"];
+        let results = parse_batch_response(response, 2, categories);
+        assert_eq!(results[0].as_ref().unwrap(), "Work");
+        assert_eq!(results[1].as_ref().unwrap(), "Finance");
+    }
+
+    #[test]
+    fn test_parse_batch_response_fuzzy_match() {
+        let response = "Category: Work\nThis is Finance";
+        let categories = &["Work", "Finance"];
+        let results = parse_batch_response(response, 2, categories);
+        assert_eq!(results[0].as_ref().unwrap(), "Work");
+        assert_eq!(results[1].as_ref().unwrap(), "Finance");
+    }
+
+    #[test]
+    fn test_parse_batch_response_missing_lines() {
+        let response = "Work";
+        let categories = &["Work", "Finance"];
+        let results = parse_batch_response(response, 2, categories);
+        assert_eq!(results[0].as_ref().unwrap(), "Work");
+        assert!(results[1].is_err());
+    }
+
+    #[test]
+    fn test_parse_batch_response_invalid_category() {
+        let response = "Work\nUnknownCategory\nFinance";
+        let categories = &["Work", "Finance", "Personal"];
+        let results = parse_batch_response(response, 3, categories);
+        assert_eq!(results[0].as_ref().unwrap(), "Work");
+        assert!(results[1].is_err());
+        assert_eq!(results[2].as_ref().unwrap(), "Finance");
+    }
+
+    #[test]
+    fn test_parse_batch_response_empty_lines_filtered() {
+        let response = "Work\n\n\nFinance\n";
+        let categories = &["Work", "Finance"];
+        let results = parse_batch_response(response, 2, categories);
+        assert_eq!(results[0].as_ref().unwrap(), "Work");
+        assert_eq!(results[1].as_ref().unwrap(), "Finance");
     }
 }

@@ -190,6 +190,46 @@ impl VectorCategorizer {
         generative: Option<&dyn GenerativeModel>,
         classification_config: &ClassificationConfig,
     ) -> Result<CategoryResult, VectorError> {
+        self.categorize_with_fallback_config_inner(
+            email_text,
+            from_addr,
+            generative,
+            classification_config,
+            false,
+        )
+        .await
+    }
+
+    /// Classify an email using only vector centroids and rules, skipping LLM.
+    ///
+    /// Emails that cannot be classified by centroids or rules are returned as
+    /// `Uncategorized` with method `"pending_backfill"`, signalling that they
+    /// should be processed by the async LLM backfill task later.
+    pub async fn categorize_rules_only(
+        &self,
+        email_text: &str,
+        from_addr: &str,
+        classification_config: &ClassificationConfig,
+    ) -> Result<CategoryResult, VectorError> {
+        self.categorize_with_fallback_config_inner(
+            email_text,
+            from_addr,
+            None,
+            classification_config,
+            true,
+        )
+        .await
+    }
+
+    /// Internal implementation for tiered fallback with optional LLM skip.
+    async fn categorize_with_fallback_config_inner(
+        &self,
+        email_text: &str,
+        from_addr: &str,
+        generative: Option<&dyn GenerativeModel>,
+        classification_config: &ClassificationConfig,
+        skip_llm: bool,
+    ) -> Result<CategoryResult, VectorError> {
         // Step 1: Try vector centroid classification.
         let result = self.categorize(email_text).await?;
         if result.method != "below_threshold" {
@@ -215,7 +255,16 @@ impl VectorCategorizer {
             }
         }
 
-        // Step 3: If generative model available, try LLM classification.
+        // Step 3: If LLM is skipped (onboarding mode), return pending_backfill.
+        if skip_llm {
+            return Ok(CategoryResult {
+                category: EmailCategory::Uncategorized,
+                confidence: result.confidence,
+                method: "pending_backfill".to_string(),
+            });
+        }
+
+        // Step 4: If generative model available, try LLM classification.
         // Use categories from YAML config.
         if let Some(gen) = generative {
             let cat_refs: Vec<&str> = classification_config
@@ -241,12 +290,122 @@ impl VectorCategorizer {
             }
         }
 
-        // Step 4: Nothing worked.
+        // Step 5: Nothing worked.
         Ok(CategoryResult {
             category: EmailCategory::Uncategorized,
             confidence: result.confidence,
             method: "uncategorized".to_string(),
         })
+    }
+
+    /// Classify a batch of emails with tiered fallback using explicit config.
+    ///
+    /// Takes a slice of `(text, from_addr)` pairs. First applies rule-based
+    /// classification to all emails, then sends only the LLM-needing subset
+    /// to `classify_batch()` in a single call. Returns one `CategoryResult`
+    /// per input email, preserving order.
+    pub async fn categorize_batch_with_fallback_config(
+        &self,
+        emails: &[(&str, &str)],
+        generative: Option<&dyn GenerativeModel>,
+        classification_config: &ClassificationConfig,
+    ) -> Vec<Result<CategoryResult, VectorError>> {
+        let mut results: Vec<Option<Result<CategoryResult, VectorError>>> =
+            (0..emails.len()).map(|_| None).collect();
+
+        // Step 1: Try vector centroid classification for all.
+        for (i, (text, _from_addr)) in emails.iter().enumerate() {
+            match self.categorize(text).await {
+                Ok(result) if result.method != "below_threshold" => {
+                    results[i] = Some(Ok(result));
+                }
+                Ok(_) | Err(_) => {} // Will try fallback below
+            }
+        }
+
+        // Step 2: Rule-based fallback for emails not yet classified.
+        for (i, (text, from_addr)) in emails.iter().enumerate() {
+            if results[i].is_some() {
+                continue;
+            }
+            if let Some(cat_name) = RuleBasedClassifier::classify_by_rules_with_config(
+                text,
+                from_addr,
+                classification_config,
+            ) {
+                if let Some(category) = parse_email_category(&cat_name) {
+                    debug!(category = %cat_name, index = i, "Batch: rule-based fallback");
+                    results[i] = Some(Ok(CategoryResult {
+                        category,
+                        confidence: 0.0,
+                        method: "rule_based".to_string(),
+                    }));
+                }
+            }
+        }
+
+        // Step 3: Collect indices still needing LLM classification.
+        let llm_indices: Vec<usize> = results
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| r.is_none())
+            .map(|(i, _)| i)
+            .collect();
+
+        if !llm_indices.is_empty() {
+            if let Some(gen) = generative {
+                let cat_refs: Vec<&str> = classification_config
+                    .categories
+                    .iter()
+                    .map(|s| s.as_str())
+                    .collect();
+                let texts: Vec<&str> = llm_indices.iter().map(|&i| emails[i].0).collect();
+
+                match gen.classify_batch(&texts, &cat_refs).await {
+                    Ok(batch_cats) => {
+                        for (batch_idx, &orig_idx) in llm_indices.iter().enumerate() {
+                            if let Some(cat_name) = batch_cats.get(batch_idx) {
+                                if let Some(category) = parse_email_category(cat_name) {
+                                    debug!(
+                                        category = %cat_name,
+                                        index = orig_idx,
+                                        "Batch: LLM fallback classified email"
+                                    );
+                                    results[orig_idx] = Some(Ok(CategoryResult {
+                                        category,
+                                        confidence: 0.0,
+                                        method: "llm_fallback".to_string(),
+                                    }));
+                                } else {
+                                    warn!(
+                                        category = %cat_name,
+                                        index = orig_idx,
+                                        "Batch: LLM returned unparseable category"
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        warn!(error = %e, "Batch LLM classification failed");
+                    }
+                }
+            }
+        }
+
+        // Step 4: Fill any remaining with Uncategorized.
+        results
+            .into_iter()
+            .map(|r| {
+                r.unwrap_or_else(|| {
+                    Ok(CategoryResult {
+                        category: EmailCategory::Uncategorized,
+                        confidence: 0.0,
+                        method: "uncategorized".to_string(),
+                    })
+                })
+            })
+            .collect()
     }
 
     /// Update a category centroid using exponential moving average.
@@ -895,6 +1054,43 @@ mod tests {
         assert_eq!(result.method, "rule_based");
     }
 
+    #[tokio::test]
+    async fn test_categorize_rules_only_skips_llm() {
+        // High threshold so vector classification always fails.
+        let cat = make_categorizer(0.99, 0.1, 0);
+
+        // Text that matches no rules and no centroid — should get pending_backfill.
+        let result = cat
+            .categorize_rules_only(
+                "Hello, how are you doing today?",
+                "friend@personal.com",
+                &ClassificationConfig::default(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.category, EmailCategory::Uncategorized);
+        assert_eq!(result.method, "pending_backfill");
+    }
+
+    #[tokio::test]
+    async fn test_categorize_rules_only_still_uses_rules() {
+        let cat = make_categorizer(0.99, 0.1, 0);
+
+        // GitHub email should still be caught by rule-based fallback.
+        let result = cat
+            .categorize_rules_only(
+                "New pull request opened on your repo",
+                "noreply@github.com",
+                &ClassificationConfig::default(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.category, EmailCategory::Notification);
+        assert_eq!(result.method, "rule_based");
+    }
+
     #[test]
     fn test_parse_email_category() {
         assert_eq!(parse_email_category("Work"), Some(EmailCategory::Work));
@@ -907,5 +1103,57 @@ mod tests {
             Some(EmailCategory::Shopping)
         );
         assert_eq!(parse_email_category("unknown"), None);
+    }
+
+    // -- categorize_batch_with_fallback_config tests --------------------------
+
+    #[tokio::test]
+    async fn test_batch_fallback_rule_based() {
+        // High threshold so vector classification always fails.
+        let cat = make_categorizer(0.99, 0.1, 0);
+
+        let emails: Vec<(&str, &str)> = vec![
+            ("New pull request opened on your repo", "noreply@github.com"),
+            ("Your invoice #12345 is attached", "billing@randomco.com"),
+            ("Hello, how are you doing today?", "friend@personal.com"),
+        ];
+
+        let results = cat
+            .categorize_batch_with_fallback_config(
+                &emails,
+                None, // No generative model
+                &ClassificationConfig::default(),
+            )
+            .await;
+
+        assert_eq!(results.len(), 3);
+        // GitHub domain → Notification
+        let r0 = results[0].as_ref().unwrap();
+        assert_eq!(r0.category, EmailCategory::Notification);
+        assert_eq!(r0.method, "rule_based");
+
+        // Invoice keyword → Finance
+        let r1 = results[1].as_ref().unwrap();
+        assert_eq!(r1.category, EmailCategory::Finance);
+        assert_eq!(r1.method, "rule_based");
+
+        // No rules match → Uncategorized
+        let r2 = results[2].as_ref().unwrap();
+        assert_eq!(r2.category, EmailCategory::Uncategorized);
+        assert_eq!(r2.method, "uncategorized");
+    }
+
+    #[tokio::test]
+    async fn test_batch_fallback_empty_input() {
+        let cat = make_categorizer(0.99, 0.1, 0);
+        let emails: Vec<(&str, &str)> = vec![];
+        let results = cat
+            .categorize_batch_with_fallback_config(
+                &emails,
+                None,
+                &ClassificationConfig::default(),
+            )
+            .await;
+        assert!(results.is_empty());
     }
 }
