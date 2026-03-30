@@ -1201,6 +1201,7 @@ impl IngestionPipelineHandle {
             r#"SELECT id, subject, from_addr, body_text
                FROM emails
                WHERE account_id = ? AND embedding_status = 'pending'
+                 AND is_trash = 0 AND is_spam = 0 AND deleted_at IS NULL
                ORDER BY received_at DESC"#,
         )
         .bind(account_id)
