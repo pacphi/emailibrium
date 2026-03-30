@@ -986,26 +986,33 @@ impl EmbeddingPipeline {
             }
         }
 
-        // 2. Check L2 (Redis) for remaining misses.
+        // 2. Check L2 (Redis) for remaining misses — single MGET round-trip.
         if let Some(ref redis) = self.redis {
-            let mut still_missing = Vec::new();
-            for &idx in &miss_indices {
-                let key = Self::hash_text(&texts[idx]);
-                let redis_key = format!("emb:{key}");
-                match redis.get::<Vec<f32>>(&redis_key).await {
-                    Ok(Some(cached)) => {
-                        // Promote to L1.
-                        self.cache.insert(key, cached.clone()).await;
-                        results[idx] = Some(cached);
+            let redis_keys: Vec<String> = miss_indices
+                .iter()
+                .map(|&idx| format!("emb:{}", Self::hash_text(&texts[idx])))
+                .collect();
+
+            match redis.mget::<Vec<f32>>(&redis_keys).await {
+                Ok(cached_values) => {
+                    let mut still_missing = Vec::new();
+                    for (j, &idx) in miss_indices.iter().enumerate() {
+                        match &cached_values[j] {
+                            Some(cached) => {
+                                let key = Self::hash_text(&texts[idx]);
+                                self.cache.insert(key, cached.clone()).await;
+                                results[idx] = Some(cached.clone());
+                            }
+                            None => still_missing.push(idx),
+                        }
                     }
-                    Ok(None) => still_missing.push(idx),
-                    Err(e) => {
-                        warn!("Redis L2 batch read failed (non-fatal): {e}");
-                        still_missing.push(idx);
-                    }
+                    miss_indices = still_missing;
+                }
+                Err(e) => {
+                    warn!("Redis L2 batch MGET failed (non-fatal): {e}");
+                    // All miss_indices remain as misses — fall through to compute.
                 }
             }
-            miss_indices = still_missing;
         }
 
         // 3. Prepare texts for embedding (with augmentation).
@@ -1018,21 +1025,23 @@ impl EmbeddingPipeline {
         if !miss_texts.is_empty() {
             let new_vecs = self.batch_with_fallback(&miss_texts).await?;
 
+            // Collect pairs for batch L2 write.
+            let mut redis_pairs: Vec<(String, Vec<f32>)> = Vec::new();
             for (j, idx) in miss_indices.iter().enumerate() {
                 let key = Self::hash_text(&texts[*idx]);
                 // Store in L1.
                 self.cache.insert(key, new_vecs[j].clone()).await;
-                // Store in L2 (best-effort).
-                if let Some(ref redis) = self.redis {
-                    let redis_key = format!("emb:{key}");
-                    if let Err(e) = redis
-                        .set(&redis_key, &new_vecs[j], self.redis_ttl_secs)
-                        .await
-                    {
-                        warn!("Redis L2 batch write failed (non-fatal): {e}");
-                    }
+                // Collect for batch L2 write.
+                if self.redis.is_some() {
+                    redis_pairs.push((format!("emb:{key}"), new_vecs[j].clone()));
                 }
                 results[*idx] = Some(new_vecs[j].clone());
+            }
+            // Batch L2 write — single pipeline round-trip.
+            if let Some(ref redis) = self.redis {
+                if let Err(e) = redis.mset(&redis_pairs, self.redis_ttl_secs).await {
+                    warn!("Redis L2 batch MSET failed (non-fatal): {e}");
+                }
             }
         }
 
