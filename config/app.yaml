@@ -102,8 +102,8 @@ hardware:
 security:
   jwt_secret_env: JWT_SECRET
   encryption_key_env: EMAILIBRIUM_ENCRYPTION_MASTER_PASSWORD
-  rate_limit_capacity: 60 # Max requests in burst window
-  rate_limit_refill_per_sec: 1.0 # Tokens refilled per second
+  rate_limit_capacity: 500 # Max requests in burst window (high for dev; lower in production via env)
+  rate_limit_refill_per_sec: 20.0 # Tokens refilled per second (supports active frontend polling)
   hsts_max_age_secs: 63072000 # 2 years
 
 # ── Paths ────────────────────────────────────────────────────────────────────

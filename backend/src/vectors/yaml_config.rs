@@ -765,8 +765,8 @@ impl Default for AppSecurityConfig {
         Self {
             jwt_secret_env: String::new(),
             encryption_key_env: String::new(),
-            rate_limit_capacity: 60,
-            rate_limit_refill_per_sec: 1.0,
+            rate_limit_capacity: 500,
+            rate_limit_refill_per_sec: 20.0,
             hsts_max_age_secs: 63072000,
         }
     }
