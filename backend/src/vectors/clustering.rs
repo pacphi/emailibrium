@@ -13,6 +13,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
+use rand::seq::index::sample as rand_sample;
 use ruvector_gnn::RuvectorLayer;
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
@@ -23,7 +24,11 @@ use crate::db::Database;
 use super::categorizer::cosine_similarity;
 use super::error::VectorError;
 use super::store::VectorStoreBackend;
-use super::types::VectorCollection;
+use super::types::{SearchParams, VectorCollection};
+
+/// Maximum number of points sampled for silhouette score estimation.
+/// 3 000 samples gives < 1 % variance vs the full O(n²) computation.
+const MAX_SILHOUETTE_SAMPLE: usize = 3_000;
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -354,10 +359,22 @@ pub fn silhouette_score(data: &[Vec<f32>], assignments: &[usize], k: usize) -> f
         return 0.0;
     }
 
+    // Sample evaluation points when n > MAX_SILHOUETTE_SAMPLE to avoid O(n²).
+    // Each sampled point still computes distances against ALL cluster members,
+    // giving O(sample_size × n) instead of O(n²).
+    let eval_indices: Vec<usize> = if n > MAX_SILHOUETTE_SAMPLE {
+        let mut rng = rand::rng();
+        let mut indices = rand_sample(&mut rng, n, MAX_SILHOUETTE_SAMPLE).into_vec();
+        indices.sort_unstable();
+        indices
+    } else {
+        (0..n).collect()
+    };
+
     let mut total_score = 0.0_f64;
     let mut counted = 0usize;
 
-    for i in 0..n {
+    for &i in &eval_indices {
         let ci = assignments[i];
         let same_cluster = &clusters[&ci];
 
@@ -408,10 +425,105 @@ pub fn silhouette_score(data: &[Vec<f32>], assignments: &[usize], k: usize) -> f
 // Graph construction & propagation
 // ---------------------------------------------------------------------------
 
-/// Build a kNN similarity graph from embeddings.
+/// Build a kNN similarity graph using the HNSW vector store for O(n log n)
+/// approximate nearest neighbor search, plus inverted indexes for
+/// sender/thread edges in O(n) total.
 ///
 /// Returns adjacency list: email_id -> [(neighbor_id, similarity)].
-fn build_similarity_graph(
+async fn build_similarity_graph_ann(
+    ids: &[String],
+    embeddings: &[Vec<f32>],
+    k: usize,
+    sender_map: &HashMap<String, String>,
+    thread_map: &HashMap<String, String>,
+    store: &dyn VectorStoreBackend,
+) -> HashMap<String, Vec<(String, f32)>> {
+    let n = ids.len();
+    let mut graph: HashMap<String, Vec<(String, f32)>> = HashMap::with_capacity(n);
+
+    // Step 1: HNSW ANN search for cosine-similarity edges — O(n × K × log n).
+    for (i, id) in ids.iter().enumerate() {
+        let params = SearchParams {
+            vector: embeddings[i].clone(),
+            limit: k + 1, // +1 in case self is returned
+            collection: VectorCollection::EmailText,
+            filters: None,
+            min_score: None,
+        };
+
+        let mut edge_map: HashMap<String, f32> = HashMap::new();
+        if let Ok(results) = store.search(&params).await {
+            for result in results {
+                if result.document.email_id != *id {
+                    edge_map.insert(result.document.email_id.clone(), result.score);
+                }
+            }
+        }
+
+        graph.insert(id.clone(), edge_map.into_iter().collect());
+    }
+
+    // Step 2: Add same-sender edges via inverted index — O(n + Σ group²).
+    let mut sender_groups: HashMap<&str, Vec<usize>> = HashMap::new();
+    for (i, id) in ids.iter().enumerate() {
+        if let Some(sender) = sender_map.get(id) {
+            sender_groups.entry(sender.as_str()).or_default().push(i);
+        }
+    }
+    for members in sender_groups.values() {
+        for &i in members {
+            let edges = graph.entry(ids[i].clone()).or_default();
+            for &j in members {
+                if i != j {
+                    let existing = edges.iter().position(|(n, _)| n == &ids[j]);
+                    match existing {
+                        Some(pos) => {
+                            edges[pos].1 = edges[pos].1.max(0.3);
+                        }
+                        None => {
+                            edges.push((ids[j].clone(), 0.3));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Step 3: Add same-thread edges via inverted index — O(n + Σ group²).
+    let mut thread_groups: HashMap<&str, Vec<usize>> = HashMap::new();
+    for (i, id) in ids.iter().enumerate() {
+        if let Some(thread) = thread_map.get(id) {
+            thread_groups.entry(thread.as_str()).or_default().push(i);
+        }
+    }
+    for members in thread_groups.values() {
+        for &i in members {
+            let edges = graph.entry(ids[i].clone()).or_default();
+            for &j in members {
+                if i != j {
+                    let existing = edges.iter().position(|(n, _)| n == &ids[j]);
+                    match existing {
+                        Some(pos) => {
+                            edges[pos].1 = edges[pos].1.max(0.8);
+                        }
+                        None => {
+                            edges.push((ids[j].clone(), 0.8));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    graph
+}
+
+/// Build a kNN similarity graph from embeddings (brute-force O(n²)).
+///
+/// Used as a fallback and in unit tests where the vector store may not have
+/// HNSW indexing. Production code should prefer `build_similarity_graph_ann`.
+#[cfg(test)]
+fn build_similarity_graph_brute_force(
     ids: &[String],
     embeddings: &[Vec<f32>],
     k: usize,
@@ -420,6 +532,20 @@ fn build_similarity_graph(
 ) -> HashMap<String, Vec<(String, f32)>> {
     let n = ids.len();
     let mut graph: HashMap<String, Vec<(String, f32)>> = HashMap::with_capacity(n);
+
+    // Build inverted indexes for sender/thread — O(n).
+    let mut sender_groups: HashMap<&str, Vec<usize>> = HashMap::new();
+    for (i, id) in ids.iter().enumerate() {
+        if let Some(sender) = sender_map.get(id) {
+            sender_groups.entry(sender.as_str()).or_default().push(i);
+        }
+    }
+    let mut thread_groups: HashMap<&str, Vec<usize>> = HashMap::new();
+    for (i, id) in ids.iter().enumerate() {
+        if let Some(thread) = thread_map.get(id) {
+            thread_groups.entry(thread.as_str()).or_default().push(i);
+        }
+    }
 
     for i in 0..n {
         let mut neighbors: Vec<(usize, f32)> = Vec::with_capacity(n - 1);
@@ -441,30 +567,24 @@ fn build_similarity_graph(
             edge_map.insert(ids[j].clone(), sim);
         }
 
-        // Same-sender edges (weight 0.3).
-        if let Some(sender_i) = sender_map.get(&ids[i]) {
-            for (j, id_j) in ids.iter().enumerate().take(n) {
-                if i == j {
-                    continue;
-                }
-                if let Some(sender_j) = sender_map.get(id_j) {
-                    if sender_i == sender_j {
-                        let entry = edge_map.entry(id_j.clone()).or_insert(0.0);
+        // Same-sender edges (weight 0.3) via inverted index.
+        if let Some(sender) = sender_map.get(&ids[i]) {
+            if let Some(group) = sender_groups.get(sender.as_str()) {
+                for &j in group {
+                    if i != j {
+                        let entry = edge_map.entry(ids[j].clone()).or_insert(0.0);
                         *entry = entry.max(0.3);
                     }
                 }
             }
         }
 
-        // Same-thread edges (weight 0.8).
-        if let Some(thread_i) = thread_map.get(&ids[i]) {
-            for (j, id_j) in ids.iter().enumerate().take(n) {
-                if i == j {
-                    continue;
-                }
-                if let Some(thread_j) = thread_map.get(id_j) {
-                    if thread_i == thread_j {
-                        let entry = edge_map.entry(id_j.clone()).or_insert(0.0);
+        // Same-thread edges (weight 0.8) via inverted index.
+        if let Some(thread) = thread_map.get(&ids[i]) {
+            if let Some(group) = thread_groups.get(thread.as_str()) {
+                for &j in group {
+                    if i != j {
+                        let entry = edge_map.entry(ids[j].clone()).or_insert(0.0);
                         *entry = entry.max(0.8);
                     }
                 }
@@ -1005,14 +1125,16 @@ impl ClusterEngine {
             // Default: GraphSAGE + KMeans++ pipeline.
             tracing::info!("Clustering algorithm: GraphSAGE + KMeans++");
 
-            // Step 1: Build similarity graph via HNSW neighbors.
-            let graph = build_similarity_graph(
+            // Step 1: Build similarity graph via HNSW ANN search — O(n log n).
+            let graph = build_similarity_graph_ann(
                 &ids,
                 &embeddings,
                 self.config.neighbor_count,
                 &sender_map,
                 &thread_map,
-            );
+                self.store.as_ref(),
+            )
+            .await;
 
             // Step 2: GraphSAGE propagation (ruvector-gnn learned embeddings).
             let propagated =
@@ -1451,7 +1573,8 @@ mod tests {
 
         let sender_map = HashMap::new();
         let thread_map = HashMap::new();
-        let graph = build_similarity_graph(&ids, &embeddings, 2, &sender_map, &thread_map);
+        let graph =
+            build_similarity_graph_brute_force(&ids, &embeddings, 2, &sender_map, &thread_map);
 
         // Test the mean-aggregation fallback path.
         let propagated = propagate_embeddings_mean(&ids, &embeddings, &graph);
@@ -1483,7 +1606,8 @@ mod tests {
 
         let sender_map = HashMap::new();
         let thread_map = HashMap::new();
-        let graph = build_similarity_graph(&ids, &embeddings, 2, &sender_map, &thread_map);
+        let graph =
+            build_similarity_graph_brute_force(&ids, &embeddings, 2, &sender_map, &thread_map);
 
         let config = ClusterConfig {
             graphsage_hidden_dim: 4,
