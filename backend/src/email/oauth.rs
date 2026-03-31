@@ -8,7 +8,7 @@ use aes_gcm::aead::Aead;
 use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
 use base64::Engine;
 use chrono::{DateTime, Duration, Utc};
-use rand::RngCore;
+use rand::Rng;
 use sqlx::SqlitePool;
 use zeroize::Zeroizing;
 

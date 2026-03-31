@@ -35,7 +35,7 @@ use aes_gcm::aead::Aead;
 use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
 use argon2::Argon2;
 use async_trait::async_trait;
-use rand::RngCore;
+use rand::Rng;
 use std::sync::Arc;
 use zeroize::Zeroizing;
 
