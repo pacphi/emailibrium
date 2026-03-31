@@ -1201,7 +1201,7 @@ impl IngestionPipelineHandle {
             r#"SELECT id, subject, from_addr, body_text
                FROM emails
                WHERE account_id = ? AND embedding_status = 'pending'
-                 AND is_trash = 0 AND is_spam = 0 AND deleted_at IS NULL
+                 AND COALESCE(is_trash, 0) = 0 AND COALESCE(is_spam, 0) = 0 AND deleted_at IS NULL
                ORDER BY received_at DESC"#,
         )
         .bind(account_id)
@@ -1391,10 +1391,7 @@ mod tests {
 
     async fn test_db() -> Database {
         let db = Database::connect("sqlite::memory:").await.unwrap();
-        sqlx::query(include_str!("../../migrations/001_initial_schema.sql"))
-            .execute(&db.pool)
-            .await
-            .unwrap();
+        db.run_migrations().await.unwrap();
         db
     }
 
