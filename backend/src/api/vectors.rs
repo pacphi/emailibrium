@@ -56,6 +56,7 @@ pub struct SemanticSearchRequest {
 }
 
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SearchResponse {
     pub results: Vec<SearchResultItem>,
     pub total: usize,
@@ -69,6 +70,7 @@ pub struct SearchResponse {
 }
 
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SearchResultItem {
     pub email_id: String,
     pub score: f32,
