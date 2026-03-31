@@ -64,11 +64,19 @@ function Sidebar() {
             className="mx-auto"
             title="Expand sidebar"
           >
-            <img src="/emailibrium-icon.svg" alt="Emailibrium" className="h-8 w-8" />
+            <img
+              src="/emailibrium-icon.svg"
+              alt="Emailibrium"
+              className="h-8 w-8 dark:invert dark:hue-rotate-180"
+            />
           </button>
         ) : (
           <>
-            <img src="/emailibrium-text.svg" alt="Emailibrium" className="h-5 w-auto" />
+            <img
+              src="/emailibrium-text.svg"
+              alt="Emailibrium"
+              className="h-5 w-auto dark:invert dark:hue-rotate-180"
+            />
             <button
               type="button"
               onClick={() => setCollapsed(true)}

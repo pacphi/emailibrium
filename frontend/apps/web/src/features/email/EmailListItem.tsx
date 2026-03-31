@@ -106,7 +106,7 @@ export const EmailListItem = forwardRef<HTMLDivElement, EmailListItemProps>(func
           ${
             isSelected
               ? 'border-l-[3px] border-l-indigo-600 bg-indigo-100 dark:border-l-indigo-400 dark:bg-indigo-900/40'
-              : `hover:bg-gray-50 dark:hover:bg-gray-800/50 ${!email.isRead ? 'bg-white dark:bg-gray-800' : 'bg-gray-50/50 dark:bg-gray-850'}`
+              : `hover:bg-gray-50 dark:hover:bg-gray-800/50 ${!email.isRead ? 'bg-white dark:bg-gray-800' : 'bg-gray-50/50 dark:bg-gray-900/50'}`
           }
         `}
     >
