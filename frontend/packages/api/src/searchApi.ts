@@ -13,9 +13,7 @@ export async function searchEmails(query: SearchQuery): Promise<SearchResponse> 
 }
 
 export async function findSimilar(emailId: string): Promise<SearchResponse> {
-  return api
-    .post(`vectors/search/similar/${emailId}`, { json: {} })
-    .json<SearchResponse>();
+  return api.post(`vectors/search/similar/${emailId}`, { json: {} }).json<SearchResponse>();
 }
 
 export async function classifyEmail(request: {
