@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, useEffect } from 'react';
+import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import { Plus, Trash2, ArrowLeft, Search } from 'lucide-react';
 import { submitFeedback } from '@emailibrium/api';
 import type { EmailViewContext } from './EmailActions';
@@ -68,6 +68,7 @@ export function EmailClient() {
     if (urlEmailId) {
       setSelectedEmailId(urlEmailId);
       setFromSearch(true);
+      setScrollToEmailId(urlEmailId);
       setMobilePanel('thread');
     }
     if (urlGroup) {
@@ -93,6 +94,29 @@ export function EmailClient() {
     () => emailsQuery.data?.pages.flatMap((p) => p.emails) ?? [],
     [emailsQuery.data?.pages],
   );
+
+  // Progressive page loading: when we need to scroll to an email that's not yet
+  // loaded (e.g. from a search result deep-link), keep fetching pages until found.
+  const fetchingForScrollRef = useRef(false);
+  useEffect(() => {
+    if (!scrollToEmailId) return;
+    // Wait for initial load to complete before doing anything.
+    if (emailsQuery.isLoading) return;
+    const found = emails.some((e) => e.id === scrollToEmailId);
+    if (found) {
+      fetchingForScrollRef.current = false;
+      return;
+    }
+    // Email not in loaded pages — fetch more if available.
+    if (emailsQuery.hasNextPage && !emailsQuery.isFetchingNextPage) {
+      fetchingForScrollRef.current = true;
+      emailsQuery.fetchNextPage();
+    } else if (!emailsQuery.hasNextPage && !emailsQuery.isFetchingNextPage) {
+      // Exhausted all pages without finding the email — clear scroll target.
+      fetchingForScrollRef.current = false;
+      setScrollToEmailId(null);
+    }
+  }, [scrollToEmailId, emails, emailsQuery.hasNextPage, emailsQuery.isFetchingNextPage, emailsQuery.isLoading]);
 
   const filteredEmails = useMemo(() => {
     if (!searchText.trim()) return emails;
@@ -252,6 +276,7 @@ export function EmailClient() {
   const handleSelectEmail = useCallback(
     (emailId: string) => {
       setSelectedEmailId(emailId);
+      setScrollToEmailId(emailId);
       setMobilePanel('thread');
       // Auto-mark as read when selecting an unread email.
       const email = emails.find((e) => e.id === emailId);
@@ -770,7 +795,7 @@ export function EmailClient() {
               Viewing search result
             </span>
             <a
-              href="/command-center"
+              href="/command-center?view=search"
               className="ml-auto flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-indigo-600 hover:bg-indigo-100 dark:text-indigo-400 dark:hover:bg-indigo-800/50"
             >
               <ArrowLeft className="h-3 w-3" aria-hidden="true" />

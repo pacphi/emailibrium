@@ -84,6 +84,7 @@ storybook-static/
 test-results/
 playwright-report/
 blob-report/
+.playwright-mcp/
 
 # Docker local
 docker-compose.override.yml

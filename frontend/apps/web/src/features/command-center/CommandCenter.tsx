@@ -15,7 +15,10 @@ import { useSyncStore } from '@/shared/stores/syncStore';
 type View = 'dashboard' | 'search';
 
 export function CommandCenter() {
-  const [view, setView] = useState<View>('dashboard');
+  const [view, setView] = useState<View>(() => {
+    const params = new URLSearchParams(window.location.search);
+    return params.get('view') === 'search' ? 'search' : 'dashboard';
+  });
   const { stats, isLoading, isError, error, refetch, dataUpdatedAt } = useStats();
   const { open: openPalette } = useCommandPalette();
 
