@@ -4,7 +4,9 @@ import {
   getRecurringSenders,
   getInboxReport,
   getTemporalInsights,
+  getTopicClusters,
 } from '@emailibrium/api';
+import type { TopicCluster } from '@emailibrium/api';
 import type { SubscriptionInsight, InboxReport, TemporalInsights } from '@emailibrium/types';
 
 export function useInboxReport() {
@@ -35,6 +37,14 @@ export function useTemporalInsights() {
   return useQuery<TemporalInsights>({
     queryKey: ['temporal-insights'],
     queryFn: getTemporalInsights,
+    staleTime: 60_000,
+  });
+}
+
+export function useTopicClusters() {
+  return useQuery<TopicCluster[]>({
+    queryKey: ['topic-clusters'],
+    queryFn: getTopicClusters,
     staleTime: 60_000,
   });
 }

@@ -7,8 +7,8 @@ export interface GetEmailsParams {
   label?: string;
   isRead?: boolean;
   isStarred?: boolean;
-  is_spam?: boolean;
-  is_trash?: boolean;
+  isSpam?: boolean;
+  isTrash?: boolean;
   limit?: number;
   offset?: number;
 }

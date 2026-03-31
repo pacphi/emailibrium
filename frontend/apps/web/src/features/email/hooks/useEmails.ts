@@ -26,6 +26,13 @@ import type { Email, EmailThread } from '@emailibrium/types';
 
 const PAGE_SIZE = 50;
 
+/** Invalidate all sidebar count queries so Labels, Categories, and Subscriptions update. */
+function invalidateSidebarCounts(queryClient: ReturnType<typeof useQueryClient>) {
+  queryClient.invalidateQueries({ queryKey: ['email-counts'] });
+  queryClient.invalidateQueries({ queryKey: ['categories-enriched'] });
+  queryClient.invalidateQueries({ queryKey: ['labels-all'] });
+}
+
 export function useEmailsQuery(params?: GetEmailsParams) {
   return useInfiniteQuery({
     queryKey: ['emails', params],
@@ -64,6 +71,7 @@ export function useArchiveEmail() {
     mutationFn: archiveEmail,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['emails'] });
+      invalidateSidebarCounts(queryClient);
     },
   });
 }
@@ -85,6 +93,7 @@ export function useMarkRead() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['emails'] });
       queryClient.invalidateQueries({ queryKey: ['thread'] });
+      invalidateSidebarCounts(queryClient);
     },
   });
 }
@@ -95,6 +104,7 @@ export function useDeleteEmail() {
     mutationFn: deleteEmail,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['emails'] });
+      invalidateSidebarCounts(queryClient);
     },
   });
 }
@@ -137,6 +147,7 @@ export function useBulkArchive() {
     mutationFn: bulkArchive,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['emails'] });
+      invalidateSidebarCounts(queryClient);
     },
   });
 }
@@ -147,6 +158,7 @@ export function useBulkDelete() {
     mutationFn: bulkDelete,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['emails'] });
+      invalidateSidebarCounts(queryClient);
     },
   });
 }
@@ -208,7 +220,7 @@ export function useMarkAsSpam() {
     mutationFn: markAsSpam,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['emails'] });
-      queryClient.invalidateQueries({ queryKey: ['email-counts'] });
+      invalidateSidebarCounts(queryClient);
     },
   });
 }
@@ -219,7 +231,7 @@ export function useUnmarkSpam() {
     mutationFn: unmarkSpam,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['emails'] });
-      queryClient.invalidateQueries({ queryKey: ['email-counts'] });
+      invalidateSidebarCounts(queryClient);
     },
   });
 }
@@ -230,7 +242,7 @@ export function useRestoreEmail() {
     mutationFn: restoreEmail,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['emails'] });
-      queryClient.invalidateQueries({ queryKey: ['email-counts'] });
+      invalidateSidebarCounts(queryClient);
     },
   });
 }
@@ -241,7 +253,7 @@ export function useEmptyTrash() {
     mutationFn: emptyTrash,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['emails'] });
-      queryClient.invalidateQueries({ queryKey: ['email-counts'] });
+      invalidateSidebarCounts(queryClient);
     },
   });
 }
@@ -252,7 +264,7 @@ export function usePermanentDelete() {
     mutationFn: permanentDelete,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['emails'] });
-      queryClient.invalidateQueries({ queryKey: ['email-counts'] });
+      invalidateSidebarCounts(queryClient);
     },
   });
 }

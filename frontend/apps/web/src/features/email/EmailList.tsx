@@ -27,6 +27,9 @@ interface EmailListProps {
   onDeleteEmail: (emailId: string) => void;
   onMoveOpen?: (emailId: string) => void;
   onMarkUnread?: (emailId: string) => void;
+  /** When set, scroll to this email in the list (used after "Show in inbox"). */
+  scrollToEmailId?: string | null;
+  onScrollToComplete?: () => void;
 }
 
 export function EmailList({
@@ -45,6 +48,8 @@ export function EmailList({
   isFetchingNextPage,
   onFetchNextPage,
   onMarkUnread,
+  scrollToEmailId,
+  onScrollToComplete,
 }: EmailListProps) {
   const parentRef = useRef<HTMLDivElement>(null);
   const { emailListDensity, fontSize } = useSettings();
@@ -61,6 +66,16 @@ export function EmailList({
   useEffect(() => {
     virtualizer.measure();
   }, [emailListDensity, virtualizer]);
+
+  // Scroll to a specific email when requested (e.g. "Show in inbox" from search).
+  useEffect(() => {
+    if (!scrollToEmailId) return;
+    const index = emails.findIndex((e) => e.id === scrollToEmailId);
+    if (index >= 0) {
+      virtualizer.scrollToIndex(index, { align: 'center', behavior: 'smooth' });
+      onScrollToComplete?.();
+    }
+  }, [scrollToEmailId, emails, virtualizer, onScrollToComplete]);
 
   // Infinite scroll: load more when last few items are visible.
   const virtualItems = virtualizer.getVirtualItems();

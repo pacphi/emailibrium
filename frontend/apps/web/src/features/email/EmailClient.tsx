@@ -1,5 +1,5 @@
-import { useState, useCallback, useMemo } from 'react';
-import { Plus, Trash2 } from 'lucide-react';
+import { useState, useCallback, useMemo, useEffect } from 'react';
+import { Plus, Trash2, ArrowLeft, Search } from 'lucide-react';
 import { submitFeedback } from '@emailibrium/api';
 import type { EmailViewContext } from './EmailActions';
 import { EmailSidebar } from './EmailSidebar';
@@ -14,6 +14,7 @@ import { useQuery } from '@tanstack/react-query';
 import { getAllLabels, getEnrichedCategories, getEmailCounts } from '@emailibrium/api';
 import {
   useEmailsQuery,
+  useEmailQuery,
   useThreadQuery,
   useArchiveEmail,
   useStarEmail,
@@ -56,14 +57,35 @@ export function EmailClient() {
   const [expandedSenders, setExpandedSenders] = useState<Set<string>>(new Set());
   const [searchText, setSearchText] = useState('');
   const [searchField, setSearchField] = useState<'from' | 'to' | 'cc' | 'subject' | 'body'>('from');
+  const [fromSearch, setFromSearch] = useState(false);
+  const [scrollToEmailId, setScrollToEmailId] = useState<string | null>(null);
+
+  // Read URL params on mount (search result deep-link or topic/category deep-link).
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const urlEmailId = params.get('id');
+    const urlGroup = params.get('group');
+    if (urlEmailId) {
+      setSelectedEmailId(urlEmailId);
+      setFromSearch(true);
+      setMobilePanel('thread');
+    }
+    if (urlGroup) {
+      setActiveGroup(urlGroup);
+    }
+    // Clean the URL so refreshing doesn't re-trigger.
+    if (urlEmailId || urlGroup) {
+      window.history.replaceState({}, '', '/email');
+    }
+  }, []);
 
   const queryParams = useMemo(() => {
     const base = groupToQueryParam(activeGroup);
     if (filter === 'read') return { ...base, isRead: true };
     if (filter === 'unread') return { ...base, isRead: false };
     if (filter === 'starred') return { ...base, isStarred: true };
-    if (filter === 'spam') return { ...base, is_spam: true };
-    if (filter === 'trash') return { ...base, is_trash: true };
+    if (filter === 'spam') return { ...base, isSpam: true };
+    if (filter === 'trash') return { ...base, isTrash: true };
     return base;
   }, [activeGroup, filter]);
   const emailsQuery = useEmailsQuery(queryParams);
@@ -96,8 +118,11 @@ export function EmailClient() {
     });
   }, [emails, searchText, searchField]);
 
-  const selectedEmail = emails.find((e) => e.id === selectedEmailId) ?? null;
-  const threadId = selectedEmail?.threadId ?? null;
+  const selectedEmailFromList = emails.find((e) => e.id === selectedEmailId) ?? null;
+  // Fallback: fetch individual email when it's not in the current list (e.g. from search).
+  const directEmailQuery = useEmailQuery(selectedEmailFromList ? null : selectedEmailId);
+  const selectedEmail = selectedEmailFromList ?? directEmailQuery.data ?? null;
+  const threadId = selectedEmail?.threadId ?? selectedEmailId;
   const threadQuery = useThreadQuery(threadId);
 
   const archiveMutation = useArchiveEmail();
@@ -163,7 +188,7 @@ export function EmailClient() {
         id: `${prefix}${cat.name}`,
         label: cat.name,
         icon,
-        unreadCount: cat.unreadCount,
+        unreadCount: cat.emailCount,
       });
     }
 
@@ -173,7 +198,7 @@ export function EmailClient() {
         id: `label-${label.name}`,
         label: label.name,
         icon: 'label',
-        unreadCount: label.unreadCount,
+        unreadCount: label.emailCount,
       });
     }
 
@@ -726,6 +751,8 @@ export function EmailClient() {
             hasNextPage={emailsQuery.hasNextPage}
             isFetchingNextPage={emailsQuery.isFetchingNextPage}
             onFetchNextPage={() => emailsQuery.fetchNextPage()}
+            scrollToEmailId={scrollToEmailId}
+            onScrollToComplete={() => setScrollToEmailId(null)}
           />
         )}
       </div>
@@ -736,6 +763,31 @@ export function EmailClient() {
           mobilePanel === 'thread' ? 'flex' : 'hidden'
         } min-w-0 flex-1 flex-col lg:flex`}
       >
+        {fromSearch && selectedEmailId && (
+          <div className="flex items-center gap-2 border-b border-indigo-200 bg-indigo-50 px-4 py-2 dark:border-indigo-800 dark:bg-indigo-900/30">
+            <Search className="h-4 w-4 text-indigo-600 dark:text-indigo-400" aria-hidden="true" />
+            <span className="text-xs font-medium text-indigo-700 dark:text-indigo-300">
+              Viewing search result
+            </span>
+            <a
+              href="/command-center"
+              className="ml-auto flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-indigo-600 hover:bg-indigo-100 dark:text-indigo-400 dark:hover:bg-indigo-800/50"
+            >
+              <ArrowLeft className="h-3 w-3" aria-hidden="true" />
+              Back to search
+            </a>
+            <button
+              type="button"
+              onClick={() => {
+                setFromSearch(false);
+                setScrollToEmailId(selectedEmailId);
+              }}
+              className="rounded-md px-2 py-1 text-xs font-medium text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-700"
+            >
+              Show in inbox
+            </button>
+          </div>
+        )}
         <ThreadView
           thread={threadQuery.data}
           isLoading={threadQuery.isLoading}

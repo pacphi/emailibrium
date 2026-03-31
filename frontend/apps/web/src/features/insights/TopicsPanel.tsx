@@ -1,50 +1,10 @@
 import { useState } from 'react';
-import type { SubscriptionInsight } from '@emailibrium/types';
-
-interface TopicCluster {
-  id: string;
-  name: string;
-  emailCount: number;
-  dateRange: { start: string; end: string };
-  topSenders: string[];
-  sampleSubjects: string[];
-  isPinned: boolean;
-}
+import type { TopicCluster } from '@emailibrium/api';
+import { useTopicClusters } from './hooks/useInsights';
 
 interface TopicsPanelProps {
-  senders: SubscriptionInsight[] | undefined;
-  isLoading: boolean;
-}
-
-function buildClusters(senders: SubscriptionInsight[]): TopicCluster[] {
-  const categoryMap = new Map<string, SubscriptionInsight[]>();
-  for (const s of senders) {
-    const key = s.category || 'unknown';
-    const list = categoryMap.get(key) ?? [];
-    list.push(s);
-    categoryMap.set(key, list);
-  }
-
-  return Array.from(categoryMap.entries()).map(([category, items]) => {
-    const sorted = [...items].sort(
-      (a, b) => new Date(a.firstSeen).getTime() - new Date(b.firstSeen).getTime(),
-    );
-    return {
-      id: category,
-      name: category.charAt(0).toUpperCase() + category.slice(1),
-      emailCount: items.reduce((sum, i) => sum + i.emailCount, 0),
-      dateRange: {
-        start: sorted[0]?.firstSeen ?? '',
-        end: sorted[sorted.length - 1]?.lastSeen ?? '',
-      },
-      topSenders: items
-        .sort((a, b) => b.emailCount - a.emailCount)
-        .slice(0, 3)
-        .map((i) => i.senderAddress),
-      sampleSubjects: items.slice(0, 3).map((i) => i.senderAddress),
-      isPinned: false,
-    };
-  });
+  senders?: unknown;
+  isLoading?: boolean;
 }
 
 function PinIcon({ pinned }: { pinned: boolean }) {
@@ -68,10 +28,12 @@ function PinIcon({ pinned }: { pinned: boolean }) {
 
 function ClusterCard({
   cluster,
+  isPinned,
   onTogglePin,
   onClick,
 }: {
   cluster: TopicCluster;
+  isPinned: boolean;
   onTogglePin: () => void;
   onClick: () => void;
 }) {
@@ -97,6 +59,11 @@ function ClusterCard({
           <h4 className="text-sm font-semibold text-gray-900 dark:text-white">{cluster.name}</h4>
           <p className="text-xs text-gray-500 dark:text-gray-400">
             {cluster.emailCount.toLocaleString()} emails
+            {cluster.unreadCount > 0 && (
+              <span className="ml-1 text-indigo-600 dark:text-indigo-400">
+                ({cluster.unreadCount.toLocaleString()} unread)
+              </span>
+            )}
           </p>
         </div>
         <button
@@ -105,9 +72,9 @@ function ClusterCard({
             onTogglePin();
           }}
           className="rounded p-1 hover:bg-gray-100 dark:hover:bg-gray-700"
-          aria-label={cluster.isPinned ? 'Unpin cluster' : 'Pin cluster'}
+          aria-label={isPinned ? 'Unpin cluster' : 'Pin cluster'}
         >
-          <PinIcon pinned={cluster.isPinned} />
+          <PinIcon pinned={isPinned} />
         </button>
       </div>
 
@@ -127,7 +94,7 @@ function ClusterCard({
       </div>
 
       <div>
-        <p className="mb-1 text-xs font-medium text-gray-500 dark:text-gray-400">Sample Subjects</p>
+        <p className="mb-1 text-xs font-medium text-gray-500 dark:text-gray-400">Recent Subjects</p>
         <div className="space-y-0.5">
           {cluster.sampleSubjects.map((subject, i) => (
             <p key={i} className="truncate text-xs text-gray-500 italic dark:text-gray-400">
@@ -150,26 +117,22 @@ function PanelSkeleton() {
   );
 }
 
-export function TopicsPanel({ senders, isLoading }: TopicsPanelProps) {
-  const [clusters, setClusters] = useState<TopicCluster[]>([]);
-  const [initialized, setInitialized] = useState(false);
+export function TopicsPanel(_props: TopicsPanelProps) {
+  const { data: clusters, isLoading } = useTopicClusters();
+  const [pinnedIds, setPinnedIds] = useState<Set<string>>(new Set());
 
-  if (!initialized && senders && senders.length > 0) {
-    setClusters(buildClusters(senders));
-    setInitialized(true);
-  }
+  const togglePin = (id: string) => {
+    setPinnedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
 
   if (isLoading) return <PanelSkeleton />;
 
-  const pinned = clusters.filter((c) => c.isPinned);
-  const unpinned = clusters.filter((c) => !c.isPinned);
-  const sorted = [...pinned, ...unpinned];
-
-  const togglePin = (id: string) => {
-    setClusters((prev) => prev.map((c) => (c.id === id ? { ...c, isPinned: !c.isPinned } : c)));
-  };
-
-  if (sorted.length === 0) {
+  if (!clusters || clusters.length === 0) {
     return (
       <p className="py-12 text-center text-sm text-gray-400">
         No topic clusters available. Clusters are generated from email analysis.
@@ -177,15 +140,24 @@ export function TopicsPanel({ senders, isLoading }: TopicsPanelProps) {
     );
   }
 
+  const sorted = [...clusters].sort((a, b) => {
+    const aPinned = pinnedIds.has(a.id) ? 0 : 1;
+    const bPinned = pinnedIds.has(b.id) ? 0 : 1;
+    if (aPinned !== bPinned) return aPinned - bPinned;
+    return b.emailCount - a.emailCount;
+  });
+
   return (
     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
       {sorted.map((cluster) => (
         <ClusterCard
           key={cluster.id}
           cluster={cluster}
+          isPinned={pinnedIds.has(cluster.id)}
           onTogglePin={() => togglePin(cluster.id)}
           onClick={() => {
-            window.location.href = `/clustering/clusters/${cluster.id}`;
+            // Navigate to email view with this category pre-selected in the sidebar.
+            window.location.href = `/email?group=${encodeURIComponent(cluster.id)}`;
           }}
         />
       ))}

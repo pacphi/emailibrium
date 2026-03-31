@@ -54,6 +54,30 @@ pub struct HourOfDayCount {
     pub count: i64,
 }
 
+// ---------------------------------------------------------------------------
+// Topic clusters (grouped by AI-assigned category)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TopicCluster {
+    pub id: String,
+    pub name: String,
+    /// "category" or "subscription" — matches sidebar group prefixes.
+    pub group: String,
+    pub email_count: i64,
+    pub unread_count: i64,
+    pub date_range: DateRange,
+    pub top_senders: Vec<String>,
+    pub sample_subjects: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct DateRange {
+    pub start: String,
+    pub end: String,
+}
+
 /// Build insight API routes.
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -61,6 +85,7 @@ pub fn routes() -> Router<AppState> {
         .route("/recurring-senders", get(recurring))
         .route("/report", get(report))
         .route("/temporal", get(temporal_insights))
+        .route("/topics", get(topic_clusters))
 }
 
 /// GET /api/v1/insights/subscriptions
@@ -172,4 +197,75 @@ async fn temporal_insights(
         day_of_week,
         hour_of_day,
     }))
+}
+
+/// GET /api/v1/insights/topics — topic clusters grouped by AI-assigned category.
+async fn topic_clusters(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<TopicCluster>>, (StatusCode, String)> {
+    // Category-level aggregates.
+    let cat_rows: Vec<(String, i64, i64, String, String)> = sqlx::query_as(
+        "SELECT COALESCE(category, 'Uncategorized') as cat, \
+         COUNT(*) as cnt, \
+         SUM(CASE WHEN is_read = 0 THEN 1 ELSE 0 END) as unread, \
+         MIN(received_at) as first_seen, \
+         MAX(received_at) as last_seen \
+         FROM emails \
+         WHERE COALESCE(is_spam, 0) = 0 AND COALESCE(is_trash, 0) = 0 \
+         GROUP BY cat ORDER BY cnt DESC",
+    )
+    .fetch_all(&state.db.pool)
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let mut clusters = Vec::new();
+
+    for (category, count, unread, first_seen, last_seen) in cat_rows {
+        // Top 3 senders in this category.
+        let top_senders: Vec<(String,)> = sqlx::query_as(
+            "SELECT from_addr FROM emails \
+             WHERE COALESCE(category, 'Uncategorized') = ? \
+             AND COALESCE(is_spam, 0) = 0 AND COALESCE(is_trash, 0) = 0 \
+             GROUP BY from_addr ORDER BY COUNT(*) DESC LIMIT 3",
+        )
+        .bind(&category)
+        .fetch_all(&state.db.pool)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+        // 3 recent subjects in this category.
+        let sample_subjects: Vec<(String,)> = sqlx::query_as(
+            "SELECT subject FROM emails \
+             WHERE COALESCE(category, 'Uncategorized') = ? \
+             AND COALESCE(is_spam, 0) = 0 AND COALESCE(is_trash, 0) = 0 \
+             ORDER BY received_at DESC LIMIT 3",
+        )
+        .bind(&category)
+        .fetch_all(&state.db.pool)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+        let group = crate::api::emails::categorize_group(&category).to_string();
+        let prefix = if group == "subscription" {
+            "sub-"
+        } else {
+            "cat-"
+        };
+        let id = format!("{prefix}{category}");
+        clusters.push(TopicCluster {
+            id,
+            name: category,
+            group,
+            email_count: count,
+            unread_count: unread,
+            date_range: DateRange {
+                start: first_seen,
+                end: last_seen,
+            },
+            top_senders: top_senders.into_iter().map(|(s,)| s).collect(),
+            sample_subjects: sample_subjects.into_iter().map(|(s,)| s).collect(),
+        });
+    }
+
+    Ok(Json(clusters))
 }

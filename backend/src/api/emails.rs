@@ -53,6 +53,8 @@ pub struct ListEmailsParams {
     pub label: Option<String>,
     pub is_read: Option<bool>,
     pub is_starred: Option<bool>,
+    pub is_spam: Option<bool>,
+    pub is_trash: Option<bool>,
     pub limit: Option<i64>,
     pub offset: Option<i64>,
 }
@@ -137,13 +139,29 @@ async fn list_emails(
         where_parts.push("category = ? COLLATE NOCASE".to_string());
     }
     if params.label.is_some() {
-        where_parts.push("(',' || labels || ',') LIKE '%,' || ? || ',%'".to_string());
+        // Match both raw label name and $-prefixed variant (Gmail user labels use $ prefix).
+        where_parts.push(
+            "((',' || labels || ',') LIKE '%,' || ? || ',%' \
+             OR (',' || labels || ',') LIKE '%,$' || ? || ',%')"
+                .to_string(),
+        );
     }
     if params.is_read.is_some() {
         where_parts.push("is_read = ?".to_string());
     }
     if params.is_starred.is_some() {
         where_parts.push("is_starred = ?".to_string());
+    }
+    // Spam/trash: when explicitly requested show only those; otherwise exclude them.
+    if let Some(true) = params.is_spam {
+        where_parts.push("is_spam = 1".to_string());
+    } else if params.is_spam.is_none() {
+        where_parts.push("COALESCE(is_spam, 0) = 0".to_string());
+    }
+    if let Some(true) = params.is_trash {
+        where_parts.push("is_trash = 1".to_string());
+    } else if params.is_trash.is_none() {
+        where_parts.push("COALESCE(is_trash, 0) = 0".to_string());
     }
     let where_clause = if where_parts.is_empty() {
         String::new()
@@ -162,6 +180,7 @@ async fn list_emails(
     }
     if let Some(ref v) = params.label {
         count_q = count_q.bind(v);
+        count_q = count_q.bind(v); // bound twice for the OR clause
     }
     if let Some(v) = params.is_read {
         count_q = count_q.bind(v);
@@ -187,6 +206,7 @@ async fn list_emails(
     }
     if let Some(ref v) = params.label {
         query = query.bind(v);
+        query = query.bind(v); // bound twice for the OR clause
     }
     if let Some(v) = params.is_read {
         query = query.bind(v);
@@ -859,7 +879,9 @@ async fn list_all_labels(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<AggregatedLabel>>, (StatusCode, String)> {
     let rows: Vec<(String, String, bool)> = sqlx::query_as(
-        "SELECT labels, account_id, is_read FROM emails WHERE labels IS NOT NULL AND labels != ''",
+        "SELECT labels, account_id, is_read FROM emails \
+         WHERE labels IS NOT NULL AND labels != '' \
+         AND COALESCE(is_spam, 0) = 0 AND COALESCE(is_trash, 0) = 0",
     )
     .fetch_all(&state.db.pool)
     .await
@@ -945,7 +967,7 @@ pub struct EnrichedCategory {
     pub unread_count: u64,
 }
 
-fn categorize_group(category: &str) -> &'static str {
+pub fn categorize_group(category: &str) -> &'static str {
     match category.to_lowercase().as_str() {
         "newsletter" | "marketing" | "promotions" => "subscription",
         _ => "category",
@@ -961,6 +983,7 @@ async fn list_enriched_categories(
          SUM(CASE WHEN is_read = 0 THEN 1 ELSE 0 END) as unread \
          FROM emails \
          WHERE category IS NOT NULL AND category != 'Uncategorized' \
+         AND COALESCE(is_spam, 0) = 0 AND COALESCE(is_trash, 0) = 0 \
          GROUP BY category ORDER BY total DESC",
     )
     .fetch_all(&state.db.pool)
@@ -989,6 +1012,8 @@ async fn list_enriched_categories(
 pub struct EmailCounts {
     pub total: u64,
     pub unread: u64,
+    pub spam_count: u64,
+    pub trash_count: u64,
     pub by_category: Vec<CategoryCount>,
 }
 
@@ -1000,25 +1025,41 @@ pub struct CategoryCount {
     pub unread: u64,
 }
 
-/// GET /api/v1/emails/counts — accurate total, unread, and per-category counts.
+/// GET /api/v1/emails/counts — accurate total, unread, spam, trash, and per-category counts.
 async fn email_counts(
     State(state): State<AppState>,
 ) -> Result<Json<EmailCounts>, (StatusCode, String)> {
-    // Total and unread
+    // Total and unread (excluding spam/trash).
     let (total, unread): (i64, i64) = sqlx::query_as(
         "SELECT COALESCE(COUNT(*), 0), \
          COALESCE(SUM(CASE WHEN is_read = 0 THEN 1 ELSE 0 END), 0) \
-         FROM emails",
+         FROM emails \
+         WHERE COALESCE(is_spam, 0) = 0 AND COALESCE(is_trash, 0) = 0",
     )
     .fetch_one(&state.db.pool)
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    // Per-category
+    // Spam and trash counts.
+    let (spam_count,): (i64,) =
+        sqlx::query_as("SELECT COALESCE(COUNT(*), 0) FROM emails WHERE is_spam = 1")
+            .fetch_one(&state.db.pool)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let (trash_count,): (i64,) =
+        sqlx::query_as("SELECT COALESCE(COUNT(*), 0) FROM emails WHERE is_trash = 1")
+            .fetch_one(&state.db.pool)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    // Per-category (excluding spam/trash).
     let cat_rows: Vec<(String, i64, i64)> = sqlx::query_as(
         "SELECT COALESCE(category, 'Uncategorized'), COUNT(*), \
          SUM(CASE WHEN is_read = 0 THEN 1 ELSE 0 END) \
-         FROM emails GROUP BY category ORDER BY COUNT(*) DESC",
+         FROM emails \
+         WHERE COALESCE(is_spam, 0) = 0 AND COALESCE(is_trash, 0) = 0 \
+         GROUP BY category ORDER BY COUNT(*) DESC",
     )
     .fetch_all(&state.db.pool)
     .await
@@ -1036,6 +1077,8 @@ async fn email_counts(
     Ok(Json(EmailCounts {
         total: total as u64,
         unread: unread as u64,
+        spam_count: spam_count as u64,
+        trash_count: trash_count as u64,
         by_category,
     }))
 }

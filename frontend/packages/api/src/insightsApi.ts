@@ -16,3 +16,19 @@ export async function getInboxReport(): Promise<InboxReport> {
 export async function getTemporalInsights(): Promise<TemporalInsights> {
   return api.get('insights/temporal').json<TemporalInsights>();
 }
+
+export interface TopicCluster {
+  id: string;
+  name: string;
+  /** "category" or "subscription" — matches sidebar group prefixes. */
+  group: string;
+  emailCount: number;
+  unreadCount: number;
+  dateRange: { start: string; end: string };
+  topSenders: string[];
+  sampleSubjects: string[];
+}
+
+export async function getTopicClusters(): Promise<TopicCluster[]> {
+  return api.get('insights/topics').json<TopicCluster[]>();
+}

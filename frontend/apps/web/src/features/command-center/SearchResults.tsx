@@ -171,7 +171,7 @@ interface SearchResultItemProps {
 
 function SearchResultItem({ result, query }: SearchResultItemProps) {
   const subject = result.metadata?.subject ?? `Email ${result.emailId}`;
-  const sender = result.metadata?.from ?? 'Unknown';
+  const sender = result.metadata?.from_addr ?? result.metadata?.from ?? 'Unknown';
   const date = result.metadata?.date ?? '';
   const scorePercent = Math.round(result.score * 100);
 

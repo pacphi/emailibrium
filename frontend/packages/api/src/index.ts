@@ -9,7 +9,9 @@ export {
   getRecurringSenders,
   getInboxReport,
   getTemporalInsights,
+  getTopicClusters,
 } from './insightsApi.js';
+export type { TopicCluster } from './insightsApi.js';
 
 export {
   startIngestion,
