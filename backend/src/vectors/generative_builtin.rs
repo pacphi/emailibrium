@@ -534,6 +534,17 @@ impl GenerativeModel for BuiltInGenerativeModel {
         };
         let trimmed = stripped.trim_matches('"');
 
+        // Empty response (e.g. unclosed <think> block) — signal gracefully
+        if trimmed.is_empty() {
+            debug!(
+                categories = cats_display,
+                "Built-in LLM returned empty response, deferring to fallback"
+            );
+            return Err(VectorError::CategorizationFailed(
+                "Built-in LLM returned empty response".to_string(),
+            ));
+        }
+
         // Validate against known categories
         for cat in categories {
             if trimmed.eq_ignore_ascii_case(cat) {

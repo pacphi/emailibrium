@@ -36,6 +36,9 @@ const categories = [
   'Newsletter',
   'Marketing',
   'Notification',
+  'Alerts',
+  'Promotions',
+  'Travel',
 ];
 
 const groups = [

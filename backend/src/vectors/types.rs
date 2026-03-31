@@ -105,6 +105,7 @@ pub enum EmailCategory {
     Notification,
     Alerts,
     Promotions,
+    Travel,
     Uncategorized,
 }
 
@@ -121,6 +122,7 @@ impl std::fmt::Display for EmailCategory {
             EmailCategory::Notification => write!(f, "Notification"),
             EmailCategory::Alerts => write!(f, "Alerts"),
             EmailCategory::Promotions => write!(f, "Promotions"),
+            EmailCategory::Travel => write!(f, "Travel"),
             EmailCategory::Uncategorized => write!(f, "Uncategorized"),
         }
     }

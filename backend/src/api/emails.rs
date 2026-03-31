@@ -970,6 +970,8 @@ pub struct EnrichedCategory {
 pub fn categorize_group(category: &str) -> &'static str {
     match category.to_lowercase().as_str() {
         "newsletter" | "marketing" | "promotions" => "subscription",
+        "alerts" | "notification" => "system",
+        "travel" => "category",
         _ => "category",
     }
 }

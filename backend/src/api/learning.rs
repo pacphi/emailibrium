@@ -84,6 +84,19 @@ async fn submit_feedback(
     State(state): State<AppState>,
     Json(req): Json<FeedbackRequest>,
 ) -> Result<Json<FeedbackResponse>, (StatusCode, String)> {
+    // If this is a reclassification, persist the new category to the DB immediately
+    // so the user sees the change on refetch.
+    if let FeedbackActionRequest::Reclassify { ref to, .. } = req.action {
+        sqlx::query(
+            "UPDATE emails SET category = ?, category_method = 'user_reclassify' WHERE id = ?",
+        )
+        .bind(to.to_string())
+        .bind(&req.email_id)
+        .execute(&state.db.pool)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    }
+
     let action = match req.action {
         FeedbackActionRequest::Reclassify { from, to } => FeedbackAction::Reclassify { from, to },
         FeedbackActionRequest::MoveToGroup { group_id } => FeedbackAction::MoveToGroup { group_id },

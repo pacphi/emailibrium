@@ -21,11 +21,13 @@ categories:
   - Work
   - Personal
   - Finance
-  - Marketing
-  - Social
-  - Notification
-  - Newsletter
   - Shopping
+  - Social
+  - Newsletter
+  - Marketing
+  - Notification
+  - Alerts
+  - Promotions
   - Travel
   - Uncategorized # Fallback when no rule matches and LLM is unavailable
 

@@ -292,7 +292,25 @@ impl VectorCategorizer {
             }
         }
 
-        // Step 5: Nothing worked.
+        // Step 5: If centroid had a positive best-match (even below threshold),
+        // use it as a low-confidence guess rather than discarding all signal.
+        if result.confidence > 0.0 {
+            let centroid_result = self.categorize(email_text).await?;
+            if centroid_result.category != EmailCategory::Uncategorized {
+                debug!(
+                    category = %centroid_result.category,
+                    confidence = centroid_result.confidence,
+                    "Using low-confidence centroid match as final fallback"
+                );
+                return Ok(CategoryResult {
+                    category: centroid_result.category,
+                    confidence: centroid_result.confidence,
+                    method: "centroid_low_confidence".to_string(),
+                });
+            }
+        }
+
+        // Step 6: Truly nothing worked.
         Ok(CategoryResult {
             category: EmailCategory::Uncategorized,
             confidence: result.confidence,
@@ -579,6 +597,10 @@ impl VectorCategorizer {
                 EmailCategory::Promotions,
                 "exclusive offer flash sale clearance reward points loyalty",
             ),
+            (
+                EmailCategory::Travel,
+                "flight hotel reservation itinerary boarding pass trip booking travel",
+            ),
         ];
 
         let mut seeded = 0usize;
@@ -650,6 +672,8 @@ fn parse_email_category(name: &str) -> Option<EmailCategory> {
         "notification" => Some(EmailCategory::Notification),
         "alerts" => Some(EmailCategory::Alerts),
         "promotions" => Some(EmailCategory::Promotions),
+        "travel" => Some(EmailCategory::Travel),
+        "uncategorized" => Some(EmailCategory::Uncategorized),
         _ => None,
     }
 }
