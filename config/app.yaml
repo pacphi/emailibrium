@@ -19,6 +19,12 @@ sync:
   sync_completion_check_interval_ms: 3000 # Interval between stability checks
   max_sync_wait_polls: 120 # Max polls before giving up (120 * 3s = 6 min)
 
+# ── Email ────────────────────────────────────────────────────────────────────
+email:
+  trash_retention_days: 30 # Auto-purge trashed emails after N days
+  spam_retention_days: 30 # Auto-purge spam emails after N days
+  label_repair_interval_hours: 6 # Re-resolve unresolved label IDs (0 = disabled)
+
 # ── Frontend Cache (React Query) ─────────────────────────────────────────────
 cache:
   default_stale_time_ms: 30000 # Global default for React Query staleTime

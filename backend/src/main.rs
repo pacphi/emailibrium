@@ -458,6 +458,32 @@ async fn main() -> anyhow::Result<()> {
         );
     }
 
+    // ── Label repair task ──────────────────────────────────────────────
+    // Periodically scans the `emails` table for unresolved Gmail label IDs
+    // (e.g. `Label_356207529`) and re-resolves them to human-readable names
+    // by fetching the label map from the provider API.
+    {
+        let repair_hours = yaml_config.app.email.label_repair_interval_hours;
+        if repair_hours > 0 {
+            let state_clone = state.clone();
+            tokio::spawn(async move {
+                let mut interval = tokio::time::interval(std::time::Duration::from_secs(
+                    u64::from(repair_hours) * 3600,
+                ));
+                loop {
+                    interval.tick().await;
+                    if let Err(e) = repair_unresolved_labels(&state_clone).await {
+                        tracing::warn!("Label repair task failed: {e}");
+                    }
+                }
+            });
+            tracing::info!(
+                interval_hours = repair_hours,
+                "Label repair background task started"
+            );
+        }
+    }
+
     // ── CORS middleware (audit item #6) ────────────────────────────────
     let origins: Vec<HeaderValue> = config
         .security
@@ -684,4 +710,112 @@ fn validate_provider_catalog(yaml_config: &vectors::yaml_config::YamlConfig) {
         }
         tracing::info!("Embedding provider {provider_name}: {total} models configured");
     }
+}
+
+// ---------------------------------------------------------------------------
+// Background label repair
+// ---------------------------------------------------------------------------
+
+/// Scan for emails whose `labels` column contains unresolved Gmail label IDs
+/// (e.g. `Label_356207529...`) and replace them with human-readable names by
+/// querying the provider API.
+async fn repair_unresolved_labels(state: &AppState) -> anyhow::Result<()> {
+    // Step 1: Find distinct unresolved label IDs across all emails.
+    let rows: Vec<(i64, String, String)> = sqlx::query_as(
+        "SELECT rowid, labels, account_id FROM emails \
+         WHERE labels LIKE '%Label_%' \
+         AND COALESCE(is_spam, 0) = 0 AND COALESCE(is_trash, 0) = 0",
+    )
+    .fetch_all(&state.db.pool)
+    .await?;
+
+    if rows.is_empty() {
+        return Ok(());
+    }
+
+    tracing::info!(
+        affected_emails = rows.len(),
+        "Label repair: found emails with unresolved label IDs"
+    );
+
+    // Step 2: Build per-account label maps by fetching from the provider API.
+    use std::collections::{HashMap, HashSet};
+
+    // Collect unique account IDs that have unresolved labels.
+    let account_ids: HashSet<&str> = rows.iter().map(|(_, _, aid)| aid.as_str()).collect();
+
+    let mut label_maps: HashMap<String, HashMap<String, String>> = HashMap::new();
+
+    for account_id in account_ids {
+        let map = match build_label_map(state, account_id).await {
+            Ok(m) => m,
+            Err(e) => {
+                tracing::warn!(account_id, "Label repair: failed to fetch label map: {e}");
+                continue;
+            }
+        };
+        label_maps.insert(account_id.to_string(), map);
+    }
+
+    // Step 3: Resolve and update each affected row.
+    let mut resolved_count: u64 = 0;
+    let unresolved_re = regex::Regex::new(r"^Label_\d+").expect("valid regex");
+
+    for (rowid, labels_csv, account_id) in &rows {
+        let Some(map) = label_maps.get(account_id) else {
+            continue;
+        };
+
+        let mut changed = false;
+        let new_labels: Vec<String> = labels_csv
+            .split(',')
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .map(|label| {
+                if unresolved_re.is_match(label) {
+                    if let Some(name) = map.get(label) {
+                        changed = true;
+                        name.clone()
+                    } else {
+                        label.to_string()
+                    }
+                } else {
+                    label.to_string()
+                }
+            })
+            .collect();
+
+        if changed {
+            let joined = new_labels.join(", ");
+            sqlx::query("UPDATE emails SET labels = ?1 WHERE rowid = ?2")
+                .bind(&joined)
+                .bind(rowid)
+                .execute(&state.db.pool)
+                .await?;
+            resolved_count += 1;
+        }
+    }
+
+    if resolved_count > 0 {
+        tracing::info!(
+            resolved_count,
+            "Label repair: updated emails with resolved label names"
+        );
+    }
+
+    Ok(())
+}
+
+/// Fetch the label ID -> name mapping from the provider API for a given account.
+async fn build_label_map(
+    state: &AppState,
+    account_id: &str,
+) -> anyhow::Result<std::collections::HashMap<String, String>> {
+    let (provider, token, _kind) =
+        api::provider_helpers::resolve_provider_and_token(state, account_id)
+            .await
+            .map_err(|(_status, msg)| anyhow::anyhow!(msg))?;
+
+    let pairs = provider.list_labels(&token).await?;
+    Ok(pairs.into_iter().collect())
 }

@@ -525,10 +525,17 @@ pub struct EmailConfig {
     pub skip_spam_embedding: bool,
     #[serde(default = "default_inbox_str")]
     pub default_folder_filter: String,
+    /// How often (in hours) the background label repair job runs.
+    /// Set to 0 to disable. Default: 6 hours.
+    #[serde(default = "default_6_u32")]
+    pub label_repair_interval_hours: u32,
 }
 
 fn default_30_u32() -> u32 {
     30
+}
+fn default_6_u32() -> u32 {
+    6
 }
 fn default_inbox_str() -> String {
     "INBOX".to_string()
@@ -542,6 +549,7 @@ impl Default for EmailConfig {
             skip_trash_embedding: true,
             skip_spam_embedding: true,
             default_folder_filter: "INBOX".to_string(),
+            label_repair_interval_hours: 6,
         }
     }
 }

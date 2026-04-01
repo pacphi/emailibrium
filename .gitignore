@@ -96,3 +96,5 @@ docker-compose.override.yml
 *.bak
 *.tmp
 *.orig
+*.rej
+.git-rewrite/
