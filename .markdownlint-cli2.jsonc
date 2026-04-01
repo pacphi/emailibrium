@@ -4,6 +4,7 @@
   "ignores": [
     ".claude/**",
     ".claude-flow/**",
+    ".agentic-qe/**",
     "**/node_modules/**",
     "**/target/**",
     "ruvector/**",

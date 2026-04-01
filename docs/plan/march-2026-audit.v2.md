@@ -258,7 +258,7 @@
 
 ## Appendix A — AQE Quality Gate
 
-```
+```text
 Quality Score:     72 / 100  (FAILED — threshold 80)
 Coverage:          70%
 Complexity:        10.69 (warning)
@@ -268,7 +268,7 @@ Security:          85.0
 
 ## Appendix B — AQE Security Scan Summary
 
-```
+```text
 Files scanned:     5,727 (1,914 JS/TS + 3,813 other)
 Lines scanned:     557,550
 Rules applied:     83
@@ -279,7 +279,7 @@ False positive rate: ~95% (WASM codegen + Claude tooling artifacts)
 
 ## Appendix C — Dependency Audit Summary
 
-```
+```text
 Cargo audit:       1 vulnerability (RUSTSEC-2023-0071, medium, no fix)
                    3 unmaintained crate warnings
 npm audit:         0 known vulnerabilities
@@ -290,7 +290,7 @@ Pre-release deps:  3 (apalis RC x2, async_zip 0.0.x)
 
 ## Appendix D — Codebase Metrics
 
-```
+```text
 Backend (Rust):    57,055 LOC across 105 files
 Frontend (TS/TSX): 24,764 LOC across ~100 files
 Backend tests:     3,566 LOC across 11 files (6.2% ratio)

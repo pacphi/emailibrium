@@ -11,6 +11,7 @@
 
 SHELL := /bin/bash
 CARGO := cargo
+export CARGO_INCREMENTAL := 1
 
 BOLD   := $(shell tput bold 2>/dev/null || echo '')
 GREEN  := $(shell tput setaf 2 2>/dev/null || echo '')

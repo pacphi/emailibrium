@@ -350,12 +350,12 @@ outdated: ## Show outdated dependencies (no changes)
 .PHONY: lint-md
 lint-md: ## Lint Markdown files
 	@echo "$(GREEN)Linting Markdown...$(RESET)"
-	@markdownlint-cli2 '**/*.md' '#**/node_modules' '#**/target' '#.claude/worktrees/**' '#ruvector/**' 2>/dev/null || echo "$(YELLOW)markdownlint-cli2 not installed. Run: npm i -g markdownlint-cli2$(RESET)"
+	@if command -v markdownlint-cli2 >/dev/null 2>&1; then markdownlint-cli2 '**/*.md' '#**/node_modules' '#**/target' '#.claude/worktrees/**' '#ruvector/**' || true; else echo "$(YELLOW)markdownlint-cli2 not installed. Run: npm i -g markdownlint-cli2$(RESET)"; fi
 
 .PHONY: lint-yaml
 lint-yaml: ## Lint YAML files
 	@echo "$(GREEN)Linting YAML...$(RESET)"
-	@yamllint -c .yamllint.yaml . 2>/dev/null || echo "$(YELLOW)yamllint not installed. Run: pip install yamllint$(RESET)"
+	@find . \( -name node_modules -o -name target -o -name ruvector -o -name .claude -o -name .claude-flow \) -prune -o \( -name '*.yaml' -o -name '*.yml' \) ! -name 'pnpm-lock.yaml' -print | xargs yamllint -c .yamllint.yaml 2>/dev/null || echo "$(YELLOW)yamllint not installed. Run: pip install yamllint$(RESET)"
 
 .PHONY: lint-docs
 lint-docs: lint-md lint-yaml ## Lint all docs (Markdown + YAML)
@@ -371,7 +371,7 @@ format-yaml: ## Format YAML files
 		cd $(FRONTEND_DIR) && npx prettier --write '../**/*.{yaml,yml}' 2>/dev/null || true
 
 .PHONY: format-docs
-format-docs: format-md format-yaml
+format-docs: format-md format-yaml ## Format docs (Markdown + YAML)
 
 .PHONY: format-check-md
 format-check-md:
