@@ -116,11 +116,7 @@ export function EmailClient() {
       fetchingForScrollRef.current = false;
       setScrollToEmailId(null);
     }
-  }, [
-    scrollToEmailId,
-    emails,
-    emailsQuery,
-  ]);
+  }, [scrollToEmailId, emails, emailsQuery]);
 
   const filteredEmails = useMemo(() => {
     if (!searchText.trim()) return emails;
