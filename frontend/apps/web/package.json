@@ -20,8 +20,8 @@
     "@emailibrium/core": "workspace:*",
     "@emailibrium/types": "workspace:*",
     "@emailibrium/ui": "workspace:*",
-    "@tanstack/react-query": "^5.95.2",
-    "@tanstack/react-router": "^1.168.7",
+    "@tanstack/react-query": "^5.96.0",
+    "@tanstack/react-router": "^1.168.10",
     "@tanstack/react-virtual": "^3.13.23",
     "cmdk": "^1.1.1",
     "date-fns": "^4.1.0",
@@ -56,7 +56,7 @@
     "@tailwindcss/postcss": "^4.1.7",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
-    "@types/node": "^24.0.0",
+    "@types/node": "^25.5.0",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.1",
@@ -69,7 +69,7 @@
     "prettier": "^3.8.1",
     "tailwindcss": "^4.1.7",
     "typescript": "^6.0.2",
-    "typescript-eslint": "^8.57.2",
+    "typescript-eslint": "^8.58.0",
     "vite": "^8.0.3",
     "vitest": "^4.1.2"
   }

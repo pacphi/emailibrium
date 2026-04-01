@@ -360,28 +360,30 @@ lint-yaml: ## Lint YAML files
 .PHONY: lint-docs
 lint-docs: lint-md lint-yaml ## Lint all docs (Markdown + YAML)
 
+# find with -prune avoids traversing multi-GB Rust target/ and node_modules/ dirs
+# (prettier's own glob walker enters all dirs before filtering via .prettierignore)
+PRUNE_DIRS := \( -name node_modules -o -name target -o -name ruvector -o -name .claude \
+	-o -name .claude-flow -o -name .git -o -name .agentic-qe -o -name .swarm \
+	-o -name .git-rewrite -o -name dist -o -name storybook-static -o -name coverage \) -prune
+
 .PHONY: format-md
 format-md: ## Format Markdown files
-	@npx prettier --write '**/*.md' --ignore-path .gitignore --ignore-pattern 'ruvector/**' 2>/dev/null || \
-		cd $(FRONTEND_DIR) && npx prettier --write '../**/*.md' 2>/dev/null || true
+	@find . $(PRUNE_DIRS) -o -name '*.md' -print | xargs npx prettier --write --no-error-on-unmatched-pattern
 
 .PHONY: format-yaml
 format-yaml: ## Format YAML files
-	@npx prettier --write '**/*.{yaml,yml}' --ignore-path .gitignore --ignore-pattern 'ruvector/**' 2>/dev/null || \
-		cd $(FRONTEND_DIR) && npx prettier --write '../**/*.{yaml,yml}' 2>/dev/null || true
+	@find . $(PRUNE_DIRS) -o \( -name '*.yaml' -o -name '*.yml' \) ! -name 'pnpm-lock.yaml' -print | xargs npx prettier --write --no-error-on-unmatched-pattern
 
 .PHONY: format-docs
 format-docs: format-md format-yaml ## Format docs (Markdown + YAML)
 
 .PHONY: format-check-md
 format-check-md:
-	@npx prettier --check '**/*.md' --ignore-path .gitignore --ignore-pattern 'ruvector/**' 2>/dev/null || \
-		cd $(FRONTEND_DIR) && npx prettier --check '../**/*.md' 2>/dev/null || true
+	@find . $(PRUNE_DIRS) -o -name '*.md' -print | xargs npx prettier --check --no-error-on-unmatched-pattern
 
 .PHONY: format-check-yaml
 format-check-yaml:
-	@npx prettier --check '**/*.{yaml,yml}' --ignore-path .gitignore --ignore-pattern 'ruvector/**' 2>/dev/null || \
-		cd $(FRONTEND_DIR) && npx prettier --check '../**/*.{yaml,yml}' 2>/dev/null || true
+	@find . $(PRUNE_DIRS) -o \( -name '*.yaml' -o -name '*.yml' \) ! -name 'pnpm-lock.yaml' -print | xargs npx prettier --check --no-error-on-unmatched-pattern
 
 .PHONY: format-check-docs
 format-check-docs: format-check-md format-check-yaml
