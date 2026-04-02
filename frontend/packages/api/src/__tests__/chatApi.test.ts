@@ -122,8 +122,7 @@ describe('chatApi', () => {
       mockLocalStorage.getItem.mockReturnValue('my-token');
 
       const mockReader = {
-        read: vi.fn()
-          .mockResolvedValueOnce({ done: true, value: undefined }),
+        read: vi.fn().mockResolvedValueOnce({ done: true, value: undefined }),
       };
       const mockResponse = {
         ok: true,

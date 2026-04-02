@@ -22,12 +22,7 @@ vi.mock('../client.js', () => ({
   },
 }));
 
-import {
-  recordConsent,
-  getConsents,
-  requestDataExport,
-  requestDataErase,
-} from '../consentApi.js';
+import { recordConsent, getConsents, requestDataExport, requestDataErase } from '../consentApi.js';
 
 // ---------------------------------------------------------------------------
 // Tests

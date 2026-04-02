@@ -4,8 +4,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 // Mocks (vitest 4: hoist mock variables)
 // ---------------------------------------------------------------------------
 
-const { mockCreate, mockGet, mockPost, mockDelete, mockPatch, mockPut, capturedHooks } =
-  vi.hoisted(() => {
+const { mockCreate, mockGet, mockPost, mockDelete, mockPatch, mockPut, capturedHooks } = vi.hoisted(
+  () => {
     const jsonFn = vi.fn().mockResolvedValue({});
     const responseLike = { json: jsonFn };
 
@@ -19,7 +19,13 @@ const { mockCreate, mockGet, mockPost, mockDelete, mockPatch, mockPut, capturedH
       beforeRequest: [],
     };
 
-    const mockInstance = { get: mockGet, post: mockPost, delete: mockDelete, patch: mockPatch, put: mockPut };
+    const mockInstance = {
+      get: mockGet,
+      post: mockPost,
+      delete: mockDelete,
+      patch: mockPatch,
+      put: mockPut,
+    };
 
     const mockCreate = vi.fn().mockImplementation((options: Record<string, unknown>) => {
       if (options?.hooks) {
@@ -30,7 +36,8 @@ const { mockCreate, mockGet, mockPost, mockDelete, mockPatch, mockPut, capturedH
     });
 
     return { mockCreate, mockGet, mockPost, mockDelete, mockPatch, mockPut, capturedHooks };
-  });
+  },
+);
 
 vi.mock('ky', () => ({
   default: { create: mockCreate },
@@ -69,18 +76,14 @@ describe('client', () => {
       vi.resetModules();
       await import('../client.js');
 
-      expect(mockCreate).toHaveBeenCalledWith(
-        expect.objectContaining({ prefixUrl: '/api/v1' }),
-      );
+      expect(mockCreate).toHaveBeenCalledWith(expect.objectContaining({ prefixUrl: '/api/v1' }));
     });
 
     it('configures a 30-second timeout', async () => {
       vi.resetModules();
       await import('../client.js');
 
-      expect(mockCreate).toHaveBeenCalledWith(
-        expect.objectContaining({ timeout: 30_000 }),
-      );
+      expect(mockCreate).toHaveBeenCalledWith(expect.objectContaining({ timeout: 30_000 }));
     });
 
     it('registers a beforeRequest hook', async () => {
