@@ -9,3 +9,4 @@ export { useFocusTrap } from './useFocusTrap';
 export { useInstallPrompt } from './useInstallPrompt';
 export { useIntersectionObserver } from './useIntersectionObserver';
 export { useMediaQuery, useIsMobile, useIsTablet, useIsDesktop } from './useMediaQuery';
+export { useAppConfig } from './useAppConfig';

@@ -913,7 +913,10 @@ pub struct ClusterEngine {
     /// Email -> current cluster assignment for hysteresis checks.
     assignments: RwLock<HashMap<String, String>>,
     /// Tuning parameters from `config/tuning.yaml` clustering section.
-    clustering_tuning: super::yaml_config::ClusteringTuning,
+    pub clustering_tuning: super::yaml_config::ClusteringTuning,
+    /// Vector store count at the time of the last successful recluster.
+    /// Used to decide if incremental reclustering is needed.
+    last_clustered_vector_count: RwLock<u64>,
 }
 
 impl ClusterEngine {
@@ -930,6 +933,7 @@ impl ClusterEngine {
             clusters: RwLock::new(Vec::new()),
             assignments: RwLock::new(HashMap::new()),
             clustering_tuning: super::yaml_config::ClusteringTuning::default(),
+            last_clustered_vector_count: RwLock::new(0),
         }
     }
 
@@ -947,6 +951,7 @@ impl ClusterEngine {
             clusters: RwLock::new(Vec::new()),
             assignments: RwLock::new(HashMap::new()),
             clustering_tuning,
+            last_clustered_vector_count: RwLock::new(0),
         }
     }
 
@@ -970,6 +975,7 @@ impl ClusterEngine {
             clusters: RwLock::new(clusters),
             assignments: RwLock::new(assignments_map),
             clustering_tuning: super::yaml_config::ClusteringTuning::default(),
+            last_clustered_vector_count: RwLock::new(0),
         }
     }
 
@@ -1141,14 +1147,17 @@ impl ClusterEngine {
                 propagate_embeddings_graphsage(&ids, &embeddings, &graph, &self.config);
 
             // Step 3: Auto-detect K via silhouette score.
-            let max_k = self.config.max_clusters.min(ids.len());
-            let min_k = 2.min(max_k);
+            // Use configurable min_k/max_k from tuning.yaml.
+            let tuning_min_k = self.clustering_tuning.min_k.max(2);
+            let tuning_max_k = self.clustering_tuning.max_k;
+            let max_k = self.config.max_clusters.min(ids.len()).min(tuning_max_k);
+            let min_k = tuning_min_k.min(max_k);
 
             let mut best_k = min_k;
             let mut best_score = f32::NEG_INFINITY;
 
             let probe_iters = self.config.kmeans_max_iters.min(50);
-            for k in min_k..=max_k.min(10) {
+            for k in min_k..=max_k {
                 let assignments = kmeans(&propagated, k, probe_iters, 0);
                 let score = silhouette_score(&propagated, &assignments, k);
                 if score > best_score {
@@ -1319,6 +1328,15 @@ impl ClusterEngine {
         let cluster_count = final_clusters.len();
         *old_clusters = final_clusters;
 
+        // Release the write lock before persisting to avoid holding it during I/O.
+        drop(old_clusters);
+        if let Err(e) = self.persist_clusters().await {
+            tracing::warn!(error = %e, "Failed to persist clusters after recluster");
+        }
+
+        // Record the vector count at which we last clustered.
+        *self.last_clustered_vector_count.write().await = ids.len() as u64;
+
         Ok(ClusteringReport {
             total_emails: ids.len(),
             cluster_count,
@@ -1390,6 +1408,10 @@ impl ClusterEngine {
         }
 
         clusters.push(merged);
+        drop(clusters);
+        if let Err(e) = self.persist_clusters().await {
+            tracing::warn!(error = %e, "Failed to persist clusters after merge");
+        }
         Ok(())
     }
 
@@ -1401,12 +1423,39 @@ impl ClusterEngine {
             .find(|c| c.id == cluster_id)
             .ok_or_else(|| VectorError::NotFound(format!("Cluster {cluster_id} not found")))?;
         cluster.is_pinned = true;
+        drop(clusters);
+        if let Err(e) = self.persist_clusters().await {
+            tracing::warn!(error = %e, "Failed to persist clusters after pin");
+        }
         Ok(())
+    }
+
+    /// Check if reclustering is needed based on how many new vectors have been
+    /// added since the last recluster. Returns true if the delta exceeds the
+    /// configured threshold.
+    pub async fn should_recluster(&self, current_vector_count: u64, threshold: u64) -> bool {
+        let last = *self.last_clustered_vector_count.read().await;
+        let delta = current_vector_count.saturating_sub(last);
+        delta >= threshold
     }
 
     /// Get all clusters.
     pub async fn get_clusters(&self) -> Vec<TopicCluster> {
         self.clusters.read().await.clone()
+    }
+
+    /// Clear all clusters from memory and SQLite. Used during full re-embed.
+    pub async fn clear_clusters(&self) -> Result<(), VectorError> {
+        self.clusters.write().await.clear();
+        self.assignments.write().await.clear();
+
+        // Also clear from SQLite so stale clusters don't reload on restart.
+        sqlx::query("DELETE FROM topic_clusters")
+            .execute(&self.db.pool)
+            .await?;
+
+        tracing::info!("Cleared all clusters (memory + SQLite)");
+        Ok(())
     }
 
     /// Get email IDs belonging to a specific cluster.
@@ -1417,6 +1466,168 @@ impl ClusterEngine {
             .find(|c| c.id == cluster_id)
             .ok_or_else(|| VectorError::NotFound(format!("Cluster {cluster_id} not found")))?;
         Ok(cluster.email_ids.clone())
+    }
+
+    // -----------------------------------------------------------------------
+    // Persistence — SQLite-backed cluster storage
+    // -----------------------------------------------------------------------
+
+    /// Persist all current clusters to SQLite. Replaces the full set each time
+    /// (DELETE + INSERT) inside a transaction for atomicity.
+    pub async fn persist_clusters(&self) -> Result<(), VectorError> {
+        let clusters = self.clusters.read().await;
+        let pool = &self.db.pool;
+
+        let mut tx = pool
+            .begin()
+            .await
+            ?;
+
+        sqlx::query("DELETE FROM topic_clusters")
+            .execute(&mut *tx)
+            .await
+            ?;
+
+        for c in clusters.iter() {
+            let centroid_blob: Vec<u8> = c
+                .centroid
+                .iter()
+                .flat_map(|f| f.to_le_bytes())
+                .collect();
+            let email_ids_json =
+                serde_json::to_string(&c.email_ids).unwrap_or_else(|_| "[]".to_string());
+            let top_terms_json =
+                serde_json::to_string(&c.top_terms).unwrap_or_else(|_| "[]".to_string());
+            let rep_ids_json = serde_json::to_string(&c.representative_email_ids)
+                .unwrap_or_else(|_| "[]".to_string());
+
+            sqlx::query(
+                "INSERT INTO topic_clusters \
+                 (id, name, description, centroid, email_ids, email_count, \
+                  top_terms, representative_email_ids, stability_score, \
+                  stability_runs, is_pinned, created_at, updated_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+            )
+            .bind(&c.id)
+            .bind(&c.name)
+            .bind(&c.description)
+            .bind(&centroid_blob)
+            .bind(&email_ids_json)
+            .bind(c.email_count as i64)
+            .bind(&top_terms_json)
+            .bind(&rep_ids_json)
+            .bind(c.stability_score as f64)
+            .bind(c.stability_runs as i64)
+            .bind(c.is_pinned)
+            .bind(c.created_at.to_rfc3339())
+            .bind(c.updated_at.to_rfc3339())
+            .execute(&mut *tx)
+            .await
+            ?;
+        }
+
+        tx.commit()
+            .await
+            ?;
+
+        tracing::info!(count = clusters.len(), "Persisted clusters to SQLite");
+        Ok(())
+    }
+
+    /// Load clusters from SQLite into the in-memory RwLock. Called on startup.
+    #[allow(clippy::type_complexity)]
+    pub async fn load_persisted_clusters(&self) -> Result<usize, VectorError> {
+        let pool = &self.db.pool;
+
+        // Check if the table exists (migration may not have run yet).
+        let table_exists: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='topic_clusters'",
+        )
+        .fetch_one(pool)
+        .await
+        ?;
+
+        if table_exists.0 == 0 {
+            tracing::debug!("topic_clusters table not found, skipping load");
+            return Ok(0);
+        }
+
+        let rows: Vec<(
+            String,         // id
+            String,         // name
+            String,         // description
+            Vec<u8>,        // centroid (blob)
+            String,         // email_ids (json)
+            i64,            // email_count
+            String,         // top_terms (json)
+            String,         // representative_email_ids (json)
+            f64,            // stability_score
+            i64,            // stability_runs
+            bool,           // is_pinned
+            String,         // created_at
+            String,         // updated_at
+        )> = sqlx::query_as(
+            "SELECT id, name, description, centroid, email_ids, email_count, \
+             top_terms, representative_email_ids, stability_score, \
+             stability_runs, is_pinned, created_at, updated_at \
+             FROM topic_clusters",
+        )
+        .fetch_all(pool)
+        .await
+        ?;
+
+        let mut loaded: Vec<TopicCluster> = Vec::with_capacity(rows.len());
+        let mut assignments_map = HashMap::new();
+
+        for row in &rows {
+            let centroid: Vec<f32> = row
+                .3
+                .chunks_exact(4)
+                .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+                .collect();
+            let email_ids: Vec<String> =
+                serde_json::from_str(&row.4).unwrap_or_default();
+            let top_terms: Vec<ClusterTerm> =
+                serde_json::from_str(&row.6).unwrap_or_default();
+            let representative_email_ids: Vec<String> =
+                serde_json::from_str(&row.7).unwrap_or_default();
+            let created_at = chrono::DateTime::parse_from_rfc3339(&row.11)
+                .map(|dt| dt.with_timezone(&Utc))
+                .unwrap_or_else(|_| Utc::now());
+            let updated_at = chrono::DateTime::parse_from_rfc3339(&row.12)
+                .map(|dt| dt.with_timezone(&Utc))
+                .unwrap_or_else(|_| Utc::now());
+
+            for eid in &email_ids {
+                assignments_map.insert(eid.clone(), row.0.clone());
+            }
+
+            loaded.push(TopicCluster {
+                id: row.0.clone(),
+                name: row.1.clone(),
+                description: row.2.clone(),
+                centroid,
+                email_ids,
+                email_count: row.5 as usize,
+                top_terms,
+                representative_email_ids,
+                stability_score: row.8 as f32,
+                stability_runs: row.9 as u32,
+                is_pinned: row.10,
+                created_at,
+                updated_at,
+            });
+        }
+
+        let count = loaded.len();
+        let total_clustered_emails: u64 = loaded.iter().map(|c| c.email_count as u64).sum();
+        *self.clusters.write().await = loaded;
+        *self.assignments.write().await = assignments_map;
+        // Set the last-clustered count so we don't immediately recluster on startup.
+        *self.last_clustered_vector_count.write().await = total_clustered_emails;
+
+        tracing::info!(count, "Loaded persisted clusters from SQLite");
+        Ok(count)
     }
 }
 

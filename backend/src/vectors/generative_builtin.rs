@@ -243,6 +243,57 @@ impl BuiltInGenerativeModel {
             .map_err(|e| VectorError::EmbeddingFailed(format!("spawn_blocking failed: {e}")))??;
 
             *guard = Some(loaded);
+
+            // Warmup: run a minimal inference to prime the GPU/Metal pipeline.
+            // The first inference after model load can produce empty output on
+            // some backends (e.g. Apple Metal) due to cold-start latency.
+            if let Some(ref loaded) = *guard {
+                let ctx_size = self.effective_context_size;
+
+                let warmup_result = {
+                    let ctx_params = LlamaContextParams::default()
+                        .with_n_ctx(std::num::NonZeroU32::new(ctx_size));
+                    let mut ctx = loaded
+                        .model
+                        .new_context(&loaded.backend, ctx_params)
+                        .map_err(|e| {
+                            VectorError::EmbeddingFailed(format!(
+                                "Warmup context creation failed: {e}"
+                            ))
+                        })?;
+
+                    // Tokenize a trivial prompt.
+                    let warmup_prompt = "<|im_start|>user\nHi<|im_end|>\n<|im_start|>assistant\n";
+                    let tokens = loaded
+                        .model
+                        .str_to_token(warmup_prompt, llama_cpp_2::model::AddBos::Never)
+                        .map_err(|e| {
+                            VectorError::EmbeddingFailed(format!(
+                                "Warmup tokenization failed: {e}"
+                            ))
+                        })?;
+
+                    let mut batch = LlamaBatch::new(ctx_size as usize, 1);
+                    for (i, &token) in tokens.iter().enumerate() {
+                        let is_last = i == tokens.len() - 1;
+                        batch.add(token, i as i32, &[0], is_last).ok();
+                    }
+                    ctx.decode(&mut batch).ok();
+
+                    // Generate just 1 token to warm the pipeline.
+                    let candidates = ctx.candidates();
+                    let mut token_data =
+                        LlamaTokenDataArray::from_iter(candidates, false);
+                    let _ = token_data.sample_token_greedy();
+
+                    Ok::<(), VectorError>(())
+                };
+
+                match warmup_result {
+                    Ok(()) => info!("Built-in LLM warmup complete"),
+                    Err(e) => warn!(error = %e, "Built-in LLM warmup failed (non-fatal)"),
+                }
+            }
         }
         Ok(guard)
     }

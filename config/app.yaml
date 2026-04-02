@@ -41,14 +41,21 @@ cache:
   model_catalog_stale_time_ms: 60000
   clusters_stale_time_ms: 10000
   clusters_refetch_interval_ms: 30000
+  clusters_active_stale_time_ms: 3000 # Faster polling during active ingestion
+  clusters_active_refetch_interval_ms: 5000
+  clustering_status_stale_time_ms: 5000
+  clustering_status_refetch_interval_ms: 10000
   dashboard_accounts_refetch_interval_ms: 10000
   dashboard_embedding_refetch_interval_ms: 10000
+  embedding_active_refetch_interval_ms: 5000 # Faster polling during active re-embedding (must stay under rate limit)
 
 # ── Network Timeouts ─────────────────────────────────────────────────────────
 network:
   ollama_fetch_timeout_ms: 3000 # Timeout for Ollama model list fetch
   model_catalog_fetch_timeout_ms: 3000
   ingestion_start_timeout_ms: 300000 # 5 min — sync fetches all emails from provider
+  recluster_timeout_ms: 300000 # 5 min — GraphSAGE + KMeans is compute-heavy
+  reembed_timeout_ms: 60000 # 1 min — resets DB rows then triggers ingestion
   model_switch_poll_interval_ms: 2000 # Poll interval during model download
   model_switch_max_polls: 150 # 150 * 2s = 5 min max download wait
 

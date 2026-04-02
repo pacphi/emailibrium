@@ -22,6 +22,7 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/clusters", get(list_clusters))
         .route("/clusters/{id}", get(get_cluster))
+        .route("/status", get(clustering_status))
         .route("/recluster", post(recluster))
         .route("/clusters/{id}/pin", post(pin_cluster))
         .route("/clusters/{id}/unpin", post(unpin_cluster))
@@ -213,6 +214,34 @@ async fn get_cluster(
         is_pinned: cluster.is_pinned,
         created_at: cluster.created_at.to_rfc3339(),
         updated_at: cluster.updated_at.to_rfc3339(),
+    }))
+}
+
+/// GET /api/v1/clustering/status — clustering readiness and counts.
+async fn clustering_status(
+    State(state): State<AppState>,
+) -> Json<serde_json::Value> {
+    let clusters = state.vector_service.cluster_engine.get_clusters().await;
+    let cluster_count = clusters.len();
+    let total_emails: usize = clusters.iter().map(|c| c.email_count).sum();
+
+    // Check if ingestion is currently in clustering phase.
+    // Note: get_progress() returns the last job even if complete, so we must
+    // check the phase to distinguish truly active ingestion from a stale job.
+    let ingestion_progress = state.vector_service.ingestion_pipeline.get_progress().await;
+    let phase = ingestion_progress.as_ref().map(|p| p.phase.as_str());
+    let is_truly_active = matches!(
+        phase,
+        Some("syncing" | "embedding" | "categorizing" | "clustering" | "analyzing" | "backfilling")
+    );
+    let is_clustering = phase == Some("clustering");
+
+    Json(serde_json::json!({
+        "clusterCount": cluster_count,
+        "totalClusteredEmails": total_emails,
+        "isClustering": is_clustering,
+        "isIngesting": is_truly_active,
+        "phase": if is_truly_active { phase } else { None },
     }))
 }
 

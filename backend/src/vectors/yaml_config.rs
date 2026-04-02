@@ -255,6 +255,12 @@ pub struct ClusteringTuning {
     pub tfidf_max_terms: usize,
     #[serde(default = "default_5_usize")]
     pub representative_emails: usize,
+    #[serde(default = "default_5_usize")]
+    pub min_k: usize,
+    #[serde(default = "default_10_usize")]
+    pub max_k: usize,
+    #[serde(default = "default_50_usize")]
+    pub recluster_threshold: usize,
 }
 
 impl Default for ClusteringTuning {
@@ -262,6 +268,9 @@ impl Default for ClusteringTuning {
         Self {
             tfidf_max_terms: 20,
             representative_emails: 5,
+            min_k: 5,
+            max_k: 10,
+            recluster_threshold: 50,
         }
     }
 }
@@ -592,6 +601,42 @@ pub struct CacheConfig {
     pub default_stale_time_ms: u64,
     #[serde(default = "default_1_usize")]
     pub default_retry_count: usize,
+
+    // Per-feature overrides (consumed by frontend via /ai/config/app)
+    #[serde(default = "default_10000_u64")]
+    pub email_counts_stale_time_ms: u64,
+    #[serde(default = "default_30000_u64")]
+    pub email_counts_refetch_interval_ms: u64,
+    #[serde(default = "default_30000_u64")]
+    pub categories_stale_time_ms: u64,
+    #[serde(default = "default_30000_u64")]
+    pub labels_stale_time_ms: u64,
+    #[serde(default = "default_30000_u64")]
+    pub chat_sessions_stale_time_ms: u64,
+    #[serde(default = "default_60000_u64")]
+    pub subscriptions_stale_time_ms: u64,
+    #[serde(default = "default_30000_u64")]
+    pub ollama_models_stale_time_ms: u64,
+    #[serde(default = "default_60000_u64")]
+    pub model_catalog_stale_time_ms: u64,
+    #[serde(default = "default_10000_u64")]
+    pub clusters_stale_time_ms: u64,
+    #[serde(default = "default_30000_u64")]
+    pub clusters_refetch_interval_ms: u64,
+    #[serde(default = "default_3000_u64")]
+    pub clusters_active_stale_time_ms: u64,
+    #[serde(default = "default_5000_u64")]
+    pub clusters_active_refetch_interval_ms: u64,
+    #[serde(default = "default_5000_u64")]
+    pub clustering_status_stale_time_ms: u64,
+    #[serde(default = "default_10000_u64")]
+    pub clustering_status_refetch_interval_ms: u64,
+    #[serde(default = "default_10000_u64")]
+    pub dashboard_accounts_refetch_interval_ms: u64,
+    #[serde(default = "default_10000_u64")]
+    pub dashboard_embedding_refetch_interval_ms: u64,
+    #[serde(default = "default_5000_u64")]
+    pub embedding_active_refetch_interval_ms: u64,
 }
 
 impl Default for CacheConfig {
@@ -599,6 +644,23 @@ impl Default for CacheConfig {
         Self {
             default_stale_time_ms: 30000,
             default_retry_count: 1,
+            email_counts_stale_time_ms: 10000,
+            email_counts_refetch_interval_ms: 30000,
+            categories_stale_time_ms: 30000,
+            labels_stale_time_ms: 30000,
+            chat_sessions_stale_time_ms: 30000,
+            subscriptions_stale_time_ms: 60000,
+            ollama_models_stale_time_ms: 30000,
+            model_catalog_stale_time_ms: 60000,
+            clusters_stale_time_ms: 10000,
+            clusters_refetch_interval_ms: 30000,
+            clusters_active_stale_time_ms: 3000,
+            clusters_active_refetch_interval_ms: 5000,
+            clustering_status_stale_time_ms: 5000,
+            clustering_status_refetch_interval_ms: 10000,
+            dashboard_accounts_refetch_interval_ms: 10000,
+            dashboard_embedding_refetch_interval_ms: 10000,
+            embedding_active_refetch_interval_ms: 5000,
         }
     }
 }
@@ -611,6 +673,10 @@ pub struct NetworkConfig {
     pub model_catalog_fetch_timeout_ms: u64,
     #[serde(default = "default_300000_u64")]
     pub ingestion_start_timeout_ms: u64,
+    #[serde(default = "default_300000_u64")]
+    pub recluster_timeout_ms: u64,
+    #[serde(default = "default_60000_u64")]
+    pub reembed_timeout_ms: u64,
     #[serde(default = "default_2000_u64")]
     pub model_switch_poll_interval_ms: u64,
     #[serde(default = "default_150_usize")]
@@ -623,6 +689,8 @@ impl Default for NetworkConfig {
             ollama_fetch_timeout_ms: 3000,
             model_catalog_fetch_timeout_ms: 3000,
             ingestion_start_timeout_ms: 300000,
+            recluster_timeout_ms: 300000,
+            reembed_timeout_ms: 60000,
             model_switch_poll_interval_ms: 2000,
             model_switch_max_polls: 150,
         }
@@ -1076,8 +1144,17 @@ fn default_3000_u64() -> u64 {
 fn default_3600_u64() -> u64 {
     3600
 }
+fn default_5000_u64() -> u64 {
+    5000
+}
+fn default_10000_u64() -> u64 {
+    10000
+}
 fn default_30000_u64() -> u64 {
     30000
+}
+fn default_60000_u64() -> u64 {
+    60000
 }
 fn default_300000_u64() -> u64 {
     300000

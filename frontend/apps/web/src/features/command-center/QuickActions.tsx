@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { type ReactNode, useState, useRef, useEffect } from 'react';
 
 interface QuickAction {
   id: string;
@@ -25,6 +25,21 @@ const ACCOUNT_REQUIRED = new Set([
 ]);
 
 export function QuickActions({ onAction, syncing, hasAccounts = true }: QuickActionsProps) {
+  const [syncMenuOpen, setSyncMenuOpen] = useState(false);
+  const syncMenuRef = useRef<HTMLDivElement>(null);
+
+  // Close menu on outside click.
+  useEffect(() => {
+    if (!syncMenuOpen) return;
+    function handleOutside(e: MouseEvent) {
+      if (syncMenuRef.current && !syncMenuRef.current.contains(e.target as Node)) {
+        setSyncMenuOpen(false);
+      }
+    }
+    document.addEventListener('mousedown', handleOutside);
+    return () => document.removeEventListener('mousedown', handleOutside);
+  }, [syncMenuOpen]);
+
   const actions: QuickAction[] = [
     {
       id: 'clean-inbox',
@@ -61,12 +76,6 @@ export function QuickActions({ onAction, syncing, hasAccounts = true }: QuickAct
       icon: <PlusIcon />,
       href: '/settings',
     },
-    {
-      id: 'sync-now',
-      label: syncing ? 'Syncing...' : 'Sync Now',
-      description: syncing ? 'In progress' : 'Fetch latest emails',
-      icon: <RefreshIcon spinning={syncing} />,
-    },
   ];
 
   function handleClick(action: QuickAction) {
@@ -77,6 +86,8 @@ export function QuickActions({ onAction, syncing, hasAccounts = true }: QuickAct
       window.location.href = action.href;
     }
   }
+
+  const syncDisabled = !hasAccounts || !!syncing;
 
   return (
     <section aria-label="Quick actions">
@@ -119,6 +130,92 @@ export function QuickActions({ onAction, syncing, hasAccounts = true }: QuickAct
             </button>
           );
         })}
+
+        {/* Sync Now — split button with incremental/full mode */}
+        <div ref={syncMenuRef} className="relative">
+          <button
+            type="button"
+            disabled={syncDisabled}
+            onClick={() => {
+              if (onAction) onAction('sync-now');
+            }}
+            className={`flex w-full flex-col items-center gap-2 rounded-xl border p-4 text-center shadow-sm transition-all focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 ${
+              syncDisabled
+                ? 'cursor-not-allowed border-gray-100 bg-gray-50 opacity-50 dark:border-gray-800 dark:bg-gray-900'
+                : 'border-gray-200 bg-white hover:border-indigo-300 hover:shadow-md dark:border-gray-700 dark:bg-gray-800 dark:hover:border-indigo-600'
+            }`}
+            aria-label="Sync Now"
+          >
+            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-indigo-50 text-indigo-600 dark:bg-indigo-900/30 dark:text-indigo-400">
+              <RefreshIcon spinning={syncing} />
+            </div>
+            <div>
+              <p className="text-sm font-medium text-gray-900 dark:text-white">
+                {syncing ? 'Syncing...' : 'Sync Now'}
+              </p>
+              <p className="text-xs text-gray-500 dark:text-gray-400">
+                {syncing ? 'In progress' : 'Fetch latest emails'}
+              </p>
+            </div>
+          </button>
+
+          {/* Mode toggle — small button in the corner */}
+          {!syncing && hasAccounts && (
+            <button
+              type="button"
+              onClick={() => setSyncMenuOpen((o) => !o)}
+              className="absolute right-1.5 top-1.5 rounded-md p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-700 dark:hover:text-gray-300"
+              aria-label="Sync options"
+              title="Sync options"
+            >
+              <svg
+                className="h-3.5 w-3.5"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+                strokeWidth={2}
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+              </svg>
+            </button>
+          )}
+
+          {/* Dropdown menu */}
+          {syncMenuOpen && (
+            <div className="absolute right-0 top-full z-10 mt-1 w-48 rounded-lg border border-gray-200 bg-white py-1 shadow-lg dark:border-gray-700 dark:bg-gray-800">
+              <button
+                type="button"
+                onClick={() => {
+                  setSyncMenuOpen(false);
+                  if (onAction) onAction('sync-now');
+                }}
+                className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-700"
+              >
+                <RefreshIcon />
+                <div>
+                  <p className="font-medium">Incremental Sync</p>
+                  <p className="text-xs text-gray-500 dark:text-gray-400">Fetch new emails only</p>
+                </div>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setSyncMenuOpen(false);
+                  if (onAction) onAction('full-sync');
+                }}
+                className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-700"
+              >
+                <RebuildIcon />
+                <div>
+                  <p className="font-medium">Full Sync</p>
+                  <p className="text-xs text-gray-500 dark:text-gray-400">
+                    Rebuild embeddings &amp; clusters
+                  </p>
+                </div>
+              </button>
+            </div>
+          )}
+        </div>
       </div>
     </section>
   );
@@ -212,6 +309,25 @@ function PlusIcon() {
       aria-hidden="true"
     >
       <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
+    </svg>
+  );
+}
+
+function RebuildIcon() {
+  return (
+    <svg
+      className="h-5 w-5"
+      fill="none"
+      viewBox="0 0 24 24"
+      stroke="currentColor"
+      strokeWidth={2}
+      aria-hidden="true"
+    >
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z"
+      />
     </svg>
   );
 }

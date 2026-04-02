@@ -974,14 +974,25 @@ impl IngestionPipelineHandle {
         self.broadcast_progress(&job_id).await;
 
         // Phase 4: Clustering (ADR-009)
+        // Recluster when enough new emails have been embedded since the last
+        // clustering run (checked via total vector count delta), OR when this
+        // is a large batch (e.g., initial onboarding or full re-embed).
         self.update_phase(IngestionPhase::Clustering).await;
         self.broadcast_progress(&job_id).await;
-        let embedded_count = {
-            let state = self.state.read().await;
-            state.current_job.as_ref().map(|j| j.embedded).unwrap_or(0)
-        };
-        if embedded_count >= self.ingestion_tuning.min_cluster_emails as u64 {
-            if let Some(ref engine) = self.cluster_engine {
+        if let Some(ref engine) = self.cluster_engine {
+            let current_count = self.store.count().await.unwrap_or(0);
+            let threshold = self.ingestion_tuning.min_cluster_emails as u64;
+            let recluster_threshold = engine.clustering_tuning.recluster_threshold as u64;
+
+            let should_cluster = if current_count < threshold {
+                // Not enough total vectors for meaningful clusters.
+                false
+            } else {
+                // Check if enough new emails accumulated since last clustering.
+                engine.should_recluster(current_count, recluster_threshold).await
+            };
+
+            if should_cluster {
                 match engine.full_recluster().await {
                     Ok(report) => {
                         info!(
@@ -997,10 +1008,10 @@ impl IngestionPipelineHandle {
                     }
                 }
             } else {
-                debug!(job_id = %job_id, "Clustering phase: skipped (no cluster engine)");
+                debug!(job_id = %job_id, vectors = current_count, recluster_threshold, "Clustering phase: skipped (below recluster threshold)");
             }
         } else {
-            debug!(job_id = %job_id, embedded = embedded_count, min = self.ingestion_tuning.min_cluster_emails, "Clustering phase: skipped (below min_cluster_emails threshold)");
+            debug!(job_id = %job_id, "Clustering phase: skipped (no cluster engine)");
         }
 
         // Phase 5: Analyzing
@@ -1200,7 +1211,7 @@ impl IngestionPipelineHandle {
         let rows: Vec<EmailRow> = sqlx::query_as(
             r#"SELECT id, subject, from_addr, body_text
                FROM emails
-               WHERE account_id = ? AND embedding_status = 'pending'
+               WHERE account_id = ? AND embedding_status IN ('pending', 'stale')
                  AND COALESCE(is_trash, 0) = 0 AND COALESCE(is_spam, 0) = 0 AND deleted_at IS NULL
                ORDER BY received_at DESC"#,
         )

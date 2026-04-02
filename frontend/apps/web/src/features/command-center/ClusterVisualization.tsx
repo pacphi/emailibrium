@@ -1,9 +1,11 @@
 import { useState } from 'react';
 import type { Cluster, ClusterTerm } from '@emailibrium/types';
+import type { ClusteringStatus } from '@emailibrium/api';
 
 interface ClusterVisualizationProps {
   clusters?: Cluster[];
   isLoading?: boolean;
+  clusteringStatus?: ClusteringStatus | null;
 }
 
 function ClusterCardSkeleton() {
@@ -53,7 +55,11 @@ function WordCloud({ terms }: { terms: ClusterTerm[] }) {
   );
 }
 
-export function ClusterVisualization({ clusters, isLoading }: ClusterVisualizationProps) {
+export function ClusterVisualization({
+  clusters,
+  isLoading,
+  clusteringStatus,
+}: ClusterVisualizationProps) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
   if (isLoading) {
@@ -70,13 +76,68 @@ export function ClusterVisualization({ clusters, isLoading }: ClusterVisualizati
   }
 
   if (!clusters || clusters.length === 0) {
+    const isClustering = clusteringStatus?.isClustering ?? false;
+    const isIngesting = clusteringStatus?.isIngesting ?? false;
+    const phase = clusteringStatus?.phase;
+
+    // Context-aware message based on actual pipeline state
+    let message: string;
+    if (isClustering) {
+      message = 'Clustering in progress — analyzing email topics...';
+    } else if (phase === 'embedding') {
+      message = 'Waiting for embeddings to complete before clustering...';
+    } else if (phase === 'categorizing') {
+      message = 'Categorizing emails — clustering will follow...';
+    } else if (isIngesting) {
+      message = 'Email analysis in progress — clustering will follow...';
+    } else {
+      message = 'No clusters yet. Use "Full Sync" to rebuild embeddings and clusters.';
+    }
+
     return (
       <section aria-label="Topic clusters">
         <h2 className="mb-3 text-lg font-semibold text-gray-900 dark:text-white">Topic Clusters</h2>
         <div className="rounded-xl border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
-          <p className="mt-4 text-center text-sm text-gray-500 dark:text-gray-400">
-            Clusters will appear after email analysis completes.
-          </p>
+          <div className="flex flex-col items-center gap-3 py-4">
+            {isClustering ? (
+              <svg
+                className="h-6 w-6 animate-spin text-indigo-500"
+                viewBox="0 0 24 24"
+                fill="none"
+                aria-hidden="true"
+              >
+                <circle
+                  className="opacity-25"
+                  cx="12"
+                  cy="12"
+                  r="10"
+                  stroke="currentColor"
+                  strokeWidth="4"
+                />
+                <path
+                  className="opacity-75"
+                  fill="currentColor"
+                  d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+                />
+              </svg>
+            ) : (
+              <svg
+                className="h-6 w-6 text-gray-400"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+                strokeWidth={1.5}
+                aria-hidden="true"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M3.75 6A2.25 2.25 0 016 3.75h2.25A2.25 2.25 0 0110.5 6v2.25a2.25 2.25 0 01-2.25 2.25H6a2.25 2.25 0 01-2.25-2.25V6zM3.75 15.75A2.25 2.25 0 016 13.5h2.25a2.25 2.25 0 012.25 2.25V18a2.25 2.25 0 01-2.25 2.25H6A2.25 2.25 0 013.75 18v-2.25zM13.5 6a2.25 2.25 0 012.25-2.25H18A2.25 2.25 0 0120.25 6v2.25A2.25 2.25 0 0118 10.5h-2.25a2.25 2.25 0 01-2.25-2.25V6zM13.5 15.75a2.25 2.25 0 012.25-2.25H18a2.25 2.25 0 012.25 2.25V18A2.25 2.25 0 0118 20.25h-2.25A2.25 2.25 0 0113.5 18v-2.25z"
+                />
+              </svg>
+            )}
+            <p className="text-center text-sm text-gray-500 dark:text-gray-400">{message}</p>
+          </div>
         </div>
       </section>
     );
@@ -86,7 +147,7 @@ export function ClusterVisualization({ clusters, isLoading }: ClusterVisualizati
 
   return (
     <section aria-label="Topic clusters">
-      <div className="mb-3 flex items-baseline gap-2">
+      <div className="mb-3 flex items-center gap-2">
         <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Topic Clusters</h2>
         <span className="text-sm text-gray-500 dark:text-gray-400">
           {clusters.length} clusters, {totalClustered.toLocaleString()} emails

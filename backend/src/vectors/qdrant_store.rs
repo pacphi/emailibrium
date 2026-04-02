@@ -401,6 +401,13 @@ impl super::store::VectorStoreBackend for QdrantVectorStore {
         Ok(true)
     }
 
+    async fn clear_all(&self) -> Result<u64, VectorError> {
+        let mut cache = self.documents.write().await;
+        let count = cache.len() as u64;
+        cache.clear();
+        Ok(count)
+    }
+
     async fn update(&self, doc: VectorDocument) -> Result<(), VectorError> {
         if doc.vector.is_empty() {
             return Err(VectorError::StoreFailed(

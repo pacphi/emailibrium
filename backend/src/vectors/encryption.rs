@@ -212,6 +212,10 @@ impl VectorStoreBackend for EncryptedVectorStore {
         self.inner.delete(id).await
     }
 
+    async fn clear_all(&self) -> Result<u64, VectorError> {
+        self.inner.clear_all().await
+    }
+
     async fn update(&self, doc: VectorDocument) -> Result<(), VectorError> {
         self.inner.update(doc).await
     }

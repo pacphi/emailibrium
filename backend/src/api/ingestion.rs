@@ -142,6 +142,7 @@ pub fn routes() -> Router<AppState> {
         .route("/embedding-status", get(embedding_status))
         .route("/poll-status", get(poll_status))
         .route("/poll-toggle", post(poll_toggle))
+        .route("/progress", get(ingestion_progress_json))
 }
 
 // ---------------------------------------------------------------------------
@@ -996,6 +997,7 @@ pub struct EmbeddingStatusSummary {
     pub embedded_count: u64,
     pub pending_count: u64,
     pub failed_count: u64,
+    pub stale_count: u64,
 }
 
 #[derive(Debug, Serialize)]
@@ -1024,6 +1026,7 @@ async fn embedding_status(
     let mut embedded_count: u64 = 0;
     let mut pending_count: u64 = 0;
     let mut failed_count: u64 = 0;
+    let mut stale_count: u64 = 0;
     let mut total_emails: u64 = 0;
 
     for (status, count) in &rows {
@@ -1033,6 +1036,7 @@ async fn embedding_status(
             "embedded" => embedded_count = c,
             "pending" => pending_count = c,
             "failed" => failed_count = c,
+            "stale" => stale_count = c,
             _ => pending_count += c,
         }
     }
@@ -1047,6 +1051,7 @@ async fn embedding_status(
             embedded_count,
             pending_count,
             failed_count,
+            stale_count,
         },
         sample_record: EmbeddingStatusSample {
             pending: "pending".to_string(),
@@ -1094,6 +1099,33 @@ async fn poll_toggle(
             StatusCode::SERVICE_UNAVAILABLE,
             "Poll scheduler not initialized".to_string(),
         )),
+    }
+}
+
+/// GET /api/v1/ingestion/progress — JSON snapshot of current ingestion progress.
+///
+/// Returns the current phase, counts, and whether ingestion is active.
+/// Unlike `/status` (SSE), this is a simple request/response for polling.
+async fn ingestion_progress_json(
+    State(state): State<AppState>,
+) -> Json<serde_json::Value> {
+    match state.vector_service.ingestion_pipeline.get_progress().await {
+        Some(progress) => Json(serde_json::json!({
+            "active": true,
+            "jobId": progress.job_id,
+            "phase": progress.phase,
+            "total": progress.total,
+            "processed": progress.processed,
+            "embedded": progress.embedded,
+            "categorized": progress.categorized,
+            "failed": progress.failed,
+            "etaSeconds": progress.eta_seconds,
+            "emailsPerSecond": progress.emails_per_second,
+        })),
+        None => Json(serde_json::json!({
+            "active": false,
+            "phase": null,
+        })),
     }
 }
 

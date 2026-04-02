@@ -1,7 +1,13 @@
 import { type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import type { AppStats } from './hooks/useStats';
-import { getAccounts, getEmailCounts, getEmbeddingStatus } from '@emailibrium/api';
+import {
+  getAccounts,
+  getEmailCounts,
+  getEmbeddingStatus,
+  getClusteringStatus,
+} from '@emailibrium/api';
+import { useAppConfig } from '@/shared/hooks';
 
 /** Map backend index type identifiers to human-friendly display names. */
 function formatIndexType(raw?: string): string {
@@ -82,26 +88,53 @@ interface StatsCardsProps {
 }
 
 export function StatsCards({ stats, isLoading }: StatsCardsProps) {
-  // All dashboard data auto-refreshes every 10s via React Query.
+  const { cache } = useAppConfig();
+
   const accountsQuery = useQuery({
     queryKey: ['dashboard-accounts'],
     queryFn: getAccounts,
-    staleTime: 5_000,
-    refetchInterval: 10_000,
+    staleTime: cache.dashboardAccountsRefetchIntervalMs / 2,
+    refetchInterval: cache.dashboardAccountsRefetchIntervalMs,
   });
 
   const emailCountsQuery = useQuery({
     queryKey: ['dashboard-email-counts'],
     queryFn: getEmailCounts,
-    staleTime: 5_000,
-    refetchInterval: 10_000,
+    staleTime: cache.dashboardEmbeddingRefetchIntervalMs / 2,
+    refetchInterval: cache.dashboardEmbeddingRefetchIntervalMs,
   });
 
   const embeddingQuery = useQuery({
     queryKey: ['dashboard-embedding-status'],
     queryFn: getEmbeddingStatus,
-    staleTime: 5_000,
-    refetchInterval: 10_000,
+    staleTime: cache.embeddingActiveRefetchIntervalMs / 2,
+    // Poll fast (3s) whenever there are pending/stale emails or mutation is active.
+    refetchInterval: (query) => {
+      const data = query.state.data;
+      const hasPending =
+        data &&
+        (data.embeddingStatusSummary.pendingCount > 0 ||
+          data.embeddingStatusSummary.staleCount > 0);
+      return hasPending
+        ? cache.embeddingActiveRefetchIntervalMs
+        : cache.dashboardEmbeddingRefetchIntervalMs;
+    },
+  });
+
+  // Derive "embedding in progress" from actual data.
+  const embeddingInProgress =
+    (embeddingQuery.data?.embeddingStatusSummary.pendingCount ?? 0) > 0 ||
+    (embeddingQuery.data?.embeddingStatusSummary.staleCount ?? 0) > 0;
+
+  const clusteringStatusQuery = useQuery({
+    queryKey: ['dashboard-clustering-status'],
+    queryFn: getClusteringStatus,
+    staleTime: embeddingInProgress
+      ? cache.embeddingActiveRefetchIntervalMs
+      : cache.clusteringStatusStaleTimeMs,
+    refetchInterval: embeddingInProgress
+      ? cache.embeddingActiveRefetchIntervalMs
+      : cache.clusteringStatusRefetchIntervalMs,
   });
 
   const accounts = accountsQuery.data ?? [];
@@ -113,6 +146,7 @@ export function StatsCards({ stats, isLoading }: StatsCardsProps) {
 
   const emailCounts = emailCountsQuery.data ?? null;
   const embeddingStatus = embeddingQuery.data ?? null;
+  const clusteringStatus = clusteringStatusQuery.data ?? null;
 
   if (isLoading) {
     return (
@@ -314,6 +348,54 @@ export function StatsCards({ stats, isLoading }: StatsCardsProps) {
                       </span>
                     )}
                   </div>
+
+                  {/* Clustering status */}
+                  {clusteringStatus &&
+                    (() => {
+                      const clusteringActive = clusteringStatus.isClustering;
+                      return (
+                        <div className="border-t border-gray-100 pt-2 dark:border-gray-700">
+                          <div className="flex items-center justify-between text-sm mb-1">
+                            <span className="text-gray-700 dark:text-gray-300">Clustering</span>
+                            <span className="font-medium text-gray-900 dark:text-white">
+                              {clusteringStatus.clusterCount > 0 && !clusteringActive
+                                ? `${clusteringStatus.clusterCount} clusters`
+                                : clusteringActive
+                                  ? 'Running...'
+                                  : clusteringStatus.isIngesting
+                                    ? 'Queued'
+                                    : isReady
+                                      ? 'Ready to run'
+                                      : '\u2014'}
+                            </span>
+                          </div>
+                          <span className="flex items-center gap-1.5 text-xs">
+                            <span
+                              className={`inline-block h-2 w-2 rounded-full ${
+                                clusteringStatus.clusterCount > 0 && !clusteringActive
+                                  ? 'bg-green-500'
+                                  : clusteringActive
+                                    ? 'animate-pulse bg-indigo-500'
+                                    : clusteringStatus.isIngesting
+                                      ? 'animate-pulse bg-yellow-500'
+                                      : 'bg-gray-400'
+                              }`}
+                            />
+                            <span className="text-gray-600 dark:text-gray-400">
+                              {clusteringStatus.clusterCount > 0 && !clusteringActive
+                                ? `${clusteringStatus.totalClusteredEmails.toLocaleString()} emails clustered`
+                                : clusteringActive
+                                  ? 'Analyzing email topics...'
+                                  : clusteringStatus.isIngesting
+                                    ? 'Will run after embedding'
+                                    : isReady
+                                      ? 'Use "Run Clustering" below'
+                                      : 'Waiting for embeddings'}
+                            </span>
+                          </span>
+                        </div>
+                      );
+                    })()}
                 </div>
               );
             })()}

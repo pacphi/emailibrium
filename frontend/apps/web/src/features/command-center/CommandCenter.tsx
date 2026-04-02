@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { getClusters, getEnrichedCategories } from '@emailibrium/api';
+import { getClusters, getEnrichedCategories, getClusteringStatus } from '@emailibrium/api';
 import { StatsCards } from './StatsCards';
 import { QuickActions } from './QuickActions';
 import { RecentActivity } from './RecentActivity';
@@ -11,6 +11,7 @@ import { SyncStatusIndicator } from './SyncStatusIndicator';
 import { useStats } from './hooks/useStats';
 import { useCommandPalette } from './hooks/useCommandPalette';
 import { useSyncStore } from '@/shared/stores/syncStore';
+import { useAppConfig } from '@/shared/hooks';
 
 type View = 'dashboard' | 'search';
 
@@ -21,13 +22,28 @@ export function CommandCenter() {
   });
   const { stats, isLoading, isError, error, refetch, dataUpdatedAt } = useStats();
   const { open: openPalette } = useCommandPalette();
+  const appConfig = useAppConfig();
+  const { cache } = appConfig;
+
+  // Fetch clustering status to drive context-aware UI.
+  const clusteringStatusQuery = useQuery({
+    queryKey: ['dashboard-clustering-status'],
+    queryFn: () => getClusteringStatus(),
+    staleTime: cache.clusteringStatusStaleTimeMs,
+    refetchInterval: cache.clusteringStatusRefetchIntervalMs,
+  });
+
+  const isActiveIngestion = clusteringStatusQuery.data?.isIngesting ?? false;
 
   // Fetch topic clusters for the visualization panel.
+  // Poll faster during active ingestion so clusters appear promptly.
   const clustersQuery = useQuery({
     queryKey: ['clusters'],
     queryFn: () => getClusters(),
-    staleTime: 10_000,
-    refetchInterval: 30_000,
+    staleTime: isActiveIngestion ? cache.clustersActiveStaleTimeMs : cache.clustersStaleTimeMs,
+    refetchInterval: isActiveIngestion
+      ? cache.clustersActiveRefetchIntervalMs
+      : cache.clustersRefetchIntervalMs,
   });
 
   // Fetch enriched categories to power "Recent Activity" with real data.
@@ -62,7 +78,9 @@ export function CommandCenter() {
   const handleQuickAction = useCallback(
     (actionId: string) => {
       if (actionId === 'sync-now') {
-        startSync();
+        startSync('incremental');
+      } else if (actionId === 'full-sync') {
+        startSync('full');
       }
     },
     [startSync],
@@ -241,6 +259,7 @@ export function CommandCenter() {
             <ClusterVisualization
               clusters={clustersQuery.data}
               isLoading={clustersQuery.isLoading}
+              clusteringStatus={clusteringStatusQuery.data}
             />
           </div>
         </div>

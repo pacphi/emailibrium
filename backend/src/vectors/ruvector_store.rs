@@ -308,6 +308,21 @@ impl super::store::VectorStoreBackend for RuVectorStore {
                 let rv_entries: Vec<VectorEntry> =
                     entries.iter().map(|(_, e, _)| e.clone()).collect();
 
+                // Dedup: remove existing vectors for the same email_id to prevent
+                // duplicates during re-embed. The HashMap is keyed by vector UUID,
+                // so we need to find and remove the old entry by email_id.
+                for (_, _, doc) in &entries {
+                    let old_key = coll
+                        .documents
+                        .iter()
+                        .find(|(_, existing)| existing.email_id == doc.email_id)
+                        .map(|(k, _)| k.clone());
+                    if let Some(key) = old_key {
+                        let _ = coll.db.delete(&key);
+                        coll.documents.remove(&key);
+                    }
+                }
+
                 coll.db.insert_batch(rv_entries).map_err(|e| {
                     VectorError::StoreFailed(format!("ruvector batch insert failed: {e}"))
                 })?;
@@ -459,6 +474,30 @@ impl super::store::VectorStoreBackend for RuVectorStore {
             }
         }
         Ok(false)
+    }
+
+    async fn clear_all(&self) -> Result<u64, VectorError> {
+        let mut total = 0u64;
+        for coll_lock in self.collections.values() {
+            let mut coll = coll_lock.write().await;
+            let count = coll.documents.len() as u64;
+
+            // Delete each vector from the redb storage via the VectorDB API.
+            // This is safer than file deletion because redb uses a global
+            // connection pool that holds open handles.
+            let ids: Vec<String> = coll.documents.keys().cloned().collect();
+            for id in &ids {
+                let _ = coll.db.delete(id);
+            }
+
+            // Clear the in-memory document map and persist empty sidecar.
+            coll.documents.clear();
+            coll.save_sidecar();
+
+            total += count;
+        }
+        tracing::info!(total, "Cleared all vectors from RuVector store");
+        Ok(total)
     }
 
     async fn update(&self, doc: VectorDocument) -> Result<(), VectorError> {

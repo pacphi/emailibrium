@@ -41,6 +41,9 @@ pub trait VectorStoreBackend: Send + Sync {
     /// Delete a document by ID. Returns `true` if the document existed.
     async fn delete(&self, id: &VectorId) -> Result<bool, VectorError>;
 
+    /// Delete all documents from all collections. Used for full re-embed.
+    async fn clear_all(&self) -> Result<u64, VectorError>;
+
     /// Update an existing document in place. Fails if the document does not exist.
     async fn update(&self, doc: VectorDocument) -> Result<(), VectorError>;
 
@@ -224,6 +227,13 @@ impl VectorStoreBackend for InMemoryVectorStore {
     async fn delete(&self, id: &VectorId) -> Result<bool, VectorError> {
         let mut store = self.documents.write().await;
         Ok(store.remove(id).is_some())
+    }
+
+    async fn clear_all(&self) -> Result<u64, VectorError> {
+        let mut store = self.documents.write().await;
+        let count = store.len() as u64;
+        store.clear();
+        Ok(count)
     }
 
     async fn update(&self, doc: VectorDocument) -> Result<(), VectorError> {

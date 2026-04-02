@@ -61,6 +61,9 @@ ingestion:
 clustering:
   tfidf_max_terms: 20 # Max TF-IDF terms per cluster for word cloud
   representative_emails: 5 # Number of centroid-nearest emails per cluster
+  min_k: 5 # Minimum number of clusters (silhouette search lower bound)
+  max_k: 10 # Maximum number of clusters (silhouette search upper bound)
+  recluster_threshold: 50 # Recluster when this many new emails have been embedded since last clustering
 
 # ── Error Recovery ───────────────────────────────────────────────────────────
 error_recovery:

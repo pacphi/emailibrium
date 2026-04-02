@@ -362,6 +362,14 @@ impl super::store::VectorStoreBackend for SqliteVectorStore {
         Ok(result.rows_affected() > 0)
     }
 
+    async fn clear_all(&self) -> Result<u64, VectorError> {
+        let result = sqlx::query("DELETE FROM vector_documents")
+            .execute(&self.pool)
+            .await
+            .map_err(|e| VectorError::StoreFailed(format!("sqlite clear_all failed: {e}")))?;
+        Ok(result.rows_affected())
+    }
+
     async fn update(&self, doc: VectorDocument) -> Result<(), VectorError> {
         if doc.vector.is_empty() {
             return Err(VectorError::StoreFailed(

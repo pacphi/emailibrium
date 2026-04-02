@@ -19,8 +19,9 @@ export {
   resumeIngestion,
   createIngestionStream,
   getEmbeddingStatus,
+  triggerReembed,
 } from './ingestionApi.js';
-export type { EmbeddingStatus } from './ingestionApi.js';
+export type { EmbeddingStatus, ReembedMode, ReembedResponse } from './ingestionApi.js';
 
 export { getHealth, getStats } from './vectorsApi.js';
 
@@ -96,7 +97,11 @@ export {
 
 export { recordConsent, getConsents, requestDataExport, requestDataErase } from './consentApi.js';
 
-export { getClusters } from './clusterApi.js';
+export { getClusters, getClusteringStatus, triggerRecluster } from './clusterApi.js';
+export type { ClusteringStatus } from './clusterApi.js';
+
+export { getAppConfig } from './configApi.js';
+export type { AppConfig, AppCacheConfig, AppNetworkConfig } from './configApi.js';
 
 export { submitFeedback } from './learningApi.js';
 export type { FeedbackPayload, FeedbackAction } from './learningApi.js';

@@ -1,5 +1,7 @@
 import { create } from 'zustand';
-import { getAccounts, startIngestion, getEmails } from '@emailibrium/api';
+import { getAccounts, startIngestion, getEmails, triggerReembed } from '@emailibrium/api';
+
+export type SyncMode = 'incremental' | 'full';
 
 export interface SyncState {
   /** Whether a sync is currently in progress. */
@@ -13,8 +15,8 @@ export interface SyncState {
 
   /** Check for active accounts (call on mount). */
   refreshAccounts: () => Promise<void>;
-  /** Start syncing all active accounts sequentially. */
-  startSync: () => Promise<void>;
+  /** Start syncing all active accounts. Mode: 'incremental' (default) or 'full' (reset + rebuild). */
+  startSync: (mode?: SyncMode) => Promise<void>;
   /** Clear the error message. */
   clearError: () => void;
 }
@@ -65,11 +67,22 @@ export const useSyncStore = create<SyncState>((set, get) => ({
     }
   },
 
-  startSync: async () => {
+  startSync: async (mode: SyncMode = 'incremental') => {
     if (get().syncing) return; // prevent double-trigger
 
-    set({ syncing: true, status: 'Fetching accounts...', error: '' });
+    set({
+      syncing: true,
+      status: mode === 'full' ? 'Rebuilding index...' : 'Fetching accounts...',
+      error: '',
+    });
     try {
+      // Full sync: clear vectors, clusters, and reset all embedding statuses first.
+      if (mode === 'full') {
+        set({ status: 'Clearing vectors and clusters...' });
+        await triggerReembed('all');
+        set({ status: 'Fetching accounts...' });
+      }
+
       const accounts = await getAccounts();
       const active = accounts.filter((a) => a.isActive);
 

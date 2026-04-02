@@ -814,36 +814,115 @@ async fn model_status(
     })
 }
 
+/// Request body for selective re-embed.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ReembedRequest {
+    #[serde(default = "default_reembed_mode")]
+    mode: String,
+}
+
+fn default_reembed_mode() -> String {
+    "all".to_string()
+}
+
 /// Response for re-embed trigger.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ReembedResponse {
     emails_reset: u64,
+    mode: String,
     message: String,
+    ingestion_triggered: bool,
 }
 
-/// POST /api/v1/ai/reembed — mark all emails for re-embedding.
+/// POST /api/v1/ai/reembed — mark emails for re-embedding.
 ///
-/// Resets all email embedding_status to 'pending', clears the vector store,
-/// and lets the next poll cycle re-embed everything with the current model.
+/// Accepts optional `{ "mode": "all" | "failed" | "stale" }`.
+/// After resetting, auto-triggers ingestion for the first account.
 async fn trigger_reembed(
     State(state): State<AppState>,
+    body: Option<Json<ReembedRequest>>,
 ) -> Result<Json<ReembedResponse>, (StatusCode, String)> {
-    // Reset all embeddings to pending.
-    let reset = sqlx::query("UPDATE emails SET embedding_status = 'pending', vector_id = NULL")
+    let mode = body
+        .map(|b| b.0.mode)
+        .unwrap_or_else(default_reembed_mode);
+
+    // For "all" mode, clear the vector store and clusters to start fresh.
+    if mode == "all" {
+        match state.vector_service.store.clear_all().await {
+            Ok(cleared) => {
+                tracing::info!(cleared, "Cleared vector store for full re-embed");
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "Failed to clear vector store (continuing with re-embed)");
+            }
+        }
+        // Also clear stale clusters so they don't show inflated counts.
+        if let Err(e) = state.vector_service.cluster_engine.clear_clusters().await {
+            tracing::warn!(error = %e, "Failed to clear clusters (continuing with re-embed)");
+        }
+    }
+
+    let sql = match mode.as_str() {
+        "failed" => {
+            "UPDATE emails SET embedding_status = 'pending' WHERE embedding_status = 'failed'"
+        }
+        "stale" => {
+            "UPDATE emails SET embedding_status = 'pending' WHERE embedding_status = 'stale'"
+        }
+        _ => "UPDATE emails SET embedding_status = 'pending', vector_id = NULL",
+    };
+
+    let reset = sqlx::query(sql)
         .execute(&state.db.pool)
         .await
         .map(|r| r.rows_affected())
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    tracing::info!(
-        emails_reset = reset,
-        "Re-embed triggered: all emails marked pending"
-    );
+    tracing::info!(emails_reset = reset, mode = %mode, "Re-embed triggered");
+
+    // Auto-trigger ingestion for the first account with pending emails.
+    let mut ingestion_triggered = false;
+    if reset > 0 {
+        let account_row: Option<(String,)> = sqlx::query_as(
+            "SELECT DISTINCT account_id FROM emails WHERE embedding_status = 'pending' LIMIT 1",
+        )
+        .fetch_optional(&state.db.pool)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+        if let Some((account_id,)) = account_row {
+            match state
+                .vector_service
+                .ingestion_pipeline
+                .start_ingestion(&account_id)
+                .await
+            {
+                Ok(job_id) => {
+                    tracing::info!(job_id = %job_id, account_id = %account_id, "Auto-triggered ingestion after reembed");
+                    ingestion_triggered = true;
+                }
+                Err(e) => {
+                    tracing::info!(error = %e, "Ingestion already running; reset emails will be processed in current or next cycle");
+                }
+            }
+        }
+    }
+
+    let msg = if ingestion_triggered {
+        format!("{reset} emails queued for re-embedding. Ingestion started.")
+    } else if reset > 0 {
+        format!("{reset} emails queued for re-embedding. Will process on next sync cycle.")
+    } else {
+        "No emails to re-embed.".to_string()
+    };
 
     Ok(Json(ReembedResponse {
         emails_reset: reset,
-        message: format!("{reset} emails queued for re-embedding. This will happen automatically on the next sync cycle."),
+        mode,
+        message: msg,
+        ingestion_triggered,
     }))
 }
 

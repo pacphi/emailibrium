@@ -240,6 +240,17 @@ impl VectorService {
             yaml_tuning.clustering.clone(),
         ));
 
+        // Load persisted clusters from SQLite so they survive restarts.
+        match cluster_engine.load_persisted_clusters().await {
+            Ok(count) if count > 0 => {
+                tracing::info!(count, "Restored topic clusters from database");
+            }
+            Ok(_) => {}
+            Err(e) => {
+                tracing::warn!(error = %e, "Failed to load persisted clusters (non-fatal)");
+            }
+        }
+
         // Initialize SONA learning engine
         let learning_engine = Arc::new(learning::LearningEngine::new(
             categorizer.clone(),

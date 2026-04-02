@@ -30,9 +30,31 @@ export interface EmbeddingStatus {
     embeddedCount: number;
     pendingCount: number;
     failedCount: number;
+    staleCount: number;
   };
 }
 
 export async function getEmbeddingStatus(): Promise<EmbeddingStatus> {
   return api.get('ingestion/embedding-status').json<EmbeddingStatus>();
+}
+
+export type ReembedMode = 'all' | 'failed' | 'stale';
+
+export interface ReembedResponse {
+  emailsReset: number;
+  mode: string;
+  message: string;
+  ingestionTriggered: boolean;
+}
+
+export async function triggerReembed(
+  mode: ReembedMode = 'all',
+  timeoutMs?: number,
+): Promise<ReembedResponse> {
+  return api
+    .post('ai/reembed', {
+      json: { mode },
+      timeout: timeoutMs ?? 60_000,
+    })
+    .json<ReembedResponse>();
 }
