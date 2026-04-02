@@ -1,11 +1,12 @@
 import { useState } from 'react';
-import { Inbox, Tag, Hash, Bell, ChevronDown, ChevronRight } from 'lucide-react';
+import { Inbox, Tag, Hash, Bell, ChevronDown, ChevronRight, Mail } from 'lucide-react';
 
 export interface SidebarGroup {
   id: string;
   label: string;
   icon: 'inbox' | 'category' | 'topic' | 'subscription' | 'label';
   unreadCount?: number;
+  totalCount?: number;
   children?: SidebarGroup[];
 }
 
@@ -53,20 +54,34 @@ function SidebarItem({
     >
       <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
       <span className="flex-1 truncate text-left">{group.label}</span>
-      {group.unreadCount != null && group.unreadCount > 0 && (
-        <span
-          className={`
-            ml-auto inline-flex h-5 min-w-[20px] items-center justify-center rounded-full px-1.5 text-xs font-semibold
-            ${
-              isActive
-                ? 'bg-indigo-200 text-indigo-800 dark:bg-indigo-800 dark:text-indigo-100'
-                : 'bg-gray-200 text-gray-600 dark:bg-gray-600 dark:text-gray-200'
-            }
-          `}
-        >
-          {group.unreadCount.toLocaleString()}
-        </span>
-      )}
+      <span className="ml-auto flex items-center gap-1">
+        {group.totalCount != null && group.totalCount > 0 && (
+          <span
+            className={`
+              inline-flex h-5 min-w-[20px] items-center justify-center rounded-full px-1.5 text-xs font-semibold
+              ${
+                isActive
+                  ? 'bg-indigo-200 text-indigo-800 dark:bg-indigo-800 dark:text-indigo-100'
+                  : 'bg-gray-200 text-gray-600 dark:bg-gray-600 dark:text-gray-200'
+              }
+            `}
+          >
+            {group.totalCount.toLocaleString()}
+          </span>
+        )}
+        {group.unreadCount != null && group.unreadCount > 0 && (
+          <span
+            className="relative inline-flex h-5 min-w-[20px] items-center justify-center rounded-full bg-indigo-600 px-1.5 text-xs font-semibold text-white"
+            title={`${group.unreadCount.toLocaleString()} unread`}
+          >
+            {group.unreadCount.toLocaleString()}
+            <Mail
+              className="absolute -right-1 -top-1 h-2.5 w-2.5 text-indigo-300"
+              aria-hidden="true"
+            />
+          </span>
+        )}
+      </span>
     </button>
   );
 }

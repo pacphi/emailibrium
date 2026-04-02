@@ -9,6 +9,7 @@ export interface GetEmailsParams {
   isStarred?: boolean;
   isSpam?: boolean;
   isTrash?: boolean;
+  folder?: string;
   limit?: number;
   offset?: number;
 }
@@ -120,6 +121,7 @@ export interface EmailCounts {
   unread: number;
   spam_count: number;
   trash_count: number;
+  sent_count: number;
   byCategory: Array<{ category: string; total: number; unread: number }>;
 }
 

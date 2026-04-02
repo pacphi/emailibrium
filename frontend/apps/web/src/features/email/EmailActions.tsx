@@ -11,7 +11,7 @@ import {
   AlertTriangle,
 } from 'lucide-react';
 
-export type EmailViewContext = 'inbox' | 'spam' | 'trash';
+export type EmailViewContext = 'inbox' | 'spam' | 'trash' | 'sent';
 
 interface EmailActionsProps {
   emailId: string | null;

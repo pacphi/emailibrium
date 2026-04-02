@@ -55,6 +55,7 @@ pub struct ListEmailsParams {
     pub is_starred: Option<bool>,
     pub is_spam: Option<bool>,
     pub is_trash: Option<bool>,
+    pub folder: Option<String>,
     pub limit: Option<i64>,
     pub offset: Option<i64>,
 }
@@ -82,6 +83,7 @@ pub struct EmailResponse {
     pub embedding_status: String,
     pub category: String,
     pub category_confidence: Option<f64>,
+    pub folder: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -93,7 +95,7 @@ pub struct ListEmailsResponse {
 const EMAIL_COLUMNS: &str = "id, account_id, provider, message_id, thread_id, subject, \
     from_addr, from_name, to_addrs, cc_addrs, received_at, body_text, body_html, \
     labels, is_read, is_starred, has_attachments, embedding_status, \
-    category, category_confidence";
+    category, category_confidence, folder";
 
 fn row_to_response(row: &sqlx::sqlite::SqliteRow) -> EmailResponse {
     EmailResponse {
@@ -119,6 +121,7 @@ fn row_to_response(row: &sqlx::sqlite::SqliteRow) -> EmailResponse {
             .get::<Option<String>, _>("category")
             .unwrap_or_else(|| "Uncategorized".to_string()),
         category_confidence: row.get("category_confidence"),
+        folder: row.get("folder"),
     }
 }
 
@@ -163,6 +166,9 @@ async fn list_emails(
     } else if params.is_trash.is_none() {
         where_parts.push("COALESCE(is_trash, 0) = 0".to_string());
     }
+    if params.folder.is_some() {
+        where_parts.push("folder = ? COLLATE NOCASE".to_string());
+    }
     let where_clause = if where_parts.is_empty() {
         String::new()
     } else {
@@ -186,6 +192,9 @@ async fn list_emails(
         count_q = count_q.bind(v);
     }
     if let Some(v) = params.is_starred {
+        count_q = count_q.bind(v);
+    }
+    if let Some(ref v) = params.folder {
         count_q = count_q.bind(v);
     }
     let total = count_q
@@ -212,6 +221,9 @@ async fn list_emails(
         query = query.bind(v);
     }
     if let Some(v) = params.is_starred {
+        query = query.bind(v);
+    }
+    if let Some(ref v) = params.folder {
         query = query.bind(v);
     }
     query = query.bind(limit).bind(offset);
@@ -1016,6 +1028,7 @@ pub struct EmailCounts {
     pub unread: u64,
     pub spam_count: u64,
     pub trash_count: u64,
+    pub sent_count: u64,
     pub by_category: Vec<CategoryCount>,
 }
 
@@ -1055,6 +1068,14 @@ async fn email_counts(
             .await
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
+    let (sent_count,): (i64,) = sqlx::query_as(
+        "SELECT COALESCE(COUNT(*), 0) FROM emails WHERE folder = 'SENT' \
+         AND COALESCE(is_spam, 0) = 0 AND COALESCE(is_trash, 0) = 0",
+    )
+    .fetch_one(&state.db.pool)
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
     // Per-category (excluding spam/trash).
     let cat_rows: Vec<(String, i64, i64)> = sqlx::query_as(
         "SELECT COALESCE(category, 'Uncategorized'), COUNT(*), \
@@ -1081,6 +1102,7 @@ async fn email_counts(
         unread: unread as u64,
         spam_count: spam_count as u64,
         trash_count: trash_count as u64,
+        sent_count: sent_count as u64,
         by_category,
     }))
 }

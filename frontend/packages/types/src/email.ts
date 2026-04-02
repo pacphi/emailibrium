@@ -23,6 +23,7 @@ export interface Email {
   categoryConfidence?: number;
   isSpam?: boolean;
   isTrashed?: boolean;
+  folder?: string;
 }
 
 export interface Attachment {

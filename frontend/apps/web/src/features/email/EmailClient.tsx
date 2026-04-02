@@ -49,9 +49,9 @@ export function EmailClient() {
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
   const [isComposeOpen, setIsComposeOpen] = useState(false);
   const [mobilePanel, setMobilePanel] = useState<'sidebar' | 'list' | 'thread'>('list');
-  const [filter, setFilter] = useState<'all' | 'read' | 'unread' | 'starred' | 'spam' | 'trash'>(
-    'all',
-  );
+  const [filter, setFilter] = useState<
+    'all' | 'read' | 'unread' | 'starred' | 'sent' | 'spam' | 'trash'
+  >('all');
   const [isGrouped, setIsGrouped] = useState(false);
   const [expandedDomains, setExpandedDomains] = useState<Set<string>>(new Set());
   const [expandedSenders, setExpandedSenders] = useState<Set<string>>(new Set());
@@ -85,6 +85,7 @@ export function EmailClient() {
     if (filter === 'read') return { ...base, isRead: true };
     if (filter === 'unread') return { ...base, isRead: false };
     if (filter === 'starred') return { ...base, isStarred: true };
+    if (filter === 'sent') return { ...base, folder: 'SENT' };
     if (filter === 'spam') return { ...base, isSpam: true };
     if (filter === 'trash') return { ...base, isTrash: true };
     return base;
@@ -200,8 +201,10 @@ export function EmailClient() {
     const counts = countsQuery.data;
     const inboxUnread = counts?.unread ?? 0;
 
+    const inboxTotal = counts?.total ?? 0;
+
     const groups: SidebarGroup[] = [
-      { id: 'inbox', label: 'Inbox', icon: 'inbox', unreadCount: inboxUnread },
+      { id: 'inbox', label: 'Inbox', icon: 'inbox', totalCount: inboxTotal, unreadCount: inboxUnread },
     ];
 
     // Categories from enriched endpoint (dynamic grouping from backend).
@@ -212,7 +215,8 @@ export function EmailClient() {
         id: `${prefix}${cat.name}`,
         label: cat.name,
         icon,
-        unreadCount: cat.emailCount,
+        totalCount: cat.emailCount,
+        unreadCount: cat.unreadCount,
       });
     }
 
@@ -222,7 +226,8 @@ export function EmailClient() {
         id: `label-${label.name}`,
         label: label.name,
         icon: 'label',
-        unreadCount: label.emailCount,
+        totalCount: label.emailCount,
+        unreadCount: label.unreadCount,
       });
     }
 
@@ -361,6 +366,7 @@ export function EmailClient() {
   const viewContext: EmailViewContext = useMemo(() => {
     if (filter === 'spam') return 'spam';
     if (filter === 'trash') return 'trash';
+    if (filter === 'sent') return 'sent';
     return 'inbox';
   }, [filter]);
 
@@ -613,6 +619,18 @@ export function EmailClient() {
                 {f.charAt(0).toUpperCase() + f.slice(1)}
               </button>
             ))}
+            {/* Sent pill */}
+            <button
+              type="button"
+              onClick={() => setFilter((prev) => (prev === 'sent' ? 'all' : 'sent'))}
+              className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
+                filter === 'sent'
+                  ? 'bg-sky-600 text-white'
+                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600'
+              }`}
+            >
+              Sent{countsQuery.data?.sent_count != null ? ` (${countsQuery.data.sent_count})` : ''}
+            </button>
             {/* Divider */}
             <div className="mx-1 h-4 w-px bg-gray-300 dark:bg-gray-600" />
             {/* Spam pill */}
