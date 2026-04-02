@@ -204,7 +204,13 @@ export function EmailClient() {
     const inboxTotal = counts?.total ?? 0;
 
     const groups: SidebarGroup[] = [
-      { id: 'inbox', label: 'Inbox', icon: 'inbox', totalCount: inboxTotal, unreadCount: inboxUnread },
+      {
+        id: 'inbox',
+        label: 'Inbox',
+        icon: 'inbox',
+        totalCount: inboxTotal,
+        unreadCount: inboxUnread,
+      },
     ];
 
     // Categories from enriched endpoint (dynamic grouping from backend).
