@@ -247,10 +247,16 @@ impl EmailProvider for OutlookProvider {
         access_token: &str,
         params: &ListParams,
     ) -> Result<EmailPage, ProviderError> {
+        // Request $count on the first page so we can report an estimated total
+        // for the dashboard progress bar. Graph requires ConsistencyLevel: eventual
+        // for $count to work on /messages.
+        let is_first_page = params.page_token.is_none();
+        let count_param = if is_first_page { "&$count=true" } else { "" };
+
         let mut url = format!(
             "{GRAPH_API_BASE}/messages?$top={}&$orderby=receivedDateTime desc\
              &$select=id,conversationId,subject,bodyPreview,from,toRecipients,\
-             isRead,receivedDateTime,categories,flag,body,internetMessageHeaders",
+             isRead,receivedDateTime,categories,flag,body,internetMessageHeaders{count_param}",
             params.max_results
         );
 
@@ -266,10 +272,12 @@ impl EmailProvider for OutlookProvider {
             }
         }
 
-        let resp: serde_json::Value = self
-            .http
-            .get(&url)
-            .bearer_auth(access_token)
+        let mut req = self.http.get(&url).bearer_auth(access_token);
+        if is_first_page {
+            req = req.header("ConsistencyLevel", "eventual");
+        }
+
+        let resp: serde_json::Value = req
             .send()
             .await
             .map_err(|e| ProviderError::RequestFailed(e.to_string()))?
@@ -288,10 +296,13 @@ impl EmailProvider for OutlookProvider {
 
         let next_page_token = resp["@odata.nextLink"].as_str().map(|s| s.to_string());
 
+        // Extract @odata.count (total message count) when available.
+        let result_size_estimate = resp["@odata.count"].as_u64().map(|n| n as u32);
+
         Ok(EmailPage {
             messages,
             next_page_token,
-            result_size_estimate: None,
+            result_size_estimate,
         })
     }
 

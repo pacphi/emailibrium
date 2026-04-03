@@ -75,26 +75,51 @@ pub struct IngestionProgress {
 #[derive(Clone)]
 pub struct IngestionBroadcast {
     sender: broadcast::Sender<IngestionProgress>,
+    /// Cache of the most recent progress snapshot so that polling endpoints
+    /// (e.g. `/api/v1/ingestion/progress`) can return sync-phase progress
+    /// even when the pipeline has not yet started a job.
+    last_progress: std::sync::Arc<tokio::sync::RwLock<Option<IngestionProgress>>>,
 }
 
 impl IngestionBroadcast {
     /// Create a new broadcast channel with the given capacity.
     pub fn new(capacity: usize) -> Self {
         let (sender, _) = broadcast::channel(capacity);
-        Self { sender }
+        Self {
+            sender,
+            last_progress: std::sync::Arc::new(tokio::sync::RwLock::new(None)),
+        }
     }
 
     /// Publish a progress event. Returns the number of active receivers.
+    ///
+    /// Also caches the progress so polling endpoints can retrieve it.
     pub fn send(
         &self,
         progress: IngestionProgress,
     ) -> Result<usize, broadcast::error::SendError<IngestionProgress>> {
+        // Cache the latest snapshot for polling.
+        let cached = self.last_progress.clone();
+        let snapshot = progress.clone();
+        tokio::spawn(async move {
+            *cached.write().await = Some(snapshot);
+        });
         self.sender.send(progress)
     }
 
     /// Subscribe to progress events.
     pub fn subscribe(&self) -> broadcast::Receiver<IngestionProgress> {
         self.sender.subscribe()
+    }
+
+    /// Get the most recently broadcast progress snapshot.
+    pub async fn last_progress(&self) -> Option<IngestionProgress> {
+        self.last_progress.read().await.clone()
+    }
+
+    /// Clear the cached progress (e.g. when a pipeline run completes).
+    pub async fn clear_last_progress(&self) {
+        *self.last_progress.write().await = None;
     }
 }
 
@@ -331,6 +356,9 @@ pub async fn sync_emails_from_provider(
     let mut page_num = 0u64;
     let mut page_token: Option<String> = None;
     let batch_size = 100u32;
+    // Estimated total from the provider (e.g. Gmail's resultSizeEstimate).
+    // Set from the first page response to enable a determinate progress bar.
+    let mut estimated_total: u64 = 0;
 
     loop {
         page_num += 1;
@@ -357,6 +385,13 @@ pub async fn sync_emails_from_provider(
                 )
             })?;
 
+        // Capture estimated total from the first page if available.
+        if page_num == 1 {
+            if let Some(est) = page.result_size_estimate {
+                estimated_total = est as u64;
+            }
+        }
+
         let page_count = page.messages.len();
         let has_more = page.next_page_token.is_some();
         info!(
@@ -371,6 +406,20 @@ pub async fn sync_emails_from_provider(
         for msg in &page.messages {
             inserted += upsert_email(state, account_id, provider_str, msg).await;
         }
+
+        // Broadcast per-page progress so the dashboard banner can show
+        // "Fetching emails (N / ~total)" during the syncing phase.
+        let _ = state.ingestion_broadcast.send(IngestionProgress {
+            job_id: String::new(),
+            total: estimated_total,
+            processed: inserted,
+            embedded: 0,
+            categorized: 0,
+            failed: 0,
+            phase: IngestionPhase::Syncing,
+            eta_seconds: None,
+            emails_per_second: 0.0,
+        });
 
         debug!(
             account_id = %account_id,
@@ -931,6 +980,9 @@ async fn start_ingestion(
         // The inner pipeline's `start_ingestion` is awaited inside the
         // spawned task above, so by this point all phases have completed.
         bg_state.pipeline_locks.release(&bg_account_id).await;
+        // Clear the broadcast cache so stale syncing progress doesn't
+        // make the polling endpoint report `active: true` after completion.
+        bg_state.ingestion_broadcast.clear_last_progress().await;
         info!(
             account_id = %bg_account_id,
             job_id = %bg_job_id,
@@ -1201,8 +1253,9 @@ async fn poll_toggle(
 /// Returns the current phase, counts, and whether ingestion is active.
 /// Unlike `/status` (SSE), this is a simple request/response for polling.
 async fn ingestion_progress_json(State(state): State<AppState>) -> Json<serde_json::Value> {
-    match state.vector_service.ingestion_pipeline.get_progress().await {
-        Some(progress) => Json(serde_json::json!({
+    // First check the pipeline's own job state (covers embedding/categorizing/etc).
+    if let Some(progress) = state.vector_service.ingestion_pipeline.get_progress().await {
+        return Json(serde_json::json!({
             "active": true,
             "jobId": progress.job_id,
             "phase": progress.phase,
@@ -1213,12 +1266,32 @@ async fn ingestion_progress_json(State(state): State<AppState>) -> Json<serde_js
             "failed": progress.failed,
             "etaSeconds": progress.eta_seconds,
             "emailsPerSecond": progress.emails_per_second,
-        })),
-        None => Json(serde_json::json!({
-            "active": false,
-            "phase": null,
-        })),
+        }));
     }
+
+    // Fall back to the broadcast cache — this covers the syncing phase
+    // which runs *before* the pipeline creates a job.
+    if let Some(bp) = state.ingestion_broadcast.last_progress().await {
+        if bp.phase != IngestionPhase::Complete {
+            return Json(serde_json::json!({
+                "active": true,
+                "jobId": bp.job_id,
+                "phase": bp.phase.to_string(),
+                "total": bp.total,
+                "processed": bp.processed,
+                "embedded": bp.embedded,
+                "categorized": bp.categorized,
+                "failed": bp.failed,
+                "etaSeconds": bp.eta_seconds,
+                "emailsPerSecond": bp.emails_per_second,
+            }));
+        }
+    }
+
+    Json(serde_json::json!({
+        "active": false,
+        "phase": null,
+    }))
 }
 
 /// GET /api/v1/ingestion/backfill-progress — Poll current LLM backfill state.
