@@ -27,6 +27,7 @@ after just 2 in-flight batches during any consumer I/O variance.
 targets.
 
 **Evidence:**
+
 - Tokio official tutorial uses `channel(32)` as its recommended example capacity
   ([tokio.rs/tokio/tutorial/channels](https://tokio.rs/tokio/tutorial/channels))
 - Tokio stores messages in blocks of 32 on 64-bit targets; buffer=2 wastes
@@ -54,6 +55,7 @@ means 9 million distance computations per K value tested.
 scores), 500 is sufficient.
 
 **Evidence:**
+
 - scikit-learn's `silhouette_score` provides a `sample_size` parameter
   specifically to mitigate quadratic cost
   ([sklearn silhouette_score](https://scikit-learn.org/stable/modules/generated/sklearn.metrics.silhouette_score.html))
@@ -80,6 +82,7 @@ vastly more than needed.
 **Fix:** Reduce probe iterations to 15 and final iterations to 30.
 
 **Evidence:**
+
 - Yale research on Lloyd's algorithm: "rapid clustering rate at the first
   2 iterations, then convergence slows, and after four iterations, the log
   mis-clustering rate plateaus"
@@ -98,6 +101,7 @@ vastly more than needed.
   15 iterations captures >95% of convergence quality
 
 **Config:**
+
 - `clustering.kmeans_probe_iters` (default: 15)
 - `clustering.kmeans_final_iters` (default: 30)
 
@@ -114,6 +118,7 @@ subjects. With K=10 clusters, this meant 10 redundant DF passes.
 pass it to each cluster's TF-IDF scoring.
 
 **Evidence:**
+
 - scikit-learn `TfidfVectorizer.fit()` computes IDF once globally, then
   `.transform()` reuses it for all documents
   ([sklearn TfidfVectorizer](https://scikit-learn.org/stable/modules/generated/sklearn.feature_extraction.text.TfidfVectorizer.html))
@@ -136,16 +141,17 @@ pass it to each cluster's TF-IDF scoring.
 The current model (`all-MiniLM-L6-v2`, 384 dims, ONNX via fastembed) is already
 the fastest available option. Larger models would slow embedding further:
 
-| Model | Dims | Relative Speed | Quality |
-|-------|------|----------------|---------|
-| **all-MiniLM-L6-v2** | 384 | **1.0x (fastest)** | Good |
-| bge-small-en-v1.5 | 384 | ~1.0x | Good+ |
-| all-MiniLM-L12-v2 | 384 | ~0.5x | Better |
-| nomic-embed-text-v1.5 | 768 | ~0.3x | Very Good |
-| bge-base-en-v1.5 | 768 | ~0.3x | Very Good |
-| bge-large-en-v1.5 | 1024 | ~0.15x | Best |
+| Model                 | Dims | Relative Speed     | Quality   |
+| --------------------- | ---- | ------------------ | --------- |
+| **all-MiniLM-L6-v2**  | 384  | **1.0x (fastest)** | Good      |
+| bge-small-en-v1.5     | 384  | ~1.0x              | Good+     |
+| all-MiniLM-L12-v2     | 384  | ~0.5x              | Better    |
+| nomic-embed-text-v1.5 | 768  | ~0.3x              | Very Good |
+| bge-base-en-v1.5      | 768  | ~0.3x              | Very Good |
+| bge-large-en-v1.5     | 1024 | ~0.15x             | Best      |
 
 Throughput benchmarks for all-MiniLM-L6-v2:
+
 - SBERT (PyTorch, CPU): ~2,800 sentences/sec
   ([SBERT Pretrained Models](https://www.sbert.net/docs/sentence_transformer/pretrained_models.html))
 - fastembed (Python, ONNX, CPU): ~1,300 sentences/sec
@@ -158,14 +164,14 @@ and algorithm complexity, not the embedding model.
 
 ## Performance Projection
 
-| Phase | Before (2,160 emails) | After (100k emails) |
-|-------|----------------------|---------------------|
-| Embedding | ~300s | ~250-500s (pipeline unclogged) |
-| Categorization | ~50s | ~100-200s (already parallelized) |
-| K-Detection | ~250s | ~5-30s (50-500x faster) |
-| Final KMeans | ~30s | ~20-60s (3.3x fewer iters) |
-| TF-IDF | ~10s | ~5-10s (global precompute) |
-| **Total** | **~600s** | **~400-900s (7-15 min)** |
+| Phase          | Before (2,160 emails) | After (100k emails)              |
+| -------------- | --------------------- | -------------------------------- |
+| Embedding      | ~300s                 | ~250-500s (pipeline unclogged)   |
+| Categorization | ~50s                  | ~100-200s (already parallelized) |
+| K-Detection    | ~250s                 | ~5-30s (50-500x faster)          |
+| Final KMeans   | ~30s                  | ~20-60s (3.3x fewer iters)       |
+| TF-IDF         | ~10s                  | ~5-10s (global precompute)       |
+| **Total**      | **~600s**             | **~400-900s (7-15 min)**         |
 
 **Confidence:** 90% that 100k emails can be processed within 15-20 minutes.
 
@@ -183,7 +189,7 @@ These can be pursued if the above optimizations are insufficient:
 3. **Elbow pre-filter:** Use inertia-based elbow method (free from KMeans
    computation) to narrow K candidates before silhouette validation
 4. **Condensed Silhouette (CAS):** Replace pairwise distances with
-   centroid distances for O(k*n) instead of O(n^2)
+   centroid distances for O(k\*n) instead of O(n^2)
    ([arXiv:2507.08311](https://arxiv.org/abs/2507.08311))
 
 ## Configuration Reference
@@ -192,17 +198,18 @@ All parameters are externalized in `config/tuning.yaml`:
 
 ```yaml
 ingestion:
-  pipeline_channel_buffer: 32  # Was 2; Tokio block-aligned (ADR-021)
+  pipeline_channel_buffer: 32 # Was 2; Tokio block-aligned (ADR-021)
 
 clustering:
-  silhouette_sample_size: 500  # Was 3000; O(n^2) → O(500^2) (ADR-021)
-  kmeans_probe_iters: 15       # Was 50; convergence in 2-4 iters (ADR-021)
-  kmeans_final_iters: 30       # Was 100; KMeans++ needs fewer (ADR-021)
+  silhouette_sample_size: 500 # Was 3000; O(n^2) → O(500^2) (ADR-021)
+  kmeans_probe_iters: 15 # Was 50; convergence in 2-4 iters (ADR-021)
+  kmeans_final_iters: 30 # Was 100; KMeans++ needs fewer (ADR-021)
 ```
 
 ## Consequences
 
 **Positive:**
+
 - 20-50x faster clustering pipeline for typical workloads
 - 100k email target achievable within 15-20 minutes
 - All parameters externalized and tunable without code changes
@@ -210,6 +217,7 @@ clustering:
 - Global TF-IDF is more correct (canonical IR approach)
 
 **Negative:**
+
 - Reduced silhouette sampling may occasionally select a suboptimal K for
   highly overlapping clusters (mitigated by 500 being well above the
   20-30 per cluster minimum from PMC research)
@@ -217,5 +225,6 @@ clustering:
   (mitigated by KMeans++ initialization quality)
 
 **Neutral:**
+
 - Memory increase from channel buffer: ~3MB (negligible)
 - No API changes; all optimizations are internal
