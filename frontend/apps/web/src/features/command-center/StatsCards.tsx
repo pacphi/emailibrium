@@ -5,6 +5,7 @@ import {
   getAccounts,
   getEmailCounts,
   getEmbeddingStatus,
+  getIngestionProgress,
   getClusteringStatus,
 } from '@emailibrium/api';
 import { useAppConfig } from '@/shared/hooks';
@@ -121,10 +122,22 @@ export function StatsCards({ stats, isLoading }: StatsCardsProps) {
     },
   });
 
-  // Derive "embedding in progress" from actual data.
+  // Poll ingestion progress to get the real-time pipeline phase and counts.
+  const ingestionProgressQuery = useQuery({
+    queryKey: ['dashboard-ingestion-progress'],
+    queryFn: getIngestionProgress,
+    staleTime: 2000,
+    refetchInterval: 3000, // Fast poll — this is lightweight
+  });
+
+  const ingestionProgress = ingestionProgressQuery.data ?? null;
+  const pipelineActive = ingestionProgress?.active ?? false;
+
+  // Derive "embedding in progress" from actual data OR pipeline phase.
   const embeddingInProgress =
     (embeddingQuery.data?.embeddingStatusSummary.pendingCount ?? 0) > 0 ||
-    (embeddingQuery.data?.embeddingStatusSummary.staleCount ?? 0) > 0;
+    (embeddingQuery.data?.embeddingStatusSummary.staleCount ?? 0) > 0 ||
+    (pipelineActive && ingestionProgress?.phase === 'embedding');
 
   const clusteringStatusQuery = useQuery({
     queryKey: ['dashboard-clustering-status'],
@@ -298,9 +311,52 @@ export function StatsCards({ stats, isLoading }: StatsCardsProps) {
               const { embeddedCount, pendingCount, failedCount } =
                 embeddingStatus.embeddingStatusSummary;
               const total = embeddingStatus.totalEmails;
-              const pct = total > 0 ? Math.round((embeddedCount / total) * 100) : 0;
-              const isReady = pct === 100;
-              const isInProgress = pendingCount > 0;
+
+              // Use pipeline progress for more accurate embedding % when pipeline is active.
+              const pipelinePhase = pipelineActive ? ingestionProgress?.phase : null;
+              const pipelineEmbedPct =
+                pipelinePhase === 'embedding' && (ingestionProgress?.total ?? 0) > 0
+                  ? Math.round(
+                      ((ingestionProgress?.embedded ?? 0) / ingestionProgress!.total!) * 100,
+                    )
+                  : null;
+
+              // Pipeline is past embedding (categorizing/clustering/analyzing/complete) → treat as 100%
+              const pastEmbedding =
+                pipelineActive &&
+                (pipelinePhase === 'categorizing' ||
+                  pipelinePhase === 'clustering' ||
+                  pipelinePhase === 'analyzing' ||
+                  pipelinePhase === 'complete');
+
+              const pct =
+                pipelineEmbedPct !== null
+                  ? pipelineEmbedPct
+                  : pastEmbedding
+                    ? 100
+                    : total > 0
+                      ? Math.round((embeddedCount / total) * 100)
+                      : 0;
+
+              const isReady = pct === 100 && !pipelineActive;
+              const isInProgress =
+                pendingCount > 0 || (pipelineActive && pipelinePhase !== 'complete');
+
+              // Status label for embeddings
+              let embeddingLabel: string;
+              if (pipelinePhase === 'syncing') {
+                embeddingLabel = `Fetching emails (${(ingestionProgress?.processed ?? 0).toLocaleString()})`;
+              } else if (pipelinePhase === 'embedding') {
+                embeddingLabel = `Embedding (${(ingestionProgress?.embedded ?? 0).toLocaleString()} / ${(ingestionProgress?.total ?? 0).toLocaleString()})`;
+              } else if (pastEmbedding) {
+                embeddingLabel = 'Embeddings complete';
+              } else if (isReady) {
+                embeddingLabel = 'Chat ready';
+              } else if (pendingCount > 0) {
+                embeddingLabel = `${pendingCount.toLocaleString()} pending`;
+              } else {
+                embeddingLabel = 'Waiting';
+              }
 
               return (
                 <div className="space-y-3">
@@ -333,13 +389,7 @@ export function StatsCards({ stats, isLoading }: StatsCardsProps) {
                               : 'bg-yellow-500'
                         }`}
                       />
-                      <span className="text-gray-600 dark:text-gray-400">
-                        {isReady
-                          ? 'Chat ready'
-                          : isInProgress
-                            ? `${pendingCount.toLocaleString()} pending`
-                            : 'Waiting'}
-                      </span>
+                      <span className="text-gray-600 dark:text-gray-400">{embeddingLabel}</span>
                     </span>
                     {failedCount > 0 && (
                       <span className="flex items-center gap-1.5 mt-1">
@@ -350,52 +400,79 @@ export function StatsCards({ stats, isLoading }: StatsCardsProps) {
                   </div>
 
                   {/* Clustering status */}
-                  {clusteringStatus &&
-                    (() => {
-                      const clusteringActive = clusteringStatus.isClustering;
-                      return (
-                        <div className="border-t border-gray-100 pt-2 dark:border-gray-700">
-                          <div className="flex items-center justify-between text-sm mb-1">
-                            <span className="text-gray-700 dark:text-gray-300">Clustering</span>
-                            <span className="font-medium text-gray-900 dark:text-white">
-                              {clusteringStatus.clusterCount > 0 && !clusteringActive
-                                ? `${clusteringStatus.clusterCount} clusters`
-                                : clusteringActive
-                                  ? 'Running...'
-                                  : clusteringStatus.isIngesting
-                                    ? 'Queued'
-                                    : isReady
-                                      ? 'Ready to run'
-                                      : '\u2014'}
-                            </span>
-                          </div>
-                          <span className="flex items-center gap-1.5 text-xs">
-                            <span
-                              className={`inline-block h-2 w-2 rounded-full ${
-                                clusteringStatus.clusterCount > 0 && !clusteringActive
-                                  ? 'bg-green-500'
-                                  : clusteringActive
-                                    ? 'animate-pulse bg-indigo-500'
-                                    : clusteringStatus.isIngesting
-                                      ? 'animate-pulse bg-yellow-500'
-                                      : 'bg-gray-400'
-                              }`}
-                            />
-                            <span className="text-gray-600 dark:text-gray-400">
-                              {clusteringStatus.clusterCount > 0 && !clusteringActive
-                                ? `${clusteringStatus.totalClusteredEmails.toLocaleString()} emails clustered`
-                                : clusteringActive
-                                  ? 'Analyzing email topics...'
-                                  : clusteringStatus.isIngesting
-                                    ? 'Will run after embedding'
-                                    : isReady
-                                      ? 'Use "Run Clustering" below'
-                                      : 'Waiting for embeddings'}
-                            </span>
+                  {(() => {
+                    const clusteringActive =
+                      clusteringStatus?.isClustering ||
+                      (pipelineActive && pipelinePhase === 'clustering');
+                    const clusterCount = clusteringStatus?.clusterCount ?? 0;
+                    const isIngesting =
+                      clusteringStatus?.isIngesting ||
+                      (pipelineActive && pipelinePhase !== 'complete');
+
+                    // Status label
+                    let clusterLabel: string;
+                    let clusterDetail: string;
+                    let dotClass: string;
+
+                    if (clusterCount > 0 && !clusteringActive && !isIngesting) {
+                      clusterLabel = `${clusterCount} clusters`;
+                      clusterDetail = `${(clusteringStatus?.totalClusteredEmails ?? 0).toLocaleString()} emails clustered`;
+                      dotClass = 'bg-green-500';
+                    } else if (clusteringActive) {
+                      clusterLabel = 'Running...';
+                      clusterDetail = 'Analyzing email topics...';
+                      dotClass = 'animate-pulse bg-indigo-500';
+                    } else if (
+                      pipelineActive &&
+                      (pipelinePhase === 'categorizing' ||
+                        pipelinePhase === 'embedding' ||
+                        pipelinePhase === 'analyzing')
+                    ) {
+                      clusterLabel = 'Queued';
+                      clusterDetail =
+                        pipelinePhase === 'embedding'
+                          ? 'Will run after embedding'
+                          : pipelinePhase === 'categorizing'
+                            ? 'Will run after categorization'
+                            : 'Finalizing analysis...';
+                      dotClass = 'animate-pulse bg-yellow-500';
+                    } else if (pipelinePhase === 'syncing') {
+                      clusterLabel = 'Waiting';
+                      clusterDetail = 'Waiting for emails to sync';
+                      dotClass = 'animate-pulse bg-yellow-500';
+                    } else if (pipelineActive && pipelinePhase === 'clustering') {
+                      clusterLabel = 'Processing';
+                      clusterDetail = 'Building topic clusters...';
+                      dotClass = 'animate-pulse bg-indigo-500';
+                    } else if (isReady) {
+                      clusterLabel = 'Ready to run';
+                      clusterDetail = 'Use "Run Clustering" below';
+                      dotClass = 'bg-gray-400';
+                    } else if (pipelineActive) {
+                      clusterLabel = 'In progress';
+                      clusterDetail = 'Pipeline active...';
+                      dotClass = 'animate-pulse bg-yellow-500';
+                    } else {
+                      clusterLabel = '\u2014';
+                      clusterDetail = 'Waiting for embeddings';
+                      dotClass = 'bg-gray-400';
+                    }
+
+                    return (
+                      <div className="border-t border-gray-100 pt-2 dark:border-gray-700">
+                        <div className="flex items-center justify-between text-sm mb-1">
+                          <span className="text-gray-700 dark:text-gray-300">Clustering</span>
+                          <span className="font-medium text-gray-900 dark:text-white">
+                            {clusterLabel}
                           </span>
                         </div>
-                      );
-                    })()}
+                        <span className="flex items-center gap-1.5 text-xs">
+                          <span className={`inline-block h-2 w-2 rounded-full ${dotClass}`} />
+                          <span className="text-gray-600 dark:text-gray-400">{clusterDetail}</span>
+                        </span>
+                      </div>
+                    );
+                  })()}
                 </div>
               );
             })()}

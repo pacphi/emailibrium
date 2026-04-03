@@ -268,9 +268,7 @@ impl BuiltInGenerativeModel {
                         .model
                         .str_to_token(warmup_prompt, llama_cpp_2::model::AddBos::Never)
                         .map_err(|e| {
-                            VectorError::EmbeddingFailed(format!(
-                                "Warmup tokenization failed: {e}"
-                            ))
+                            VectorError::EmbeddingFailed(format!("Warmup tokenization failed: {e}"))
                         })?;
 
                     let mut batch = LlamaBatch::new(ctx_size as usize, 1);
@@ -282,8 +280,7 @@ impl BuiltInGenerativeModel {
 
                     // Generate just 1 token to warm the pipeline.
                     let candidates = ctx.candidates();
-                    let mut token_data =
-                        LlamaTokenDataArray::from_iter(candidates, false);
+                    let mut token_data = LlamaTokenDataArray::from_iter(candidates, false);
                     let _ = token_data.sample_token_greedy();
 
                     Ok::<(), VectorError>(())

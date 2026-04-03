@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { SubscriptionInsight } from '@emailibrium/types';
+import type { SubscriptionInsight, UnsubscribeTarget } from '@emailibrium/types';
 import { FrequencyBadge } from './components/FrequencyBadge';
 import { UnsubscribePreviewDialog } from './components/UnsubscribePreviewDialog';
 import { UndoToast } from './components/UndoToast';
@@ -18,6 +18,7 @@ interface SectionProps {
   items: SubscriptionInsight[];
   bulkAction?: { label: string; onClick: () => void; disabled?: boolean };
   onUnsubscribeSingle?: (id: string) => void;
+  onKeepSingle?: (id: string) => void;
   defaultExpanded?: boolean;
 }
 
@@ -41,26 +42,14 @@ function ReadRateBar({ rate }: { rate: number }) {
 function SubscriptionRow({
   item,
   onUnsubscribe,
+  onKeep,
 }: {
   item: SubscriptionInsight;
   onUnsubscribe?: (id: string) => void;
+  onKeep?: (id: string) => void;
 }) {
   const readRate = item.readRate ?? 0;
-  const actionLabel =
-    item.suggestedAction === 'unsubscribe'
-      ? 'Unsubscribe'
-      : item.suggestedAction === 'archive'
-        ? 'Archive'
-        : item.suggestedAction === 'digest'
-          ? 'Digest'
-          : 'Keep';
-
-  const actionColor =
-    item.suggestedAction === 'unsubscribe'
-      ? 'text-red-600 hover:text-red-500 dark:text-red-400'
-      : item.suggestedAction === 'keep'
-        ? 'text-green-600 hover:text-green-500 dark:text-green-400'
-        : 'text-indigo-600 hover:text-indigo-500 dark:text-indigo-400';
+  const suggested = item.suggestedAction;
 
   return (
     <tr className="border-b border-gray-100 last:border-0 dark:border-gray-700/50">
@@ -83,13 +72,31 @@ function SubscriptionRow({
         {new Date(item.lastSeen).toLocaleDateString()}
       </td>
       <td className="py-3">
-        <button
-          type="button"
-          onClick={() => onUnsubscribe?.(item.senderAddress)}
-          className={`text-sm font-medium ${actionColor}`}
-        >
-          {actionLabel}
-        </button>
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => onUnsubscribe?.(item.senderAddress)}
+            className={`text-sm font-medium ${
+              suggested === 'unsubscribe'
+                ? 'text-red-600 hover:text-red-500 dark:text-red-400'
+                : 'text-gray-400 hover:text-red-500 dark:text-gray-500 dark:hover:text-red-400'
+            }`}
+          >
+            Unsubscribe
+          </button>
+          <span className="text-gray-300 dark:text-gray-600">|</span>
+          <button
+            type="button"
+            onClick={() => onKeep?.(item.senderAddress)}
+            className={`text-sm font-medium ${
+              suggested === 'keep'
+                ? 'text-green-600 hover:text-green-500 dark:text-green-400'
+                : 'text-gray-400 hover:text-green-500 dark:text-gray-500 dark:hover:text-green-400'
+            }`}
+          >
+            Keep
+          </button>
+        </div>
       </td>
     </tr>
   );
@@ -102,6 +109,7 @@ function SubscriptionSection({
   items,
   bulkAction,
   onUnsubscribeSingle,
+  onKeepSingle,
   defaultExpanded = false,
 }: SectionProps) {
   const [expanded, setExpanded] = useState(defaultExpanded);
@@ -171,6 +179,7 @@ function SubscriptionSection({
                   key={item.senderAddress}
                   item={item}
                   onUnsubscribe={onUnsubscribeSingle}
+                  onKeep={onKeepSingle}
                 />
               ))}
             </tbody>
@@ -208,7 +217,7 @@ export function SubscriptionsPanel({
     isPreviewOpen,
     isPreviewLoading,
     previewData,
-    pendingIds,
+    pendingTargets,
     openPreview,
     closePreview,
     confirmUnsubscribe,
@@ -232,13 +241,26 @@ export function SubscriptionsPanel({
   );
   const regularlyOpened = all.filter((s) => s.suggestedAction === 'keep');
 
+  function toTarget(item: SubscriptionInsight): UnsubscribeTarget {
+    return {
+      sender: item.senderAddress,
+      listUnsubscribeHeader: item.listUnsubscribe,
+      listUnsubscribePost: item.listUnsubscribePost,
+    };
+  }
+
   function handleSingleUnsubscribe(senderAddress: string) {
-    openPreview([senderAddress]);
+    const item = all.find((s) => s.senderAddress === senderAddress);
+    openPreview(item ? [toTarget(item)] : [{ sender: senderAddress }]);
   }
 
   function handleBulkUnsubscribe(items: SubscriptionInsight[]) {
-    const ids = items.map((s) => s.senderAddress);
-    openPreview(ids);
+    openPreview(items.map(toTarget));
+  }
+
+  function handleKeep(_senderAddress: string) {
+    // TODO: persist "keep" decision to train the suggestion model
+    // For now this is a no-op acknowledgement — the subscription stays.
   }
 
   return (
@@ -273,6 +295,7 @@ export function SubscriptionsPanel({
         tintClass="border-red-200 bg-red-50/50 dark:border-red-900/40 dark:bg-red-900/10"
         items={neverOpened}
         onUnsubscribeSingle={handleSingleUnsubscribe}
+        onKeepSingle={handleKeep}
         bulkAction={{
           label: isUnsubscribing ? 'Unsubscribing...' : 'Unsubscribe All',
           disabled: isUnsubscribing || neverOpened.length === 0,
@@ -287,6 +310,7 @@ export function SubscriptionsPanel({
         tintClass="border-yellow-200 bg-yellow-50/50 dark:border-yellow-900/40 dark:bg-yellow-900/10"
         items={rarelyOpened}
         onUnsubscribeSingle={handleSingleUnsubscribe}
+        onKeepSingle={handleKeep}
       />
 
       <SubscriptionSection
@@ -295,6 +319,7 @@ export function SubscriptionsPanel({
         tintClass="border-green-200 bg-green-50/50 dark:border-green-900/40 dark:bg-green-900/10"
         items={regularlyOpened}
         onUnsubscribeSingle={handleSingleUnsubscribe}
+        onKeepSingle={handleKeep}
       />
 
       {/* Unsubscribe preview dialog */}
@@ -302,7 +327,7 @@ export function SubscriptionsPanel({
         isOpen={isPreviewOpen}
         isLoading={isPreviewLoading}
         previews={previewData}
-        pendingCount={pendingIds.length}
+        pendingCount={pendingTargets.length}
         isUnsubscribing={isUnsubscribing}
         onConfirm={confirmUnsubscribe}
         onCancel={closePreview}

@@ -989,7 +989,9 @@ impl IngestionPipelineHandle {
                 false
             } else {
                 // Check if enough new emails accumulated since last clustering.
-                engine.should_recluster(current_count, recluster_threshold).await
+                engine
+                    .should_recluster(current_count, recluster_threshold)
+                    .await
             };
 
             if should_cluster {

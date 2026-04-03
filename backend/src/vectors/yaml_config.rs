@@ -222,7 +222,7 @@ pub struct IngestionTuning {
     pub min_cluster_emails: usize,
     #[serde(default = "default_10_usize")]
     pub sidecar_write_interval: usize,
-    #[serde(default = "default_2_usize")]
+    #[serde(default = "default_32_usize")]
     pub pipeline_channel_buffer: usize,
     #[serde(default = "default_true")]
     pub onboarding_mode: bool,
@@ -240,7 +240,7 @@ impl Default for IngestionTuning {
             embedding_batch_size: 64,
             min_cluster_emails: 50,
             sidecar_write_interval: 10,
-            pipeline_channel_buffer: 2,
+            pipeline_channel_buffer: 32,
             onboarding_mode: true,
             backfill_batch_size: 10,
             backfill_concurrency: 8,
@@ -261,6 +261,18 @@ pub struct ClusteringTuning {
     pub max_k: usize,
     #[serde(default = "default_50_usize")]
     pub recluster_threshold: usize,
+    /// Max points sampled for silhouette score estimation (ADR-021).
+    /// Reduced from 3000 to 500: O(n²) → O(500²) regardless of dataset size.
+    #[serde(default = "default_500_usize")]
+    pub silhouette_sample_size: usize,
+    /// KMeans iterations during K-detection probing (ADR-021).
+    /// Reduced from 50 to 15: Yale research shows convergence in 2-4 iterations.
+    #[serde(default = "default_15_usize")]
+    pub kmeans_probe_iters: usize,
+    /// KMeans iterations for final clustering (ADR-021).
+    /// Reduced from 100 to 30: sufficient with KMeans++ initialization.
+    #[serde(default = "default_30_usize")]
+    pub kmeans_final_iters: usize,
 }
 
 impl Default for ClusteringTuning {
@@ -271,6 +283,9 @@ impl Default for ClusteringTuning {
             min_k: 5,
             max_k: 10,
             recluster_threshold: 50,
+            silhouette_sample_size: 500,
+            kmeans_probe_iters: 15,
+            kmeans_final_iters: 30,
         }
     }
 }
@@ -1088,6 +1103,15 @@ fn default_100_usize() -> usize {
 }
 fn default_120_usize() -> usize {
     120
+}
+fn default_15_usize() -> usize {
+    15
+}
+fn default_30_usize() -> usize {
+    30
+}
+fn default_32_usize() -> usize {
+    32
 }
 fn default_150_usize() -> usize {
     150

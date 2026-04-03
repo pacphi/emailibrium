@@ -117,6 +117,13 @@ pub struct StatusQuery {
 pub struct StartRequest {
     pub account_id: Option<String>,
     pub full_sync: Option<bool>,
+    /// Who initiated this ingestion: "onboarding", "manual_sync", "inbox_clean", "poll".
+    pub source: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct LockStatusQuery {
+    pub account_id: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -143,6 +150,7 @@ pub fn routes() -> Router<AppState> {
         .route("/poll-status", get(poll_status))
         .route("/poll-toggle", post(poll_toggle))
         .route("/progress", get(ingestion_progress_json))
+        .route("/lock-status", get(lock_status))
 }
 
 // ---------------------------------------------------------------------------
@@ -671,9 +679,9 @@ async fn upsert_email(
            (id, account_id, provider, message_id, thread_id, subject,
             from_addr, to_addrs, received_at, body_text, body_html, labels,
             is_read, is_starred, has_attachments, embedding_status,
-            is_trash, is_spam, folder)
+            is_trash, is_spam, folder, list_unsubscribe, list_unsubscribe_post)
            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, 'pending',
-                   ?16, ?17, ?18)
+                   ?16, ?17, ?18, ?19, ?20)
            ON CONFLICT(id) DO UPDATE SET
             body_html = CASE WHEN length(excluded.body_html) > 0 THEN excluded.body_html ELSE emails.body_html END,
             body_text = CASE WHEN length(excluded.body_text) > 0 THEN excluded.body_text ELSE emails.body_text END,
@@ -682,7 +690,9 @@ async fn upsert_email(
             is_starred = excluded.is_starred,
             is_trash = excluded.is_trash,
             is_spam = excluded.is_spam,
-            folder = excluded.folder"#,
+            folder = excluded.folder,
+            list_unsubscribe = COALESCE(excluded.list_unsubscribe, emails.list_unsubscribe),
+            list_unsubscribe_post = COALESCE(excluded.list_unsubscribe_post, emails.list_unsubscribe_post)"#,
     )
     .bind(&msg.id)
     .bind(account_id)
@@ -702,6 +712,8 @@ async fn upsert_email(
     .bind(is_trash)
     .bind(is_spam)
     .bind(folder)
+    .bind(&msg.list_unsubscribe)
+    .bind(&msg.list_unsubscribe_post)
     .execute(&state.db.pool)
     .await;
 
@@ -745,22 +757,71 @@ async fn fetch_provider_history_id(
 
 /// POST /api/v1/ingestion/start — sync from provider then run ingestion pipeline.
 ///
-/// 1. Fetches emails from the provider API (Gmail/Outlook) into local DB
-/// 2. Runs the embedding + categorization pipeline on pending emails
+/// 1. Acquires a per-account pipeline lock (returns 409 if already active)
+/// 2. Fetches emails from the provider API (Gmail/Outlook) into local DB
+/// 3. Runs the embedding + categorization pipeline on pending emails
 async fn start_ingestion(
     State(state): State<AppState>,
     Json(req): Json<StartRequest>,
 ) -> Result<Json<JobResponse>, (StatusCode, String)> {
     let account_id = req.account_id.unwrap_or_else(|| "default".to_string());
+    let source = req.source.unwrap_or_else(|| "unknown".to_string());
 
     debug!(
         account_id = %account_id,
         full_sync = req.full_sync.unwrap_or(false),
+        source = %source,
         "starting ingestion job"
     );
 
     // Generate job ID early so we can return it immediately.
     let job_id = uuid::Uuid::new_v4().to_string();
+
+    // ── Acquire per-account pipeline lock ────────────────────────────────
+    let activity = crate::sync_lock::PipelineActivity {
+        job_id: job_id.clone(),
+        account_id: account_id.clone(),
+        phase: "syncing".to_string(),
+        started_at: chrono::Utc::now(),
+        source: source.clone(),
+    };
+
+    if let Err(existing) = state
+        .pipeline_locks
+        .try_acquire(&account_id, activity)
+        .await
+    {
+        warn!(
+            account_id = %account_id,
+            source = %source,
+            existing_job = %existing.job_id,
+            existing_source = %existing.source,
+            existing_phase = %existing.phase,
+            "Rejected ingestion start: pipeline already active for account"
+        );
+        let body = serde_json::json!({
+            "error": "pipeline_busy",
+            "message": format!(
+                "A {} operation is already in progress (phase: {}, started: {})",
+                existing.source, existing.phase, existing.started_at.to_rfc3339()
+            ),
+            "existingJobId": existing.job_id,
+            "existingSource": existing.source,
+            "existingPhase": existing.phase,
+            "startedAt": existing.started_at.to_rfc3339(),
+        });
+        return Err((
+            StatusCode::CONFLICT,
+            serde_json::to_string(&body).unwrap_or_default(),
+        ));
+    }
+
+    info!(
+        account_id = %account_id,
+        job_id = %job_id,
+        source = %source,
+        "Pipeline lock acquired"
+    );
 
     // Spawn sync + pipeline in background so the HTTP response returns immediately.
     let bg_state = state.clone();
@@ -811,6 +872,12 @@ async fn start_ingestion(
             }
         }
 
+        // Update lock phase: sync done, pipeline starting.
+        bg_state
+            .pipeline_locks
+            .update_phase(&bg_account_id, "embedding")
+            .await;
+
         // Broadcast: sync done, pipeline starting.
         let _ = bg_state.ingestion_broadcast.send(IngestionProgress {
             job_id: bg_job_id.clone(),
@@ -856,6 +923,18 @@ async fn start_ingestion(
         // Progress broadcasting is handled by the inner ingestion pipeline.
         // Do not broadcast a premature Complete event here.
         info!(job_id = %bg_job_id, "Ingestion pipeline dispatched for account {bg_account_id}");
+
+        // ── Release the per-account pipeline lock ────────────────────────
+        // Wait for the inner pipeline to finish before releasing so that
+        // concurrent requests are properly blocked for the full duration.
+        // The inner pipeline's `start_ingestion` is awaited inside the
+        // spawned task above, so by this point all phases have completed.
+        bg_state.pipeline_locks.release(&bg_account_id).await;
+        info!(
+            account_id = %bg_account_id,
+            job_id = %bg_job_id,
+            "Pipeline lock released"
+        );
     });
 
     Ok(Json(JobResponse {
@@ -863,6 +942,20 @@ async fn start_ingestion(
         status: "started".to_string(),
         message: format!("Ingestion started for account {account_id}"),
     }))
+}
+
+/// GET /api/v1/ingestion/lock-status?account_id=... — check pipeline lock.
+///
+/// Returns the current `PipelineActivity` if a pipeline is running for the
+/// given account, or `null` if idle.
+async fn lock_status(
+    State(state): State<AppState>,
+    Query(params): Query<LockStatusQuery>,
+) -> Json<serde_json::Value> {
+    match state.pipeline_locks.get_activity(&params.account_id).await {
+        Some(activity) => Json(serde_json::to_value(activity).unwrap_or_default()),
+        None => Json(serde_json::Value::Null),
+    }
 }
 
 /// POST /api/v1/ingestion/pause — pause a running ingestion job.
@@ -1106,9 +1199,7 @@ async fn poll_toggle(
 ///
 /// Returns the current phase, counts, and whether ingestion is active.
 /// Unlike `/status` (SSE), this is a simple request/response for polling.
-async fn ingestion_progress_json(
-    State(state): State<AppState>,
-) -> Json<serde_json::Value> {
+async fn ingestion_progress_json(State(state): State<AppState>) -> Json<serde_json::Value> {
     match state.vector_service.ingestion_pipeline.get_progress().await {
         Some(progress) => Json(serde_json::json!({
             "active": true,

@@ -19,9 +19,17 @@ export {
   resumeIngestion,
   createIngestionStream,
   getEmbeddingStatus,
+  getIngestionProgress,
   triggerReembed,
+  getPipelineLockStatus,
+  PipelineBusyError,
 } from './ingestionApi.js';
-export type { EmbeddingStatus, ReembedMode, ReembedResponse } from './ingestionApi.js';
+export type {
+  EmbeddingStatus,
+  IngestionProgressResponse,
+  ReembedMode,
+  ReembedResponse,
+} from './ingestionApi.js';
 
 export { getHealth, getStats } from './vectorsApi.js';
 

@@ -133,6 +133,8 @@ mod tests {
             labels: vec!["inbox".to_string(), "important".to_string()],
             date: Utc::now(),
             is_read: false,
+            list_unsubscribe: None,
+            list_unsubscribe_post: None,
         }
     }
 

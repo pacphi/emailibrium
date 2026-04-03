@@ -27,6 +27,10 @@ export interface SubscriptionInsight {
   category: SubscriptionCategory;
   suggestedAction: SuggestedAction;
   readRate?: number;
+  /** RFC 2369 List-Unsubscribe header (if captured from email headers). */
+  listUnsubscribe?: string;
+  /** RFC 8058 List-Unsubscribe-Post header (if captured from email headers). */
+  listUnsubscribePost?: string;
 }
 
 export interface InboxReport {

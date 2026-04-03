@@ -1,5 +1,11 @@
 import { create } from 'zustand';
-import { getAccounts, startIngestion, getEmails, triggerReembed } from '@emailibrium/api';
+import {
+  getAccounts,
+  startIngestion,
+  getIngestionProgress,
+  triggerReembed,
+  PipelineBusyError,
+} from '@emailibrium/api';
 
 export type SyncMode = 'incremental' | 'full';
 
@@ -23,33 +29,62 @@ export interface SyncState {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-/** Poll until email count stabilizes (no new emails for 2 consecutive checks). */
-async function waitForSyncCompletion(
-  accountId: string,
-  onUpdate: (count: number) => void,
-): Promise<number> {
-  let stableCount = 0;
-  let stableChecks = 0;
-  const maxWait = 120; // 120 polls × 3s = 6 min max
+/** Human-readable label for each ingestion phase. */
+const phaseLabels: Record<string, string> = {
+  syncing: 'Fetching emails',
+  embedding: 'Generating embeddings',
+  categorizing: 'Categorizing emails',
+  clustering: 'Building topic clusters',
+  analyzing: 'Analyzing patterns',
+  complete: 'Complete',
+};
+
+/** Poll ingestion progress until the pipeline reaches "complete" or becomes inactive. */
+async function waitForIngestionCompletion(
+  emailAddress: string,
+  onUpdate: (status: string) => void,
+): Promise<void> {
+  const maxWait = 240; // 240 polls × 3s = 12 min max (embedding can be slow)
 
   for (let i = 0; i < maxWait; i++) {
     await sleep(3000);
     try {
-      const { total } = await getEmails({ accountId, limit: 1, offset: 0 });
-      onUpdate(total);
+      const progress = await getIngestionProgress();
 
-      if (total === stableCount) {
-        stableChecks++;
-        if (stableChecks >= 2) return total; // Stable for 6s — sync done
-      } else {
-        stableCount = total;
-        stableChecks = 0;
+      if (!progress.active) {
+        // Pipeline finished or was never started
+        return;
+      }
+
+      const label = phaseLabels[progress.phase ?? ''] ?? progress.phase ?? 'Processing';
+      const parts: string[] = [`${emailAddress}: ${label}`];
+
+      if (progress.phase === 'syncing' && progress.processed) {
+        parts.push(`(${progress.processed.toLocaleString()} emails)`);
+      } else if (progress.phase === 'embedding' && progress.total) {
+        const pct =
+          progress.total > 0 ? Math.round(((progress.embedded ?? 0) / progress.total) * 100) : 0;
+        parts.push(`(${pct}%)`);
+      } else if (progress.phase === 'categorizing' && progress.total) {
+        const pct =
+          progress.total > 0 ? Math.round(((progress.categorized ?? 0) / progress.total) * 100) : 0;
+        parts.push(`(${pct}%)`);
+      }
+
+      if (progress.etaSeconds && progress.etaSeconds > 0) {
+        const mins = Math.ceil(progress.etaSeconds / 60);
+        parts.push(`— ~${mins}m remaining`);
+      }
+
+      onUpdate(parts.join(' '));
+
+      if (progress.phase === 'complete') {
+        return;
       }
     } catch {
       // Ignore transient errors during polling
     }
   }
-  return stableCount;
 }
 
 export const useSyncStore = create<SyncState>((set, get) => ({
@@ -101,15 +136,35 @@ export const useSyncStore = create<SyncState>((set, get) => ({
           status: `Syncing account ${i + 1} of ${active.length}: ${a.emailAddress}...`,
         });
         try {
-          await startIngestion(a.id);
+          // Full sync: reembed already auto-triggered ingestion, so only
+          // start ingestion explicitly for incremental syncs.
+          if (mode !== 'full') {
+            await startIngestion(a.id, 'manual_sync');
+          }
 
-          // Poll until sync completes (email count stabilizes).
-          await waitForSyncCompletion(a.id, (count) => {
-            set({
-              status: `Syncing ${a.emailAddress}... (${count.toLocaleString()} emails)`,
-            });
+          // Poll ingestion progress to show pipeline phases (embedding, clustering, etc.)
+          await waitForIngestionCompletion(a.emailAddress, (status) => {
+            set({ status });
           });
         } catch (err) {
+          // Surface pipeline-busy conflicts with a specific message.
+          if (err instanceof PipelineBusyError) {
+            const { existingSource, existingPhase } = err.activity;
+            const label =
+              existingSource === 'inbox_clean'
+                ? 'Inbox Clean'
+                : existingSource === 'onboarding'
+                  ? 'onboarding'
+                  : existingSource === 'poll'
+                    ? 'a background sync'
+                    : 'another sync';
+            set({
+              syncing: false,
+              status: '',
+              error: `Cannot sync ${a.emailAddress}: ${label} is already running (${existingPhase} phase). Please wait for it to complete.`,
+            });
+            return;
+          }
           const msg = err instanceof Error ? err.message : String(err);
           errors.push(`${a.emailAddress}: ${msg}`);
           console.error(`Sync failed for ${a.emailAddress}:`, err);

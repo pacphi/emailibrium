@@ -6,9 +6,17 @@
 
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 
 const SESSION_DIR = path.join(process.cwd(), '.claude-flow', 'sessions');
 const SESSION_FILE = path.join(SESSION_DIR, 'current.json');
+
+// Atomic write — write to temp file then rename to prevent corruption from concurrent hooks
+function atomicWriteJSON(filePath, data) {
+  const tmp = filePath + '.' + process.pid + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify(data, null, 2));
+  fs.renameSync(tmp, filePath);
+}
 
 const commands = {
   start: () => {
@@ -27,7 +35,7 @@ const commands = {
     };
 
     fs.mkdirSync(SESSION_DIR, { recursive: true });
-    fs.writeFileSync(SESSION_FILE, JSON.stringify(session, null, 2));
+    atomicWriteJSON(SESSION_FILE, session);
 
     console.log(`Session started: ${sessionId}`);
     return session;
@@ -41,7 +49,7 @@ const commands = {
 
     const session = JSON.parse(fs.readFileSync(SESSION_FILE, 'utf-8'));
     session.restoredAt = new Date().toISOString();
-    fs.writeFileSync(SESSION_FILE, JSON.stringify(session, null, 2));
+    atomicWriteJSON(SESSION_FILE, session);
 
     console.log(`Session restored: ${session.id}`);
     return session;
@@ -95,7 +103,7 @@ const commands = {
     const session = JSON.parse(fs.readFileSync(SESSION_FILE, 'utf-8'));
     session.context[key] = value;
     session.updatedAt = new Date().toISOString();
-    fs.writeFileSync(SESSION_FILE, JSON.stringify(session, null, 2));
+    atomicWriteJSON(SESSION_FILE, session);
 
     return session;
   },
@@ -116,7 +124,7 @@ const commands = {
     const session = JSON.parse(fs.readFileSync(SESSION_FILE, 'utf-8'));
     if (session.metrics[name] !== undefined) {
       session.metrics[name]++;
-      fs.writeFileSync(SESSION_FILE, JSON.stringify(session, null, 2));
+      atomicWriteJSON(SESSION_FILE, session);
     }
 
     return session;

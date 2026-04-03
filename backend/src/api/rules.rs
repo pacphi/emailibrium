@@ -483,6 +483,8 @@ async fn test_rule(
         labels: req.email.labels,
         date: now,
         is_read: false,
+        list_unsubscribe: None,
+        list_unsubscribe_post: None,
     };
 
     // Load all persisted rules and add the test rule so `process_email`

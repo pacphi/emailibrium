@@ -29,7 +29,13 @@ export type {
   TemporalInsights,
 } from './insights.js';
 
-export type { IngestionPhase, IngestionProgress } from './ingestion.js';
+export type {
+  IngestionPhase,
+  IngestionProgress,
+  PipelineSource,
+  PipelineActivity,
+  PipelineBusyResponse,
+} from './ingestion.js';
 
 export type {
   Provider,
@@ -52,4 +58,9 @@ export type {
 
 export type { ChatSession, ChatRequest, ChatResponse, ChatStreamChunk } from './chat.js';
 
-export type { UnsubscribeRequest, UnsubscribeResult, UnsubscribePreview } from './unsubscribe.js';
+export type {
+  UnsubscribeTarget,
+  UnsubscribeRequest,
+  UnsubscribeResult,
+  UnsubscribePreview,
+} from './unsubscribe.js';

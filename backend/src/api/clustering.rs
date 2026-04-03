@@ -218,9 +218,7 @@ async fn get_cluster(
 }
 
 /// GET /api/v1/clustering/status — clustering readiness and counts.
-async fn clustering_status(
-    State(state): State<AppState>,
-) -> Json<serde_json::Value> {
+async fn clustering_status(State(state): State<AppState>) -> Json<serde_json::Value> {
     let clusters = state.vector_service.cluster_engine.get_clusters().await;
     let cluster_count = clusters.len();
     let total_emails: usize = clusters.iter().map(|c| c.email_count).sum();

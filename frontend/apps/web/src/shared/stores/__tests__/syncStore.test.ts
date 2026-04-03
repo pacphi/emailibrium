@@ -5,14 +5,30 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 // Mock the API module
 // ---------------------------------------------------------------------------
 
-const mockGetAccounts = vi.hoisted(() => vi.fn());
-const mockStartIngestion = vi.hoisted(() => vi.fn());
-const mockGetEmails = vi.hoisted(() => vi.fn());
+const { mockGetAccounts, mockStartIngestion, mockGetIngestionProgress, MockPipelineBusyError } =
+  vi.hoisted(() => {
+    class _MockPipelineBusyError extends Error {
+      activity: Record<string, string>;
+      constructor(body: Record<string, string>) {
+        super(body.message);
+        this.name = 'PipelineBusyError';
+        this.activity = body;
+      }
+    }
+    return {
+      mockGetAccounts: vi.fn(),
+      mockStartIngestion: vi.fn(),
+      mockGetIngestionProgress: vi.fn(),
+      MockPipelineBusyError: _MockPipelineBusyError,
+    };
+  });
 
 vi.mock('@emailibrium/api', () => ({
   getAccounts: mockGetAccounts,
   startIngestion: mockStartIngestion,
-  getEmails: mockGetEmails,
+  getIngestionProgress: mockGetIngestionProgress,
+  triggerReembed: vi.fn().mockResolvedValue({ emailsReset: 0 }),
+  PipelineBusyError: MockPipelineBusyError,
 }));
 
 // Must import AFTER vi.mock so the store picks up the mocked API.
@@ -119,24 +135,20 @@ describe('syncStore', () => {
       { id: 'acc-2', emailAddress: 'c@d.com', isActive: true },
     ]);
     mockStartIngestion.mockResolvedValue({ jobId: 'job-1' });
-    // Make getEmails stabilize immediately (same count twice)
-    mockGetEmails.mockImplementation(async () => {
-      return { emails: [], total: 10 };
-    });
+    // Simulate pipeline completing immediately
+    mockGetIngestionProgress.mockResolvedValue({ active: false, phase: null });
 
     const syncPromise = useSyncStore.getState().startSync();
 
-    // The sync loop uses sleep(3000) between polls.
-    // We need to advance timers to let the polling complete.
-    // Each account needs: at least 3 polls (initial + 2 stable checks) * 3000ms
-    for (let i = 0; i < 10; i++) {
+    // Advance past the first poll for each account
+    for (let i = 0; i < 4; i++) {
       await vi.advanceTimersByTimeAsync(3000);
     }
 
     await syncPromise;
 
-    expect(mockStartIngestion).toHaveBeenCalledWith('acc-1');
-    expect(mockStartIngestion).toHaveBeenCalledWith('acc-2');
+    expect(mockStartIngestion).toHaveBeenCalledWith('acc-1', 'manual_sync');
+    expect(mockStartIngestion).toHaveBeenCalledWith('acc-2', 'manual_sync');
     expect(mockStartIngestion).toHaveBeenCalledTimes(2);
   });
 
@@ -156,15 +168,47 @@ describe('syncStore', () => {
     expect(state.error).toContain('a@b.com');
   });
 
-  it('startSync completes successfully and clears syncing flag', async () => {
+  it('startSync surfaces PipelineBusyError with specific message', async () => {
+    mockGetAccounts.mockResolvedValue([{ id: 'acc-1', emailAddress: 'a@b.com', isActive: true }]);
+    mockStartIngestion.mockRejectedValue(
+      new MockPipelineBusyError({
+        error: 'pipeline_busy',
+        message: 'A poll operation is already in progress',
+        existingJobId: 'job-123',
+        existingSource: 'poll',
+        existingPhase: 'embedding',
+        startedAt: '2026-04-03T10:00:00Z',
+      }),
+    );
+
+    await useSyncStore.getState().startSync();
+
+    const state = useSyncStore.getState();
+    expect(state.syncing).toBe(false);
+    expect(state.error).toContain('a background sync');
+    expect(state.error).toContain('embedding phase');
+  });
+
+  it('startSync shows phase progress and completes successfully', async () => {
     mockGetAccounts.mockResolvedValue([{ id: 'acc-1', emailAddress: 'a@b.com', isActive: true }]);
     mockStartIngestion.mockResolvedValue({ jobId: 'job-1' });
-    mockGetEmails.mockResolvedValue({ emails: [], total: 5 });
+
+    // Simulate phases: syncing → embedding → complete
+    let callCount = 0;
+    mockGetIngestionProgress.mockImplementation(async () => {
+      callCount++;
+      if (callCount === 1) {
+        return { active: true, phase: 'syncing', total: 100, processed: 50 };
+      }
+      if (callCount === 2) {
+        return { active: true, phase: 'embedding', total: 100, embedded: 60 };
+      }
+      return { active: true, phase: 'complete' };
+    });
 
     const syncPromise = useSyncStore.getState().startSync();
 
-    // Advance timers just enough for polling stabilization (3 polls * 3s = 9s).
-    // waitForSyncCompletion needs 2 consecutive stable checks.
+    // Advance timers for 3 polls
     for (let i = 0; i < 4; i++) {
       await vi.advanceTimersByTimeAsync(3000);
     }
@@ -174,7 +218,6 @@ describe('syncStore', () => {
     // Sync finished — syncing should be false, no errors.
     expect(useSyncStore.getState().syncing).toBe(false);
     expect(useSyncStore.getState().error).toBe('');
-    // Status is either 'Sync complete!' or '' (if the 5s cleanup timer already fired).
     const status = useSyncStore.getState().status;
     expect(status === 'Sync complete!' || status === '').toBe(true);
   });

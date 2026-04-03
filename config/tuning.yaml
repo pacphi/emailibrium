@@ -47,23 +47,28 @@ chat:
   max_history_messages: 20 # Sliding window: keep last N messages per session
 
 # ── Ingestion Pipeline ───────────────────────────────────────────────────────
+# See also: ADR-021 (Clustering Performance)
 ingestion:
   embedding_batch_size: 64 # Emails per embedding batch
   min_cluster_emails: 50 # Minimum embedded emails before clustering runs
   sidecar_write_interval: 10 # Write sidecar every N batches (0 = every batch)
-  pipeline_channel_buffer: 2 # Embed→insert channel depth (pipelining)
+  pipeline_channel_buffer: 32 # Embed→insert channel depth; aligns with Tokio internal block size (ADR-021)
   onboarding_mode: true # During bulk sync: rules-only classification, LLM backfill async
   backfill_batch_size: 10 # LLM batch size for async classification backfill
   backfill_concurrency: 8 # Parallel LLM calls during backfill
   backfill_delay_between_ms: 50 # Throttle between backfill batches (ms)
 
 # ── Clustering ───────────────────────────────────────────────────────────────
+# See also: ADR-021 (Clustering Performance)
 clustering:
   tfidf_max_terms: 20 # Max TF-IDF terms per cluster for word cloud
   representative_emails: 5 # Number of centroid-nearest emails per cluster
   min_k: 5 # Minimum number of clusters (silhouette search lower bound)
   max_k: 10 # Maximum number of clusters (silhouette search upper bound)
   recluster_threshold: 50 # Recluster when this many new emails have been embedded since last clustering
+  silhouette_sample_size: 500 # Max points sampled for silhouette score (ADR-021: reduced from 3000)
+  kmeans_probe_iters: 15 # KMeans iterations during K-detection probing (ADR-021: reduced from 50)
+  kmeans_final_iters: 30 # KMeans iterations for final clustering (ADR-021: reduced from 100)
 
 # ── Error Recovery ───────────────────────────────────────────────────────────
 error_recovery:

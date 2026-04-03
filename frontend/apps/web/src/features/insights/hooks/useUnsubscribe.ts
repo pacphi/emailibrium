@@ -1,7 +1,7 @@
 import { useState, useCallback, useRef } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { batchUnsubscribe, undoUnsubscribe, previewUnsubscribe } from '@emailibrium/api';
-import type { UnsubscribeResult, UnsubscribePreview } from '@emailibrium/types';
+import type { UnsubscribeTarget, UnsubscribeResult, UnsubscribePreview } from '@emailibrium/types';
 
 const UNDO_WINDOW_MS = 5 * 60 * 1000; // 5 minutes
 
@@ -13,14 +13,14 @@ interface UndoState {
 
 export function useUnsubscribePreview() {
   return useMutation({
-    mutationFn: (subscriptionIds: string[]) => previewUnsubscribe(subscriptionIds),
+    mutationFn: (targets: UnsubscribeTarget[]) => previewUnsubscribe(targets),
   });
 }
 
 export function useBatchUnsubscribe() {
   const queryClient = useQueryClient();
-  return useMutation<UnsubscribeResult, Error, string[]>({
-    mutationFn: (subscriptionIds: string[]) => batchUnsubscribe({ subscriptionIds }),
+  return useMutation<UnsubscribeResult, Error, UnsubscribeTarget[]>({
+    mutationFn: (targets: UnsubscribeTarget[]) => batchUnsubscribe({ subscriptions: targets }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['subscriptions'] });
     },
@@ -44,7 +44,7 @@ export function useUnsubscribeFlow() {
   const [previewData, setPreviewData] = useState<UnsubscribePreview[] | null>(null);
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
   const [undoState, setUndoState] = useState<UndoState | null>(null);
-  const [pendingIds, setPendingIds] = useState<string[]>([]);
+  const [pendingTargets, setPendingTargets] = useState<UnsubscribeTarget[]>([]);
   const undoTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const previewMutation = useUnsubscribePreview();
@@ -52,9 +52,9 @@ export function useUnsubscribeFlow() {
   const undoMutation = useUndoUnsubscribe();
 
   const openPreview = useCallback(
-    (subscriptionIds: string[]) => {
-      setPendingIds(subscriptionIds);
-      previewMutation.mutate(subscriptionIds, {
+    (targets: UnsubscribeTarget[]) => {
+      setPendingTargets(targets);
+      previewMutation.mutate(targets, {
         onSuccess: (data) => {
           setPreviewData(data);
           setIsPreviewOpen(true);
@@ -72,21 +72,21 @@ export function useUnsubscribeFlow() {
   const closePreview = useCallback(() => {
     setIsPreviewOpen(false);
     setPreviewData(null);
-    setPendingIds([]);
+    setPendingTargets([]);
   }, []);
 
   const confirmUnsubscribe = useCallback(() => {
-    unsubscribeMutation.mutate(pendingIds, {
+    unsubscribeMutation.mutate(pendingTargets, {
       onSuccess: (result) => {
         setIsPreviewOpen(false);
         setPreviewData(null);
-        setPendingIds([]);
+        setPendingTargets([]);
 
         // Set up undo window
         const deadline = Date.now() + UNDO_WINDOW_MS;
         setUndoState({
           batchId: result.batchId,
-          count: result.succeeded.length,
+          count: result.succeeded,
           deadline,
         });
 
@@ -97,7 +97,7 @@ export function useUnsubscribeFlow() {
         }, UNDO_WINDOW_MS);
       },
     });
-  }, [pendingIds, unsubscribeMutation]);
+  }, [pendingTargets, unsubscribeMutation]);
 
   const handleUndo = useCallback(() => {
     if (!undoState) return;
@@ -119,7 +119,7 @@ export function useUnsubscribeFlow() {
     isPreviewOpen,
     isPreviewLoading: previewMutation.isPending,
     previewData,
-    pendingIds,
+    pendingTargets,
     openPreview,
     closePreview,
 

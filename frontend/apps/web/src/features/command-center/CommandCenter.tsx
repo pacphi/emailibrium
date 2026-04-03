@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { getClusters, getEnrichedCategories, getClusteringStatus } from '@emailibrium/api';
 import { StatsCards } from './StatsCards';
 import { QuickActions } from './QuickActions';
@@ -22,6 +22,7 @@ export function CommandCenter() {
   });
   const { stats, isLoading, isError, error, refetch, dataUpdatedAt } = useStats();
   const { open: openPalette } = useCommandPalette();
+  const queryClient = useQueryClient();
   const appConfig = useAppConfig();
   const { cache } = appConfig;
 
@@ -68,12 +69,17 @@ export function CommandCenter() {
     refreshAccounts();
   }, [refreshAccounts]);
 
-  // Refetch stats when sync completes.
+  // Refetch stats and clusters when sync completes.
   useEffect(() => {
     if (!syncing && syncStatus === 'Sync complete!') {
       refetch();
+      // Invalidate all dashboard queries so they refresh with new data.
+      queryClient.invalidateQueries({ queryKey: ['clusters'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard-clustering-status'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard-embedding-status'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard-ingestion-progress'] });
     }
-  }, [syncing, syncStatus, refetch]);
+  }, [syncing, syncStatus, refetch, queryClient]);
 
   const handleQuickAction = useCallback(
     (actionId: string) => {

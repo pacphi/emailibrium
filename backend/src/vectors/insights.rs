@@ -121,6 +121,12 @@ pub struct SubscriptionInsight {
     pub suggested_action: SuggestedAction,
     /// Per-sender read rate (0.0 to 1.0).
     pub read_rate: f64,
+    /// RFC 2369 List-Unsubscribe header from the most recent email (if any).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub list_unsubscribe: Option<String>,
+    /// RFC 8058 List-Unsubscribe-Post header from the most recent email (if any).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub list_unsubscribe_post: Option<String>,
 }
 
 /// Insight about a recurring sender.
@@ -178,7 +184,23 @@ impl InsightEngine {
     }
 
     /// Detect subscription patterns by grouping emails by sender.
+    ///
+    /// Excludes the user's own account email addresses (which appear as senders
+    /// for sent mail) to avoid false-positive subscription detections.
     pub async fn detect_subscriptions(&self) -> Result<Vec<SubscriptionInsight>, VectorError> {
+        // Collect all connected account email addresses to exclude from results.
+        let own_addresses: Vec<(String,)> = sqlx::query_as(
+            "SELECT DISTINCT email_address FROM connected_accounts WHERE status = 'connected'",
+        )
+        .fetch_all(&self.db.pool)
+        .await
+        .unwrap_or_default();
+
+        let own_set: std::collections::HashSet<String> = own_addresses
+            .into_iter()
+            .map(|(addr,)| addr.to_lowercase())
+            .collect();
+
         // (from_addr, count, first_received, last_received)
         let groups: Vec<(String, i32, String, String)> = sqlx::query_as(
             r#"SELECT from_addr,
@@ -198,6 +220,13 @@ impl InsightEngine {
 
         for (from_addr, cnt, first_seen_str, last_seen_str) in &groups {
             let sender = from_addr;
+
+            // Skip the user's own email addresses (sent mail false positives).
+            let sender_email = extract_email_address(sender).to_lowercase();
+            if own_set.contains(&sender_email) {
+                continue;
+            }
+
             let domain = extract_domain(sender);
 
             // Fetch individual timestamps for interval analysis
@@ -220,16 +249,32 @@ impl InsightEngine {
                 })
                 .collect();
 
-            // Check for unsubscribe patterns in body text
-            let has_unsubscribe = timestamps.iter().any(|row| {
-                row.body_text.as_ref().is_some_and(|body: &String| {
-                    let lower = body.to_lowercase();
-                    lower.contains("unsubscribe")
-                        || lower.contains("list-unsubscribe")
-                        || lower.contains("opt out")
-                        || lower.contains("opt-out")
-                })
-            });
+            // Check for List-Unsubscribe header in DB first (most reliable),
+            // then fall back to body text keyword matching for older emails
+            // that were ingested before header capture was added.
+            let header_row: Option<(Option<String>, Option<String>)> = sqlx::query_as(
+                r#"SELECT list_unsubscribe, list_unsubscribe_post
+                   FROM emails
+                   WHERE from_addr = ? AND list_unsubscribe IS NOT NULL
+                   ORDER BY received_at DESC
+                   LIMIT 1"#,
+            )
+            .bind(sender)
+            .fetch_optional(&self.db.pool)
+            .await
+            .map_err(VectorError::DatabaseError)?;
+
+            let (list_unsub_header, list_unsub_post) = header_row.unwrap_or((None, None));
+
+            let has_unsubscribe = list_unsub_header.is_some()
+                || timestamps.iter().any(|row| {
+                    row.body_text.as_ref().is_some_and(|body: &String| {
+                        let lower = body.to_lowercase();
+                        lower.contains("unsubscribe")
+                            || lower.contains("opt out")
+                            || lower.contains("opt-out")
+                    })
+                });
 
             // Compute inter-arrival intervals in days
             let intervals = compute_intervals(&timestamps);
@@ -264,6 +309,8 @@ impl InsightEngine {
                 category,
                 suggested_action,
                 read_rate: read_rate_row.0,
+                list_unsubscribe: list_unsub_header,
+                list_unsubscribe_post: list_unsub_post,
             });
         }
 
@@ -427,6 +474,16 @@ fn extract_domain(email: &str) -> String {
         .unwrap_or_else(|| email.to_lowercase())
 }
 
+/// Extract the bare email address from a "Name <addr>" or plain "addr" string.
+fn extract_email_address(from: &str) -> String {
+    if let Some(start) = from.find('<') {
+        if let Some(end) = from[start..].find('>') {
+            return from[start + 1..start + end].trim().to_string();
+        }
+    }
+    from.trim().to_string()
+}
+
 /// Parse a timestamp string into a DateTime<Utc>.
 fn parse_timestamp(s: &str) -> DateTime<Utc> {
     // Try RFC3339 first, then the SQLite default format
@@ -556,6 +613,14 @@ mod tests {
             .execute(&db.pool)
             .await
             .unwrap();
+        // Add unsubscribe header columns (migration 018).
+        for stmt in include_str!("../../migrations/018_unsubscribe_headers.sql")
+            .split(';')
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+        {
+            sqlx::query(stmt).execute(&db.pool).await.unwrap();
+        }
         db
     }
 

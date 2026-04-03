@@ -492,6 +492,8 @@ mod tests {
                     labels: vec![],
                     date: Utc::now(),
                     is_read: false,
+                    list_unsubscribe: None,
+                    list_unsubscribe_post: None,
                 })
                 .collect();
             Self { messages }

@@ -71,6 +71,9 @@ impl OutlookProvider {
     }
 
     /// Parse a Graph API message JSON into an EmailMessage.
+    ///
+    /// When `internetMessageHeaders` is present in the response (requested via
+    /// `$select`), extracts List-Unsubscribe headers using the shared utility.
     fn parse_message(msg: &serde_json::Value) -> Result<EmailMessage, ProviderError> {
         let id = msg["id"].as_str().unwrap_or_default().to_string();
 
@@ -129,6 +132,12 @@ impl OutlookProvider {
             _ => (raw_content, None),
         };
 
+        // Extract List-Unsubscribe headers from internetMessageHeaders (if present).
+        let unsub = msg["internetMessageHeaders"]
+            .as_array()
+            .map(|hdrs| super::types::UnsubscribeHeaders::from_graph_headers(hdrs))
+            .unwrap_or_default();
+
         Ok(EmailMessage {
             id,
             thread_id: conversation_id,
@@ -141,6 +150,8 @@ impl OutlookProvider {
             labels,
             date,
             is_read,
+            list_unsubscribe: unsub.list_unsubscribe,
+            list_unsubscribe_post: unsub.list_unsubscribe_post,
         })
     }
 }
@@ -237,7 +248,9 @@ impl EmailProvider for OutlookProvider {
         params: &ListParams,
     ) -> Result<EmailPage, ProviderError> {
         let mut url = format!(
-            "{GRAPH_API_BASE}/messages?$top={}&$orderby=receivedDateTime desc",
+            "{GRAPH_API_BASE}/messages?$top={}&$orderby=receivedDateTime desc\
+             &$select=id,conversationId,subject,bodyPreview,from,toRecipients,\
+             isRead,receivedDateTime,categories,flag,body,internetMessageHeaders",
             params.max_results
         );
 
@@ -287,9 +300,14 @@ impl EmailProvider for OutlookProvider {
         access_token: &str,
         id: &str,
     ) -> Result<EmailMessage, ProviderError> {
+        let url = format!(
+            "{GRAPH_API_BASE}/messages/{id}?\
+             $select=id,conversationId,subject,bodyPreview,from,toRecipients,\
+             isRead,receivedDateTime,categories,flag,body,internetMessageHeaders"
+        );
         let resp: serde_json::Value = self
             .http
-            .get(format!("{GRAPH_API_BASE}/messages/{id}"))
+            .get(&url)
             .bearer_auth(access_token)
             .send()
             .await

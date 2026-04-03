@@ -19,6 +19,7 @@ pub mod email;
 pub mod events;
 mod middleware;
 mod rules;
+pub mod sync_lock;
 mod vectors;
 
 pub use vectors::config::VectorConfig;
@@ -41,6 +42,8 @@ pub struct AppState {
     pub poll_scheduler: Option<email::poll_scheduler::PollSchedulerHandle>,
     /// YAML configuration loaded from `config/` directory.
     pub yaml_config: Arc<vectors::yaml_config::YamlConfig>,
+    /// Per-account pipeline locks preventing concurrent sync/ingestion runs.
+    pub pipeline_locks: sync_lock::AccountLockMap,
 }
 
 #[tokio::main]
@@ -282,6 +285,7 @@ async fn main() -> anyhow::Result<()> {
         rag_pipeline,
         poll_scheduler: None, // Initialized below after state creation.
         yaml_config: yaml_config.clone(),
+        pipeline_locks: sync_lock::AccountLockMap::default(),
     };
 
     // Start the background email poll scheduler.
@@ -292,10 +296,36 @@ async fn main() -> anyhow::Result<()> {
     let sync_fn: email::poll_scheduler::SyncAccountFn = std::sync::Arc::new(move |account_id| {
         let s = sync_state.clone();
         Box::pin(async move {
+            // Acquire per-account pipeline lock.
+            let activity = sync_lock::PipelineActivity {
+                job_id: uuid::Uuid::new_v4().to_string(),
+                account_id: account_id.clone(),
+                phase: "syncing".to_string(),
+                started_at: chrono::Utc::now(),
+                source: "poll".to_string(),
+            };
+            if let Err(existing) = s.pipeline_locks.try_acquire(&account_id, activity).await {
+                tracing::debug!(
+                    account_id = %account_id,
+                    existing_source = %existing.source,
+                    existing_phase = %existing.phase,
+                    "Poll scheduler: skipping — pipeline already active"
+                );
+                return Ok(0);
+            }
+
             // Phase 0: Sync from provider.
-            let synced = api::ingestion::sync_emails_from_provider(&s, &account_id)
-                .await
-                .map_err(|(_status, msg)| msg)?;
+            let synced = match api::ingestion::sync_emails_from_provider(&s, &account_id).await {
+                Ok(n) => n,
+                Err((_status, msg)) => {
+                    s.pipeline_locks.release(&account_id).await;
+                    return Err(msg);
+                }
+            };
+
+            s.pipeline_locks
+                .update_phase(&account_id, "embedding")
+                .await;
 
             // Phase 1+: Run ingestion pipeline on pending emails.
             // Always attempt ingestion — there may be pending embeddings from
@@ -315,6 +345,8 @@ async fn main() -> anyhow::Result<()> {
                     );
                 }
             }
+
+            s.pipeline_locks.release(&account_id).await;
             Ok(synced)
         })
     });

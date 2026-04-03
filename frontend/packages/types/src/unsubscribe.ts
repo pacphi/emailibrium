@@ -1,19 +1,30 @@
+export interface UnsubscribeTarget {
+  sender: string;
+  listUnsubscribeHeader?: string;
+  listUnsubscribePost?: string;
+}
+
 export interface UnsubscribeRequest {
-  subscriptionIds: string[];
+  subscriptions: UnsubscribeTarget[];
 }
 
 export interface UnsubscribeResult {
   batchId: string;
-  succeeded: string[];
-  failed: Array<{ subscriptionId: string; reason: string }>;
-  undoDeadline: string;
+  total: number;
+  succeeded: number;
+  failed: number;
+  results: Array<{
+    sender: string;
+    methodUsed?: { type: string; url?: string; email?: string };
+    success: boolean;
+    error?: string;
+  }>;
+  undoAvailableUntil: string;
 }
 
 export interface UnsubscribePreview {
-  subscriptionId: string;
-  senderAddress: string;
-  senderDomain: string;
-  emailCount: number;
-  method: 'link' | 'email' | 'header';
-  estimatedEffect: string;
+  sender: string;
+  methods: Array<{ type: string; url?: string; email?: string }>;
+  bestMethod?: { type: string; url?: string; email?: string };
+  warning?: string;
 }

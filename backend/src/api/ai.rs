@@ -844,9 +844,7 @@ async fn trigger_reembed(
     State(state): State<AppState>,
     body: Option<Json<ReembedRequest>>,
 ) -> Result<Json<ReembedResponse>, (StatusCode, String)> {
-    let mode = body
-        .map(|b| b.0.mode)
-        .unwrap_or_else(default_reembed_mode);
+    let mode = body.map(|b| b.0.mode).unwrap_or_else(default_reembed_mode);
 
     // For "all" mode, clear the vector store and clusters to start fresh.
     if mode == "all" {

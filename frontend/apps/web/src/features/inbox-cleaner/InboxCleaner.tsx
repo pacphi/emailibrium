@@ -7,7 +7,8 @@ import { Step3Topics } from './Step3Topics';
 import { Step4Rules } from './Step4Rules';
 import { CleanupProgress } from './CleanupProgress';
 import type { CleanupAction, CleanupState } from './CleanupProgress';
-import type { Cluster } from '@emailibrium/types';
+import type { Cluster, PipelineActivity } from '@emailibrium/types';
+import { getAccounts, getPipelineLockStatus } from '@emailibrium/api';
 import { useGenerativeRouter } from '../../services/ai/useGenerativeRouter';
 
 const stepLabels: Record<WizardStep, string> = {
@@ -96,6 +97,8 @@ export function InboxCleaner() {
   const [cleanupActions, setCleanupActions] = useState<CleanupAction[]>([]);
   const [cleanupState, setCleanupState] = useState<CleanupState>('running');
   const [cleanupErrors] = useState<string[]>([]);
+  const [pipelineConflict, setPipelineConflict] = useState<PipelineActivity | null>(null);
+  const [checkingLock, setCheckingLock] = useState(false);
 
   // Placeholder clusters (would come from an API query in production)
   const [clusters] = useState<Cluster[]>([]);
@@ -104,6 +107,31 @@ export function InboxCleaner() {
   const handleIngestionComplete = useCallback(() => {
     wizard.goNext();
   }, [wizard]);
+
+  /** Pre-flight check: ensure no pipeline is already running for any active account. */
+  const handleBeginIngestion = useCallback(async () => {
+    setPipelineConflict(null);
+    setCheckingLock(true);
+    try {
+      const accounts = await getAccounts();
+      const active = accounts.filter((a) => a.isActive);
+      for (const acct of active) {
+        const activity = await getPipelineLockStatus(acct.id);
+        if (activity) {
+          setPipelineConflict(activity);
+          setCheckingLock(false);
+          return;
+        }
+      }
+      // No conflicts — start ingestion.
+      setIngestionJobId('job-' + Date.now());
+    } catch {
+      // If the lock-status check itself fails, proceed optimistically.
+      // The backend will still enforce the 409 if there's a real conflict.
+      setIngestionJobId('job-' + Date.now());
+    }
+    setCheckingLock(false);
+  }, []);
 
   const handleExecuteCleanup = useCallback(() => {
     setShowCleanupProgress(true);
@@ -232,6 +260,37 @@ export function InboxCleaner() {
               />
             ) : (
               <div className="rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-8 text-center space-y-4">
+                {/* Pipeline conflict alert */}
+                {pipelineConflict && (
+                  <div className="rounded-lg border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20 px-4 py-3 text-left mb-4">
+                    <p className="text-sm font-medium text-amber-800 dark:text-amber-300">
+                      Pipeline already active
+                    </p>
+                    <p className="text-sm text-amber-700 dark:text-amber-400 mt-1">
+                      A{' '}
+                      <strong>
+                        {pipelineConflict.source === 'manual_sync'
+                          ? 'manual sync'
+                          : pipelineConflict.source === 'inbox_clean'
+                            ? 'previous Inbox Clean'
+                            : pipelineConflict.source === 'onboarding'
+                              ? 'onboarding sync'
+                              : pipelineConflict.source === 'poll'
+                                ? 'background sync'
+                                : pipelineConflict.source}
+                      </strong>{' '}
+                      operation is running ({pipelineConflict.phase} phase). Please wait for it to
+                      complete before starting Inbox Clean.
+                    </p>
+                    <button
+                      onClick={() => setPipelineConflict(null)}
+                      className="mt-2 text-xs text-amber-600 dark:text-amber-400 underline hover:no-underline"
+                    >
+                      Dismiss
+                    </button>
+                  </div>
+                )}
+
                 <div className="w-16 h-16 rounded-full bg-indigo-100 dark:bg-indigo-900/30 mx-auto flex items-center justify-center">
                   <svg
                     className="w-8 h-8 text-indigo-600 dark:text-indigo-400"
@@ -255,10 +314,11 @@ export function InboxCleaner() {
                   topics, and analyze patterns.
                 </p>
                 <button
-                  onClick={() => setIngestionJobId('job-' + Date.now())}
-                  className="px-6 py-2.5 text-sm font-medium text-white bg-indigo-600 rounded-md hover:bg-indigo-700 transition-colors"
+                  onClick={handleBeginIngestion}
+                  disabled={checkingLock}
+                  className="px-6 py-2.5 text-sm font-medium text-white bg-indigo-600 rounded-md hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-wait transition-colors"
                 >
-                  Begin Ingestion
+                  {checkingLock ? 'Checking...' : 'Begin Ingestion'}
                 </button>
               </div>
             )}

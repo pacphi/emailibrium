@@ -53,18 +53,14 @@ describe('secureStorage', () => {
       await secureStorage.setItem('foo', 'bar');
 
       // A key should have been stored via set()
-      expect(mockSet).toHaveBeenCalledWith(
-        '__emailibrium_crypto_key__',
-        expect.anything(),
-      );
+      expect(mockSet).toHaveBeenCalledWith('__emailibrium_crypto_key__', expect.anything());
     });
 
     it('reuses existing CryptoKey from IndexedDB', async () => {
-      const existingKey = await crypto.subtle.generateKey(
-        { name: 'AES-GCM', length: 256 },
-        false,
-        ['encrypt', 'decrypt'],
-      );
+      const existingKey = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, [
+        'encrypt',
+        'decrypt',
+      ]);
 
       // Return the existing key for the handle lookup
       mockGet.mockImplementation((key: string) => {
@@ -171,16 +167,17 @@ describe('secureStorage', () => {
   describe('error handling', () => {
     it('propagates decryption errors', async () => {
       // Return a valid key but garbage encrypted data
-      const key = await crypto.subtle.generateKey(
-        { name: 'AES-GCM', length: 256 },
-        false,
-        ['encrypt', 'decrypt'],
-      );
+      const key = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, [
+        'encrypt',
+        'decrypt',
+      ]);
 
       mockGet.mockImplementation((k: string) => {
         if (k === '__emailibrium_crypto_key__') return Promise.resolve(key);
         // Return garbage data that will fail decryption
-        return Promise.resolve(new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 99, 99]).buffer);
+        return Promise.resolve(
+          new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 99, 99]).buffer,
+        );
       });
 
       await expect(secureStorage.getItem('bad')).rejects.toThrow();

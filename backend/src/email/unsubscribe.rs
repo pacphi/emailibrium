@@ -36,6 +36,7 @@ pub enum UnsubscribeMethod {
 
 /// A subscription target for unsubscribe operations.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SubscriptionTarget {
     /// Sender email address or domain.
     pub sender: String,
@@ -49,6 +50,7 @@ pub struct SubscriptionTarget {
 
 /// Result of a single unsubscribe attempt.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct UnsubscribeResult {
     pub sender: String,
     pub method_used: Option<UnsubscribeMethod>,
@@ -58,6 +60,7 @@ pub struct UnsubscribeResult {
 
 /// Result of a batch unsubscribe operation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct BatchResult {
     pub batch_id: String,
     pub total: usize,
@@ -77,6 +80,7 @@ pub struct Subscription {
 
 /// Preview of what a batch unsubscribe would do.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct UnsubscribePreview {
     pub sender: String,
     pub methods: Vec<UnsubscribeMethod>,

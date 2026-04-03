@@ -151,6 +151,9 @@ impl GmailProvider {
             })
             .unwrap_or_else(Utc::now);
 
+        // Extract List-Unsubscribe headers (RFC 2369 / RFC 8058).
+        let unsub = super::types::UnsubscribeHeaders::from_json_headers(&headers);
+
         // Extract plain-text body from parts.
         let body = extract_body_text(msg);
         // Extract and sanitize HTML body from parts.
@@ -169,6 +172,8 @@ impl GmailProvider {
             labels,
             date,
             is_read,
+            list_unsubscribe: unsub.list_unsubscribe,
+            list_unsubscribe_post: unsub.list_unsubscribe_post,
         })
     }
 }

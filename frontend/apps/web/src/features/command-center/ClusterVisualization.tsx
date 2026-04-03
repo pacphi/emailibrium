@@ -1,6 +1,8 @@
 import { useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import type { Cluster, ClusterTerm } from '@emailibrium/types';
 import type { ClusteringStatus } from '@emailibrium/api';
+import { getIngestionProgress } from '@emailibrium/api';
 
 interface ClusterVisualizationProps {
   clusters?: Cluster[];
@@ -62,6 +64,16 @@ export function ClusterVisualization({
 }: ClusterVisualizationProps) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
+  // Poll ingestion progress to get real-time pipeline phase for accurate empty-state messaging.
+  const ingestionProgressQuery = useQuery({
+    queryKey: ['dashboard-ingestion-progress'],
+    queryFn: getIngestionProgress,
+    staleTime: 2000,
+    refetchInterval: 3000,
+  });
+  const pipelineActive = ingestionProgressQuery.data?.active ?? false;
+  const pipelinePhase = ingestionProgressQuery.data?.phase ?? null;
+
   if (isLoading) {
     return (
       <section aria-label="Topic clusters loading">
@@ -80,15 +92,24 @@ export function ClusterVisualization({
     const isIngesting = clusteringStatus?.isIngesting ?? false;
     const phase = clusteringStatus?.phase;
 
-    // Context-aware message based on actual pipeline state
+    // Context-aware message based on actual pipeline state.
+    // Use both the clustering status endpoint AND the ingestion pipeline phase
+    // to handle transition windows where clustering status hasn't caught up.
+    const effectivePhase = phase ?? pipelinePhase;
+    const effectiveIngesting = isIngesting || pipelineActive;
+
     let message: string;
-    if (isClustering) {
+    if (isClustering || effectivePhase === 'clustering') {
       message = 'Clustering in progress — analyzing email topics...';
-    } else if (phase === 'embedding') {
+    } else if (effectivePhase === 'embedding') {
       message = 'Waiting for embeddings to complete before clustering...';
-    } else if (phase === 'categorizing') {
+    } else if (effectivePhase === 'categorizing') {
       message = 'Categorizing emails — clustering will follow...';
-    } else if (isIngesting) {
+    } else if (effectivePhase === 'analyzing') {
+      message = 'Finalizing analysis — clusters will appear shortly...';
+    } else if (effectivePhase === 'syncing') {
+      message = 'Syncing emails — clustering will follow...';
+    } else if (effectiveIngesting) {
       message = 'Email analysis in progress — clustering will follow...';
     } else {
       message = 'No clusters yet. Use "Full Sync" to rebuild embeddings and clusters.';
@@ -99,7 +120,7 @@ export function ClusterVisualization({
         <h2 className="mb-3 text-lg font-semibold text-gray-900 dark:text-white">Topic Clusters</h2>
         <div className="rounded-xl border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
           <div className="flex flex-col items-center gap-3 py-4">
-            {isClustering ? (
+            {isClustering || effectiveIngesting || effectivePhase === 'clustering' ? (
               <svg
                 className="h-6 w-6 animate-spin text-indigo-500"
                 viewBox="0 0 24 24"

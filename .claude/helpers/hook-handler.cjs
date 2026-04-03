@@ -146,6 +146,14 @@ const handlers = {
     console.log('[OK] Command validated');
   },
 
+  'pre-edit': () => {
+    // Record pre-edit metric
+    if (session && session.metric) {
+      try { session.metric('edits'); } catch (e) { /* no active session */ }
+    }
+    console.log('[OK] Edit validated');
+  },
+
   'post-edit': () => {
     // Record edit for session metrics
     if (session && session.metric) {
@@ -227,6 +235,14 @@ const handlers = {
     }
   },
 
+  'post-bash': () => {
+    // Record bash command for session metrics
+    if (session && session.metric) {
+      try { session.metric('commands'); } catch (e) { /* no active session */ }
+    }
+    console.log('[OK] Command completed');
+  },
+
   'post-task': () => {
     // Implicit success feedback for intelligence
     if (intelligence && intelligence.feedback) {
@@ -235,6 +251,50 @@ const handlers = {
       } catch (e) { /* non-fatal */ }
     }
     console.log('[OK] Task completed');
+  },
+
+  'status': () => {
+    if (session && session.status) {
+      session.status();
+    } else {
+      console.log('[OK] Status check');
+    }
+  },
+
+  'notify': () => {
+    // Notification passthrough
+    const message = hookInput.message || prompt || '';
+    if (message) {
+      console.log(`[NOTIFY] ${message.substring(0, 200)}`);
+    } else {
+      console.log('[OK] Notification received');
+    }
+  },
+
+  'compact-manual': () => {
+    // Save state before manual compaction
+    if (intelligence && intelligence.consolidate) {
+      try {
+        const result = intelligence.consolidate();
+        if (result && result.entries > 0) {
+          console.log(`[INTELLIGENCE] Pre-compact consolidation: ${result.entries} entries`);
+        }
+      } catch (e) { /* non-fatal */ }
+    }
+    console.log('[OK] Manual compaction prepared');
+  },
+
+  'compact-auto': () => {
+    // Save state before auto compaction
+    if (intelligence && intelligence.consolidate) {
+      try {
+        const result = intelligence.consolidate();
+        if (result && result.entries > 0) {
+          console.log(`[INTELLIGENCE] Pre-compact consolidation: ${result.entries} entries`);
+        }
+      } catch (e) { /* non-fatal */ }
+    }
+    console.log('[OK] Auto compaction prepared');
   },
 
   'stats': () => {
@@ -258,7 +318,7 @@ const handlers = {
     // Unknown command - pass through without error
     console.log(`[OK] Hook: ${command}`);
   } else {
-    console.log('Usage: hook-handler.cjs <route|pre-bash|post-edit|session-restore|session-end|pre-task|post-task|stats>');
+    console.log('Usage: hook-handler.cjs <route|pre-bash|pre-edit|post-edit|post-bash|session-restore|session-end|pre-task|post-task|status|notify|compact-manual|compact-auto|stats>');
   }
 }
 

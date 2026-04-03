@@ -70,6 +70,8 @@ struct ImapEnvelope {
     flags: Vec<String>,
     body_snippet: String,
     body_full: Option<String>,
+    list_unsubscribe: Option<String>,
+    list_unsubscribe_post: Option<String>,
 }
 
 /// Parse a raw IMAP FETCH response line into envelope fields.
@@ -132,6 +134,10 @@ fn parse_fetch_response(raw: &str) -> Vec<ImapEnvelope> {
                 env.date = DateTime::parse_from_rfc2822(date_str)
                     .ok()
                     .map(|dt| dt.with_timezone(&Utc));
+            } else if lower.starts_with("list-unsubscribe:") {
+                env.list_unsubscribe = Some(trimmed[17..].trim().to_string());
+            } else if lower.starts_with("list-unsubscribe-post:") {
+                env.list_unsubscribe_post = Some(trimmed[22..].trim().to_string());
             }
         }
     }
@@ -187,6 +193,8 @@ fn envelope_to_message(env: ImapEnvelope) -> EmailMessage {
         labels,
         date: env.date.unwrap_or_else(Utc::now),
         is_read,
+        list_unsubscribe: env.list_unsubscribe,
+        list_unsubscribe_post: env.list_unsubscribe_post,
     }
 }
 
@@ -212,9 +220,9 @@ impl ImapProvider {
     fn build_fetch_command(start: u32, count: u32, full: bool) -> String {
         let end = start + count - 1;
         let fields = if full {
-            "UID FLAGS BODY[HEADER.FIELDS (FROM TO SUBJECT DATE)] BODY[TEXT]"
+            "UID FLAGS BODY[HEADER.FIELDS (FROM TO SUBJECT DATE LIST-UNSUBSCRIBE LIST-UNSUBSCRIBE-POST)] BODY[TEXT]"
         } else {
-            "UID FLAGS BODY[HEADER.FIELDS (FROM TO SUBJECT DATE)]"
+            "UID FLAGS BODY[HEADER.FIELDS (FROM TO SUBJECT DATE LIST-UNSUBSCRIBE LIST-UNSUBSCRIBE-POST)]"
         };
         format!("FETCH {start}:{end} ({fields})")
     }
@@ -611,6 +619,7 @@ Subject: Second
             flags: vec!["Seen".to_string()],
             body_snippet: "Preview text".to_string(),
             body_full: Some("Full body".to_string()),
+            ..Default::default()
         };
         let msg = envelope_to_message(env);
         assert_eq!(msg.id, "42");
@@ -630,6 +639,7 @@ Subject: Second
             flags: vec![],
             body_snippet: "".to_string(),
             body_full: Some("Body content here for snippet".to_string()),
+            ..Default::default()
         };
         let msg = envelope_to_message(env);
         assert!(!msg.is_read);

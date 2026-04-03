@@ -162,6 +162,12 @@ pub struct EmailMessage {
     pub date: DateTime<Utc>,
     /// Whether the message has been read.
     pub is_read: bool,
+    /// RFC 2369 List-Unsubscribe header value (if present).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub list_unsubscribe: Option<String>,
+    /// RFC 8058 List-Unsubscribe-Post header value (if present).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub list_unsubscribe_post: Option<String>,
 }
 
 /// Response envelope for paginated message lists.
@@ -185,6 +191,72 @@ pub struct ProviderConfig {
     pub scopes: Vec<String>,
 }
 
+// ---------------------------------------------------------------------------
+// Shared header extraction (used by all providers)
+// ---------------------------------------------------------------------------
+
+/// Unsubscribe headers extracted from an email.
+#[derive(Debug, Clone, Default)]
+pub struct UnsubscribeHeaders {
+    /// RFC 2369 List-Unsubscribe header value.
+    pub list_unsubscribe: Option<String>,
+    /// RFC 8058 List-Unsubscribe-Post header value.
+    pub list_unsubscribe_post: Option<String>,
+}
+
+impl UnsubscribeHeaders {
+    /// Extract unsubscribe headers from a name/value header array (Gmail format).
+    ///
+    /// Expects a JSON array of `{"name": "...", "value": "..."}` objects,
+    /// as returned by the Gmail API (`payload.headers`) and similar APIs.
+    pub fn from_json_headers(headers: &[serde_json::Value]) -> Self {
+        let find = |name: &str| -> Option<String> {
+            headers
+                .iter()
+                .find(|h| {
+                    h["name"]
+                        .as_str()
+                        .is_some_and(|n| n.eq_ignore_ascii_case(name))
+                })
+                .and_then(|h| h["value"].as_str())
+                .filter(|v| !v.is_empty())
+                .map(|v| v.to_string())
+        };
+
+        Self {
+            list_unsubscribe: find("List-Unsubscribe"),
+            list_unsubscribe_post: find("List-Unsubscribe-Post"),
+        }
+    }
+
+    /// Extract unsubscribe headers from MS Graph `internetMessageHeaders`.
+    ///
+    /// Graph uses the same `[{"name": "...", "value": "..."}]` format,
+    /// so this delegates to [`from_json_headers`].
+    pub fn from_graph_headers(headers: &[serde_json::Value]) -> Self {
+        Self::from_json_headers(headers)
+    }
+
+    /// Extract unsubscribe headers from raw IMAP header lines.
+    ///
+    /// Each line is expected to be a full header line like
+    /// `List-Unsubscribe: <https://...>`.
+    pub fn from_imap_lines(lines: &[(String, String)]) -> Self {
+        let find = |name: &str| -> Option<String> {
+            lines
+                .iter()
+                .find(|(k, _)| k.eq_ignore_ascii_case(name))
+                .map(|(_, v)| v.clone())
+                .filter(|v| !v.is_empty())
+        };
+
+        Self {
+            list_unsubscribe: find("List-Unsubscribe"),
+            list_unsubscribe_post: find("List-Unsubscribe-Post"),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -206,5 +278,52 @@ mod tests {
             AccountStatus::Connected
         );
         assert_eq!(AccountStatus::Suspended.as_str(), "suspended");
+    }
+
+    #[test]
+    fn unsub_headers_from_json_gmail_style() {
+        let headers: Vec<serde_json::Value> = serde_json::from_str(
+            r#"[
+                {"name": "From", "value": "news@example.com"},
+                {"name": "List-Unsubscribe", "value": "<https://example.com/unsub>, <mailto:unsub@example.com>"},
+                {"name": "List-Unsubscribe-Post", "value": "List-Unsubscribe=One-Click"}
+            ]"#,
+        )
+        .unwrap();
+
+        let h = UnsubscribeHeaders::from_json_headers(&headers);
+        assert!(h
+            .list_unsubscribe
+            .as_ref()
+            .unwrap()
+            .contains("example.com/unsub"));
+        assert_eq!(
+            h.list_unsubscribe_post.as_deref(),
+            Some("List-Unsubscribe=One-Click")
+        );
+    }
+
+    #[test]
+    fn unsub_headers_from_json_missing() {
+        let headers: Vec<serde_json::Value> =
+            serde_json::from_str(r#"[{"name": "From", "value": "a@b.com"}]"#).unwrap();
+
+        let h = UnsubscribeHeaders::from_json_headers(&headers);
+        assert!(h.list_unsubscribe.is_none());
+        assert!(h.list_unsubscribe_post.is_none());
+    }
+
+    #[test]
+    fn unsub_headers_from_imap_lines() {
+        let lines = vec![
+            (
+                "List-Unsubscribe".to_string(),
+                "<https://x.com/unsub>".to_string(),
+            ),
+            ("From".to_string(), "a@b.com".to_string()),
+        ];
+        let h = UnsubscribeHeaders::from_imap_lines(&lines);
+        assert!(h.list_unsubscribe.is_some());
+        assert!(h.list_unsubscribe_post.is_none());
     }
 }

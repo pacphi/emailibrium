@@ -64,22 +64,24 @@ export function UnsubscribePreviewDialog({
               <div className="space-y-2">
                 {previews.map((preview) => (
                   <div
-                    key={preview.subscriptionId}
+                    key={preview.sender}
                     className="rounded-lg border border-gray-100 bg-gray-50 p-3 dark:border-gray-700 dark:bg-gray-900/50"
                   >
                     <div className="flex items-center justify-between">
                       <div>
                         <p className="text-sm font-medium text-gray-900 dark:text-white">
-                          {preview.senderAddress}
+                          {preview.sender}
                         </p>
                         <p className="text-xs text-gray-500 dark:text-gray-400">
-                          {preview.emailCount} emails -- via {preview.method}
+                          via {preview.bestMethod?.type ?? 'unknown'}
+                          {preview.methods.length > 1 &&
+                            ` (+${preview.methods.length - 1} fallback${preview.methods.length > 2 ? 's' : ''})`}
                         </p>
                       </div>
                     </div>
-                    {preview.estimatedEffect && (
-                      <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                        {preview.estimatedEffect}
+                    {preview.warning && (
+                      <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
+                        {preview.warning}
                       </p>
                     )}
                   </div>

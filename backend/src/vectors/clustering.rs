@@ -26,9 +26,11 @@ use super::error::VectorError;
 use super::store::VectorStoreBackend;
 use super::types::{SearchParams, VectorCollection};
 
-/// Maximum number of points sampled for silhouette score estimation.
-/// 3 000 samples gives < 1 % variance vs the full O(n²) computation.
-const MAX_SILHOUETTE_SAMPLE: usize = 3_000;
+/// Default maximum number of points sampled for silhouette score estimation.
+/// Reduced to 500 per ADR-021: scikit-learn tutorial uses 500; sufficient for
+/// relative K-ranking without O(n²) cost on large datasets.
+#[allow(dead_code)]
+const DEFAULT_SILHOUETTE_SAMPLE: usize = 500;
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -116,7 +118,7 @@ fn default_graphsage_dropout() -> f32 {
     0.0
 }
 fn default_kmeans_max_iters() -> usize {
-    100
+    30
 }
 
 impl Default for ClusterConfig {
@@ -337,7 +339,18 @@ fn nearest_centroid(point: &[f32], centroids: &[Vec<f32>]) -> usize {
 /// For each point: a = avg distance to same-cluster points,
 /// b = avg distance to nearest other cluster.
 /// Score = mean over all points of (b - a) / max(a, b).
+#[allow(dead_code)]
 pub fn silhouette_score(data: &[Vec<f32>], assignments: &[usize], k: usize) -> f32 {
+    silhouette_score_sampled(data, assignments, k, DEFAULT_SILHOUETTE_SAMPLE)
+}
+
+/// Compute the silhouette score with a configurable sample size (ADR-021).
+pub fn silhouette_score_sampled(
+    data: &[Vec<f32>],
+    assignments: &[usize],
+    k: usize,
+    max_sample: usize,
+) -> f32 {
     let n = data.len();
     if n <= 1 || k <= 1 {
         return 0.0;
@@ -359,12 +372,12 @@ pub fn silhouette_score(data: &[Vec<f32>], assignments: &[usize], k: usize) -> f
         return 0.0;
     }
 
-    // Sample evaluation points when n > MAX_SILHOUETTE_SAMPLE to avoid O(n²).
+    // Sample evaluation points when n > max_sample to avoid O(n²).
     // Each sampled point still computes distances against ALL cluster members,
     // giving O(sample_size × n) instead of O(n²).
-    let eval_indices: Vec<usize> = if n > MAX_SILHOUETTE_SAMPLE {
+    let eval_indices: Vec<usize> = if n > max_sample {
         let mut rng = rand::rng();
-        let mut indices = rand_sample(&mut rng, n, MAX_SILHOUETTE_SAMPLE).into_vec();
+        let mut indices = rand_sample(&mut rng, n, max_sample).into_vec();
         indices.sort_unstable();
         indices
     } else {
@@ -792,29 +805,16 @@ pub fn generate_cluster_name(email_subjects: &[String]) -> String {
 /// `cluster_subjects` — subjects for this cluster.
 /// `all_cluster_subjects` — subjects for each cluster (Vec of Vec of subjects).
 /// Returns the top `max_terms` terms sorted by TF-IDF score.
-fn compute_tfidf_terms(
-    cluster_subjects: &[String],
+/// Precompute a global document-frequency table across all clusters (ADR-021).
+///
+/// Computing IDF globally once and reusing it for each cluster is the canonical
+/// approach (scikit-learn TfidfVectorizer, Manning et al. "Introduction to
+/// Information Retrieval" Ch. 6). This eliminates redundant O(K × N × V) work
+/// when computing TF-IDF per cluster.
+fn precompute_global_df(
     all_cluster_subjects: &[Vec<String>],
-    max_terms: usize,
-) -> Vec<ClusterTerm> {
-    let stop: HashSet<&str> = STOP_WORDS.iter().copied().collect();
-    let num_clusters = all_cluster_subjects.len() as f32;
-
-    // Term frequency in this cluster
-    let mut tf: HashMap<String, usize> = HashMap::new();
-    for subject in cluster_subjects {
-        let words: HashSet<String> = subject
-            .split(|c: char| !c.is_alphanumeric())
-            .filter(|w| w.len() > 1)
-            .map(|w| w.to_lowercase())
-            .filter(|w| !stop.contains(w.as_str()))
-            .collect();
-        for word in words {
-            *tf.entry(word).or_insert(0) += 1;
-        }
-    }
-
-    // Document frequency across all clusters (how many clusters contain this term)
+    stop: &HashSet<&str>,
+) -> HashMap<String, usize> {
     let mut df: HashMap<String, usize> = HashMap::new();
     for subjects in all_cluster_subjects {
         let mut cluster_words: HashSet<String> = HashSet::new();
@@ -832,14 +832,38 @@ fn compute_tfidf_terms(
             *df.entry(word).or_insert(0) += 1;
         }
     }
+    df
+}
 
-    // TF-IDF = tf * log(N / df)
+fn compute_tfidf_terms(
+    cluster_subjects: &[String],
+    global_df: &HashMap<String, usize>,
+    num_clusters: f32,
+    max_terms: usize,
+) -> Vec<ClusterTerm> {
+    let stop: HashSet<&str> = STOP_WORDS.iter().copied().collect();
+
+    // Term frequency in this cluster
+    let mut tf: HashMap<String, usize> = HashMap::new();
+    for subject in cluster_subjects {
+        let words: HashSet<String> = subject
+            .split(|c: char| !c.is_alphanumeric())
+            .filter(|w| w.len() > 1)
+            .map(|w| w.to_lowercase())
+            .filter(|w| !stop.contains(w.as_str()))
+            .collect();
+        for word in words {
+            *tf.entry(word).or_insert(0) += 1;
+        }
+    }
+
+    // TF-IDF = tf * log(N / df), using precomputed global DF
     let total_subjects = cluster_subjects.len().max(1) as f32;
     let mut scored: Vec<ClusterTerm> = tf
         .into_iter()
         .map(|(word, count)| {
             let tf_score = count as f32 / total_subjects;
-            let idf = (num_clusters / *df.get(&word).unwrap_or(&1) as f32).ln() + 1.0;
+            let idf = (num_clusters / *global_df.get(&word).unwrap_or(&1) as f32).ln() + 1.0;
             ClusterTerm {
                 word,
                 score: tf_score * idf,
@@ -1146,7 +1170,7 @@ impl ClusterEngine {
             let propagated =
                 propagate_embeddings_graphsage(&ids, &embeddings, &graph, &self.config);
 
-            // Step 3: Auto-detect K via silhouette score.
+            // Step 3: Auto-detect K via silhouette score (ADR-021 optimized).
             // Use configurable min_k/max_k from tuning.yaml.
             let tuning_min_k = self.clustering_tuning.min_k.max(2);
             let tuning_max_k = self.clustering_tuning.max_k;
@@ -1156,18 +1180,24 @@ impl ClusterEngine {
             let mut best_k = min_k;
             let mut best_score = f32::NEG_INFINITY;
 
-            let probe_iters = self.config.kmeans_max_iters.min(50);
+            // ADR-021: Use configurable probe iterations (default 15, was 50).
+            // Yale research shows KMeans converges in 2-4 iterations with KMeans++ init.
+            let probe_iters = self.clustering_tuning.kmeans_probe_iters;
+            // ADR-021: Use configurable silhouette sample size (default 500, was 3000).
+            // scikit-learn tutorial uses 500; sufficient for relative K-ranking.
+            let sil_sample = self.clustering_tuning.silhouette_sample_size;
             for k in min_k..=max_k {
                 let assignments = kmeans(&propagated, k, probe_iters, 0);
-                let score = silhouette_score(&propagated, &assignments, k);
+                let score = silhouette_score_sampled(&propagated, &assignments, k, sil_sample);
                 if score > best_score {
                     best_score = score;
                     best_k = k;
                 }
             }
 
-            // Step 4: Run KMeans++ with best K.
-            let assignments = kmeans(&propagated, best_k, self.config.kmeans_max_iters, 0);
+            // Step 4: Run KMeans++ with best K (ADR-021: configurable final iters).
+            let final_iters = self.clustering_tuning.kmeans_final_iters;
+            let assignments = kmeans(&propagated, best_k, final_iters, 0);
 
             // Step 5: Build cluster members map.
             let mut members: HashMap<usize, Vec<usize>> = HashMap::new();
@@ -1212,18 +1242,23 @@ impl ClusterEngine {
             });
         }
 
-        // Build all-cluster subject lists for TF-IDF.
+        // ADR-021: Precompute global DF table once, then reuse for all clusters.
+        // This eliminates redundant O(K × N × V) work from per-cluster DF computation.
         let all_cluster_subjects: Vec<Vec<String>> = cluster_data
             .iter()
             .map(|cd| cd.cluster_subjects.clone())
             .collect();
+        let stop: HashSet<&str> = STOP_WORDS.iter().copied().collect();
+        let global_df = precompute_global_df(&all_cluster_subjects, &stop);
+        let num_clusters = all_cluster_subjects.len() as f32;
 
         let mut new_clusters: Vec<TopicCluster> = Vec::new();
         for cd in &cluster_data {
             let name = generate_cluster_name(&cd.cluster_subjects);
             let top_terms = compute_tfidf_terms(
                 &cd.cluster_subjects,
-                &all_cluster_subjects,
+                &global_df,
+                num_clusters,
                 self.clustering_tuning.tfidf_max_terms,
             );
 
@@ -1478,22 +1513,14 @@ impl ClusterEngine {
         let clusters = self.clusters.read().await;
         let pool = &self.db.pool;
 
-        let mut tx = pool
-            .begin()
-            .await
-            ?;
+        let mut tx = pool.begin().await?;
 
         sqlx::query("DELETE FROM topic_clusters")
             .execute(&mut *tx)
-            .await
-            ?;
+            .await?;
 
         for c in clusters.iter() {
-            let centroid_blob: Vec<u8> = c
-                .centroid
-                .iter()
-                .flat_map(|f| f.to_le_bytes())
-                .collect();
+            let centroid_blob: Vec<u8> = c.centroid.iter().flat_map(|f| f.to_le_bytes()).collect();
             let email_ids_json =
                 serde_json::to_string(&c.email_ids).unwrap_or_else(|_| "[]".to_string());
             let top_terms_json =
@@ -1522,13 +1549,10 @@ impl ClusterEngine {
             .bind(c.created_at.to_rfc3339())
             .bind(c.updated_at.to_rfc3339())
             .execute(&mut *tx)
-            .await
-            ?;
+            .await?;
         }
 
-        tx.commit()
-            .await
-            ?;
+        tx.commit().await?;
 
         tracing::info!(count = clusters.len(), "Persisted clusters to SQLite");
         Ok(())
@@ -1544,8 +1568,7 @@ impl ClusterEngine {
             "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='topic_clusters'",
         )
         .fetch_one(pool)
-        .await
-        ?;
+        .await?;
 
         if table_exists.0 == 0 {
             tracing::debug!("topic_clusters table not found, skipping load");
@@ -1553,19 +1576,19 @@ impl ClusterEngine {
         }
 
         let rows: Vec<(
-            String,         // id
-            String,         // name
-            String,         // description
-            Vec<u8>,        // centroid (blob)
-            String,         // email_ids (json)
-            i64,            // email_count
-            String,         // top_terms (json)
-            String,         // representative_email_ids (json)
-            f64,            // stability_score
-            i64,            // stability_runs
-            bool,           // is_pinned
-            String,         // created_at
-            String,         // updated_at
+            String,  // id
+            String,  // name
+            String,  // description
+            Vec<u8>, // centroid (blob)
+            String,  // email_ids (json)
+            i64,     // email_count
+            String,  // top_terms (json)
+            String,  // representative_email_ids (json)
+            f64,     // stability_score
+            i64,     // stability_runs
+            bool,    // is_pinned
+            String,  // created_at
+            String,  // updated_at
         )> = sqlx::query_as(
             "SELECT id, name, description, centroid, email_ids, email_count, \
              top_terms, representative_email_ids, stability_score, \
@@ -1573,8 +1596,7 @@ impl ClusterEngine {
              FROM topic_clusters",
         )
         .fetch_all(pool)
-        .await
-        ?;
+        .await?;
 
         let mut loaded: Vec<TopicCluster> = Vec::with_capacity(rows.len());
         let mut assignments_map = HashMap::new();
@@ -1585,10 +1607,8 @@ impl ClusterEngine {
                 .chunks_exact(4)
                 .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
                 .collect();
-            let email_ids: Vec<String> =
-                serde_json::from_str(&row.4).unwrap_or_default();
-            let top_terms: Vec<ClusterTerm> =
-                serde_json::from_str(&row.6).unwrap_or_default();
+            let email_ids: Vec<String> = serde_json::from_str(&row.4).unwrap_or_default();
+            let top_terms: Vec<ClusterTerm> = serde_json::from_str(&row.6).unwrap_or_default();
             let representative_email_ids: Vec<String> =
                 serde_json::from_str(&row.7).unwrap_or_default();
             let created_at = chrono::DateTime::parse_from_rfc3339(&row.11)
