@@ -1,6 +1,12 @@
 import { useState, useCallback, useEffect } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { getClusters, getEnrichedCategories, getClusteringStatus } from '@emailibrium/api';
+import {
+  getClusters,
+  getEnrichedCategories,
+  getClusteringStatus,
+  getIngestionProgress,
+  getAccounts,
+} from '@emailibrium/api';
 import { StatsCards } from './StatsCards';
 import { QuickActions } from './QuickActions';
 import { RecentActivity } from './RecentActivity';
@@ -20,11 +26,33 @@ export function CommandCenter() {
     const params = new URLSearchParams(window.location.search);
     return params.get('view') === 'search' ? 'search' : 'dashboard';
   });
-  const { stats, isLoading, isError, error, refetch, dataUpdatedAt } = useStats();
+  const [completeDismissed, setCompleteDismissed] = useState(false);
   const { open: openPalette } = useCommandPalette();
   const queryClient = useQueryClient();
   const appConfig = useAppConfig();
   const { cache } = appConfig;
+
+  // Poll ingestion progress — drives the persistent pipeline banner and adaptive polling.
+  const ingestionProgressQuery = useQuery({
+    queryKey: ['dashboard-ingestion-progress'],
+    queryFn: getIngestionProgress,
+    staleTime: 2000,
+    refetchInterval: 3000,
+  });
+  const pipelineActive = ingestionProgressQuery.data?.active ?? false;
+  const pipelinePhase = ingestionProgressQuery.data?.phase ?? null;
+
+  // Fetch accounts to show which account is being processed in the banner.
+  const accountsQuery = useQuery({
+    queryKey: ['dashboard-accounts'],
+    queryFn: getAccounts,
+    staleTime: cache.dashboardAccountsRefetchIntervalMs / 2,
+    refetchInterval: cache.dashboardAccountsRefetchIntervalMs,
+  });
+
+  const isActiveIngestionForStats = useSyncStore((s) => s.syncing) || pipelineActive;
+  const { stats, isLoading, isError, error, refetch, dataUpdatedAt } =
+    useStats(isActiveIngestionForStats);
 
   // Fetch clustering status to drive context-aware UI.
   const clusteringStatusQuery = useQuery({
@@ -34,7 +62,7 @@ export function CommandCenter() {
     refetchInterval: cache.clusteringStatusRefetchIntervalMs,
   });
 
-  const isActiveIngestion = clusteringStatusQuery.data?.isIngesting ?? false;
+  const isActiveIngestion = clusteringStatusQuery.data?.isIngesting ?? pipelineActive;
 
   // Fetch topic clusters for the visualization panel.
   // Poll faster during active ingestion so clusters appear promptly.
@@ -69,6 +97,20 @@ export function CommandCenter() {
     refreshAccounts();
   }, [refreshAccounts]);
 
+  // Auto-dismiss "Complete" banner after 10 seconds; reset when pipeline restarts.
+  useEffect(() => {
+    if (pipelineActive && pipelinePhase !== 'complete') {
+      setCompleteDismissed(false);
+    }
+  }, [pipelineActive, pipelinePhase]);
+
+  useEffect(() => {
+    if (pipelinePhase === 'complete' && !completeDismissed) {
+      const timer = setTimeout(() => setCompleteDismissed(true), 10_000);
+      return () => clearTimeout(timer);
+    }
+  }, [pipelinePhase, completeDismissed]);
+
   // Refetch stats and clusters when sync completes.
   useEffect(() => {
     if (!syncing && syncStatus === 'Sync complete!') {
@@ -76,6 +118,7 @@ export function CommandCenter() {
       // Invalidate all dashboard queries so they refresh with new data.
       queryClient.invalidateQueries({ queryKey: ['clusters'] });
       queryClient.invalidateQueries({ queryKey: ['dashboard-clustering-status'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard-email-counts'] });
       queryClient.invalidateQueries({ queryKey: ['dashboard-embedding-status'] });
       queryClient.invalidateQueries({ queryKey: ['dashboard-ingestion-progress'] });
     }
@@ -208,50 +251,143 @@ export function CommandCenter() {
             </div>
           )}
 
-          {/* Sync status banner */}
-          {(syncStatus || syncError) && (
-            <div
-              className={`flex items-center gap-3 rounded-xl border px-4 py-3 text-sm ${
-                syncError
-                  ? 'border-red-200 bg-red-50 text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-400'
-                  : 'border-indigo-200 bg-indigo-50 text-indigo-700 dark:border-indigo-800 dark:bg-indigo-900/20 dark:text-indigo-400'
-              }`}
-              role="status"
-            >
-              {syncing && (
-                <svg
-                  className="h-4 w-4 animate-spin"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  aria-hidden="true"
+          {/* Pipeline status banner — stays visible whenever ingestion is active */}
+          {(() => {
+            // Error banner takes priority
+            if (syncError) {
+              return (
+                <div
+                  className="flex items-center gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-400"
+                  role="alert"
                 >
-                  <circle
-                    className="opacity-25"
-                    cx="12"
-                    cy="12"
-                    r="10"
+                  <span>{syncError}</span>
+                  <button
+                    type="button"
+                    onClick={clearError}
+                    className="ml-auto font-medium underline"
+                  >
+                    Dismiss
+                  </button>
+                </div>
+              );
+            }
+
+            // Active pipeline banner — driven by ingestion progress, not just Zustand
+            const progress = ingestionProgressQuery.data;
+            const isComplete = pipelinePhase === 'complete' && !syncing;
+            const showBanner = (pipelineActive && !(isComplete && completeDismissed)) || syncing;
+            if (!showBanner) return null;
+
+            // Determine the account being processed
+            const accounts = accountsQuery.data ?? [];
+            const activeAccount = accounts.find((a) => a.isActive);
+            const accountLabel = activeAccount?.emailAddress ?? 'your account';
+
+            // Build status message from pipeline progress
+            const phaseLabels: Record<string, string> = {
+              syncing: 'Fetching emails',
+              embedding: 'Generating embeddings',
+              categorizing: 'Categorizing emails',
+              clustering: 'Building topic clusters',
+              analyzing: 'Analyzing patterns',
+              backfilling: 'AI categorization',
+              complete: 'Complete',
+            };
+
+            let statusMessage: string;
+            if (pipelineActive && progress) {
+              const label = phaseLabels[progress.phase ?? ''] ?? progress.phase ?? 'Processing';
+              const parts: string[] = [`${accountLabel}: ${label}`];
+
+              if (progress.phase === 'syncing' && progress.processed) {
+                parts.push(`(${progress.processed.toLocaleString()} emails fetched)`);
+              } else if (progress.phase === 'embedding' && progress.total) {
+                const pct =
+                  progress.total > 0
+                    ? Math.round(((progress.embedded ?? 0) / progress.total) * 100)
+                    : 0;
+                parts.push(
+                  `(${pct}% — ${(progress.embedded ?? 0).toLocaleString()} / ${progress.total.toLocaleString()})`,
+                );
+              } else if (progress.phase === 'categorizing' && progress.total) {
+                const pct =
+                  progress.total > 0
+                    ? Math.round(((progress.categorized ?? 0) / progress.total) * 100)
+                    : 0;
+                parts.push(`(${pct}%)`);
+              }
+
+              if (progress.etaSeconds && progress.etaSeconds > 0) {
+                const mins = Math.ceil(progress.etaSeconds / 60);
+                parts.push(`— ~${mins}m remaining`);
+              }
+
+              statusMessage = parts.join(' ');
+            } else if (syncStatus) {
+              statusMessage = syncStatus;
+            } else {
+              statusMessage = 'Processing...';
+            }
+
+            return (
+              <div
+                className={`flex items-center gap-3 rounded-xl border px-4 py-3 text-sm ${
+                  isComplete
+                    ? 'border-green-200 bg-green-50 text-green-700 dark:border-green-800 dark:bg-green-900/20 dark:text-green-400'
+                    : 'border-indigo-200 bg-indigo-50 text-indigo-700 dark:border-indigo-800 dark:bg-indigo-900/20 dark:text-indigo-400'
+                }`}
+                role="status"
+              >
+                {!isComplete && (
+                  <svg
+                    className="h-4 w-4 flex-shrink-0 animate-spin"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    aria-hidden="true"
+                  >
+                    <circle
+                      className="opacity-25"
+                      cx="12"
+                      cy="12"
+                      r="10"
+                      stroke="currentColor"
+                      strokeWidth="4"
+                    />
+                    <path
+                      className="opacity-75"
+                      fill="currentColor"
+                      d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+                    />
+                  </svg>
+                )}
+                {isComplete && (
+                  <svg
+                    className="h-4 w-4 flex-shrink-0"
+                    fill="none"
+                    viewBox="0 0 24 24"
                     stroke="currentColor"
-                    strokeWidth="4"
-                  />
-                  <path
-                    className="opacity-75"
-                    fill="currentColor"
-                    d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
-                  />
-                </svg>
-              )}
-              <span>{syncError || syncStatus}</span>
-              {syncError && (
-                <button
-                  type="button"
-                  onClick={clearError}
-                  className="ml-auto font-medium underline"
-                >
-                  Dismiss
-                </button>
-              )}
-            </div>
-          )}
+                    strokeWidth={2}
+                  >
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                  </svg>
+                )}
+                <span className="flex-1">{statusMessage}</span>
+                {/* Progress bar for embedding phase */}
+                {pipelineActive && progress?.phase === 'embedding' && (progress.total ?? 0) > 0 && (
+                  <div className="hidden w-32 sm:block">
+                    <div className="h-1.5 w-full rounded-full bg-indigo-200 dark:bg-indigo-800">
+                      <div
+                        className="h-1.5 rounded-full bg-indigo-500 transition-all duration-500"
+                        style={{
+                          width: `${Math.round(((progress.embedded ?? 0) / progress.total!) * 100)}%`,
+                        }}
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })()}
 
           {/* Stats cards */}
           <StatsCards stats={stats} isLoading={isLoading} />

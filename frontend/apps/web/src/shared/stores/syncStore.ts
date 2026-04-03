@@ -36,6 +36,7 @@ const phaseLabels: Record<string, string> = {
   categorizing: 'Categorizing emails',
   clustering: 'Building topic clusters',
   analyzing: 'Analyzing patterns',
+  backfilling: 'AI categorization',
   complete: 'Complete',
 };
 
@@ -178,12 +179,10 @@ export const useSyncStore = create<SyncState>((set, get) => ({
           error: `Sync failed for ${errors.length} account(s): ${errors[0]}`,
         });
       } else {
-        set({ syncing: false, status: 'Sync complete!', error: '' });
-        setTimeout(() => {
-          if (get().status === 'Sync complete!') {
-            set({ status: '' });
-          }
-        }, 5000);
+        // Clear status immediately — the pipeline banner in CommandCenter
+        // now shows real-time progress from the ingestion endpoint, so we
+        // don't need the Zustand "Sync complete!" message.
+        set({ syncing: false, status: '', error: '' });
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);

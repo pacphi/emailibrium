@@ -90,6 +90,17 @@ export async function getIngestionProgress(): Promise<IngestionProgressResponse>
   return api.get('ingestion/progress').json<IngestionProgressResponse>();
 }
 
+export interface BackfillProgressResponse {
+  active: boolean;
+  total: number;
+  categorized: number;
+  failed: number;
+}
+
+export async function getBackfillProgress(): Promise<BackfillProgressResponse> {
+  return api.get('ingestion/backfill-progress').json<BackfillProgressResponse>();
+}
+
 export type ReembedMode = 'all' | 'failed' | 'stale';
 
 export interface ReembedResponse {

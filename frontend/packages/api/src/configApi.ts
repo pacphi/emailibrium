@@ -12,6 +12,10 @@ export interface AppCacheConfig {
   dashboardAccountsRefetchIntervalMs: number;
   dashboardEmbeddingRefetchIntervalMs: number;
   embeddingActiveRefetchIntervalMs: number;
+  ingestionActiveRefetchIntervalMs: number;
+  ingestionActiveStaleTimeMs: number;
+  statsRefetchIntervalMs: number;
+  statsActiveRefetchIntervalMs: number;
 }
 
 export interface AppNetworkConfig {

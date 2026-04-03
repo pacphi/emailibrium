@@ -48,6 +48,10 @@ cache:
   dashboard_accounts_refetch_interval_ms: 10000
   dashboard_embedding_refetch_interval_ms: 10000
   embedding_active_refetch_interval_ms: 5000 # Faster polling during active re-embedding (must stay under rate limit)
+  ingestion_active_refetch_interval_ms: 3000 # Poll email counts + stats this fast during active ingestion
+  ingestion_active_stale_time_ms: 2000 # Stale time for queries during active ingestion
+  stats_refetch_interval_ms: 30000 # Vector stats poll interval (idle)
+  stats_active_refetch_interval_ms: 5000 # Vector stats poll interval (active ingestion)
 
 # ── Network Timeouts ─────────────────────────────────────────────────────────
 network:

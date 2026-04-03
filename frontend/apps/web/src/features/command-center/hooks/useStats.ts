@@ -1,6 +1,8 @@
 import { useQuery } from '@tanstack/react-query';
 import { getHealth, getStats } from '@emailibrium/api';
+import type { AppCacheConfig } from '@emailibrium/api';
 import type { HealthStatus, VectorStats } from '@emailibrium/types';
+import { useAppConfig } from '@/shared/hooks';
 
 export type AppStats = VectorStats;
 
@@ -22,18 +24,19 @@ export function useHealthQuery() {
   });
 }
 
-export function useStatsQuery() {
+export function useStatsQuery(cache: AppCacheConfig, isActive = false) {
   return useQuery<VectorStats>({
     queryKey: ['stats'],
     queryFn: () => getStats(),
-    staleTime: 10_000,
-    refetchInterval: 30_000,
+    staleTime: isActive ? cache.ingestionActiveStaleTimeMs : cache.statsRefetchIntervalMs / 3,
+    refetchInterval: isActive ? cache.statsActiveRefetchIntervalMs : cache.statsRefetchIntervalMs,
   });
 }
 
-export function useStats() {
+export function useStats(isActive = false) {
+  const { cache } = useAppConfig();
   const health = useHealthQuery();
-  const stats = useStatsQuery();
+  const stats = useStatsQuery(cache, isActive);
 
   // Use the most recent dataUpdatedAt from either query as "last updated".
   const dataUpdatedAt = Math.max(stats.dataUpdatedAt ?? 0, health.dataUpdatedAt ?? 0);

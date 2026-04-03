@@ -187,6 +187,19 @@ pub struct IngestionCheckpoint {
 }
 
 // ---------------------------------------------------------------------------
+// Backfill progress
+// ---------------------------------------------------------------------------
+
+/// Shared state for tracking LLM backfill progress, accessible via polling.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct BackfillProgress {
+    pub active: bool,
+    pub total: u64,
+    pub categorized: u64,
+    pub failed: u64,
+}
+
+// ---------------------------------------------------------------------------
 // Internal state
 // ---------------------------------------------------------------------------
 
@@ -215,6 +228,8 @@ pub struct IngestionPipeline {
     /// Tuning parameters from `config/tuning.yaml`.
     ingestion_tuning: super::yaml_config::IngestionTuning,
     error_recovery_tuning: super::yaml_config::ErrorRecoveryTuning,
+    #[allow(dead_code)]
+    backfill_state: Arc<RwLock<BackfillProgress>>,
 }
 
 impl IngestionPipeline {
@@ -244,6 +259,7 @@ impl IngestionPipeline {
             resume_notify: Arc::new(Notify::new()),
             ingestion_tuning,
             error_recovery_tuning,
+            backfill_state: Arc::new(RwLock::new(BackfillProgress::default())),
         }
     }
 
@@ -268,6 +284,11 @@ impl IngestionPipeline {
     /// Subscribe to progress updates (for SSE streaming).
     pub fn subscribe(&self) -> broadcast::Receiver<IngestionProgress> {
         self.progress_tx.subscribe()
+    }
+
+    /// Return a snapshot of the current LLM backfill progress.
+    pub async fn get_backfill_progress(&self) -> BackfillProgress {
+        self.backfill_state.read().await.clone()
     }
 
     /// Start ingestion for the given account. Returns the job ID immediately.
@@ -316,6 +337,7 @@ impl IngestionPipeline {
             resume_notify: self.resume_notify.clone(),
             ingestion_tuning: self.ingestion_tuning.clone(),
             error_recovery_tuning: self.error_recovery_tuning.clone(),
+            backfill_state: self.backfill_state.clone(),
         };
 
         let jid = job_id.clone();
@@ -470,6 +492,7 @@ impl IngestionPipeline {
             resume_notify: self.resume_notify.clone(),
             ingestion_tuning: self.ingestion_tuning.clone(),
             error_recovery_tuning: self.error_recovery_tuning.clone(),
+            backfill_state: self.backfill_state.clone(),
         };
 
         let jid = batch_id.clone();
@@ -532,6 +555,7 @@ struct IngestionPipelineHandle {
     resume_notify: Arc<Notify>,
     ingestion_tuning: super::yaml_config::IngestionTuning,
     error_recovery_tuning: super::yaml_config::ErrorRecoveryTuning,
+    backfill_state: Arc<RwLock<BackfillProgress>>,
 }
 
 impl IngestionPipelineHandle {
@@ -1056,6 +1080,7 @@ impl IngestionPipelineHandle {
         let batch_size = self.ingestion_tuning.backfill_batch_size;
         let concurrency = self.ingestion_tuning.backfill_concurrency;
         let delay_ms = self.ingestion_tuning.backfill_delay_between_ms;
+        let backfill_state = self.backfill_state.clone();
 
         tokio::spawn(async move {
             info!(
@@ -1065,6 +1090,25 @@ impl IngestionPipelineHandle {
                 concurrency,
                 "Starting background LLM backfill for pending_backfill emails"
             );
+
+            // Count total pending_backfill emails for progress tracking.
+            let total_count: u64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM emails WHERE account_id = ? AND category_method = 'pending_backfill'",
+            )
+            .bind(&account_id)
+            .fetch_one(&db.pool)
+            .await
+            .unwrap_or(0i64) as u64;
+
+            {
+                let mut bs = backfill_state.write().await;
+                *bs = BackfillProgress {
+                    active: true,
+                    total: total_count,
+                    categorized: 0,
+                    failed: 0,
+                };
+            }
 
             let mut total_backfilled: u64 = 0;
             let mut total_failed: u64 = 0;
@@ -1176,10 +1220,17 @@ impl IngestionPipelineHandle {
                     }
                 }
 
+                // Update shared backfill state after each batch.
+                {
+                    let mut bs = backfill_state.write().await;
+                    bs.categorized = total_backfilled;
+                    bs.failed = total_failed;
+                }
+
                 // Broadcast backfill progress via SSE.
                 let progress = IngestionProgress {
                     job_id: job_id.clone(),
-                    total: 0, // unknown total for backfill
+                    total: total_count,
                     processed: total_backfilled + total_failed,
                     embedded: 0,
                     categorized: total_backfilled,
@@ -1194,6 +1245,14 @@ impl IngestionPipelineHandle {
                 if delay_ms > 0 {
                     tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
                 }
+            }
+
+            // Mark backfill as complete.
+            {
+                let mut bs = backfill_state.write().await;
+                bs.active = false;
+                bs.categorized = total_backfilled;
+                bs.failed = total_failed;
             }
 
             info!(

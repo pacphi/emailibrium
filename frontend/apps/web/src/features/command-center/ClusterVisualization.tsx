@@ -87,17 +87,24 @@ export function ClusterVisualization({
     );
   }
 
-  if (!clusters || clusters.length === 0) {
-    const isClustering = clusteringStatus?.isClustering ?? false;
-    const isIngesting = clusteringStatus?.isIngesting ?? false;
-    const phase = clusteringStatus?.phase;
+  // Determine pipeline state — used for both empty and stale-cluster rendering.
+  const isClustering = clusteringStatus?.isClustering ?? false;
+  const isIngesting = clusteringStatus?.isIngesting ?? false;
+  const clusterPhase = clusteringStatus?.phase;
+  const effectivePhase = clusterPhase ?? pipelinePhase;
+  const effectiveIngesting = isIngesting || pipelineActive;
 
-    // Context-aware message based on actual pipeline state.
-    // Use both the clustering status endpoint AND the ingestion pipeline phase
-    // to handle transition windows where clustering status hasn't caught up.
-    const effectivePhase = phase ?? pipelinePhase;
-    const effectiveIngesting = isIngesting || pipelineActive;
+  // During an active pipeline that hasn't reached clustering yet, suppress
+  // stale clusters from a previous run and show progress instead.
+  const preClustering =
+    pipelineActive &&
+    (pipelinePhase === 'syncing' ||
+      pipelinePhase === 'embedding' ||
+      pipelinePhase === 'categorizing' ||
+      pipelinePhase === 'analyzing');
+  const showProgressInsteadOfClusters = preClustering || !clusters || clusters.length === 0;
 
+  if (showProgressInsteadOfClusters) {
     let message: string;
     if (isClustering || effectivePhase === 'clustering') {
       message = 'Clustering in progress — analyzing email topics...';

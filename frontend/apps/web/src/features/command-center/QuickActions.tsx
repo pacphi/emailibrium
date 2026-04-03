@@ -74,7 +74,7 @@ export function QuickActions({ onAction, syncing, hasAccounts = true }: QuickAct
       label: 'Add Account',
       description: 'Connect email provider',
       icon: <PlusIcon />,
-      href: '/settings',
+      href: '/onboarding',
     },
   ];
 

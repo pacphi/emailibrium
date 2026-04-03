@@ -1,5 +1,5 @@
-import { type ReactNode } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { type ReactNode, useEffect, useRef } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { AppStats } from './hooks/useStats';
 import {
   getAccounts,
@@ -7,6 +7,7 @@ import {
   getEmbeddingStatus,
   getIngestionProgress,
   getClusteringStatus,
+  getBackfillProgress,
 } from '@emailibrium/api';
 import { useAppConfig } from '@/shared/hooks';
 
@@ -90,6 +91,65 @@ interface StatsCardsProps {
 
 export function StatsCards({ stats, isLoading }: StatsCardsProps) {
   const { cache } = useAppConfig();
+  const queryClient = useQueryClient();
+
+  // Poll ingestion progress FIRST — drives adaptive intervals for other queries.
+  const ingestionProgressQuery = useQuery({
+    queryKey: ['dashboard-ingestion-progress'],
+    queryFn: getIngestionProgress,
+    staleTime: 2000,
+    refetchInterval: 3000, // Fast poll — this is lightweight
+  });
+
+  const ingestionProgress = ingestionProgressQuery.data ?? null;
+  const pipelineActive = ingestionProgress?.active ?? false;
+
+  // Invalidate vector stats whenever ingestion progress changes during active pipeline.
+  // This ensures the tiles update as emails are fetched, embedded, etc.
+  const prevProcessedRef = useRef<number>(0);
+  useEffect(() => {
+    if (!pipelineActive) {
+      prevProcessedRef.current = 0;
+      return;
+    }
+    const processed = ingestionProgress?.processed ?? 0;
+    const embedded = ingestionProgress?.embedded ?? 0;
+    const current = processed + embedded;
+    if (current !== prevProcessedRef.current) {
+      prevProcessedRef.current = current;
+      queryClient.invalidateQueries({ queryKey: ['stats'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard-email-counts'] });
+    }
+  }, [pipelineActive, ingestionProgress?.processed, ingestionProgress?.embedded, queryClient]);
+
+  const backfillQuery = useQuery({
+    queryKey: ['dashboard-backfill-progress'],
+    queryFn: getBackfillProgress,
+    staleTime: 2000,
+    refetchInterval: (query) => {
+      const isActive = query.state.data?.active;
+      return isActive || pipelineActive ? 3000 : 30000;
+    },
+  });
+
+  // Invalidate categories-enriched-cc during and after backfill.
+  const prevBackfillRef = useRef<number>(0);
+  useEffect(() => {
+    const backfillData = backfillQuery.data;
+    if (!backfillData?.active) {
+      if (prevBackfillRef.current > 0) {
+        // Backfill just finished — final refresh
+        queryClient.invalidateQueries({ queryKey: ['categories-enriched-cc'] });
+        prevBackfillRef.current = 0;
+      }
+      return;
+    }
+    const current = backfillData.categorized + backfillData.failed;
+    if (current !== prevBackfillRef.current) {
+      prevBackfillRef.current = current;
+      queryClient.invalidateQueries({ queryKey: ['categories-enriched-cc'] });
+    }
+  }, [backfillQuery.data, queryClient]);
 
   const accountsQuery = useQuery({
     queryKey: ['dashboard-accounts'],
@@ -101,8 +161,12 @@ export function StatsCards({ stats, isLoading }: StatsCardsProps) {
   const emailCountsQuery = useQuery({
     queryKey: ['dashboard-email-counts'],
     queryFn: getEmailCounts,
-    staleTime: cache.dashboardEmbeddingRefetchIntervalMs / 2,
-    refetchInterval: cache.dashboardEmbeddingRefetchIntervalMs,
+    staleTime: pipelineActive
+      ? cache.ingestionActiveStaleTimeMs
+      : cache.dashboardEmbeddingRefetchIntervalMs / 2,
+    refetchInterval: pipelineActive
+      ? cache.ingestionActiveRefetchIntervalMs
+      : cache.dashboardEmbeddingRefetchIntervalMs,
   });
 
   const embeddingQuery = useQuery({
@@ -111,6 +175,7 @@ export function StatsCards({ stats, isLoading }: StatsCardsProps) {
     staleTime: cache.embeddingActiveRefetchIntervalMs / 2,
     // Poll fast (3s) whenever there are pending/stale emails or mutation is active.
     refetchInterval: (query) => {
+      if (pipelineActive) return cache.embeddingActiveRefetchIntervalMs;
       const data = query.state.data;
       const hasPending =
         data &&
@@ -121,17 +186,6 @@ export function StatsCards({ stats, isLoading }: StatsCardsProps) {
         : cache.dashboardEmbeddingRefetchIntervalMs;
     },
   });
-
-  // Poll ingestion progress to get the real-time pipeline phase and counts.
-  const ingestionProgressQuery = useQuery({
-    queryKey: ['dashboard-ingestion-progress'],
-    queryFn: getIngestionProgress,
-    staleTime: 2000,
-    refetchInterval: 3000, // Fast poll — this is lightweight
-  });
-
-  const ingestionProgress = ingestionProgressQuery.data ?? null;
-  const pipelineActive = ingestionProgress?.active ?? false;
 
   // Derive "embedding in progress" from actual data OR pipeline phase.
   const embeddingInProgress =
@@ -301,16 +355,20 @@ export function StatsCards({ stats, isLoading }: StatsCardsProps) {
           </div>
         )}
 
-        {/* AI Readiness — spans 2 of 8 columns */}
-        {embeddingStatus && embeddingStatus.totalEmails > 0 && (
+        {/* AI Readiness — spans 2 of 8 columns; show during active pipeline even if no emails yet */}
+        {(pipelineActive || (embeddingStatus && embeddingStatus.totalEmails > 0)) && (
           <div className="col-span-2 rounded-xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-800">
             <p className="text-sm font-medium text-gray-500 dark:text-gray-400 mb-3">
               AI Readiness
             </p>
             {(() => {
               const { embeddedCount, pendingCount, failedCount } =
-                embeddingStatus.embeddingStatusSummary;
-              const total = embeddingStatus.totalEmails;
+                embeddingStatus?.embeddingStatusSummary ?? {
+                  embeddedCount: 0,
+                  pendingCount: 0,
+                  failedCount: 0,
+                };
+              const total = embeddingStatus?.totalEmails ?? 0;
 
               // Use pipeline progress for more accurate embedding % when pipeline is active.
               const pipelinePhase = pipelineActive ? ingestionProgress?.phase : null;
@@ -321,12 +379,13 @@ export function StatsCards({ stats, isLoading }: StatsCardsProps) {
                     )
                   : null;
 
-              // Pipeline is past embedding (categorizing/clustering/analyzing/complete) → treat as 100%
+              // Pipeline is past embedding (categorizing/clustering/analyzing/backfilling/complete) → treat as 100%
               const pastEmbedding =
                 pipelineActive &&
                 (pipelinePhase === 'categorizing' ||
                   pipelinePhase === 'clustering' ||
                   pipelinePhase === 'analyzing' ||
+                  pipelinePhase === 'backfilling' ||
                   pipelinePhase === 'complete');
 
               const pct =
@@ -472,6 +531,58 @@ export function StatsCards({ stats, isLoading }: StatsCardsProps) {
                         </span>
                       </div>
                     );
+                  })()}
+
+                  {/* Categorization status — driven by backfill progress */}
+                  {(() => {
+                    const backfillData = backfillQuery.data;
+                    if (!backfillData || backfillData.total === 0) return null;
+
+                    if (backfillData.active) {
+                      const categorizationPct =
+                        backfillData.total > 0
+                          ? Math.round((backfillData.categorized / backfillData.total) * 100)
+                          : 0;
+                      return (
+                        <div className="border-t border-gray-100 pt-2 dark:border-gray-700">
+                          <div className="flex items-center justify-between text-sm mb-1">
+                            <span className="text-gray-700 dark:text-gray-300">Categorization</span>
+                            <span className="font-medium text-gray-900 dark:text-white">
+                              {categorizationPct}%
+                            </span>
+                          </div>
+                          <div className="h-2 w-full rounded-full bg-gray-200 dark:bg-gray-700 mb-1.5">
+                            <div
+                              className="h-2 rounded-full bg-indigo-500 transition-all duration-500"
+                              style={{ width: `${categorizationPct}%` }}
+                            />
+                          </div>
+                          <span className="flex items-center gap-1.5 text-xs">
+                            <span className="inline-block h-2 w-2 rounded-full animate-pulse bg-indigo-500" />
+                            <span className="text-gray-600 dark:text-gray-400">
+                              AI refining ({backfillData.categorized.toLocaleString()} /{' '}
+                              {backfillData.total.toLocaleString()})
+                            </span>
+                          </span>
+                        </div>
+                      );
+                    }
+
+                    if (backfillData.categorized > 0) {
+                      return (
+                        <div className="border-t border-gray-100 pt-2 dark:border-gray-700">
+                          <div className="flex items-center justify-between text-sm mb-1">
+                            <span className="text-gray-700 dark:text-gray-300">Categorization</span>
+                          </div>
+                          <span className="flex items-center gap-1.5 text-xs">
+                            <span className="inline-block h-2 w-2 rounded-full bg-green-500" />
+                            <span className="text-gray-600 dark:text-gray-400">AI categorized</span>
+                          </span>
+                        </div>
+                      );
+                    }
+
+                    return null;
                   })()}
                 </div>
               );

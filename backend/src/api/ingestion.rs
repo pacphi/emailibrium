@@ -150,6 +150,7 @@ pub fn routes() -> Router<AppState> {
         .route("/poll-status", get(poll_status))
         .route("/poll-toggle", post(poll_toggle))
         .route("/progress", get(ingestion_progress_json))
+        .route("/backfill-progress", get(backfill_progress_json))
         .route("/lock-status", get(lock_status))
 }
 
@@ -1218,6 +1219,21 @@ async fn ingestion_progress_json(State(state): State<AppState>) -> Json<serde_js
             "phase": null,
         })),
     }
+}
+
+/// GET /api/v1/ingestion/backfill-progress — Poll current LLM backfill state.
+async fn backfill_progress_json(State(state): State<AppState>) -> Json<serde_json::Value> {
+    let progress = state
+        .vector_service
+        .ingestion_pipeline
+        .get_backfill_progress()
+        .await;
+    Json(serde_json::json!({
+        "active": progress.active,
+        "total": progress.total,
+        "categorized": progress.categorized,
+        "failed": progress.failed,
+    }))
 }
 
 // ---------------------------------------------------------------------------

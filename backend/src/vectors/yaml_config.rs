@@ -652,6 +652,14 @@ pub struct CacheConfig {
     pub dashboard_embedding_refetch_interval_ms: u64,
     #[serde(default = "default_5000_u64")]
     pub embedding_active_refetch_interval_ms: u64,
+    #[serde(default = "default_3000_u64")]
+    pub ingestion_active_refetch_interval_ms: u64,
+    #[serde(default = "default_2000_u64")]
+    pub ingestion_active_stale_time_ms: u64,
+    #[serde(default = "default_30000_u64")]
+    pub stats_refetch_interval_ms: u64,
+    #[serde(default = "default_5000_u64")]
+    pub stats_active_refetch_interval_ms: u64,
 }
 
 impl Default for CacheConfig {
@@ -676,6 +684,10 @@ impl Default for CacheConfig {
             dashboard_accounts_refetch_interval_ms: 10000,
             dashboard_embedding_refetch_interval_ms: 10000,
             embedding_active_refetch_interval_ms: 5000,
+            ingestion_active_refetch_interval_ms: 3000,
+            ingestion_active_stale_time_ms: 2000,
+            stats_refetch_interval_ms: 30000,
+            stats_active_refetch_interval_ms: 5000,
         }
     }
 }

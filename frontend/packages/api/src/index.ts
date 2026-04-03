@@ -20,6 +20,7 @@ export {
   createIngestionStream,
   getEmbeddingStatus,
   getIngestionProgress,
+  getBackfillProgress,
   triggerReembed,
   getPipelineLockStatus,
   PipelineBusyError,
@@ -27,6 +28,7 @@ export {
 export type {
   EmbeddingStatus,
   IngestionProgressResponse,
+  BackfillProgressResponse,
   ReembedMode,
   ReembedResponse,
 } from './ingestionApi.js';
