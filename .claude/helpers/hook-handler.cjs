@@ -50,6 +50,10 @@ const intelligence = safeRequire(path.join(helpersDir, 'intelligence.cjs'));
 // Get the command from argv
 const [,, command, ...args] = process.argv;
 
+// Commands that can run without stdin data — skip the 500ms stdin timeout
+// to avoid pushing hooks past their deadline under parallel load.
+const FAST_COMMANDS = new Set(['pre-bash', 'post-bash', 'status', 'notify']);
+
 // Read stdin with timeout — Claude Code sends hook data as JSON via stdin.
 // Timeout prevents hanging when stdin is not properly closed (common on Windows).
 async function readStdin() {
@@ -71,7 +75,9 @@ async function readStdin() {
 
 async function main() {
   let stdinData = '';
-  try { stdinData = await readStdin(); } catch (e) { /* ignore stdin errors */ }
+  if (!FAST_COMMANDS.has(command)) {
+    try { stdinData = await readStdin(); } catch (e) { /* ignore stdin errors */ }
+  }
 
   let hookInput = {};
   if (stdinData.trim()) {
@@ -134,8 +140,8 @@ const handlers = {
   },
 
   'pre-bash': () => {
-    // Basic command safety check — prefer stdin command data from Claude Code
-    const cmd = (hookInput.command || prompt).toLowerCase();
+    // Basic command safety check — use env var from Claude Code (no stdin needed)
+    const cmd = (process.env.TOOL_INPUT_command || hookInput.command || prompt || '').toLowerCase();
     const dangerous = ['rm -rf /', 'format c:', 'del /s /q c:\\', ':(){:|:&};:'];
     for (const d of dangerous) {
       if (cmd.includes(d)) {

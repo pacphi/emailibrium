@@ -639,6 +639,11 @@ impl HybridSearch {
         query: &str,
         limit: usize,
     ) -> Result<Vec<(String, f32)>, VectorError> {
+        let fts_query = sanitize_fts5_query(query);
+        if fts_query.is_empty() {
+            return Ok(Vec::new());
+        }
+
         let limit_i64 = limit as i64;
 
         // FTS5 rank values are negative (lower = better). We negate them so
@@ -653,7 +658,7 @@ impl HybridSearch {
             LIMIT ?2
             "#,
         )
-        .bind(query)
+        .bind(&fts_query)
         .bind(limit_i64)
         .fetch_all(&self.db.pool)
         .await?;
@@ -665,29 +670,50 @@ impl HybridSearch {
     }
 
     /// Legacy LIKE-based keyword search (fallback when FTS5 is unavailable).
+    ///
+    /// Extracts meaningful keywords from the query and searches each
+    /// independently, so natural-language sentences produce useful results.
     async fn like_search(
         &self,
         query: &str,
         limit: usize,
     ) -> Result<Vec<(String, f32)>, VectorError> {
-        let pattern = format!("%{query}%");
+        // Extract keywords using the same stop-word filter as FTS5.
+        let keywords: Vec<String> = sanitize_fts5_query(query)
+            .split(" OR ")
+            .map(|t| t.trim_matches('"').to_string())
+            .filter(|t| !t.is_empty())
+            .collect();
+
+        if keywords.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Build OR conditions for each keyword across all searchable columns.
+        let mut conditions: Vec<String> = Vec::new();
+        let mut bind_values: Vec<String> = Vec::new();
+        for (i, kw) in keywords.iter().enumerate() {
+            let p = i + 1; // 1-based parameter index
+            conditions.push(format!(
+                "(subject LIKE ?{p} OR from_name LIKE ?{p} OR from_addr LIKE ?{p} OR body_text LIKE ?{p})"
+            ));
+            bind_values.push(format!("%{kw}%"));
+        }
+
+        let sql = format!(
+            "SELECT id FROM emails WHERE {} ORDER BY received_at DESC LIMIT ?{}",
+            conditions.join(" OR "),
+            keywords.len() + 1
+        );
         let limit_i64 = limit as i64;
 
-        let rows: Vec<(String,)> = sqlx::query_as(
-            r#"
-            SELECT id
-            FROM emails
-            WHERE subject LIKE ?1
-               OR from_addr LIKE ?1
-               OR body_text LIKE ?1
-            ORDER BY received_at DESC
-            LIMIT ?2
-            "#,
-        )
-        .bind(&pattern)
-        .bind(limit_i64)
-        .fetch_all(&self.db.pool)
-        .await?;
+        let mut q = sqlx::query_as::<_, (String,)>(&sql);
+        for val in &bind_values {
+            q = q.bind(val.as_str());
+        }
+        q = q.bind(limit_i64);
+
+        let rows: Vec<(String,)> = q.fetch_all(&self.db.pool).await?;
 
         // Assign descending rank scores (1.0 for first, decaying).
         let total = rows.len() as f32;
@@ -774,10 +800,20 @@ impl HybridSearch {
 
         if let Some(ref senders) = filters.senders {
             if !senders.is_empty() {
-                let sender_placeholders: Vec<String> =
+                // Match against both from_addr (exact) and from_name (LIKE)
+                // so that user-visible sender names like "Mindvalley" are found.
+                let addr_placeholders: Vec<String> =
                     senders.iter().map(|_| "?".to_string()).collect();
-                conditions.push(format!("from_addr IN ({})", sender_placeholders.join(", ")));
-                bind_offset += senders.len();
+                let name_likes: Vec<String> = senders
+                    .iter()
+                    .map(|_| "from_name LIKE ?".to_string())
+                    .collect();
+                conditions.push(format!(
+                    "(from_addr IN ({}) OR {})",
+                    addr_placeholders.join(", "),
+                    name_likes.join(" OR ")
+                ));
+                bind_offset += senders.len() * 2; // addr placeholders + name LIKE placeholders
             }
         }
 
@@ -810,10 +846,13 @@ impl HybridSearch {
             query = query.bind(id.as_str());
         }
 
-        // Bind sender values.
+        // Bind sender values: first the IN(...) exact matches, then LIKE patterns for from_name.
         if let Some(ref senders) = filters.senders {
             for sender in senders {
                 query = query.bind(sender.as_str());
+            }
+            for sender in senders {
+                query = query.bind(format!("%{sender}%"));
             }
         }
 
@@ -827,6 +866,51 @@ impl HybridSearch {
         let result = query.fetch_all(&self.db.pool).await?;
         Ok(result)
     }
+}
+
+// ---------------------------------------------------------------------------
+// FTS5 query sanitizer
+// ---------------------------------------------------------------------------
+
+/// Convert a natural-language query into a safe FTS5 MATCH expression.
+///
+/// Strips stop words, punctuation, and FTS5 operators, then joins the remaining
+/// terms with `OR` so that any matching term produces a hit (instead of the
+/// default implicit `AND` which would require every word to appear).
+fn sanitize_fts5_query(raw: &str) -> String {
+    const STOP_WORDS: &[&str] = &[
+        "a", "an", "the", "is", "are", "was", "were", "am", "be", "been", "being", "do", "does",
+        "did", "have", "has", "had", "having", "will", "would", "shall", "should", "may", "might",
+        "can", "could", "i", "me", "my", "we", "our", "you", "your", "he", "she", "it", "they",
+        "them", "this", "that", "these", "those", "in", "on", "at", "to", "for", "of", "with",
+        "from", "by", "about", "how", "many", "much", "what", "which", "who", "whom", "when",
+        "where", "why", "if", "then", "than", "so", "too", "very", "just", "not", "no", "nor",
+        "but", "and", "or", "any", "all", "each", "some", "most", "into", "through", "during",
+        "before", "after", "above", "below", "between", "out", "up", "down", "off", "over",
+        "under", "again", "further", "once", "here", "there", "last", "two", "three", "four",
+        "five", "months", "month", "weeks", "week", "days", "day", "year", "years", "ago",
+        "recent", "receive", "received", "get", "got", "send", "sent",
+    ];
+
+    let terms: Vec<&str> = raw
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .map(|w| w.trim())
+        .filter(|w| w.len() >= 2)
+        .filter(|w| !STOP_WORDS.contains(&w.to_lowercase().as_str()))
+        .collect();
+
+    if terms.is_empty() {
+        return String::new();
+    }
+
+    // Join with OR so any matching term produces a result.
+    // Quote each term to prevent FTS5 operator interpretation.
+    terms
+        .iter()
+        .map(|t| format!("\"{}\"", t))
+        .collect::<Vec<_>>()
+        .join(" OR ")
 }
 
 // ---------------------------------------------------------------------------
@@ -1766,5 +1850,36 @@ mod tests {
         assert!((config.sona_weight - 0.3).abs() < 1e-6);
         assert_eq!(config.collections, vec!["email_text"]);
         assert!(config.collection_weights.is_empty());
+    }
+
+    // -- FTS5 query sanitizer -------------------------------------------------
+
+    #[test]
+    fn test_sanitize_fts5_extracts_keywords() {
+        let result = sanitize_fts5_query("How many emails from MindValley did I receive in the last two months?");
+        assert!(result.contains("\"MindValley\""), "should extract MindValley: {result}");
+        assert!(!result.contains("\"How\""), "should strip stop word 'How'");
+        assert!(!result.contains("\"from\""), "should strip stop word 'from'");
+        assert!(!result.contains("\"the\""), "should strip stop word 'the'");
+        assert!(result.contains(" OR "), "should join with OR");
+    }
+
+    #[test]
+    fn test_sanitize_fts5_single_keyword() {
+        let result = sanitize_fts5_query("MindValley");
+        assert_eq!(result, "\"MindValley\"");
+    }
+
+    #[test]
+    fn test_sanitize_fts5_empty_after_stripping() {
+        let result = sanitize_fts5_query("how many from the");
+        assert!(result.is_empty(), "all stop words should produce empty: {result}");
+    }
+
+    #[test]
+    fn test_sanitize_fts5_strips_punctuation() {
+        let result = sanitize_fts5_query("hello? world!");
+        assert!(result.contains("\"hello\""));
+        assert!(result.contains("\"world\""));
     }
 }

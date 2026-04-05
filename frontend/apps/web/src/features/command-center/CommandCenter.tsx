@@ -300,12 +300,7 @@ export function CommandCenter() {
               const parts: string[] = [`${accountLabel}: ${label}`];
 
               if (progress.phase === 'syncing') {
-                if (progress.total && progress.processed) {
-                  const pct = Math.round((progress.processed / progress.total) * 100);
-                  parts.push(
-                    `(${pct}% — ${progress.processed.toLocaleString()} / ~${progress.total.toLocaleString()})`,
-                  );
-                } else if (progress.processed) {
+                if (progress.processed) {
                   parts.push(
                     `(${progress.processed.toLocaleString()} email${progress.processed === 1 ? '' : 's'} fetched)`,
                   );
@@ -381,20 +376,11 @@ export function CommandCenter() {
                   </svg>
                 )}
                 <span className="flex-1">{statusMessage}</span>
-                {/* Progress bar for syncing phase — determinate when total estimate available */}
+                {/* Progress bar for syncing phase — indeterminate since provider estimates are unreliable */}
                 {pipelineActive && progress?.phase === 'syncing' && (
                   <div className="hidden w-32 overflow-hidden sm:block">
                     <div className="h-1.5 w-full rounded-full bg-indigo-200 dark:bg-indigo-800">
-                      {(progress.total ?? 0) > 0 ? (
-                        <div
-                          className="h-1.5 rounded-full bg-indigo-500 transition-all duration-500"
-                          style={{
-                            width: `${Math.min(100, Math.round(((progress.processed ?? 0) / progress.total!) * 100))}%`,
-                          }}
-                        />
-                      ) : (
-                        <div className="h-1.5 w-1/3 animate-pulse rounded-full bg-indigo-500" />
-                      )}
+                      <div className="h-1.5 w-1/3 animate-pulse rounded-full bg-indigo-500" />
                     </div>
                   </div>
                 )}
