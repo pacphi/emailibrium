@@ -66,7 +66,7 @@ fn default_max_body_chars() -> usize {
     200
 }
 fn default_context_sufficiency_threshold() -> f32 {
-    0.01
+    0.005
 }
 
 impl Default for RagConfig {
@@ -147,12 +147,14 @@ impl RagPipeline {
 
         // 0. Parse query to extract structured filters and semantic text.
         let parsed = parse_query(query, Utc::now());
-        debug!(
+        info!(
             query,
             query_type = ?parsed.query_type,
             parse_confidence = parsed.parse_confidence,
             has_filters = parsed.filters != SearchFilters::default(),
-            "Query parsed"
+            semantic_text = ?parsed.semantic_text,
+            senders = ?parsed.filters.senders,
+            "RAG query parsed"
         );
 
         if parsed.query_type == QueryType::Aggregation {
@@ -162,8 +164,32 @@ impl RagPipeline {
             );
         }
 
-        let search_text = parsed.semantic_text.as_deref().unwrap_or(query);
-        let filters = if parsed.filters != SearchFilters::default() {
+        // When the parser extracts sender filters, the sender name is removed
+        // from the semantic text but is critical for search. Always include
+        // extracted sender names in the search text so vector/FTS can match
+        // on them. This ensures "from Josh Bob" queries find emails where
+        // "Josh Bob" appears in the from_name, subject, or body.
+        let has_filters = parsed.filters != SearchFilters::default();
+        let base_text = parsed.semantic_text.as_deref().unwrap_or(query);
+        let search_text_owned: String;
+        let search_text = if let Some(ref senders) = parsed.filters.senders {
+            if !senders.is_empty() {
+                // Prepend sender names to the search text so both vector
+                // and FTS search can match on them.
+                let sender_str = senders.join(" ");
+                search_text_owned = format!("{sender_str} {base_text}");
+                info!(
+                    search_text = %search_text_owned,
+                    "RAG: injected sender names into search text"
+                );
+                &search_text_owned
+            } else {
+                base_text
+            }
+        } else {
+            base_text
+        };
+        let filters = if has_filters {
             Some(parsed.filters)
         } else {
             None
@@ -179,9 +205,16 @@ impl RagPipeline {
             fts_weight: 1.0,
         };
 
+        info!(
+            search_text = %search_query.text,
+            has_filters = search_query.filters.is_some(),
+            top_k = self.config.top_k,
+            "RAG: executing hybrid search"
+        );
+
         let search_result = self.search.search(&search_query).await?;
 
-        debug!(
+        info!(
             query,
             total_results = search_result.results.len(),
             latency_ms = search_result.latency_ms,
@@ -203,7 +236,7 @@ impl RagPipeline {
         let top_score = relevant.first().map(|r| r.score).unwrap_or(0.0);
 
         if relevant.is_empty() {
-            debug!(query, "RAG: no emails matched above threshold");
+            info!(query, "RAG: no emails matched above min_relevance_score threshold");
             return Ok(RagContext {
                 formatted_context: String::new(),
                 email_ids: Vec::new(),
@@ -216,7 +249,7 @@ impl RagPipeline {
         // configurable threshold, treat the results as insufficient.
         let sufficiency_threshold = self.config.context_sufficiency_threshold;
         if top_score < sufficiency_threshold {
-            debug!(
+            info!(
                 query,
                 top_score,
                 sufficiency_threshold,

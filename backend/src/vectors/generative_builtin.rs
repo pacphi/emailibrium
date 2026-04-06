@@ -19,12 +19,12 @@ use super::error::VectorError;
 use super::generative::{GenerationParams, GenerativeModel};
 use super::yaml_config::PromptsConfig;
 
-use llama_cpp_2::context::params::LlamaContextParams;
-use llama_cpp_2::llama_backend::LlamaBackend;
-use llama_cpp_2::llama_batch::LlamaBatch;
-use llama_cpp_2::model::params::LlamaModelParams;
-use llama_cpp_2::model::LlamaModel;
-use llama_cpp_2::token::data_array::LlamaTokenDataArray;
+use llama_cpp_4::context::params::LlamaContextParams;
+use llama_cpp_4::llama_backend::LlamaBackend;
+use llama_cpp_4::llama_batch::LlamaBatch;
+use llama_cpp_4::model::params::LlamaModelParams;
+use llama_cpp_4::model::LlamaModel;
+use llama_cpp_4::token::data_array::LlamaTokenDataArray;
 
 // ---------------------------------------------------------------------------
 // Model resolution
@@ -305,7 +305,7 @@ impl BuiltInGenerativeModel {
                     };
                     let tokens = loaded
                         .model
-                        .str_to_token(warmup_prompt, llama_cpp_2::model::AddBos::Never)
+                        .str_to_token(warmup_prompt, llama_cpp_4::model::AddBos::Never)
                         .map_err(|e| {
                             VectorError::EmbeddingFailed(format!("Warmup tokenization failed: {e}"))
                         })?;
@@ -373,14 +373,14 @@ impl BuiltInGenerativeModel {
                 continue;
             }
 
-            let role: &'static str =
-                if tag.contains("[System]") || tag.contains("[Email Context]") {
-                    "system"
-                } else if tag.contains("[Assistant]") {
-                    "assistant"
-                } else {
-                    "user"
-                };
+            let role: &'static str = if tag.contains("[System]") || tag.contains("[Email Context]")
+            {
+                "system"
+            } else if tag.contains("[Assistant]") {
+                "assistant"
+            } else {
+                "user"
+            };
 
             result.push((role, content));
         }
@@ -488,7 +488,7 @@ impl BuiltInGenerativeModel {
 
         // Tokenize the prompt (no BOS — chat template handles boundaries)
         let tokens = model
-            .str_to_token(&formatted_prompt, llama_cpp_2::model::AddBos::Never)
+            .str_to_token(&formatted_prompt, llama_cpp_4::model::AddBos::Never)
             .map_err(|e| VectorError::EmbeddingFailed(format!("Tokenization failed: {e}")))?;
 
         debug!(
@@ -512,7 +512,6 @@ impl BuiltInGenerativeModel {
         // Generate tokens with repetition detection
         let mut output = String::new();
         let mut n_cur = tokens.len() as i32;
-        let mut decoder = encoding_rs::UTF_8.new_decoder();
         let mut recent_tokens: Vec<i32> = Vec::new();
 
         for _ in 0..max_tokens {
@@ -527,7 +526,7 @@ impl BuiltInGenerativeModel {
             }
 
             let piece = model
-                .token_to_piece(new_token, &mut decoder, true, None)
+                .token_to_str(new_token, llama_cpp_4::model::Special::Tokenize)
                 .unwrap_or_default();
 
             // Stop if the model starts a new turn (template-specific markers)
@@ -560,14 +559,21 @@ impl BuiltInGenerativeModel {
 
             // Also detect repeated phrases in the output text.
             // Values from config/tuning.yaml → repetition section.
+            // Use floor_char_boundary/ceil_char_boundary to avoid panicking
+            // on multi-byte UTF-8 characters (emojis, curly quotes, etc.).
             let phrase_check_after = rep_tuning.phrase_check_after;
             let phrase_check_length = rep_tuning.phrase_check_length;
             if output.len() > phrase_check_after {
-                let tail = &output[output.len().saturating_sub(phrase_check_length)..];
-                let check_region = &output[..output.len().saturating_sub(phrase_check_length)];
-                if check_region.contains(tail) {
-                    debug!("Stopping generation: repeated phrase detected");
-                    break;
+                let split_at = output.len().saturating_sub(phrase_check_length);
+                // Find the nearest char boundary at or after `split_at`.
+                let safe_split = output.ceil_char_boundary(split_at);
+                if safe_split < output.len() {
+                    let tail = &output[safe_split..];
+                    let check_region = &output[..safe_split];
+                    if !tail.is_empty() && check_region.contains(tail) {
+                        debug!("Stopping generation: repeated phrase detected");
+                        break;
+                    }
                 }
             }
 
@@ -585,7 +591,13 @@ impl BuiltInGenerativeModel {
             n_cur += 1;
         }
 
-        Ok(output.trim().to_string())
+        // Strip any leaked chat template markers from the output.
+        let cleaned = output
+            .replace("<end_of_turn>", "")
+            .replace("<start_of_turn>", "")
+            .replace("<|im_end|>", "")
+            .replace("<|im_start|>", "");
+        Ok(cleaned.trim().to_string())
     }
 }
 

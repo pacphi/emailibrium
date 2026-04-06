@@ -1,9 +1,100 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
+
 export type Theme = 'light' | 'dark' | 'system';
 export type SidebarPosition = 'left' | 'right';
 export type EmailListDensity = 'compact' | 'comfortable' | 'spacious';
 export type LlmProvider = 'none' | 'builtin' | 'local' | 'openai' | 'anthropic';
+
+// Keys that are safe to persist to the backend (excludes secrets and actions).
+const BACKEND_PERSISTED_KEYS: readonly string[] = [
+  'defaultComposeAccountId',
+  'notificationsEnabled',
+  'syncFrequencyMinutes',
+  'embeddingModel',
+  'llmProvider',
+  'builtInLlmModel',
+  'builtInLlmIdleTimeout',
+  'builtInLlmMaxContext',
+  'builtInLlmTemperature',
+  'ollamaBaseUrl',
+  'sonaLearningEnabled',
+  'learningRateSensitivity',
+  'encryptionAtRest',
+  'dataRetentionDays',
+  'theme',
+  'sidebarPosition',
+  'emailListDensity',
+  'fontSize',
+] as const;
+
+/** Push settings to the backend for cross-restart persistence. */
+let syncTimer: ReturnType<typeof setTimeout> | null = null;
+
+function syncToBackend(state: Record<string, unknown>): void {
+  // Debounce: wait 500ms after last change to batch rapid updates.
+  if (syncTimer) clearTimeout(syncTimer);
+  syncTimer = setTimeout(() => {
+    const payload: Record<string, unknown> = {};
+    for (const key of BACKEND_PERSISTED_KEYS) {
+      if (key in state) {
+        payload[key] = state[key];
+      }
+    }
+    fetch('/api/v1/ai/settings', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }).catch(() => {
+      /* Backend may be unavailable — localStorage is the primary store. */
+    });
+  }, 500);
+}
+
+/**
+ * Bidirectional sync with the backend on first load.
+ *
+ * - If the backend has no settings yet (fresh DB / new migration),
+ *   push the current localStorage settings to the backend so the
+ *   server can restore them on next restart.
+ * - If the backend has settings, merge them into the local store
+ *   for any keys the user hasn't changed from defaults locally.
+ */
+export async function hydrateFromBackend(): Promise<void> {
+  try {
+    const res = await fetch('/api/v1/ai/settings');
+    if (!res.ok) return;
+    const remote: Record<string, string> = await res.json();
+
+    const current = useSettings.getState();
+
+    // Backend is empty — push current local settings to seed it.
+    if (!remote || Object.keys(remote).length === 0) {
+      syncToBackend(current as unknown as Record<string, unknown>);
+      return;
+    }
+
+    // Backend has settings — merge into local store for keys still at defaults.
+    const updates: Record<string, unknown> = {};
+    for (const [key, val] of Object.entries(remote)) {
+      if (!(key in current)) continue;
+      const currentVal = (current as unknown as Record<string, unknown>)[key];
+      const defaultVal = (DEFAULT_STATE as unknown as Record<string, unknown>)[key];
+      if (currentVal === defaultVal && val !== String(defaultVal)) {
+        if (val === 'true') updates[key] = true;
+        else if (val === 'false') updates[key] = false;
+        else if (val === 'null') updates[key] = null;
+        else if (/^-?\d+(\.\d+)?$/.test(val)) updates[key] = Number(val);
+        else updates[key] = val;
+      }
+    }
+    if (Object.keys(updates).length > 0) {
+      useSettings.setState(updates);
+    }
+  } catch {
+    /* Backend unavailable — use localStorage only. */
+  }
+}
 
 export interface SettingsState {
   // General
@@ -157,3 +248,8 @@ export const useSettings = create<SettingsState>()(
     },
   ),
 );
+
+// Auto-sync settings to backend on every change (debounced).
+useSettings.subscribe((state) => {
+  syncToBackend(state as unknown as Record<string, unknown>);
+});

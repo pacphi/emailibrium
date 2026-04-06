@@ -91,7 +91,7 @@ fts5:
 # See also: ADR-029 (Enhanced RAG Pipeline)
 context:
   embedding_body_budget: 1500 # Chars of body in embedding text (was 400)
-  context_sufficiency_threshold: 0.01 # Min RRF score to attempt answering
+  context_sufficiency_threshold: 0.005 # Min RRF score to attempt answering (k=60: rank-1≈0.016, rank-100≈0.006)
 
 # ── Extractive Context ────────────────────────────────────────────────────────
 # See also: ADR-029 (Enhanced RAG Pipeline)

@@ -56,13 +56,24 @@ pub struct AppState {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // Initialize tracing with log-scrubbing safety net (R-05).
+    // Initialize tracing: console + daily rotating file log (R-05).
+    let log_dir = std::path::Path::new("data/logs");
+    std::fs::create_dir_all(log_dir)?;
+
+    let file_appender = tracing_appender::rolling::daily(log_dir, "emailibrium.log");
+    let (non_blocking_file, _file_guard) = tracing_appender::non_blocking(file_appender);
+
+    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| "emailibrium=info,tower_http=info".into());
+
     tracing_subscriber::registry()
+        .with(env_filter)
+        .with(tracing_subscriber::fmt::layer().with_ansi(true))
         .with(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "emailibrium=info,tower_http=info".into()),
+            tracing_subscriber::fmt::layer()
+                .with_ansi(false)
+                .with_writer(non_blocking_file),
         )
-        .with(tracing_subscriber::fmt::layer())
         .with(middleware::log_scrub::ScrubLayer)
         .init();
 
@@ -167,6 +178,36 @@ async fn main() -> anyhow::Result<()> {
         tracing::info!("Redis cache disabled by configuration");
         None
     };
+
+    // ── Restore persisted user settings ──────────────────────────────────
+    // Override config defaults with user's saved preferences from the
+    // `app_settings` table so that model selections survive restarts.
+    if let Ok(row) = sqlx::query_as::<_, (String,)>(
+        "SELECT value FROM app_settings WHERE key = 'builtInLlmModel'",
+    )
+    .fetch_one(&db.pool)
+    .await
+    {
+        let saved_model = &row.0;
+        if !saved_model.is_empty() && saved_model != &config.generative.builtin.model_id {
+            tracing::info!(
+                saved = %saved_model,
+                default = %config.generative.builtin.model_id,
+                "Restoring user's persisted model selection"
+            );
+            config.generative.builtin.model_id = saved_model.clone();
+
+            // Also update context_size from the model catalog for the saved model.
+            if let Some(entry) = yaml_config
+                .llm_catalog
+                .providers
+                .get("builtin")
+                .and_then(|p| p.models.iter().find(|m| m.id == *saved_model))
+            {
+                config.generative.builtin.context_size = entry.context_size;
+            }
+        }
+    }
 
     // Initialize vector service (pass Redis for L2 embedding cache)
     let vector_service = Arc::new(

@@ -200,16 +200,22 @@ impl ChatService {
         };
 
         // Dump prompt for debugging RAG.
-        if prompt.contains("[Email Context]") {
+        // Check for the actual tagged block, not just the mention of "[Email Context]"
+        // in the system prompt instructions.
+        let has_email_context = prompt.contains("\n[Email Context]\n");
+        if has_email_context {
             tracing::info!(
                 prompt_len = prompt.len(),
                 "Chat prompt CONTAINS email context"
             );
-            // Write full prompt to temp file for inspection.
-            let _ = std::fs::write("/tmp/emailibrium_last_prompt.txt", &prompt);
         } else {
-            tracing::warn!("Chat prompt has NO email context — RAG may not be injecting");
+            tracing::warn!(
+                prompt_len = prompt.len(),
+                "Chat prompt has NO email context — RAG returned no results"
+            );
         }
+        // Write full prompt to temp file for inspection.
+        let _ = std::fs::write("/tmp/emailibrium_last_prompt.txt", &prompt);
 
         // Generate the response and strip <think>...</think> blocks (Qwen 3 CoT).
         let raw_reply = self.generate_response(&prompt).await?;

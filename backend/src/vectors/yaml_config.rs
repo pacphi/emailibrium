@@ -512,7 +512,7 @@ impl Default for ContextConfig {
     fn default() -> Self {
         Self {
             embedding_body_budget: 1500,
-            context_sufficiency_threshold: 0.01,
+            context_sufficiency_threshold: 0.005,
         }
     }
 }

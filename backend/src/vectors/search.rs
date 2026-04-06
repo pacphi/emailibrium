@@ -709,6 +709,14 @@ impl HybridSearch {
             Vec::new()
         });
 
+        tracing::info!(
+            vector_results = merged_vector_pairs.len(),
+            fts_results = fts_results.len(),
+            fts_top_score = fts_results.first().map(|(_, s)| *s).unwrap_or(0.0),
+            vector_top_score = merged_vector_pairs.first().map(|(_, s)| *s).unwrap_or(0.0),
+            "Hybrid search legs completed"
+        );
+
         // Fuse vector results (potentially multi-collection) with FTS using
         // weighted RRF (ADR-029 Phase C).
         let rrf_k = self.config.rrf_k;
@@ -990,20 +998,24 @@ impl HybridSearch {
 
         if let Some(ref senders) = filters.senders {
             if !senders.is_empty() {
-                // Match against both from_addr (exact) and from_name (LIKE)
-                // so that user-visible sender names like "Mindvalley" are found.
-                let addr_placeholders: Vec<String> =
-                    senders.iter().map(|_| "?".to_string()).collect();
-                let name_likes: Vec<String> = senders
-                    .iter()
-                    .map(|_| "from_name LIKE ?".to_string())
-                    .collect();
-                conditions.push(format!(
-                    "(from_addr IN ({}) OR {})",
-                    addr_placeholders.join(", "),
-                    name_likes.join(" OR ")
-                ));
-                bind_offset += senders.len() * 2; // addr placeholders + name LIKE placeholders
+                // Match against both from_addr and from_name using LIKE.
+                // For multi-word names like "Mind Valley", also try the
+                // space-collapsed form "MindValley" to handle cases where
+                // the stored name has no space.
+                let mut like_clauses: Vec<String> = Vec::new();
+                for _ in senders {
+                    like_clauses.push("from_addr LIKE ?".to_string());
+                    like_clauses.push("from_name LIKE ?".to_string());
+                }
+                // Add space-collapsed variants for multi-word senders.
+                let multi_word: Vec<&String> =
+                    senders.iter().filter(|s| s.contains(' ')).collect();
+                for _ in &multi_word {
+                    like_clauses.push("from_addr LIKE ?".to_string());
+                    like_clauses.push("from_name LIKE ?".to_string());
+                }
+                conditions.push(format!("({})", like_clauses.join(" OR ")));
+                bind_offset += senders.len() * 2 + multi_word.len() * 2;
             }
         }
 
@@ -1036,13 +1048,18 @@ impl HybridSearch {
             query = query.bind(id.as_str());
         }
 
-        // Bind sender values: first the IN(...) exact matches, then LIKE patterns for from_name.
+        // Bind sender values: LIKE patterns for from_addr and from_name,
+        // plus space-collapsed variants for multi-word names.
         if let Some(ref senders) = filters.senders {
             for sender in senders {
-                query = query.bind(sender.as_str());
+                query = query.bind(format!("%{sender}%")); // from_addr
+                query = query.bind(format!("%{sender}%")); // from_name
             }
-            for sender in senders {
-                query = query.bind(format!("%{sender}%"));
+            // Bind space-collapsed variants (e.g. "Mind Valley" → "MindValley")
+            for sender in senders.iter().filter(|s| s.contains(' ')) {
+                let collapsed: String = sender.split_whitespace().collect();
+                query = query.bind(format!("%{collapsed}%")); // from_addr
+                query = query.bind(format!("%{collapsed}%")); // from_name
             }
         }
 

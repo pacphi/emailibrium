@@ -133,6 +133,12 @@ pub fn parse_query(query: &str, now: DateTime<Utc>) -> ParsedQuery {
 
 /// Extract sender filters from patterns like `from:alice`, `from alice`,
 /// `sent by alice`.  Returns the number of matched characters removed.
+/// Strip trailing punctuation from a captured sender name.
+fn clean_sender(raw: &str) -> String {
+    raw.trim_end_matches(|c: char| matches!(c, '?' | '!' | '.' | ',' | ';' | ':'))
+        .to_string()
+}
+
 fn extract_senders(remainder: &mut String, filters: &mut SearchFilters) -> usize {
     let mut matched = 0usize;
 
@@ -142,7 +148,7 @@ fn extract_senders(remainder: &mut String, filters: &mut SearchFilters) -> usize
         .captures_iter(remainder)
         .map(|c| {
             let full = c.get(0).unwrap();
-            let val = c.get(1).unwrap().as_str().to_string();
+            let val = clean_sender(c.get(1).unwrap().as_str());
             (full.start(), full.end(), val)
         })
         .collect();
@@ -155,13 +161,17 @@ fn extract_senders(remainder: &mut String, filters: &mut SearchFilters) -> usize
         remainder.replace_range(start..end, "");
     }
 
-    // "from <name>" (word after "from")
-    let re_from_word = Regex::new(r"(?i)\bfrom\s+(\S+)").unwrap();
+    // "from <name>" — capture the first word plus any subsequent capitalized
+    // words so that multi-word names like "Josh Bob" or "Mind Valley" are
+    // captured as a single sender rather than splitting at the first space.
+    // The `(?-i:...)` inline flag makes the uppercase check case-sensitive
+    // within the otherwise case-insensitive regex.
+    let re_from_word = Regex::new(r"(?i)\bfrom\s+(\S+(?:\s+(?-i:[A-Z])\S*)*)").unwrap();
     let captures: Vec<_> = re_from_word
         .captures_iter(remainder)
         .map(|c| {
             let full = c.get(0).unwrap();
-            let val = c.get(1).unwrap().as_str().to_string();
+            let val = clean_sender(c.get(1).unwrap().as_str());
             (full.start(), full.end(), val)
         })
         .collect();
@@ -174,13 +184,13 @@ fn extract_senders(remainder: &mut String, filters: &mut SearchFilters) -> usize
         remainder.replace_range(start..end, "");
     }
 
-    // "sent by <name>"
-    let re_sent_by = Regex::new(r"(?i)\bsent\s+by\s+(\S+)").unwrap();
+    // "sent by <name>" — same multi-word handling as "from".
+    let re_sent_by = Regex::new(r"(?i)\bsent\s+by\s+(\S+(?:\s+(?-i:[A-Z])\S*)*)").unwrap();
     let captures: Vec<_> = re_sent_by
         .captures_iter(remainder)
         .map(|c| {
             let full = c.get(0).unwrap();
-            let val = c.get(1).unwrap().as_str().to_string();
+            let val = clean_sender(c.get(1).unwrap().as_str());
             (full.start(), full.end(), val)
         })
         .collect();
@@ -687,6 +697,36 @@ mod tests {
         let parsed = parse_query("emails from bob about project", test_now());
         let senders = parsed.filters.senders.unwrap();
         assert!(senders.iter().any(|s| s == "bob"));
+    }
+
+    #[test]
+    fn test_extract_from_multi_word_name() {
+        // Multi-word names with capitalized words should be captured together.
+        let parsed = parse_query(
+            "Did I receive any email from Josh Bob in the last 90 days?",
+            test_now(),
+        );
+        let senders = parsed.filters.senders.unwrap();
+        assert!(
+            senders.iter().any(|s| s == "Josh Bob"),
+            "Expected 'Josh Bob' in senders, got: {:?}",
+            senders
+        );
+    }
+
+    #[test]
+    fn test_extract_sender_strips_trailing_punctuation() {
+        // Trailing ? from the query should not be part of the sender name.
+        let parsed = parse_query(
+            "What are the subjects of last 3 emails received from Mind Valley?",
+            test_now(),
+        );
+        let senders = parsed.filters.senders.unwrap();
+        assert!(
+            senders.iter().any(|s| s == "Mind Valley"),
+            "Expected 'Mind Valley' (no trailing ?), got: {:?}",
+            senders
+        );
     }
 
     #[test]

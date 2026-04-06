@@ -137,7 +137,9 @@ export function useChat() {
                           tc.id === toolResult.toolCallId
                             ? {
                                 ...tc,
-                                status: (toolResult.isError ? 'error' : 'complete') as const,
+                                status: toolResult.isError
+                                  ? ('error' as const)
+                                  : ('complete' as const),
                               }
                             : tc,
                         ),

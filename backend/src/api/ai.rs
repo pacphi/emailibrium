@@ -58,6 +58,7 @@ pub fn routes() -> Router<AppState> {
         .route("/config/classification", get(config_classification))
         .route("/config/tuning", get(config_tuning))
         .route("/config/app", get(config_app))
+        .route("/settings", get(get_settings).put(save_settings))
 }
 
 // ---------------------------------------------------------------------------
@@ -510,13 +511,21 @@ async fn chat_message_sse(
     let email_context = if let Some(ref rag) = state.rag_pipeline {
         match rag.retrieve_context(&req.message, Some(rag_budget)).await {
             Ok(ctx) if ctx.result_count > 0 => {
-                debug!(
+                tracing::info!(
                     result_count = ctx.result_count,
-                    "RAG: injecting email context"
+                    top_score = ctx.top_score,
+                    context_len = ctx.formatted_context.len(),
+                    "RAG: injecting email context into chat"
                 );
                 Some(ctx.formatted_context)
             }
-            Ok(_) => None,
+            Ok(ctx) => {
+                tracing::info!(
+                    top_score = ctx.top_score,
+                    "RAG: no results above threshold, chat will have no email context"
+                );
+                None
+            }
             Err(e) => {
                 tracing::warn!("RAG retrieval failed: {e}");
                 None
@@ -900,6 +909,15 @@ async fn switch_model(
             .register(ProviderType::BuiltIn, std::sync::Arc::new(model), 1)
             .await;
 
+        // Persist the selection so it survives server restarts.
+        let _ = sqlx::query(
+            "INSERT INTO app_settings (key, value) VALUES ('builtInLlmModel', ?1) \
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        )
+        .bind(&req.model_id)
+        .execute(&state.db.pool)
+        .await;
+
         return Ok(Json(SwitchModelResponse {
             model_id: req.model_id,
             status: "ready".to_string(),
@@ -924,6 +942,7 @@ async fn switch_model(
     tracing::info!(model_id = %model_id, "Starting background model download");
     let router = state.vector_service.generative_router.clone();
     let prompts_for_spawn = state.yaml_config.prompts.clone();
+    let db_pool = state.db.pool.clone();
     tokio::spawn(async move {
         match BuiltInGenerativeModel::with_params_and_prompts(
             &config,
@@ -934,6 +953,14 @@ async fn switch_model(
                 router
                     .register(ProviderType::BuiltIn, std::sync::Arc::new(model), 1)
                     .await;
+                // Persist the selection so it survives server restarts.
+                let _ = sqlx::query(
+                    "INSERT INTO app_settings (key, value) VALUES ('builtInLlmModel', ?1) \
+                     ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                )
+                .bind(&model_id)
+                .execute(&db_pool)
+                .await;
                 tracing::info!(model_id = %model_id, "Model downloaded and activated");
             }
             Err(e) => {
@@ -1522,4 +1549,73 @@ async fn config_tuning(
 /// hardcoding them.
 async fn config_app(State(state): State<AppState>) -> Json<crate::vectors::yaml_config::AppConfig> {
     Json(state.yaml_config.app.clone())
+}
+
+// ---------------------------------------------------------------------------
+// User settings persistence (app_settings table)
+// ---------------------------------------------------------------------------
+
+/// GET /api/v1/ai/settings — return all persisted user settings as a JSON object.
+async fn get_settings(
+    State(state): State<AppState>,
+) -> Result<Json<std::collections::HashMap<String, String>>, (StatusCode, String)> {
+    let rows: Vec<(String, String)> =
+        sqlx::query_as("SELECT key, value FROM app_settings")
+            .fetch_all(&state.db.pool)
+            .await
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Failed to read settings: {e}"),
+                )
+            })?;
+
+    let settings: std::collections::HashMap<String, String> =
+        rows.into_iter().collect();
+    Ok(Json(settings))
+}
+
+/// PUT /api/v1/ai/settings — persist user settings.
+///
+/// Accepts a flat JSON object of key-value pairs. Each key is upserted
+/// into the `app_settings` table so that settings survive server restarts.
+/// The frontend sends its full Zustand settings blob on every save; the
+/// backend stores each field as a separate row for easy querying.
+async fn save_settings(
+    State(state): State<AppState>,
+    Json(settings): Json<std::collections::HashMap<String, serde_json::Value>>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let mut saved = 0usize;
+
+    for (key, value) in &settings {
+        // Serialize the value as a string — booleans/numbers become their
+        // JSON representation, strings are stored unquoted.
+        let val_str = match value {
+            serde_json::Value::String(s) => s.clone(),
+            other => other.to_string(),
+        };
+
+        sqlx::query(
+            "INSERT INTO app_settings (key, value) VALUES (?1, ?2) \
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        )
+        .bind(key)
+        .bind(&val_str)
+        .execute(&state.db.pool)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to save setting '{key}': {e}"),
+            )
+        })?;
+        saved += 1;
+    }
+
+    tracing::info!(saved, "User settings persisted");
+
+    Ok(Json(serde_json::json!({
+        "saved": saved,
+        "status": "ok",
+    })))
 }
