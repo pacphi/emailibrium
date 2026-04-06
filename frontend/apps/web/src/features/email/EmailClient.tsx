@@ -21,8 +21,6 @@ import {
   useDeleteEmail,
   useReplyToEmail,
   useForwardEmail,
-  useBulkArchive,
-  useBulkDelete,
   useLabelsQuery,
   useMoveEmail,
   useMarkRead,
@@ -155,8 +153,6 @@ export function EmailClient() {
   const deleteMutation = useDeleteEmail();
   const replyMutation = useReplyToEmail();
   const forwardMutation = useForwardEmail();
-  const bulkArchiveMutation = useBulkArchive();
-  const bulkDeleteMutation = useBulkDelete();
   const moveMutation = useMoveEmail();
   const markReadMutation = useMarkRead();
   const markAsSpamMutation = useMarkAsSpam();
@@ -332,22 +328,26 @@ export function EmailClient() {
 
   const handleGroupBulkArchive = useCallback(
     (emailIds: string[]) => {
-      bulkArchiveMutation.mutate(emailIds);
+      for (const id of emailIds) {
+        archiveMutation.mutate(id);
+      }
       if (selectedEmailId && emailIds.includes(selectedEmailId)) {
         setSelectedEmailId(null);
       }
     },
-    [bulkArchiveMutation, selectedEmailId],
+    [archiveMutation, selectedEmailId],
   );
 
   const handleGroupBulkDelete = useCallback(
     (emailIds: string[]) => {
-      bulkDeleteMutation.mutate(emailIds);
+      for (const id of emailIds) {
+        deleteMutation.mutate(id);
+      }
       if (selectedEmailId && emailIds.includes(selectedEmailId)) {
         setSelectedEmailId(null);
       }
     },
-    [bulkDeleteMutation, selectedEmailId],
+    [deleteMutation, selectedEmailId],
   );
 
   const handleGroupBulkMarkRead = useCallback(
@@ -479,12 +479,14 @@ export function EmailClient() {
   // Thread-level actions
   const handleThreadArchive = useCallback(() => {
     if (checkedIds.size > 0) {
-      bulkArchiveMutation.mutate(Array.from(checkedIds));
+      for (const id of checkedIds) {
+        archiveMutation.mutate(id);
+      }
       setCheckedIds(new Set());
     } else if (selectedEmailId) {
       archiveMutation.mutate(selectedEmailId);
     }
-  }, [checkedIds, selectedEmailId, bulkArchiveMutation, archiveMutation]);
+  }, [checkedIds, selectedEmailId, archiveMutation]);
 
   const handleThreadStar = useCallback(() => {
     if (selectedEmailId) starMutation.mutate(selectedEmailId);
@@ -492,13 +494,18 @@ export function EmailClient() {
 
   const handleThreadDelete = useCallback(() => {
     if (checkedIds.size > 0) {
-      bulkDeleteMutation.mutate(Array.from(checkedIds));
+      for (const id of checkedIds) {
+        deleteMutation.mutate(id);
+      }
       setCheckedIds(new Set());
+      if (selectedEmailId && checkedIds.has(selectedEmailId)) {
+        setSelectedEmailId(null);
+      }
     } else if (selectedEmailId) {
       deleteMutation.mutate(selectedEmailId);
       setSelectedEmailId(null);
     }
-  }, [checkedIds, selectedEmailId, bulkDeleteMutation, deleteMutation]);
+  }, [checkedIds, selectedEmailId, deleteMutation]);
 
   const handleThreadSpam = useCallback(() => {
     if (selectedEmailId) {
