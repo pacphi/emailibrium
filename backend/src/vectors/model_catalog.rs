@@ -109,8 +109,26 @@ fn detect_gpu() -> String {
     }
     #[cfg(not(target_os = "macos"))]
     {
-        // TODO: detect CUDA/Vulkan
-        "CPU only".to_string()
+        // Detect GPU acceleration: try nvidia-smi for CUDA, then vulkaninfo for Vulkan.
+        if std::process::Command::new("nvidia-smi")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+        {
+            "NVIDIA CUDA".to_string()
+        } else if std::process::Command::new("vulkaninfo")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+        {
+            "Vulkan".to_string()
+        } else {
+            "CPU only".to_string()
+        }
     }
 }
 

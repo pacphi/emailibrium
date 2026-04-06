@@ -7,6 +7,7 @@ pub mod audit;
 pub mod backup;
 pub mod categorizer;
 pub mod chat;
+pub mod chat_orchestrator;
 pub mod clustering;
 pub mod config;
 pub mod consent;
@@ -15,6 +16,7 @@ pub mod encryption;
 pub mod error;
 pub mod evaluation;
 pub mod ewc;
+pub mod extractive;
 pub mod generative;
 #[cfg(feature = "builtin-llm")]
 pub mod generative_builtin;
@@ -34,13 +36,18 @@ pub mod models;
 pub mod privacy;
 pub mod qdrant_store;
 pub mod quantization;
+pub mod query_parser;
 pub mod rag;
 pub mod reindex;
 pub mod remote_wipe;
+pub mod reranker;
 pub mod ruvector_store;
 pub mod search;
 pub mod sqlite_store;
 pub mod store;
+pub mod thread;
+pub mod tool_calling;
+pub mod tool_calling_providers;
 pub mod types;
 pub mod user_learning;
 pub mod yaml_config;
@@ -224,12 +231,13 @@ impl VectorService {
             Err(e) => tracing::warn!("Failed to load category centroids: {e}"),
         }
 
-        // Initialize hybrid search
-        let hybrid_search = Arc::new(search::HybridSearch::new(
+        // Initialize hybrid search with passthrough reranker (ADR-029).
+        let hybrid_search = Arc::new(search::HybridSearch::with_reranker(
             store.clone(),
             embedding.clone(),
             db.clone(),
             config.search.clone(),
+            Arc::new(reranker::PassthroughReranker),
         ));
 
         // Initialize cluster engine with tuning parameters from YAML config

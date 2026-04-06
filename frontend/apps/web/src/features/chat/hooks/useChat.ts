@@ -3,10 +3,22 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   sendChatMessage,
   streamChatMessage,
+  confirmToolCall,
   getChatSessions,
   deleteChatSession,
 } from '@emailibrium/api';
-import type { RuleSuggestion, ChatSession } from '@emailibrium/types';
+import type {
+  RuleSuggestion,
+  ChatSession,
+  ToolCallEvent,
+  ConfirmationEvent,
+} from '@emailibrium/types';
+
+export interface ToolCallStatus {
+  id: string;
+  name: string;
+  status: 'calling' | 'complete' | 'error';
+}
 
 export interface ChatMessage {
   id: string;
@@ -15,6 +27,7 @@ export interface ChatMessage {
   timestamp: string;
   suggestions?: RuleSuggestion[];
   isStreaming?: boolean;
+  toolCalls?: ToolCallStatus[];
 }
 
 function generateId(): string {
@@ -26,13 +39,15 @@ function generateId(): string {
  * Supports both standard request/response and SSE streaming modes.
  *
  * All inference runs on the Rust backend (Tier 0.5 built-in LLM, Ollama,
- * or cloud) — the frontend is a pure REST/SSE client.
+ * or cloud) -- the frontend is a pure REST/SSE client.
  */
 export function useChat() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [sessionId, setSessionId] = useState<string | undefined>(undefined);
   const [streamingEnabled, setStreamingEnabled] = useState(true);
+  const [pendingToolCalls, setPendingToolCalls] = useState<ToolCallEvent[]>([]);
+  const [pendingConfirmation, setPendingConfirmation] = useState<ConfirmationEvent | null>(null);
   const abortRef = useRef<(() => void) | null>(null);
 
   const sendMessage = useCallback(
@@ -67,21 +82,21 @@ export function useChat() {
         ]);
 
         try {
-          const abort = await streamChatMessage(
-            request,
-            (chunk) => {
+          const abort = await streamChatMessage(request, {
+            onChunk: (chunk) => {
               setMessages((prev) =>
                 prev.map((m) => (m.id === assistantId ? { ...m, content: m.content + chunk } : m)),
               );
             },
-            (newSessionId) => {
+            onDone: (newSessionId) => {
               setSessionId(newSessionId);
+              setPendingToolCalls([]);
               setMessages((prev) =>
                 prev.map((m) => (m.id === assistantId ? { ...m, isStreaming: false } : m)),
               );
               setIsLoading(false);
             },
-            (error) => {
+            onError: (error) => {
               setMessages((prev) =>
                 prev.map((m) =>
                   m.id === assistantId
@@ -95,7 +110,46 @@ export function useChat() {
               );
               setIsLoading(false);
             },
-          );
+            onToolCall: (toolCall) => {
+              setPendingToolCalls((prev) => [...prev, toolCall]);
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === assistantId
+                    ? {
+                        ...m,
+                        toolCalls: [
+                          ...(m.toolCalls ?? []),
+                          { id: toolCall.id, name: toolCall.name, status: 'calling' as const },
+                        ],
+                      }
+                    : m,
+                ),
+              );
+            },
+            onToolResult: (toolResult) => {
+              setPendingToolCalls((prev) => prev.filter((tc) => tc.id !== toolResult.toolCallId));
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === assistantId
+                    ? {
+                        ...m,
+                        toolCalls: m.toolCalls?.map((tc) =>
+                          tc.id === toolResult.toolCallId
+                            ? {
+                                ...tc,
+                                status: (toolResult.isError ? 'error' : 'complete') as const,
+                              }
+                            : tc,
+                        ),
+                      }
+                    : m,
+                ),
+              );
+            },
+            onConfirmation: (confirmation) => {
+              setPendingConfirmation(confirmation);
+            },
+          });
           abortRef.current = abort;
         } catch {
           setMessages((prev) =>
@@ -150,11 +204,27 @@ export function useChat() {
     setIsLoading(false);
   }, []);
 
+  const handleConfirmation = useCallback(
+    async (approved: boolean): Promise<void> => {
+      if (!pendingConfirmation || !sessionId) return;
+      try {
+        await confirmToolCall(sessionId, pendingConfirmation.confirmationId, approved);
+      } catch {
+        // Error will surface through the SSE stream
+      } finally {
+        setPendingConfirmation(null);
+      }
+    },
+    [pendingConfirmation, sessionId],
+  );
+
   const clearHistory = useCallback(() => {
     abortRef.current?.();
     abortRef.current = null;
     setMessages([]);
     setSessionId(undefined);
+    setPendingToolCalls([]);
+    setPendingConfirmation(null);
     setIsLoading(false);
   }, []);
 
@@ -164,9 +234,12 @@ export function useChat() {
     sessionId,
     streamingEnabled,
     setStreamingEnabled,
+    pendingToolCalls,
+    pendingConfirmation,
     sendMessage,
     stopStreaming,
     clearHistory,
+    handleConfirmation,
   };
 }
 

@@ -1,0 +1,39 @@
+# MCP tool configuration for emailibrium (ADR-028).
+#
+# Controls which tools are exposed, rate limits, and whether
+# destructive actions require user confirmation before execution.
+
+version: "1.0"
+
+defaults:
+  rate_limit_per_minute: 20
+  timeout_ms: 10000
+
+tools:
+  search_emails:
+    enabled: true
+    requires_confirmation: false
+    rate_limit_per_minute: 30
+
+  get_email:
+    enabled: true
+    requires_confirmation: false
+
+  list_recent_emails:
+    enabled: true
+    requires_confirmation: false
+
+  send_email:
+    enabled: true
+    requires_confirmation: true
+    rate_limit_per_minute: 5
+
+  delete_email:
+    enabled: true
+    requires_confirmation: true
+    rate_limit_per_minute: 10
+
+  create_rule:
+    enabled: true
+    requires_confirmation: true
+    rate_limit_per_minute: 10

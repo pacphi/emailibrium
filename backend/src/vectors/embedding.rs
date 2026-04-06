@@ -1060,9 +1060,31 @@ impl EmbeddingPipeline {
     }
 
     /// Format email fields into a single text suitable for embedding.
-    pub fn prepare_email_text(subject: &str, from_addr: &str, body_text: &str) -> String {
-        let truncated_body: String = body_text.chars().take(400).collect();
-        format!("{subject}\nFrom: {from_addr}\n{truncated_body}")
+    ///
+    /// Enhanced for ADR-029: explicit field labels, optional metadata fields,
+    /// and increased body budget (1500 chars) for better semantic recall.
+    pub fn prepare_email_text(
+        subject: &str,
+        from_addr: &str,
+        body_text: &str,
+        from_name: Option<&str>,
+        received_at: Option<&str>,
+        category: Option<&str>,
+    ) -> String {
+        let sender = match from_name {
+            Some(name) if !name.is_empty() => format!("{name} <{from_addr}>"),
+            _ => from_addr.to_string(),
+        };
+        let truncated_body: String = body_text.chars().take(1500).collect();
+        let date_part = received_at
+            .map(|d| format!(" | Date: {d}"))
+            .unwrap_or_default();
+        let cat_part = category
+            .map(|c| format!(" | Category: {c}"))
+            .unwrap_or_default();
+        format!(
+            "[Email] Subject: {subject} | From: {sender}{date_part}{cat_part}\nBody: {truncated_body}"
+        )
     }
 
     // -- helpers -------------------------------------------------------------
@@ -1251,23 +1273,52 @@ mod tests {
             "Meeting Tomorrow",
             "alice@example.com",
             "Please join the meeting at 10am.",
+            None,
+            None,
+            None,
         );
         assert_eq!(
             result,
-            "Meeting Tomorrow\nFrom: alice@example.com\nPlease join the meeting at 10am."
+            "[Email] Subject: Meeting Tomorrow | From: alice@example.com\nBody: Please join the meeting at 10am."
+        );
+    }
+
+    #[tokio::test]
+    async fn test_prepare_email_text_with_metadata() {
+        let result = EmbeddingPipeline::prepare_email_text(
+            "Budget Review",
+            "alice@example.com",
+            "Q2 spending was $1.2M.",
+            Some("Alice Smith"),
+            Some("2026-03-15T10:30:00Z"),
+            Some("Work"),
+        );
+        assert_eq!(
+            result,
+            "[Email] Subject: Budget Review | From: Alice Smith <alice@example.com> | Date: 2026-03-15T10:30:00Z | Category: Work\nBody: Q2 spending was $1.2M."
         );
     }
 
     #[tokio::test]
     async fn test_prepare_email_text_truncation() {
-        let long_body = "a".repeat(600);
-        let result = EmbeddingPipeline::prepare_email_text("Subj", "bob@example.com", &long_body);
+        let long_body = "a".repeat(2000);
+        let result = EmbeddingPipeline::prepare_email_text(
+            "Subj",
+            "bob@example.com",
+            &long_body,
+            None,
+            None,
+            None,
+        );
 
-        // The body portion should be truncated to 400 chars.
-        let expected = format!("Subj\nFrom: bob@example.com\n{}", "a".repeat(400));
+        // The body portion should be truncated to 1500 chars.
+        let expected = format!(
+            "[Email] Subject: Subj | From: bob@example.com\nBody: {}",
+            "a".repeat(1500)
+        );
         assert_eq!(result, expected);
-        // Verify the full 600-char body was NOT included.
-        assert!(result.len() < 450);
+        // Verify the full 2000-char body was NOT included.
+        assert!(result.len() < 1600);
     }
 
     #[tokio::test]

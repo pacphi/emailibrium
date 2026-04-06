@@ -56,7 +56,17 @@ export type {
   DataEraseResponse,
 } from './consent.js';
 
-export type { ChatSession, ChatRequest, ChatResponse, ChatStreamChunk } from './chat.js';
+export type {
+  ChatSession,
+  ChatRequest,
+  ChatResponse,
+  ChatStreamChunk,
+  ToolCallEvent,
+  ToolResultEvent,
+  ConfirmationEvent,
+  ChatStreamEventType,
+  ChatStreamEvent,
+} from './chat.js';
 
 export type {
   UnsubscribeTarget,

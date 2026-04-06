@@ -7,13 +7,16 @@
 
 use std::sync::Arc;
 
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
-use tracing::debug;
+use tracing::{debug, info};
 
 use crate::db::Database;
 
 use super::error::VectorError;
-use super::search::{HybridSearch, HybridSearchQuery, SearchMode};
+use super::extractive;
+use super::query_parser::{parse_query, QueryType};
+use super::search::{HybridSearch, HybridSearchQuery, SearchFilters, SearchMode};
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -37,6 +40,14 @@ pub struct RagConfig {
     /// Maximum characters of body text per email.
     #[serde(default = "default_max_body_chars")]
     pub max_body_chars: usize,
+    /// Minimum top-result score to consider context sufficient (ADR-029).
+    /// Below this threshold the pipeline returns an "insufficient context" message.
+    #[serde(default = "default_context_sufficiency_threshold")]
+    pub context_sufficiency_threshold: f32,
+    /// Whether to use extractive passage extraction instead of full-body
+    /// truncation (ADR-029 Phase E). Defaults to `false` for backward compat.
+    #[serde(default)]
+    pub extractive_enabled: bool,
 }
 
 fn default_top_k() -> usize {
@@ -54,6 +65,9 @@ fn default_include_body() -> bool {
 fn default_max_body_chars() -> usize {
     200
 }
+fn default_context_sufficiency_threshold() -> f32 {
+    0.01
+}
 
 impl Default for RagConfig {
     fn default() -> Self {
@@ -63,6 +77,8 @@ impl Default for RagConfig {
             max_context_tokens: default_max_context_tokens(),
             include_body: default_include_body(),
             max_body_chars: default_max_body_chars(),
+            context_sufficiency_threshold: default_context_sufficiency_threshold(),
+            extractive_enabled: false,
         }
     }
 }
@@ -75,6 +91,8 @@ impl From<&super::yaml_config::RagTuning> for RagConfig {
             max_context_tokens: tuning.max_context_tokens,
             include_body: tuning.include_body,
             max_body_chars: tuning.max_body_chars,
+            context_sufficiency_threshold: default_context_sufficiency_threshold(),
+            extractive_enabled: false,
         }
     }
 }
@@ -92,6 +110,8 @@ pub struct RagContext {
     pub email_ids: Vec<String>,
     /// How many emails matched above the relevance threshold.
     pub result_count: usize,
+    /// Highest relevance score among results (ADR-029: context sufficiency check).
+    pub top_score: f32,
 }
 
 // ---------------------------------------------------------------------------
@@ -125,12 +145,38 @@ impl RagPipeline {
     ) -> Result<RagContext, VectorError> {
         let budget = max_context_tokens.unwrap_or(self.config.max_context_tokens);
 
+        // 0. Parse query to extract structured filters and semantic text.
+        let parsed = parse_query(query, Utc::now());
+        debug!(
+            query,
+            query_type = ?parsed.query_type,
+            parse_confidence = parsed.parse_confidence,
+            has_filters = parsed.filters != SearchFilters::default(),
+            "Query parsed"
+        );
+
+        if parsed.query_type == QueryType::Aggregation {
+            info!(
+                query,
+                "Aggregation query detected — proceeding with normal search for now"
+            );
+        }
+
+        let search_text = parsed.semantic_text.as_deref().unwrap_or(query);
+        let filters = if parsed.filters != SearchFilters::default() {
+            Some(parsed.filters)
+        } else {
+            None
+        };
+
         // 1. Search emails using hybrid (semantic + keyword) search.
         let search_query = HybridSearchQuery {
-            text: query.to_string(),
+            text: search_text.to_string(),
             mode: SearchMode::Hybrid,
-            filters: None,
+            filters,
             limit: Some(self.config.top_k),
+            vector_weight: 1.0,
+            fts_weight: 1.0,
         };
 
         let search_result = self.search.search(&search_query).await?;
@@ -154,12 +200,33 @@ impl RagPipeline {
             .filter(|r| r.score >= self.config.min_relevance_score)
             .collect();
 
+        let top_score = relevant.first().map(|r| r.score).unwrap_or(0.0);
+
         if relevant.is_empty() {
             debug!(query, "RAG: no emails matched above threshold");
             return Ok(RagContext {
                 formatted_context: String::new(),
                 email_ids: Vec::new(),
                 result_count: 0,
+                top_score: 0.0,
+            });
+        }
+
+        // ADR-029: Context sufficiency check — if the top score is below the
+        // configurable threshold, treat the results as insufficient.
+        let sufficiency_threshold = self.config.context_sufficiency_threshold;
+        if top_score < sufficiency_threshold {
+            debug!(
+                query,
+                top_score,
+                sufficiency_threshold,
+                "RAG: top score below context sufficiency threshold"
+            );
+            return Ok(RagContext {
+                formatted_context: String::new(),
+                email_ids: Vec::new(),
+                result_count: 0,
+                top_score,
             });
         }
 
@@ -174,7 +241,12 @@ impl RagPipeline {
         let budget_chars = budget * 4; // rough: 1 token ≈ 4 chars
 
         for email in &emails {
-            let snippet = self.format_email(email);
+            // ADR-029 Phase E: Use extractive passages when enabled.
+            let snippet = if self.config.extractive_enabled {
+                self.format_email_extractive(email, search_text)
+            } else {
+                self.format_email(email)
+            };
             let snippet_chars = snippet.len();
 
             if used_tokens + (snippet_chars / 4) > budget {
@@ -214,6 +286,7 @@ impl RagPipeline {
             formatted_context,
             email_ids: used_ids,
             result_count,
+            top_score,
         })
     }
 
@@ -314,6 +387,45 @@ impl RagPipeline {
         } else {
             format!("{header}\nBody: {body}")
         }
+    }
+
+    /// Format an email using extractive passage retrieval (ADR-029 Phase E).
+    ///
+    /// Instead of truncating the body at a fixed character limit, extracts the
+    /// most query-relevant sentences and presents them as key passages. Falls
+    /// back to `format_email` when extractive returns empty results.
+    fn format_email_extractive(&self, email: &EmailSnippet, query: &str) -> String {
+        let body = email.body_text.as_deref().unwrap_or("");
+        if body.is_empty() {
+            return self.format_email(email);
+        }
+
+        let passages = extractive::extract_passages(
+            body,
+            query,
+            3,  // max passages per email
+            20, // min sentence chars
+            self.config.max_body_chars,
+        );
+
+        if passages.is_empty() {
+            return self.format_email(email);
+        }
+
+        let formatted_passages = extractive::format_passages(&passages);
+        if formatted_passages.trim().is_empty() {
+            return self.format_email(email);
+        }
+
+        let sender = match &email.from_name {
+            Some(name) if !name.is_empty() => format!("{name} <{}>", email.from_addr),
+            _ => email.from_addr.clone(),
+        };
+
+        format!(
+            "--- Email ---\nFrom: {sender}\nSubject: {}\nDate: {}\nKey passages:\n{formatted_passages}",
+            email.subject, email.received_at,
+        )
     }
 }
 
@@ -557,10 +669,12 @@ mod tests {
             formatted_context: String::new(),
             email_ids: Vec::new(),
             result_count: 0,
+            top_score: 0.0,
         };
         assert_eq!(ctx.result_count, 0);
         assert!(ctx.formatted_context.is_empty());
         assert!(ctx.email_ids.is_empty());
+        assert!((ctx.top_score - 0.0).abs() < f32::EPSILON);
     }
 
     #[test]
@@ -569,6 +683,7 @@ mod tests {
             formatted_context: "The following 2 email(s) are relevant".to_string(),
             email_ids: vec!["e1".to_string(), "e2".to_string()],
             result_count: 2,
+            top_score: 0.02,
         };
         assert_eq!(ctx.result_count, 2);
         assert_eq!(ctx.email_ids.len(), 2);

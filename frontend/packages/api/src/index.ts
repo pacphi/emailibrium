@@ -101,9 +101,11 @@ export {
   sendChatMessage,
   createChatStream,
   streamChatMessage,
+  confirmToolCall,
   getChatSessions,
   deleteChatSession,
 } from './chatApi.js';
+export type { StreamChatCallbacks } from './chatApi.js';
 
 export { recordConsent, getConsents, requestDataExport, requestDataErase } from './consentApi.js';
 

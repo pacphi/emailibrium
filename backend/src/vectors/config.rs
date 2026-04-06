@@ -388,6 +388,13 @@ pub struct SearchConfig {
     /// Missing collections default to 1.0.
     #[serde(default)]
     pub collection_weights: std::collections::HashMap<String, f32>,
+    /// RRF k parameter (ADR-029 Phase C). Defaults to 60 for backward compat.
+    #[serde(default = "default_rrf_k_search")]
+    pub rrf_k: u32,
+}
+
+fn default_rrf_k_search() -> u32 {
+    60
 }
 
 impl Default for SearchConfig {
@@ -400,6 +407,7 @@ impl Default for SearchConfig {
             sona_weight: default_sona_weight(),
             collections: default_search_collections(),
             collection_weights: std::collections::HashMap::new(),
+            rrf_k: default_rrf_k_search(),
         }
     }
 }

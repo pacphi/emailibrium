@@ -140,6 +140,8 @@ async fn semantic_search(
             mode: search_mode,
             filters: None,
             limit: req.limit,
+            vector_weight: 1.0,
+            fts_weight: 1.0,
         };
 
         // Obtain SONA preference for re-ranking (item #18).
@@ -288,6 +290,8 @@ async fn hybrid_search(
         mode: search_mode,
         filters: req.filters,
         limit: req.limit,
+        vector_weight: 1.0,
+        fts_weight: 1.0,
     };
 
     // Obtain the SONA session preference vector for re-ranking (item #18).
@@ -419,6 +423,9 @@ async fn classify_email(
         &req.subject,
         &req.from_addr,
         &req.body_text,
+        None,
+        None,
+        None,
     );
 
     let result = state

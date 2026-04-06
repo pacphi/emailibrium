@@ -23,11 +23,15 @@ use futures::stream::Stream;
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 
-use crate::vectors::chat::{ChatResponse, SessionSummary};
+use crate::vectors::chat::{ChatMessage, ChatResponse, ChatRole, SessionSummary};
+use crate::vectors::chat_orchestrator::{
+    ChatOrchestrator, OrchestrationResult, OrchestratorConfig,
+};
 use crate::vectors::generative_router::{GenerativeRouterService, ProviderStatus};
 use crate::vectors::model_registry::ProviderType;
 use crate::vectors::models::{self, ModelStatus};
 use crate::vectors::reindex::ReindexStatus;
+use crate::vectors::tool_calling::{ToolDefinition, ToolMessage, ToolMessageRole};
 use crate::AppState;
 
 /// Build AI management routes.
@@ -41,6 +45,7 @@ pub fn routes() -> Router<AppState> {
         .route("/providers/{provider}/enable", post(enable_provider))
         .route("/chat", post(chat_message))
         .route("/chat/stream", post(chat_message_sse))
+        .route("/chat/confirm", post(confirm_tool_call))
         .route("/chat/sessions", get(list_chat_sessions))
         .route("/chat/sessions/{id}", delete(delete_chat_session))
         .route("/model-catalog", get(model_catalog))
@@ -305,10 +310,12 @@ async fn chat_message(
 /// The response is streamed as Server-Sent Events. Each event has type "chunk"
 /// with a JSON data payload. The final event has type "done".
 ///
-/// This follows the same SSE pattern as the ingestion status endpoint
-/// (`api/ingestion.rs`). We generate the full response first, then stream it
-/// in chunks. True token-level streaming would require changes to the
-/// GenerativeModel trait.
+/// When a tool-calling provider is available (ADR-028), the orchestrator path
+/// is used instead of the plain generate() path. The orchestrator can emit
+/// additional SSE event types: `tool_call`, `tool_result`, and `confirmation`.
+///
+/// When no tool-calling provider exists, this falls back to the current RAG-only
+/// path using the generative router.
 async fn chat_message_sse(
     State(state): State<AppState>,
     Json(req): Json<ChatRequest>,
@@ -331,6 +338,170 @@ async fn chat_message_sse(
         "Chat SSE stream request"
     );
 
+    // ── Branch: orchestrator path (tool-calling provider available) ────
+    if let Some(ref tool_provider) = state.tool_calling_provider {
+        debug!(session_id = %session_id, "Using orchestrator path (tool-calling provider)");
+
+        // Ensure the session exists and record the user message.
+        let session = chat_service.get_or_create_session(&session_id).await;
+
+        // Build system prompt with email context from RAG.
+        let ctx_window = state.vector_service.config.generative.builtin.context_size as usize;
+        let overhead = state.yaml_config.tuning.rag.overhead_tokens;
+        let rag_budget = ctx_window.saturating_sub(overhead);
+
+        let email_context = if let Some(ref rag) = state.rag_pipeline {
+            match rag.retrieve_context(&req.message, Some(rag_budget)).await {
+                Ok(ctx) if ctx.result_count > 0 => {
+                    debug!(
+                        result_count = ctx.result_count,
+                        "RAG: injecting email context"
+                    );
+                    Some(ctx.formatted_context)
+                }
+                Ok(_) => None,
+                Err(e) => {
+                    tracing::warn!("RAG retrieval failed: {e}");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+        let system_prompt = {
+            let now = chrono::Local::now().format("%Y-%m-%d %H:%M %Z");
+            let base = &state.yaml_config.prompts.chat_assistant;
+            let mut prompt = format!("The current date and time is: {now}\n\n{base}");
+            if let Some(ref ctx) = email_context {
+                prompt.push_str("\n\n[Email Context]\n");
+                prompt.push_str(ctx);
+            }
+            prompt
+        };
+
+        // Convert session history + new user message into ToolMessage array.
+        let mut messages = session_history_to_tool_messages(&session.messages, &system_prompt);
+        messages.push(ToolMessage {
+            role: ToolMessageRole::User,
+            content: req.message.clone(),
+            tool_calls: None,
+            tool_call_id: None,
+        });
+
+        // Build orchestrator with tools and executor.
+        let orchestrator = ChatOrchestrator::new(OrchestratorConfig::default())
+            .with_tools(build_tool_definitions())
+            .with_executor(build_tool_executor(&state));
+
+        let max_tokens = state.yaml_config.tuning.llm.chat_max_tokens as u32;
+        let result = orchestrator
+            .orchestrate(messages, tool_provider.as_ref(), 0.7, max_tokens)
+            .await;
+
+        let pending_confirmations = state.pending_confirmations.clone();
+        let sid = session_id.clone();
+
+        let events: Vec<Result<Event, Infallible>> = match result {
+            Ok(OrchestrationResult::Response(text)) => {
+                // Record the turn in the chat session via the normal chat path.
+                let _ = chat_service.chat(&sid, &req.message, email_context).await;
+
+                let chunk_size = 80;
+                let mut evts: Vec<Result<Event, Infallible>> = if text.is_empty() {
+                    vec![]
+                } else {
+                    text.as_bytes()
+                        .chunks(chunk_size)
+                        .filter_map(|c| {
+                            let chunk = String::from_utf8_lossy(c).into_owned();
+                            let payload = serde_json::json!({ "type": "token", "content": chunk });
+                            serde_json::to_string(&payload)
+                                .ok()
+                                .map(|json| Ok(Event::default().data(json)))
+                        })
+                        .collect()
+                };
+
+                if let Ok(json) = serde_json::to_string(&serde_json::json!({
+                    "type": "done",
+                    "sessionId": sid,
+                })) {
+                    evts.push(Ok(Event::default().data(json)));
+                }
+                evts
+            }
+            Ok(OrchestrationResult::ConfirmationRequired {
+                confirmation_id,
+                tool_name,
+                tool_args,
+                description,
+            }) => {
+                // Store pending confirmation for the confirm endpoint.
+                {
+                    let mut pending = pending_confirmations.lock().await;
+                    pending.insert(
+                        confirmation_id.clone(),
+                        PendingConfirmation {
+                            confirmation_id: confirmation_id.clone(),
+                            session_id: sid.clone(),
+                            tool_name: tool_name.clone(),
+                            tool_args: tool_args.clone(),
+                            description: description.clone(),
+                        },
+                    );
+                }
+
+                let mut evts = Vec::new();
+                if let Ok(json) = serde_json::to_string(&serde_json::json!({
+                    "type": "confirmation",
+                    "confirmationId": confirmation_id,
+                    "toolName": tool_name,
+                    "toolArgs": tool_args,
+                    "description": description,
+                    "sessionId": sid,
+                })) {
+                    evts.push(Ok(Event::default().event("confirmation").data(json)));
+                }
+                evts
+            }
+            Ok(OrchestrationResult::MaxIterationsReached(msg)) => {
+                let mut evts = Vec::new();
+                if let Ok(json) = serde_json::to_string(&serde_json::json!({
+                    "type": "token",
+                    "content": msg,
+                })) {
+                    evts.push(Ok(Event::default().data(json)));
+                }
+                if let Ok(json) = serde_json::to_string(&serde_json::json!({
+                    "type": "done",
+                    "sessionId": sid,
+                })) {
+                    evts.push(Ok(Event::default().data(json)));
+                }
+                evts
+            }
+            Err(e) => {
+                let mut evts = Vec::new();
+                if let Ok(json) = serde_json::to_string(&serde_json::json!({
+                    "type": "error",
+                    "error": e.to_string(),
+                })) {
+                    evts.push(Ok(Event::default().data(json)));
+                }
+                evts
+            }
+        };
+
+        let stream = futures::stream::iter(events);
+        return Ok(Sse::new(stream).keep_alive(
+            KeepAlive::new()
+                .interval(Duration::from_secs(15))
+                .text("ping"),
+        ));
+    }
+
+    // ── Fallback: RAG-only path (no tool-calling provider) ────────────
     // RAG: derive context budget from model's context window.
     let ctx_window = state.vector_service.config.generative.builtin.context_size as usize;
     let overhead = state.yaml_config.tuning.rag.overhead_tokens;
@@ -922,6 +1093,399 @@ async fn trigger_reembed(
         message: msg,
         ingestion_triggered,
     }))
+}
+
+// ---------------------------------------------------------------------------
+// Orchestrator support types (ADR-028)
+// ---------------------------------------------------------------------------
+
+/// A tool call awaiting user confirmation before execution.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingConfirmation {
+    pub confirmation_id: String,
+    pub session_id: String,
+    pub tool_name: String,
+    pub tool_args: serde_json::Value,
+    pub description: String,
+}
+
+/// Request body for POST /api/v1/ai/chat/confirm.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ConfirmToolCallRequest {
+    session_id: String,
+    confirmation_id: String,
+    approved: bool,
+}
+
+/// Response for confirm endpoint.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ConfirmToolCallResponse {
+    confirmation_id: String,
+    status: String,
+}
+
+/// POST /api/v1/ai/chat/confirm -- approve or reject a pending tool call.
+async fn confirm_tool_call(
+    State(state): State<AppState>,
+    Json(req): Json<ConfirmToolCallRequest>,
+) -> Result<Json<ConfirmToolCallResponse>, (StatusCode, String)> {
+    let mut pending = state.pending_confirmations.lock().await;
+    let entry = pending.remove(&req.confirmation_id);
+
+    match entry {
+        Some(confirmation) => {
+            let status = if req.approved {
+                debug!(
+                    confirmation_id = %req.confirmation_id,
+                    tool = %confirmation.tool_name,
+                    session_id = %req.session_id,
+                    "Tool call confirmed by user"
+                );
+                "approved"
+            } else {
+                debug!(
+                    confirmation_id = %req.confirmation_id,
+                    tool = %confirmation.tool_name,
+                    session_id = %req.session_id,
+                    "Tool call rejected by user"
+                );
+                "rejected"
+            };
+
+            Ok(Json(ConfirmToolCallResponse {
+                confirmation_id: req.confirmation_id,
+                status: status.to_string(),
+            }))
+        }
+        None => Err((
+            StatusCode::NOT_FOUND,
+            format!("No pending confirmation with id: {}", req.confirmation_id),
+        )),
+    }
+}
+
+/// Build the canonical tool definitions matching the 7 MCP server tools.
+fn build_tool_definitions() -> Vec<ToolDefinition> {
+    vec![
+        ToolDefinition {
+            name: "search_emails".into(),
+            description: "Search the user's emails by query text. Returns matching emails with sender, subject, date, and relevance score.".into(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string", "description": "Search query text" },
+                    "limit": { "type": "integer", "description": "Maximum results (default: 20)", "default": 20 }
+                },
+                "required": ["query"]
+            }),
+        },
+        ToolDefinition {
+            name: "get_email".into(),
+            description: "Get full email content including headers, body, and metadata by email ID.".into(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "email_id": { "type": "string", "description": "Unique email identifier" }
+                },
+                "required": ["email_id"]
+            }),
+        },
+        ToolDefinition {
+            name: "list_recent_emails".into(),
+            description: "List the most recent emails across all connected accounts.".into(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "limit": { "type": "integer", "description": "Maximum emails (default: 20, max: 100)" }
+                }
+            }),
+        },
+        ToolDefinition {
+            name: "count_emails".into(),
+            description: "Count emails matching optional filters. Supports filtering by sender, category, and date range.".into(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "from_filter": { "type": "string", "description": "Filter by sender (partial match)" },
+                    "category": { "type": "string", "description": "Filter by category" },
+                    "after": { "type": "string", "description": "Only count emails after this ISO 8601 date" },
+                    "before": { "type": "string", "description": "Only count emails before this ISO 8601 date" }
+                }
+            }),
+        },
+        ToolDefinition {
+            name: "get_insights".into(),
+            description: "Get email analytics: counts by category, top senders, and daily volume for the last 7 days.".into(),
+            input_schema: serde_json::json!({ "type": "object", "properties": {} }),
+        },
+        ToolDefinition {
+            name: "list_rules".into(),
+            description: "List all email rules including their conditions, actions, and status.".into(),
+            input_schema: serde_json::json!({ "type": "object", "properties": {} }),
+        },
+        ToolDefinition {
+            name: "get_email_thread".into(),
+            description: "Get all emails in the same conversation thread as the specified email.".into(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "email_id": { "type": "string", "description": "Email ID whose thread to retrieve" }
+                },
+                "required": ["email_id"]
+            }),
+        },
+    ]
+}
+
+/// Build a `ToolExecutor` that dispatches tool calls to in-process service functions.
+///
+/// This bridges the orchestrator's tool executor interface to the same database
+/// and search services used by the MCP server, without going over the network.
+fn build_tool_executor(state: &AppState) -> crate::vectors::chat_orchestrator::ToolExecutor {
+    use crate::vectors::search::{HybridSearchQuery, SearchMode};
+
+    let db = state.db.clone();
+    let hybrid_search = state.vector_service.hybrid_search.clone();
+
+    std::sync::Arc::new(move |name: &str, args: serde_json::Value| {
+        let db = db.clone();
+        let hybrid_search = hybrid_search.clone();
+        let name = name.to_string();
+
+        Box::pin(async move {
+            match name.as_str() {
+                "search_emails" => {
+                    let query_text = args.get("query").and_then(|v| v.as_str()).unwrap_or("");
+                    let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(20) as usize;
+
+                    let query = HybridSearchQuery {
+                        text: query_text.to_string(),
+                        mode: SearchMode::Hybrid,
+                        filters: None,
+                        limit: Some(limit),
+                        vector_weight: 1.0,
+                        fts_weight: 1.0,
+                    };
+
+                    match hybrid_search.search(&query).await {
+                        Ok(result) => {
+                            let items: Vec<serde_json::Value> = result.results.iter().map(|r| {
+                                serde_json::json!({
+                                    "email_id": r.email_id,
+                                    "score": r.score,
+                                    "match_type": r.match_type,
+                                    "subject": r.metadata.get("subject").unwrap_or(&String::new()),
+                                    "from": r.metadata.get("from_addr").unwrap_or(&String::new()),
+                                    "date": r.metadata.get("received_at").unwrap_or(&String::new()),
+                                })
+                            }).collect();
+                            Ok(
+                                serde_json::json!({ "total": result.total, "results": items })
+                                    .to_string(),
+                            )
+                        }
+                        Err(e) => Err(format!("Search failed: {e}")),
+                    }
+                }
+                "get_email" => {
+                    let email_id = args.get("email_id").and_then(|v| v.as_str()).unwrap_or("");
+                    let row = sqlx::query_as::<_, (String, String, Option<String>, String, String, Option<String>, Option<String>)>(
+                        "SELECT id, subject, from_name, from_addr, received_at, body_text, category FROM emails WHERE id = ?1"
+                    )
+                    .bind(email_id)
+                    .fetch_optional(&db.pool)
+                    .await;
+
+                    match row {
+                        Ok(Some((
+                            id,
+                            subject,
+                            from_name,
+                            from_addr,
+                            received_at,
+                            body_text,
+                            category,
+                        ))) => {
+                            let sender = match &from_name {
+                                Some(name) if !name.is_empty() => format!("{name} <{from_addr}>"),
+                                _ => from_addr,
+                            };
+                            Ok(serde_json::json!({
+                                "id": id, "subject": subject, "from": sender,
+                                "date": received_at, "category": category,
+                                "body": body_text.unwrap_or_default(),
+                            })
+                            .to_string())
+                        }
+                        Ok(None) => {
+                            Ok(serde_json::json!({ "error": "Email not found" }).to_string())
+                        }
+                        Err(e) => Err(format!("Database error: {e}")),
+                    }
+                }
+                "list_recent_emails" => {
+                    let limit = args
+                        .get("limit")
+                        .and_then(|v| v.as_i64())
+                        .unwrap_or(20)
+                        .min(100);
+                    let rows = sqlx::query_as::<_, (String, String, Option<String>, String, String, Option<String>)>(
+                        "SELECT id, subject, from_name, from_addr, received_at, category FROM emails ORDER BY received_at DESC LIMIT ?1"
+                    )
+                    .bind(limit)
+                    .fetch_all(&db.pool)
+                    .await;
+
+                    match rows {
+                        Ok(rows) => {
+                            let items: Vec<serde_json::Value> = rows.iter().map(|(id, subject, from_name, from_addr, date, category)| {
+                                let sender = match from_name {
+                                    Some(name) if !name.is_empty() => format!("{name} <{from_addr}>"),
+                                    _ => from_addr.clone(),
+                                };
+                                serde_json::json!({ "id": id, "subject": subject, "from": sender, "date": date, "category": category })
+                            }).collect();
+                            Ok(serde_json::json!({ "count": items.len(), "emails": items })
+                                .to_string())
+                        }
+                        Err(e) => Err(format!("Database error: {e}")),
+                    }
+                }
+                "count_emails" => {
+                    let mut sql = String::from("SELECT COUNT(*) FROM emails WHERE 1=1");
+                    let mut binds: Vec<String> = Vec::new();
+
+                    if let Some(from) = args.get("from_filter").and_then(|v| v.as_str()) {
+                        sql.push_str(&format!(" AND from_addr LIKE ?{}", binds.len() + 1));
+                        binds.push(format!("%{from}%"));
+                    }
+                    if let Some(cat) = args.get("category").and_then(|v| v.as_str()) {
+                        sql.push_str(&format!(" AND category = ?{}", binds.len() + 1));
+                        binds.push(cat.to_string());
+                    }
+                    if let Some(after) = args.get("after").and_then(|v| v.as_str()) {
+                        sql.push_str(&format!(" AND received_at >= ?{}", binds.len() + 1));
+                        binds.push(after.to_string());
+                    }
+                    if let Some(before) = args.get("before").and_then(|v| v.as_str()) {
+                        sql.push_str(&format!(" AND received_at <= ?{}", binds.len() + 1));
+                        binds.push(before.to_string());
+                    }
+
+                    let mut query = sqlx::query_scalar::<_, i64>(&sql);
+                    for b in &binds {
+                        query = query.bind(b);
+                    }
+
+                    match query.fetch_one(&db.pool).await {
+                        Ok(count) => Ok(serde_json::json!({ "count": count }).to_string()),
+                        Err(e) => Err(format!("Database error: {e}")),
+                    }
+                }
+                "get_insights" => {
+                    let pool = &db.pool;
+                    let categories: Vec<(String, i64)> = sqlx::query_as(
+                        "SELECT category, COUNT(*) FROM emails GROUP BY category ORDER BY COUNT(*) DESC"
+                    ).fetch_all(pool).await.unwrap_or_default();
+
+                    let senders: Vec<(String, i64)> = sqlx::query_as(
+                        "SELECT COALESCE(from_name, from_addr), COUNT(*) FROM emails GROUP BY 1 ORDER BY 2 DESC LIMIT 10"
+                    ).fetch_all(pool).await.unwrap_or_default();
+
+                    let daily: Vec<(String, i64)> = sqlx::query_as(
+                        "SELECT DATE(received_at), COUNT(*) FROM emails WHERE received_at >= datetime('now', '-7 days') GROUP BY 1 ORDER BY 1 DESC"
+                    ).fetch_all(pool).await.unwrap_or_default();
+
+                    Ok(serde_json::json!({
+                        "categories": categories.iter().map(|(c, n)| serde_json::json!({"category": c, "count": n})).collect::<Vec<_>>(),
+                        "top_senders": senders.iter().map(|(s, n)| serde_json::json!({"sender": s, "count": n})).collect::<Vec<_>>(),
+                        "daily_volume": daily.iter().map(|(d, n)| serde_json::json!({"date": d, "count": n})).collect::<Vec<_>>(),
+                    }).to_string())
+                }
+                "list_rules" => {
+                    let rows: Vec<(String, String, String, String, i64)> = sqlx::query_as(
+                        "SELECT id, name, conditions_json, actions_json, enabled FROM rules ORDER BY name"
+                    ).fetch_all(&db.pool).await.unwrap_or_default();
+
+                    let items: Vec<serde_json::Value> = rows.iter().map(|(id, name, conds, acts, enabled)| {
+                        serde_json::json!({ "id": id, "name": name, "conditions": conds, "actions": acts, "is_active": *enabled != 0 })
+                    }).collect();
+
+                    Ok(serde_json::json!({ "count": items.len(), "rules": items }).to_string())
+                }
+                "get_email_thread" => {
+                    let email_id = args.get("email_id").and_then(|v| v.as_str()).unwrap_or("");
+                    let thread_key: Option<String> =
+                        sqlx::query_scalar("SELECT thread_key FROM emails WHERE id = ?1")
+                            .bind(email_id)
+                            .fetch_optional(&db.pool)
+                            .await
+                            .unwrap_or(None);
+
+                    match thread_key {
+                        Some(key) => {
+                            #[derive(sqlx::FromRow)]
+                            struct ThreadRow {
+                                id: String,
+                                subject: String,
+                                from_name: Option<String>,
+                                from_addr: String,
+                                received_at: String,
+                                category: Option<String>,
+                            }
+                            let rows: Vec<ThreadRow> = sqlx::query_as(
+                                "SELECT id, subject, from_name, from_addr, received_at, category FROM emails WHERE thread_key = ?1 ORDER BY received_at ASC"
+                            ).bind(&key).fetch_all(&db.pool).await.unwrap_or_default();
+
+                            let items: Vec<serde_json::Value> = rows.iter().map(|r| {
+                                let sender = match &r.from_name {
+                                    Some(name) if !name.is_empty() => format!("{name} <{}>", r.from_addr),
+                                    _ => r.from_addr.clone(),
+                                };
+                                serde_json::json!({ "id": r.id, "subject": r.subject, "from": sender, "date": r.received_at, "category": r.category })
+                            }).collect();
+
+                            Ok(serde_json::json!({ "thread_key": key, "count": items.len(), "emails": items }).to_string())
+                        }
+                        None => Ok(serde_json::json!({ "error": "Email not found" }).to_string()),
+                    }
+                }
+                other => Err(format!("Unknown tool: {other}")),
+            }
+        })
+    })
+}
+
+/// Convert chat session history into `ToolMessage` array for the orchestrator.
+fn session_history_to_tool_messages(
+    messages: &[ChatMessage],
+    system_prompt: &str,
+) -> Vec<ToolMessage> {
+    let mut result = vec![ToolMessage {
+        role: ToolMessageRole::System,
+        content: system_prompt.to_string(),
+        tool_calls: None,
+        tool_call_id: None,
+    }];
+
+    for msg in messages {
+        let role = match msg.role {
+            ChatRole::User => ToolMessageRole::User,
+            ChatRole::Assistant => ToolMessageRole::Assistant,
+            ChatRole::System => ToolMessageRole::System,
+        };
+        result.push(ToolMessage {
+            role,
+            content: msg.content.clone(),
+            tool_calls: None,
+            tool_call_id: None,
+        });
+    }
+
+    result
 }
 
 // ---------------------------------------------------------------------------

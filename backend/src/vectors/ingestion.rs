@@ -20,6 +20,7 @@ use super::categorizer::VectorCategorizer;
 use super::embedding::EmbeddingPipeline;
 use super::error::VectorError;
 use super::store::VectorStoreBackend;
+use super::thread;
 use super::types::{EmbeddingStatus, VectorCollection, VectorDocument, VectorId};
 use super::yaml_config::ClassificationConfig;
 
@@ -169,6 +170,16 @@ struct PendingEmail {
     subject: String,
     from_addr: String,
     body_text: String,
+    /// Sender display name (ADR-029: richer embedding text).
+    from_name: Option<String>,
+    /// ISO-8601 received timestamp (ADR-029).
+    received_at: Option<String>,
+    /// Classification category (ADR-029).
+    category: Option<String>,
+    /// RFC 2822 Message-ID header for thread derivation.
+    message_id: Option<String>,
+    /// Provider-assigned thread/conversation ID (e.g. Gmail X-GM-THRID).
+    provider_thread_id: Option<String>,
 }
 
 /// Persisted checkpoint for resume-from-failure (audit item #26).
@@ -708,6 +719,8 @@ impl IngestionPipelineHandle {
             email_ids: Vec<String>,
             subjects: Vec<String>,
             from_addrs: Vec<String>,
+            message_ids: Vec<Option<String>>,
+            provider_thread_ids: Vec<Option<String>>,
             last_email_id: Option<String>,
             batch_len: u64,
         }
@@ -722,6 +735,9 @@ impl IngestionPipelineHandle {
                             &e.subject,
                             &e.from_addr,
                             &e.body_text,
+                            e.from_name.as_deref(),
+                            e.received_at.as_deref(),
+                            e.category.as_deref(),
                         )
                     })
                     .collect();
@@ -730,6 +746,11 @@ impl IngestionPipelineHandle {
                     email_ids: chunk.iter().map(|e| e.id.clone()).collect(),
                     subjects: chunk.iter().map(|e| e.subject.clone()).collect(),
                     from_addrs: chunk.iter().map(|e| e.from_addr.clone()).collect(),
+                    message_ids: chunk.iter().map(|e| e.message_id.clone()).collect(),
+                    provider_thread_ids: chunk
+                        .iter()
+                        .map(|e| e.provider_thread_id.clone())
+                        .collect(),
                     last_email_id: chunk.last().map(|e| e.id.clone()),
                     batch_len: chunk.len() as u64,
                 }
@@ -772,6 +793,33 @@ impl IngestionPipelineHandle {
                             let mut metadata = std::collections::HashMap::new();
                             metadata.insert("subject".to_string(), batch.subjects[i].clone());
                             metadata.insert("from_addr".to_string(), batch.from_addrs[i].clone());
+
+                            // ADR-029 Phase D: Derive thread_key for thread-aware search.
+                            // Note: `references` and `in_reply_to` are not yet stored in
+                            // the emails table — a future migration should persist raw
+                            // RFC 2822 headers to enable full thread derivation.
+                            let thread_key = {
+                                let key = thread::derive_thread_key(
+                                    batch.message_ids[i].as_deref(),
+                                    None, // references — needs future migration
+                                    None, // in_reply_to — needs future migration
+                                    batch.provider_thread_ids[i].as_deref(),
+                                );
+                                if key.is_empty() {
+                                    batch.email_ids[i].clone()
+                                } else {
+                                    key
+                                }
+                            };
+                            metadata.insert("thread_key".to_string(), thread_key.clone());
+
+                            // Persist thread_key to the emails table.
+                            if let Err(err) =
+                                update_thread_key_standalone(&db, &batch.email_ids[i], &thread_key)
+                                    .await
+                            {
+                                warn!(email_id = %batch.email_ids[i], "Failed to set thread_key: {err}");
+                            }
 
                             let doc = VectorDocument {
                                 id: vector_id.clone(),
@@ -933,8 +981,14 @@ impl IngestionPipelineHandle {
         let email_inputs: Vec<(String, String, String)> = emails
             .iter()
             .map(|e| {
-                let text =
-                    EmbeddingPipeline::prepare_email_text(&e.subject, &e.from_addr, &e.body_text);
+                let text = EmbeddingPipeline::prepare_email_text(
+                    &e.subject,
+                    &e.from_addr,
+                    &e.body_text,
+                    e.from_name.as_deref(),
+                    e.received_at.as_deref(),
+                    e.category.as_deref(),
+                );
                 (e.id.clone(), e.from_addr.clone(), text)
             })
             .collect();
@@ -1043,7 +1097,9 @@ impl IngestionPipelineHandle {
         // Phase 5: Analyzing
         self.update_phase(IngestionPhase::Analyzing).await;
         self.broadcast_progress(&job_id).await;
-        // TODO: Wire InsightEngine for subscription detection and temporal analysis
+        // Insight analysis (subscription detection, temporal patterns) is triggered
+        // via the REST API after sync completes, not inline during ingestion.
+        // See GET /api/v1/insights/* endpoints.
 
         // Complete
         self.update_phase(IngestionPhase::Complete).await;
@@ -1161,6 +1217,9 @@ impl IngestionPipelineHandle {
                             &subject.unwrap_or_default(),
                             &from_addr.clone().unwrap_or_default(),
                             &body_text.unwrap_or_default(),
+                            None,
+                            None,
+                            None,
                         );
                         (id, from_addr.unwrap_or_default(), text)
                     })
@@ -1268,9 +1327,20 @@ impl IngestionPipelineHandle {
         &self,
         account_id: &str,
     ) -> Result<Vec<PendingEmail>, VectorError> {
-        type EmailRow = (String, Option<String>, Option<String>, Option<String>);
+        type EmailRow = (
+            String,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+        );
         let rows: Vec<EmailRow> = sqlx::query_as(
-            r#"SELECT id, subject, from_addr, body_text
+            r#"SELECT id, subject, from_addr, body_text, from_name, received_at, category,
+                      message_id, thread_id
                FROM emails
                WHERE account_id = ? AND embedding_status IN ('pending', 'stale')
                  AND COALESCE(is_trash, 0) = 0 AND COALESCE(is_spam, 0) = 0 AND deleted_at IS NULL
@@ -1288,6 +1358,11 @@ impl IngestionPipelineHandle {
                 subject: r.1.unwrap_or_default(),
                 from_addr: r.2.unwrap_or_default(),
                 body_text: r.3.unwrap_or_default(),
+                from_name: r.4,
+                received_at: r.5,
+                category: r.6,
+                message_id: r.7,
+                provider_thread_id: r.8,
             })
             .collect())
     }
@@ -1436,6 +1511,24 @@ async fn update_embedding_status_standalone(
     .execute(&db.pool)
     .await
     .map_err(VectorError::DatabaseError)?;
+    Ok(())
+}
+
+/// Persist `thread_key` for an email row (ADR-029 Phase D).
+///
+/// Standalone helper (same pattern as `update_embedding_status_standalone`) so
+/// it can be called from the producer task without borrowing `self`.
+async fn update_thread_key_standalone(
+    db: &Database,
+    email_id: &str,
+    thread_key: &str,
+) -> Result<(), VectorError> {
+    sqlx::query(r#"UPDATE emails SET thread_key = ? WHERE id = ?"#)
+        .bind(thread_key)
+        .bind(email_id)
+        .execute(&db.pool)
+        .await
+        .map_err(VectorError::DatabaseError)?;
     Ok(())
 }
 

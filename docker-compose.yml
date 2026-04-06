@@ -32,7 +32,7 @@ services:
       VECTOR_STORE_PATH: /app/data/vectors
       CONFIG_PATH: /app/config.yaml
     volumes:
-      - ./configs/config.${APP_ENV:-development}.yaml:/app/config.yaml:ro
+      - ./config/environments/config.${APP_ENV:-development}.yaml:/app/config.yaml:ro
       - backend_data:/app/data
     secrets:
       - jwt_secret

@@ -1,4 +1,11 @@
-import type { ChatRequest, ChatResponse, ChatSession } from '@emailibrium/types';
+import type {
+  ChatRequest,
+  ChatResponse,
+  ChatSession,
+  ToolCallEvent,
+  ToolResultEvent,
+  ConfirmationEvent,
+} from '@emailibrium/types';
 import { api } from './client.js';
 
 export async function sendChatMessage(request: ChatRequest): Promise<ChatResponse> {
@@ -33,15 +40,67 @@ export function createChatStream(request: ChatRequest): {
 }
 
 /**
- * Alternative streaming approach using fetch + ReadableStream
- * for POST-based SSE when EventSource (GET-only) is insufficient.
+ * Send a tool confirmation response (approve or reject a pending tool call).
+ */
+export async function confirmToolCall(
+  sessionId: string,
+  confirmationId: string,
+  approved: boolean,
+): Promise<void> {
+  const token = localStorage.getItem('auth_token');
+  const response = await fetch('/api/v1/ai/chat/confirm', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify({ sessionId, confirmationId, approved }),
+  });
+  if (!response.ok) {
+    throw new Error(`Confirmation failed: ${response.statusText}`);
+  }
+}
+
+export interface StreamChatCallbacks {
+  onChunk: (chunk: string) => void;
+  onDone: (sessionId: string) => void;
+  onError: (error: string) => void;
+  onToolCall?: (toolCall: ToolCallEvent) => void;
+  onToolResult?: (toolResult: ToolResultEvent) => void;
+  onConfirmation?: (confirmation: ConfirmationEvent) => void;
+}
+
+/**
+ * Streaming chat using fetch + ReadableStream for POST-based SSE.
+ *
+ * Supports tool-calling events (tool_call, tool_result, confirmation)
+ * in addition to the existing token/done/error events.
+ *
+ * @overload Legacy signature for backward compatibility
  */
 export async function streamChatMessage(
   request: ChatRequest,
   onChunk: (chunk: string) => void,
   onDone: (sessionId: string) => void,
   onError: (error: string) => void,
+): Promise<() => void>;
+/**
+ * @overload Extended signature with tool-calling callbacks
+ */
+export async function streamChatMessage(
+  request: ChatRequest,
+  callbacks: StreamChatCallbacks,
+): Promise<() => void>;
+export async function streamChatMessage(
+  request: ChatRequest,
+  onChunkOrCallbacks: ((chunk: string) => void) | StreamChatCallbacks,
+  onDone?: (sessionId: string) => void,
+  onError?: (error: string) => void,
 ): Promise<() => void> {
+  const callbacks: StreamChatCallbacks =
+    typeof onChunkOrCallbacks === 'function'
+      ? { onChunk: onChunkOrCallbacks, onDone: onDone!, onError: onError! }
+      : onChunkOrCallbacks;
   const controller = new AbortController();
   const token = localStorage.getItem('auth_token');
 
@@ -57,13 +116,13 @@ export async function streamChatMessage(
     });
 
     if (!response.ok) {
-      onError(`Chat request failed: ${response.status}`);
+      callbacks.onError(`Chat request failed: ${response.status}`);
       return () => controller.abort();
     }
 
     const reader = response.body?.getReader();
     if (!reader) {
-      onError('No response body');
+      callbacks.onError('No response body');
       return () => controller.abort();
     }
 
@@ -89,28 +148,34 @@ export async function streamChatMessage(
               try {
                 const parsed = JSON.parse(data);
                 if (parsed.type === 'token' && parsed.content) {
-                  onChunk(parsed.content);
+                  callbacks.onChunk(parsed.content);
                 } else if (parsed.type === 'done' && parsed.sessionId) {
-                  onDone(parsed.sessionId);
+                  callbacks.onDone(parsed.sessionId);
                 } else if (parsed.type === 'error') {
-                  onError(parsed.error ?? 'Unknown streaming error');
+                  callbacks.onError(parsed.error ?? 'Unknown streaming error');
+                } else if (parsed.type === 'tool_call' && parsed.toolCall) {
+                  callbacks.onToolCall?.(parsed.toolCall);
+                } else if (parsed.type === 'tool_result' && parsed.toolResult) {
+                  callbacks.onToolResult?.(parsed.toolResult);
+                } else if (parsed.type === 'confirmation' && parsed.confirmation) {
+                  callbacks.onConfirmation?.(parsed.confirmation);
                 }
               } catch {
                 // Non-JSON SSE line, treat as raw token
-                if (data) onChunk(data);
+                if (data) callbacks.onChunk(data);
               }
             }
           }
         }
       } catch (err) {
         if ((err as Error).name !== 'AbortError') {
-          onError((err as Error).message);
+          callbacks.onError((err as Error).message);
         }
       }
     })();
   } catch (err) {
     if ((err as Error).name !== 'AbortError') {
-      onError((err as Error).message);
+      callbacks.onError((err as Error).message);
     }
   }
 

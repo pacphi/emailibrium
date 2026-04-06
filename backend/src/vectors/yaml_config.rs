@@ -52,11 +52,15 @@ pub struct PromptsConfig {
 fn default_chat_assistant() -> String {
     "You are an email assistant with full access to the user's inbox. \
      The [Email Context] section contains REAL emails from the user's inbox that match their query. \
-     IMPORTANT RULES:\n\
-     1. If emails are shown in the context, answer YES and list them with sender, subject, and date.\n\
-     2. NEVER say you don't have access. You DO have access — the emails are shown above.\n\
-     3. If no emails are in the context, say no matching emails were found.\n\
-     4. Be specific — quote subjects and senders from the provided emails."
+     CRITICAL RULES:\n\
+     1. Base ALL answers ONLY on the emails provided in [Email Context].\n\
+     2. For EVERY factual claim, cite the email by subject line or sender name.\n\
+     3. If emails are shown in the context, list them with sender, subject, and date.\n\
+     4. NEVER fabricate email content, senders, dates, or subjects.\n\
+     5. If no emails match or context is insufficient, say: \"I could not find this in your emails.\"\n\
+     6. Be specific — quote subjects and senders from the provided emails.\n\
+     7. Do NOT include internal reasoning or thinking in your response. Answer directly.\n\
+     8. Use the current date provided in this prompt to answer time-relative questions."
         .to_string()
 }
 
@@ -113,6 +117,19 @@ pub struct TuningConfig {
     pub error_recovery: ErrorRecoveryTuning,
     #[serde(default)]
     pub repetition: RepetitionTuning,
+    #[serde(default)]
+    pub rrf: RrfConfig,
+    #[serde(default)]
+    pub reranking: RerankingConfig,
+    /// FTS5 scoring configuration (ADR-029).
+    #[serde(default)]
+    pub fts5: Fts5Config,
+    /// Context building configuration (ADR-029).
+    #[serde(default)]
+    pub context: ContextConfig,
+    /// Extractive passage configuration (ADR-029).
+    #[serde(default)]
+    pub extractive: super::extractive::ExtractiveConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -306,6 +323,201 @@ impl Default for ErrorRecoveryTuning {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// RRF fusion config (ADR-029)
+// ---------------------------------------------------------------------------
+
+/// Configuration for Reciprocal Rank Fusion weights and k parameter.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RrfConfig {
+    /// Default k parameter for RRF scoring.
+    #[serde(default = "default_rrf_k")]
+    pub default_k: u32,
+    /// Per-query-type adaptive weights.
+    #[serde(default)]
+    pub adaptive_weights: AdaptiveWeights,
+}
+
+fn default_rrf_k() -> u32 {
+    40
+}
+
+impl Default for RrfConfig {
+    fn default() -> Self {
+        Self {
+            default_k: 40,
+            adaptive_weights: AdaptiveWeights::default(),
+        }
+    }
+}
+
+/// Per-query-type fusion weights for RRF (ADR-029 section 3.3).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdaptiveWeights {
+    #[serde(default = "default_factual_weights")]
+    pub factual: FusionWeights,
+    #[serde(default = "default_needle_weights")]
+    pub needle: FusionWeights,
+    #[serde(default = "default_temporal_weights")]
+    pub temporal: FusionWeights,
+    #[serde(default = "default_semantic_weights")]
+    pub semantic: FusionWeights,
+    #[serde(default = "default_boolean_weights")]
+    pub boolean: FusionWeights,
+}
+
+impl Default for AdaptiveWeights {
+    fn default() -> Self {
+        Self {
+            factual: default_factual_weights(),
+            needle: default_needle_weights(),
+            temporal: default_temporal_weights(),
+            semantic: default_semantic_weights(),
+            boolean: default_boolean_weights(),
+        }
+    }
+}
+
+/// FTS and vector weight pair for a single query type.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FusionWeights {
+    pub fts: f32,
+    pub vector: f32,
+}
+
+fn default_factual_weights() -> FusionWeights {
+    FusionWeights {
+        fts: 1.0,
+        vector: 1.0,
+    }
+}
+fn default_needle_weights() -> FusionWeights {
+    FusionWeights {
+        fts: 1.5,
+        vector: 0.5,
+    }
+}
+fn default_temporal_weights() -> FusionWeights {
+    FusionWeights {
+        fts: 0.8,
+        vector: 1.2,
+    }
+}
+fn default_semantic_weights() -> FusionWeights {
+    FusionWeights {
+        fts: 0.7,
+        vector: 1.3,
+    }
+}
+fn default_boolean_weights() -> FusionWeights {
+    FusionWeights {
+        fts: 1.3,
+        vector: 0.7,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Re-ranking config (ADR-029)
+// ---------------------------------------------------------------------------
+
+/// Configuration for the cross-encoder re-ranking stage (tuning.yaml).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RerankingConfig {
+    /// Whether re-ranking is enabled.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Model identifier.
+    #[serde(default = "default_reranker_model")]
+    pub model: String,
+    /// Number of RRF candidates to feed into the re-ranker.
+    #[serde(default = "default_50_usize")]
+    pub candidates: usize,
+    /// Number of results to return after re-ranking.
+    #[serde(default = "default_10_usize")]
+    pub top_k: usize,
+    /// Timeout in milliseconds; skip re-ranking if exceeded.
+    #[serde(default = "default_100_u64")]
+    pub timeout_ms: u64,
+}
+
+fn default_reranker_model() -> String {
+    "BAAI/bge-reranker-base".to_string()
+}
+
+fn default_100_u64() -> u64 {
+    100
+}
+
+impl Default for RerankingConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            model: default_reranker_model(),
+            candidates: 50,
+            top_k: 10,
+            timeout_ms: 100,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FTS5 scoring config (ADR-029)
+// ---------------------------------------------------------------------------
+
+/// FTS5 scoring weights for BM25 ranking (ADR-029).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Fts5Config {
+    /// Positional BM25 column weights: id, subject, from_name, from_addr, body_text, labels.
+    #[serde(default = "default_fts5_column_weights")]
+    pub column_weights: Vec<f32>,
+}
+
+fn default_fts5_column_weights() -> Vec<f32> {
+    vec![0.0, 10.0, 5.0, 3.0, 1.0, 2.0]
+}
+
+impl Default for Fts5Config {
+    fn default() -> Self {
+        Self {
+            column_weights: default_fts5_column_weights(),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Context building config (ADR-029)
+// ---------------------------------------------------------------------------
+
+/// Context building configuration (ADR-029).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContextConfig {
+    /// Characters of email body to include in embedding text.
+    #[serde(default = "default_1500_usize")]
+    pub embedding_body_budget: usize,
+    /// Minimum top-result RRF score to consider context sufficient.
+    #[serde(default = "default_context_threshold")]
+    pub context_sufficiency_threshold: f32,
+}
+
+fn default_1500_usize() -> usize {
+    1500
+}
+
+fn default_context_threshold() -> f32 {
+    0.01
+}
+
+impl Default for ContextConfig {
+    fn default() -> Self {
+        Self {
+            embedding_body_budget: 1500,
+            context_sufficiency_threshold: 0.01,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RepetitionTuning {

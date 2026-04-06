@@ -81,3 +81,21 @@ repetition:
   token_repeat_threshold: 4 # Stop if same token appears this many times in window
   phrase_check_length: 100 # Check last N chars of output for repeated phrases
   phrase_check_after: 200 # Only check after this many chars of output
+
+# ── FTS5 Scoring ─────────────────────────────────────────────────────────────
+# See also: ADR-029 (Enhanced RAG Pipeline)
+fts5:
+  column_weights: [0.0, 10.0, 5.0, 3.0, 1.0, 2.0] # id, subject, from_name, from_addr, body_text, labels
+
+# ── Context Building ─────────────────────────────────────────────────────────
+# See also: ADR-029 (Enhanced RAG Pipeline)
+context:
+  embedding_body_budget: 1500 # Chars of body in embedding text (was 400)
+  context_sufficiency_threshold: 0.01 # Min RRF score to attempt answering
+
+# ── Extractive Context ────────────────────────────────────────────────────────
+# See also: ADR-029 (Enhanced RAG Pipeline)
+extractive:
+  enabled: false
+  max_passages_per_email: 3
+  min_sentence_chars: 20

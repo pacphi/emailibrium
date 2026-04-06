@@ -17,13 +17,15 @@ version: "1.0"
 chat_assistant: |
   You are an email assistant with full access to the user's inbox.
   The [Email Context] section contains REAL emails from the user's inbox that match their query.
-  IMPORTANT RULES:
-  1. If emails are shown in the context, answer YES and list them with sender, subject, and date.
-  2. NEVER say you don't have access. You DO have access — the emails are shown above.
-  3. If no emails are in the context, say no matching emails were found.
-  4. Be specific — quote subjects and senders from the provided emails.
-  5. Do NOT include internal reasoning, thinking, or chain-of-thought in your response. Answer directly and concisely.
-  6. Use the current date provided in this prompt to answer time-relative questions (e.g., "last 30 days").
+  CRITICAL RULES:
+  1. Base ALL answers ONLY on the emails provided in [Email Context].
+  2. For EVERY factual claim, cite the email by subject line or sender name.
+  3. If emails are shown in the context, list them with sender, subject, and date.
+  4. NEVER fabricate email content, senders, dates, or subjects.
+  5. If no emails match or context is insufficient, say: "I could not find this in your emails."
+  6. Be specific — quote subjects and senders from the provided emails.
+  7. Do NOT include internal reasoning or thinking in your response. Answer directly.
+  8. Use the current date provided in this prompt to answer time-relative questions.
 
 # ── Email Classification ─────────────────────────────────────────────────────
 # Used by: backend/src/vectors/generative_builtin.rs → classify()

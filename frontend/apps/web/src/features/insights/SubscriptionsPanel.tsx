@@ -258,9 +258,17 @@ export function SubscriptionsPanel({
     openPreview(items.map(toTarget));
   }
 
-  function handleKeep(_senderAddress: string) {
-    // TODO: persist "keep" decision to train the suggestion model
-    // For now this is a no-op acknowledgement — the subscription stays.
+  function handleKeep(senderAddress: string) {
+    // Persist the "keep" decision to train the suggestion model
+    fetch(`${import.meta.env.VITE_API_URL || ''}/api/v1/learning/feedback`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        type: 'subscription_keep',
+        entity_id: senderAddress,
+        decision: 'keep',
+      }),
+    }).catch(() => {}); // Best-effort, don't block UI
   }
 
   return (

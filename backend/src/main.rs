@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -7,6 +8,7 @@ use axum::{
     Router,
 };
 use tokio::net::TcpListener;
+use tokio::sync::Mutex;
 use tower_http::cors::CorsLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -17,6 +19,7 @@ pub mod content;
 mod db;
 pub mod email;
 pub mod events;
+mod mcp;
 mod middleware;
 mod rules;
 pub mod sync_lock;
@@ -44,6 +47,11 @@ pub struct AppState {
     pub yaml_config: Arc<vectors::yaml_config::YamlConfig>,
     /// Per-account pipeline locks preventing concurrent sync/ingestion runs.
     pub pipeline_locks: sync_lock::AccountLockMap,
+    /// Tool-calling provider for agentic chat orchestration (ADR-028).
+    /// `None` until a cloud provider with native tool-calling is configured.
+    pub tool_calling_provider: Option<Arc<dyn vectors::tool_calling::ToolCallingProvider>>,
+    /// Pending tool-call confirmations awaiting user approval (ADR-028).
+    pub pending_confirmations: Arc<Mutex<HashMap<String, api::ai::PendingConfirmation>>>,
 }
 
 #[tokio::main]
@@ -267,12 +275,20 @@ async fn main() -> anyhow::Result<()> {
     // Initialize RAG pipeline for email-aware chat (ADR-022, DDD-010).
     // Build RagConfig from tuning.yaml so all RAG parameters (top_k, min_relevance_score,
     // max_context_tokens, include_body, max_body_chars) are driven by config/tuning.yaml.
-    let rag_config = vectors::rag::RagConfig::from(&yaml_config.tuning.rag);
+    let mut rag_config = vectors::rag::RagConfig::from(&yaml_config.tuning.rag);
+    rag_config.context_sufficiency_threshold =
+        yaml_config.tuning.context.context_sufficiency_threshold;
     let rag_pipeline = Some(Arc::new(vectors::rag::RagPipeline::new(
         vector_service.hybrid_search.clone(),
         db.clone(),
         rag_config,
     )));
+
+    // Create tool-calling provider before moving vector_service into AppState (ADR-028).
+    let tool_calling_provider = vectors::tool_calling_providers::create_tool_calling_provider(
+        &config.generative.provider,
+        &vector_service.config,
+    );
 
     let state = AppState {
         vector_service,
@@ -286,6 +302,8 @@ async fn main() -> anyhow::Result<()> {
         poll_scheduler: None, // Initialized below after state creation.
         yaml_config: yaml_config.clone(),
         pipeline_locks: sync_lock::AccountLockMap::default(),
+        tool_calling_provider,
+        pending_confirmations: Arc::new(Mutex::new(HashMap::new())),
     };
 
     // Start the background email poll scheduler.
@@ -536,9 +554,26 @@ async fn main() -> anyhow::Result<()> {
         .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION, header::ACCEPT])
         .allow_credentials(true);
 
+    // ── MCP server (ADR-028) ────────────────────────────────────────────
+    // Mount the MCP Streamable HTTP transport at /api/v1/mcp so tool-calling
+    // LLMs can access email operations via the Model Context Protocol.
+    let mcp_state = Arc::new(state.clone());
+    let mcp_service = {
+        use rmcp::transport::streamable_http_server::{
+            session::local::LocalSessionManager, StreamableHttpService,
+        };
+        StreamableHttpService::new(
+            move || Ok(mcp::server::EmailibriumMcpServer::new(mcp_state.clone())),
+            Arc::new(LocalSessionManager::default()),
+            Default::default(),
+        )
+    };
+    tracing::info!("MCP server mounted at /api/v1/mcp");
+
     // Build router
     let mut app = Router::new()
         .nest("/api/v1", api::routes())
+        .nest_service("/api/v1/mcp", mcp_service)
         .with_state(state)
         .layer(tower_http::trace::TraceLayer::new_for_http())
         .layer(cors);

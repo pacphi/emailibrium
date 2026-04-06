@@ -1,7 +1,7 @@
 //! API routes for Emailibrium.
 
 pub mod accounts;
-mod ai;
+pub mod ai;
 pub mod attachments;
 mod backup;
 mod clustering;

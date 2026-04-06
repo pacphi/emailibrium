@@ -23,7 +23,9 @@ use super::categorizer::cosine_similarity;
 use super::config::SearchConfig;
 use super::embedding::EmbeddingPipeline;
 use super::error::VectorError;
+use super::reranker::{RerankCandidate, Reranker};
 use super::store::VectorStoreBackend;
+use super::thread;
 use super::types::{ScoredResult, SearchParams, VectorCollection};
 
 // ---------------------------------------------------------------------------
@@ -42,7 +44,7 @@ pub enum SearchMode {
 }
 
 /// Structured filters applied after fusion scoring.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct SearchFilters {
     pub date_from: Option<DateTime<Utc>>,
     pub date_to: Option<DateTime<Utc>>,
@@ -59,6 +61,16 @@ pub struct HybridSearchQuery {
     pub mode: SearchMode,
     pub filters: Option<SearchFilters>,
     pub limit: Option<usize>,
+    /// Weight for vector (semantic) results in weighted RRF (ADR-029 Phase C).
+    #[serde(default = "default_weight")]
+    pub vector_weight: f32,
+    /// Weight for FTS (keyword) results in weighted RRF (ADR-029 Phase C).
+    #[serde(default = "default_weight")]
+    pub fts_weight: f32,
+}
+
+fn default_weight() -> f32 {
+    1.0
 }
 
 /// A single fused result combining vector and keyword rankings.
@@ -70,6 +82,21 @@ pub struct FusedResult {
     pub vector_rank: Option<usize>,
     pub fts_rank: Option<usize>,
     pub metadata: HashMap<String, String>,
+}
+
+impl thread::HasThreadKey for FusedResult {
+    fn thread_key(&self) -> Option<&str> {
+        self.metadata.get("thread_key").map(|s| s.as_str())
+    }
+    fn id(&self) -> &str {
+        &self.email_id
+    }
+}
+
+impl thread::HasScore for FusedResult {
+    fn score(&self) -> f32 {
+        self.score
+    }
 }
 
 /// The output of a hybrid search operation.
@@ -232,7 +259,76 @@ pub fn reciprocal_rank_fusion(
     fused
 }
 
+/// Weighted Reciprocal Rank Fusion (ADR-029).
+///
+/// Like standard RRF but applies per-retriever weights:
+///
+///   `score(d) = w_vec / (k + rank_vec(d)) + w_fts / (k + rank_fts(d))`
+///
+/// When `vector_weight == 1.0` and `fts_weight == 1.0`, this produces
+/// identical results to [`reciprocal_rank_fusion`].
+#[cfg(test)]
+pub fn weighted_reciprocal_rank_fusion(
+    vector_results: &[(String, f32)],
+    fts_results: &[(String, f32)],
+    k: u32,
+    vector_weight: f32,
+    fts_weight: f32,
+) -> Vec<(String, f32)> {
+    let mut scores: HashMap<String, f32> = HashMap::new();
+
+    for (rank_0, (id, _score)) in vector_results.iter().enumerate() {
+        let rank = (rank_0 + 1) as f32;
+        *scores.entry(id.clone()).or_insert(0.0) += vector_weight / (k as f32 + rank);
+    }
+
+    for (rank_0, (id, _score)) in fts_results.iter().enumerate() {
+        let rank = (rank_0 + 1) as f32;
+        *scores.entry(id.clone()).or_insert(0.0) += fts_weight / (k as f32 + rank);
+    }
+
+    let mut fused: Vec<(String, f32)> = scores.into_iter().collect();
+    fused.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    fused
+}
+
+/// Weighted RRF variant that preserves rank information for building `FusedResult`.
+///
+/// Returns `(id, score, vector_rank, fts_rank)` tuples.
+pub fn weighted_reciprocal_rank_fusion_detailed(
+    vector_results: &[(String, f32)],
+    fts_results: &[(String, f32)],
+    k: u32,
+    vector_weight: f32,
+    fts_weight: f32,
+) -> Vec<(String, f32, Option<usize>, Option<usize>)> {
+    let mut scores: HashMap<String, (f32, Option<usize>, Option<usize>)> = HashMap::new();
+
+    for (rank_0, (id, _score)) in vector_results.iter().enumerate() {
+        let rank = (rank_0 + 1) as f32;
+        let entry = scores.entry(id.clone()).or_insert((0.0, None, None));
+        entry.0 += vector_weight / (k as f32 + rank);
+        entry.1 = Some(rank_0 + 1);
+    }
+
+    for (rank_0, (id, _score)) in fts_results.iter().enumerate() {
+        let rank = (rank_0 + 1) as f32;
+        let entry = scores.entry(id.clone()).or_insert((0.0, None, None));
+        entry.0 += fts_weight / (k as f32 + rank);
+        entry.2 = Some(rank_0 + 1);
+    }
+
+    let mut fused: Vec<(String, f32, Option<usize>, Option<usize>)> = scores
+        .into_iter()
+        .map(|(id, (score, vr, fr))| (id, score, vr, fr))
+        .collect();
+
+    fused.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    fused
+}
+
 /// Internal variant that preserves rank information for building `FusedResult`.
+#[cfg(test)]
 fn reciprocal_rank_fusion_detailed(
     vector_results: &[(String, f32)],
     fts_results: &[(String, f32)],
@@ -273,6 +369,8 @@ pub struct HybridSearch {
     embedding: Arc<EmbeddingPipeline>,
     db: Arc<Database>,
     config: SearchConfig,
+    /// Optional cross-encoder reranker applied after RRF fusion (ADR-029 Phase C).
+    reranker: Option<Arc<dyn Reranker>>,
 }
 
 impl HybridSearch {
@@ -288,6 +386,24 @@ impl HybridSearch {
             embedding,
             db,
             config,
+            reranker: None,
+        }
+    }
+
+    /// Create a new `HybridSearch` instance with a cross-encoder reranker.
+    pub fn with_reranker(
+        store: Arc<dyn VectorStoreBackend>,
+        embedding: Arc<EmbeddingPipeline>,
+        db: Arc<Database>,
+        config: SearchConfig,
+        reranker: Arc<dyn Reranker>,
+    ) -> Self {
+        Self {
+            store,
+            embedding,
+            db,
+            config,
+            reranker: Some(reranker),
         }
     }
 
@@ -314,8 +430,15 @@ impl HybridSearch {
 
         let mut result = match query.mode {
             SearchMode::Hybrid => {
-                self.search_hybrid(&query.text, fetch_limit, limit, &query.filters)
-                    .await?
+                self.search_hybrid(
+                    &query.text,
+                    fetch_limit,
+                    limit,
+                    &query.filters,
+                    query.vector_weight,
+                    query.fts_weight,
+                )
+                .await?
             }
             SearchMode::Semantic => {
                 let results = self
@@ -386,6 +509,19 @@ impl HybridSearch {
                     );
                 }
             }
+        }
+
+        // ADR-029 Phase D: Thread collapsing — deduplicate results by thread,
+        // keeping only the highest-scoring email per conversation thread.
+        let pre_collapse = result.results.len();
+        result.results = thread::collapse_by_thread(result.results);
+        result.total = result.results.len();
+        if result.results.len() < pre_collapse {
+            debug!(
+                before = pre_collapse,
+                after = result.results.len(),
+                "Thread collapsing applied"
+            );
         }
 
         result.latency_ms = start.elapsed().as_millis() as u64;
@@ -473,6 +609,8 @@ impl HybridSearch {
         fetch_limit: usize,
         result_limit: usize,
         filters: &Option<SearchFilters>,
+        vector_weight: f32,
+        fts_weight: f32,
     ) -> Result<HybridSearchResult, VectorError> {
         // Embed the query.
         let query_vec = self.embedding.embed(text).await?;
@@ -562,7 +700,8 @@ impl HybridSearch {
                 collections = collections_searched,
                 "Multi-collection vector search completed"
             );
-            multi_collection_rrf(&collection_results, 60)
+            let rrf_k = self.config.rrf_k;
+            multi_collection_rrf(&collection_results, rrf_k)
         };
 
         let fts_results = fts_res.unwrap_or_else(|e| {
@@ -570,8 +709,16 @@ impl HybridSearch {
             Vec::new()
         });
 
-        // Fuse vector results (potentially multi-collection) with FTS using RRF (k=60).
-        let fused = reciprocal_rank_fusion_detailed(&merged_vector_pairs, &fts_results, 60);
+        // Fuse vector results (potentially multi-collection) with FTS using
+        // weighted RRF (ADR-029 Phase C).
+        let rrf_k = self.config.rrf_k;
+        let fused = weighted_reciprocal_rank_fusion_detailed(
+            &merged_vector_pairs,
+            &fts_results,
+            rrf_k,
+            vector_weight,
+            fts_weight,
+        );
 
         let mut results: Vec<FusedResult> = fused
             .into_iter()
@@ -596,6 +743,49 @@ impl HybridSearch {
         // Apply structured filters if present.
         if let Some(f) = filters {
             results = self.apply_filters(results, f).await;
+        }
+
+        // Cross-encoder re-ranking (ADR-029 Phase C).
+        // When a reranker is present, score the top candidates and re-sort.
+        if let Some(ref reranker) = self.reranker {
+            let candidates: Vec<RerankCandidate> = results
+                .iter()
+                .map(|r| {
+                    // Use subject from metadata as a text proxy; fall back to email_id.
+                    let proxy_text = r
+                        .metadata
+                        .get("subject")
+                        .cloned()
+                        .unwrap_or_else(|| r.email_id.clone());
+                    RerankCandidate {
+                        id: r.email_id.clone(),
+                        text: proxy_text,
+                        original_score: r.score,
+                    }
+                })
+                .collect();
+
+            match reranker.rerank(text, candidates, result_limit).await {
+                Ok(reranked) => {
+                    // Rebuild results in reranked order, preserving metadata.
+                    let result_map: HashMap<String, FusedResult> = results
+                        .into_iter()
+                        .map(|r| (r.email_id.clone(), r))
+                        .collect();
+                    results = reranked
+                        .into_iter()
+                        .filter_map(|rr| {
+                            result_map.get(&rr.id).map(|orig| FusedResult {
+                                score: rr.score,
+                                ..orig.clone()
+                            })
+                        })
+                        .collect();
+                }
+                Err(e) => {
+                    warn!("Reranker failed, using RRF order: {e}");
+                }
+            }
         }
 
         results.truncate(result_limit);
@@ -1080,6 +1270,153 @@ mod tests {
         );
     }
 
+    // -- Weighted RRF unit tests (ADR-029) -----------------------------------
+
+    #[test]
+    fn test_weighted_rrf_equal_weights_matches_standard() {
+        let vector = vec![
+            ("email_1".to_string(), 0.95),
+            ("email_2".to_string(), 0.80),
+            ("email_3".to_string(), 0.70),
+        ];
+        let fts = vec![
+            ("email_4".to_string(), 1.0),
+            ("email_5".to_string(), 0.9),
+            ("email_3".to_string(), 0.8),
+        ];
+
+        let standard = reciprocal_rank_fusion(&vector, &fts, 60);
+        let weighted = weighted_reciprocal_rank_fusion(&vector, &fts, 60, 1.0, 1.0);
+
+        assert_eq!(standard.len(), weighted.len());
+        // Compare by ID (sort both by ID to avoid HashMap iteration order issues)
+        let mut std_sorted: Vec<_> = standard.clone();
+        std_sorted.sort_by(|a, b| a.0.cmp(&b.0));
+        let mut wt_sorted: Vec<_> = weighted.clone();
+        wt_sorted.sort_by(|a, b| a.0.cmp(&b.0));
+        for (s, w) in std_sorted.iter().zip(wt_sorted.iter()) {
+            assert_eq!(s.0, w.0, "IDs should match");
+            assert!(
+                (s.1 - w.1).abs() < 1e-6,
+                "Scores should match for {}: {} vs {}",
+                s.0,
+                s.1,
+                w.1
+            );
+        }
+    }
+
+    #[test]
+    fn test_weighted_rrf_higher_fts_weight_boosts_fts_only() {
+        // "fts_only" appears only in FTS results.
+        // "vec_only" appears only in vector results.
+        let vector = vec![("vec_only".to_string(), 0.9)];
+        let fts = vec![("fts_only".to_string(), 1.0)];
+
+        // With higher FTS weight, fts_only should score higher than vec_only.
+        let result = weighted_reciprocal_rank_fusion(&vector, &fts, 60, 0.5, 1.5);
+
+        let fts_score = result.iter().find(|(id, _)| id == "fts_only").unwrap().1;
+        let vec_score = result.iter().find(|(id, _)| id == "vec_only").unwrap().1;
+
+        assert!(
+            fts_score > vec_score,
+            "FTS-only result should score higher with fts_weight=1.5: fts={fts_score}, vec={vec_score}"
+        );
+    }
+
+    #[test]
+    fn test_weighted_rrf_higher_vector_weight_boosts_vector_only() {
+        let vector = vec![("vec_only".to_string(), 0.9)];
+        let fts = vec![("fts_only".to_string(), 1.0)];
+
+        // With higher vector weight, vec_only should score higher.
+        let result = weighted_reciprocal_rank_fusion(&vector, &fts, 60, 1.5, 0.5);
+
+        let fts_score = result.iter().find(|(id, _)| id == "fts_only").unwrap().1;
+        let vec_score = result.iter().find(|(id, _)| id == "vec_only").unwrap().1;
+
+        assert!(
+            vec_score > fts_score,
+            "Vector-only result should score higher with vector_weight=1.5: vec={vec_score}, fts={fts_score}"
+        );
+    }
+
+    #[test]
+    fn test_weighted_rrf_weights_affect_scores_correctly() {
+        let vector = vec![("a".to_string(), 0.9)];
+        let fts: Vec<(String, f32)> = vec![];
+
+        // With weight 2.0, score should be 2.0 / (60 + 1)
+        let result = weighted_reciprocal_rank_fusion(&vector, &fts, 60, 2.0, 1.0);
+        let expected = 2.0 / 61.0;
+        assert!(
+            (result[0].1 - expected).abs() < 1e-6,
+            "expected {expected}, got {}",
+            result[0].1
+        );
+
+        // With weight 0.5, score should be 0.5 / (60 + 1)
+        let result_half = weighted_reciprocal_rank_fusion(&vector, &fts, 60, 0.5, 1.0);
+        let expected_half = 0.5 / 61.0;
+        assert!(
+            (result_half[0].1 - expected_half).abs() < 1e-6,
+            "expected {expected_half}, got {}",
+            result_half[0].1
+        );
+    }
+
+    #[test]
+    fn test_weighted_rrf_empty_inputs() {
+        let vector: Vec<(String, f32)> = vec![];
+        let fts: Vec<(String, f32)> = vec![];
+
+        let result = weighted_reciprocal_rank_fusion(&vector, &fts, 60, 1.0, 1.0);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_weighted_rrf_detailed_preserves_ranks() {
+        let vector = vec![("a".to_string(), 0.9), ("b".to_string(), 0.8)];
+        let fts = vec![("b".to_string(), 1.0), ("c".to_string(), 0.7)];
+
+        let detailed = weighted_reciprocal_rank_fusion_detailed(&vector, &fts, 60, 1.0, 1.0);
+
+        let b_entry = detailed.iter().find(|(id, _, _, _)| id == "b").unwrap();
+        assert_eq!(b_entry.2, Some(2)); // vector rank 2
+        assert_eq!(b_entry.3, Some(1)); // fts rank 1
+
+        let a_entry = detailed.iter().find(|(id, _, _, _)| id == "a").unwrap();
+        assert_eq!(a_entry.2, Some(1)); // vector rank 1
+        assert_eq!(a_entry.3, None); // not in FTS
+
+        let c_entry = detailed.iter().find(|(id, _, _, _)| id == "c").unwrap();
+        assert_eq!(c_entry.2, None); // not in vector
+        assert_eq!(c_entry.3, Some(2)); // fts rank 2
+    }
+
+    #[test]
+    fn test_weighted_rrf_detailed_equal_weights_matches_standard_detailed() {
+        let vector = vec![("x".to_string(), 0.9), ("y".to_string(), 0.8)];
+        let fts = vec![("y".to_string(), 1.0), ("z".to_string(), 0.7)];
+
+        let standard = reciprocal_rank_fusion_detailed(&vector, &fts, 60);
+        let weighted = weighted_reciprocal_rank_fusion_detailed(&vector, &fts, 60, 1.0, 1.0);
+
+        assert_eq!(standard.len(), weighted.len());
+        for (s, w) in standard.iter().zip(weighted.iter()) {
+            assert_eq!(s.0, w.0, "IDs should match");
+            assert!(
+                (s.1 - w.1).abs() < 1e-6,
+                "Scores should match: {} vs {}",
+                s.1,
+                w.1
+            );
+            assert_eq!(s.2, w.2, "Vector ranks should match");
+            assert_eq!(s.3, w.3, "FTS ranks should match");
+        }
+    }
+
     // -- Integration-like tests using mock store + in-memory DB -------------
 
     use crate::vectors::config::EmbeddingConfig;
@@ -1343,6 +1680,8 @@ mod tests {
             mode: SearchMode::Hybrid,
             filters: None,
             limit: Some(10),
+            vector_weight: 1.0,
+            fts_weight: 1.0,
         };
 
         let result = hs.search(&query).await.unwrap();
@@ -1383,6 +1722,8 @@ mod tests {
             mode: SearchMode::Keyword,
             filters: None,
             limit: Some(10),
+            vector_weight: 1.0,
+            fts_weight: 1.0,
         };
 
         let result = hs.search(&query).await.unwrap();
@@ -1418,6 +1759,8 @@ mod tests {
             mode: SearchMode::Semantic,
             filters: None,
             limit: Some(5),
+            vector_weight: 1.0,
+            fts_weight: 1.0,
         };
 
         let result = hs.search(&query).await.unwrap();
@@ -1719,6 +2062,8 @@ mod tests {
             mode: SearchMode::Semantic,
             filters: None,
             limit: Some(10),
+            vector_weight: 1.0,
+            fts_weight: 1.0,
         };
 
         // With SONA enabled, the aligned doc should be boosted.
@@ -1819,6 +2164,8 @@ mod tests {
             mode: SearchMode::Hybrid,
             filters: None,
             limit: Some(10),
+            vector_weight: 1.0,
+            fts_weight: 1.0,
         };
 
         let result = hs.search(&query).await.unwrap();
@@ -1856,10 +2203,18 @@ mod tests {
 
     #[test]
     fn test_sanitize_fts5_extracts_keywords() {
-        let result = sanitize_fts5_query("How many emails from MindValley did I receive in the last two months?");
-        assert!(result.contains("\"MindValley\""), "should extract MindValley: {result}");
+        let result = sanitize_fts5_query(
+            "How many emails from MindValley did I receive in the last two months?",
+        );
+        assert!(
+            result.contains("\"MindValley\""),
+            "should extract MindValley: {result}"
+        );
         assert!(!result.contains("\"How\""), "should strip stop word 'How'");
-        assert!(!result.contains("\"from\""), "should strip stop word 'from'");
+        assert!(
+            !result.contains("\"from\""),
+            "should strip stop word 'from'"
+        );
         assert!(!result.contains("\"the\""), "should strip stop word 'the'");
         assert!(result.contains(" OR "), "should join with OR");
     }
@@ -1873,7 +2228,10 @@ mod tests {
     #[test]
     fn test_sanitize_fts5_empty_after_stripping() {
         let result = sanitize_fts5_query("how many from the");
-        assert!(result.is_empty(), "all stop words should produce empty: {result}");
+        assert!(
+            result.is_empty(),
+            "all stop words should produce empty: {result}"
+        );
     }
 
     #[test]
