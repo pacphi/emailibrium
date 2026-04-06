@@ -236,7 +236,10 @@ impl RagPipeline {
         let top_score = relevant.first().map(|r| r.score).unwrap_or(0.0);
 
         if relevant.is_empty() {
-            info!(query, "RAG: no emails matched above min_relevance_score threshold");
+            info!(
+                query,
+                "RAG: no emails matched above min_relevance_score threshold"
+            );
             return Ok(RagContext {
                 formatted_context: String::new(),
                 email_ids: Vec::new(),

@@ -52,6 +52,16 @@ pub enum ProviderError {
     ParseError(String),
 }
 
+/// Parameters for composing and sending a new email.
+pub struct SendDraft<'a> {
+    pub to: &'a str,
+    pub cc: Option<&'a str>,
+    pub bcc: Option<&'a str>,
+    pub subject: &'a str,
+    pub body_text: Option<&'a str>,
+    pub body_html: Option<&'a str>,
+}
+
 /// Unified interface for interacting with email providers (DDD-005 ACL).
 ///
 /// Each provider (Gmail, Outlook, IMAP, POP3) implements this trait,
@@ -173,6 +183,45 @@ pub trait EmailProvider: Send + Sync {
     ) -> Result<(), ProviderError> {
         Err(ProviderError::ConfigError(
             "star_message not supported by this provider".into(),
+        ))
+    }
+
+    /// Send a new email message.
+    /// Returns the provider-assigned message ID.
+    async fn send_message(
+        &self,
+        _access_token: &str,
+        _draft: &SendDraft<'_>,
+    ) -> Result<String, ProviderError> {
+        Err(ProviderError::ConfigError(
+            "send_message not supported by this provider".into(),
+        ))
+    }
+
+    /// Reply to an existing message by provider message ID.
+    /// Returns the provider-assigned message ID of the sent reply.
+    async fn reply_to_message(
+        &self,
+        _access_token: &str,
+        _message_id: &str,
+        _body_text: Option<&str>,
+        _body_html: Option<&str>,
+    ) -> Result<String, ProviderError> {
+        Err(ProviderError::ConfigError(
+            "reply_to_message not supported by this provider".into(),
+        ))
+    }
+
+    /// Forward a message to a new recipient.
+    /// Returns the provider-assigned message ID of the forwarded message.
+    async fn forward_message(
+        &self,
+        _access_token: &str,
+        _message_id: &str,
+        _to: &str,
+    ) -> Result<String, ProviderError> {
+        Err(ProviderError::ConfigError(
+            "forward_message not supported by this provider".into(),
         ))
     }
 }

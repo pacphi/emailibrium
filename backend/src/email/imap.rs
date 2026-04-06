@@ -9,7 +9,7 @@ use futures::TryStreamExt;
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 
-use super::provider::{EmailProvider, FolderOrLabel, MoveKind, ProviderError};
+use super::provider::{EmailProvider, FolderOrLabel, MoveKind, ProviderError, SendDraft};
 use super::types::{EmailMessage, EmailPage, ListParams, OAuthTokens};
 
 // ---------------------------------------------------------------------------
@@ -35,6 +35,12 @@ pub struct ImapConfig {
     /// Archive folder name (default: "Archive").
     #[serde(default = "default_archive_folder")]
     pub archive_folder: String,
+    /// SMTP server hostname for outbound email (e.g., "smtp.gmail.com").
+    #[serde(default)]
+    pub smtp_host: Option<String>,
+    /// SMTP server port (587 for STARTTLS, 465 for TLS).
+    #[serde(default = "default_smtp_port")]
+    pub smtp_port: u16,
 }
 
 fn default_mailbox() -> String {
@@ -43,6 +49,10 @@ fn default_mailbox() -> String {
 
 fn default_archive_folder() -> String {
     "Archive".to_string()
+}
+
+fn default_smtp_port() -> u16 {
+    587
 }
 
 // ---------------------------------------------------------------------------
@@ -247,6 +257,102 @@ impl ImapProvider {
 
         let _ = session.logout().await;
         Ok(())
+    }
+
+    /// Send an email via SMTP using the configured SMTP server.
+    #[allow(clippy::too_many_arguments)]
+    async fn smtp_send(
+        &self,
+        to: &str,
+        cc: Option<&str>,
+        bcc: Option<&str>,
+        subject: &str,
+        in_reply_to: Option<&str>,
+        body_text: Option<&str>,
+        body_html: Option<&str>,
+    ) -> Result<String, ProviderError> {
+        use lettre::message::{header, Mailbox, MessageBuilder};
+        use lettre::transport::smtp::authentication::Credentials;
+        use lettre::{AsyncSmtpTransport, AsyncTransport, Tokio1Executor};
+
+        let smtp_host =
+            self.config.smtp_host.as_deref().ok_or_else(|| {
+                ProviderError::ConfigError("SMTP host not configured".to_string())
+            })?;
+
+        let from: Mailbox = self
+            .config
+            .username
+            .parse()
+            .map_err(|e| ProviderError::ConfigError(format!("Invalid from address: {e}")))?;
+
+        let mut builder = MessageBuilder::new().from(from).subject(subject);
+
+        // Parse recipients.
+        for addr in to.split(',') {
+            let addr = addr.trim();
+            if !addr.is_empty() {
+                let mbox: Mailbox = addr.parse().map_err(|e| {
+                    ProviderError::RequestFailed(format!("Invalid To address: {e}"))
+                })?;
+                builder = builder.to(mbox);
+            }
+        }
+
+        if let Some(cc) = cc {
+            for addr in cc.split(',') {
+                let addr = addr.trim();
+                if !addr.is_empty() {
+                    let mbox: Mailbox = addr.parse().map_err(|e| {
+                        ProviderError::RequestFailed(format!("Invalid Cc address: {e}"))
+                    })?;
+                    builder = builder.cc(mbox);
+                }
+            }
+        }
+
+        if let Some(bcc) = bcc {
+            for addr in bcc.split(',') {
+                let addr = addr.trim();
+                if !addr.is_empty() {
+                    let mbox: Mailbox = addr.parse().map_err(|e| {
+                        ProviderError::RequestFailed(format!("Invalid Bcc address: {e}"))
+                    })?;
+                    builder = builder.bcc(mbox);
+                }
+            }
+        }
+
+        if let Some(reply_id) = in_reply_to {
+            builder = builder.references(format!("<{reply_id}>"));
+        }
+
+        let message = if let Some(html) = body_html {
+            builder
+                .header(header::ContentType::TEXT_HTML)
+                .body(html.to_string())
+        } else {
+            builder
+                .header(header::ContentType::TEXT_PLAIN)
+                .body(body_text.unwrap_or("").to_string())
+        }
+        .map_err(|e| ProviderError::RequestFailed(format!("Failed to build message: {e}")))?;
+
+        let creds = Credentials::new(self.config.username.clone(), self.config.password.clone());
+
+        let mailer: AsyncSmtpTransport<Tokio1Executor> =
+            AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(smtp_host)
+                .map_err(|e| ProviderError::RequestFailed(format!("SMTP connection failed: {e}")))?
+                .port(self.config.smtp_port)
+                .credentials(creds)
+                .build();
+
+        mailer
+            .send(message)
+            .await
+            .map_err(|e| ProviderError::RequestFailed(format!("SMTP send failed: {e}")))?;
+
+        Ok(String::new())
     }
 }
 
@@ -720,6 +826,75 @@ impl EmailProvider for ImapProvider {
         let cmd = if starred { "+FLAGS" } else { "-FLAGS" };
         self.store_flags(message_id, cmd, "\\Flagged").await
     }
+
+    async fn send_message(
+        &self,
+        _access_token: &str,
+        draft: &SendDraft<'_>,
+    ) -> Result<String, ProviderError> {
+        self.smtp_send(
+            draft.to,
+            draft.cc,
+            draft.bcc,
+            draft.subject,
+            None,
+            draft.body_text,
+            draft.body_html,
+        )
+        .await
+    }
+
+    async fn reply_to_message(
+        &self,
+        _access_token: &str,
+        message_id: &str,
+        body_text: Option<&str>,
+        body_html: Option<&str>,
+    ) -> Result<String, ProviderError> {
+        // Fetch original to get From (reply-to) and Subject.
+        let original = self.get_message("", message_id).await?;
+        let to = &original.from;
+        let subject = if original.subject.starts_with("Re: ") {
+            original.subject.clone()
+        } else {
+            format!("Re: {}", original.subject)
+        };
+
+        self.smtp_send(
+            to,
+            None,
+            None,
+            &subject,
+            Some(message_id),
+            body_text,
+            body_html,
+        )
+        .await
+    }
+
+    async fn forward_message(
+        &self,
+        _access_token: &str,
+        message_id: &str,
+        to: &str,
+    ) -> Result<String, ProviderError> {
+        let original = self.get_message("", message_id).await?;
+        let subject = if original.subject.starts_with("Fwd: ") {
+            original.subject.clone()
+        } else {
+            format!("Fwd: {}", original.subject)
+        };
+
+        let fwd_body = format!(
+            "---------- Forwarded message ----------\nFrom: {}\nSubject: {}\n\n{}",
+            original.from,
+            original.subject,
+            original.body.as_deref().unwrap_or(""),
+        );
+
+        self.smtp_send(to, None, None, &subject, None, Some(&fwd_body), None)
+            .await
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -739,6 +914,8 @@ mod tests {
             password: "secret".to_string(),
             mailbox: "INBOX".to_string(),
             archive_folder: "Archive".to_string(),
+            smtp_host: None,
+            smtp_port: default_smtp_port(),
         }
     }
 
@@ -752,6 +929,8 @@ mod tests {
             password: "pass".to_string(),
             mailbox: default_mailbox(),
             archive_folder: default_archive_folder(),
+            smtp_host: None,
+            smtp_port: default_smtp_port(),
         };
         assert_eq!(config.mailbox, "INBOX");
         assert_eq!(config.archive_folder, "Archive");
@@ -767,6 +946,8 @@ mod tests {
             password: "pass".to_string(),
             mailbox: "INBOX".to_string(),
             archive_folder: "Archive".to_string(),
+            smtp_host: None,
+            smtp_port: default_smtp_port(),
         };
         let provider = ImapProvider::new(config);
         let result = provider.validate_config();

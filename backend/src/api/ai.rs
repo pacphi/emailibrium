@@ -1559,19 +1559,17 @@ async fn config_app(State(state): State<AppState>) -> Json<crate::vectors::yaml_
 async fn get_settings(
     State(state): State<AppState>,
 ) -> Result<Json<std::collections::HashMap<String, String>>, (StatusCode, String)> {
-    let rows: Vec<(String, String)> =
-        sqlx::query_as("SELECT key, value FROM app_settings")
-            .fetch_all(&state.db.pool)
-            .await
-            .map_err(|e| {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("Failed to read settings: {e}"),
-                )
-            })?;
+    let rows: Vec<(String, String)> = sqlx::query_as("SELECT key, value FROM app_settings")
+        .fetch_all(&state.db.pool)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to read settings: {e}"),
+            )
+        })?;
 
-    let settings: std::collections::HashMap<String, String> =
-        rows.into_iter().collect();
+    let settings: std::collections::HashMap<String, String> = rows.into_iter().collect();
     Ok(Json(settings))
 }
 

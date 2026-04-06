@@ -6,7 +6,7 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 
-use super::provider::{EmailProvider, ProviderError};
+use super::provider::{EmailProvider, ProviderError, SendDraft};
 use super::types::{EmailMessage, EmailPage, ListParams, OAuthTokens, ProviderConfig};
 
 // ---------------------------------------------------------------------------
@@ -713,6 +713,153 @@ impl EmailProvider for OutlookProvider {
             )));
         }
         Ok(())
+    }
+
+    async fn send_message(
+        &self,
+        access_token: &str,
+        draft: &SendDraft<'_>,
+    ) -> Result<String, ProviderError> {
+        let (content_type, content) = if let Some(html) = draft.body_html {
+            ("HTML", html)
+        } else {
+            ("Text", draft.body_text.unwrap_or(""))
+        };
+
+        let to_recipients: Vec<serde_json::Value> = draft
+            .to
+            .split(',')
+            .map(|addr| {
+                serde_json::json!({
+                    "emailAddress": { "address": addr.trim() }
+                })
+            })
+            .collect();
+
+        let mut message = serde_json::json!({
+            "subject": draft.subject,
+            "body": { "contentType": content_type, "content": content },
+            "toRecipients": to_recipients,
+        });
+
+        if let Some(cc) = draft.cc {
+            let cc_recips: Vec<serde_json::Value> = cc
+                .split(',')
+                .map(|addr| {
+                    serde_json::json!({
+                        "emailAddress": { "address": addr.trim() }
+                    })
+                })
+                .collect();
+            message["ccRecipients"] = serde_json::Value::Array(cc_recips);
+        }
+
+        if let Some(bcc) = draft.bcc {
+            let bcc_recips: Vec<serde_json::Value> = bcc
+                .split(',')
+                .map(|addr| {
+                    serde_json::json!({
+                        "emailAddress": { "address": addr.trim() }
+                    })
+                })
+                .collect();
+            message["bccRecipients"] = serde_json::Value::Array(bcc_recips);
+        }
+
+        let payload = serde_json::json!({ "message": message });
+
+        let resp = self
+            .http
+            .post(format!("{GRAPH_API_BASE}/sendMail"))
+            .bearer_auth(access_token)
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|e| ProviderError::RequestFailed(e.to_string()))?;
+
+        if !resp.status().is_success() {
+            let err_body = resp.text().await.unwrap_or_default();
+            return Err(ProviderError::RequestFailed(format!(
+                "sendMail failed: {err_body}"
+            )));
+        }
+        // Graph sendMail returns 202 Accepted with no body; no message ID returned.
+        Ok(String::new())
+    }
+
+    async fn reply_to_message(
+        &self,
+        access_token: &str,
+        message_id: &str,
+        body_text: Option<&str>,
+        body_html: Option<&str>,
+    ) -> Result<String, ProviderError> {
+        let (content_type, content) = if let Some(html) = body_html {
+            ("HTML", html)
+        } else {
+            ("Text", body_text.unwrap_or(""))
+        };
+
+        let payload = serde_json::json!({
+            "comment": content,
+            "message": {
+                "body": { "contentType": content_type, "content": content }
+            }
+        });
+
+        let resp = self
+            .http
+            .post(format!("{GRAPH_API_BASE}/messages/{message_id}/reply"))
+            .bearer_auth(access_token)
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|e| ProviderError::RequestFailed(e.to_string()))?;
+
+        if !resp.status().is_success() {
+            let err_body = resp.text().await.unwrap_or_default();
+            return Err(ProviderError::RequestFailed(format!(
+                "reply failed: {err_body}"
+            )));
+        }
+        Ok(String::new())
+    }
+
+    async fn forward_message(
+        &self,
+        access_token: &str,
+        message_id: &str,
+        to: &str,
+    ) -> Result<String, ProviderError> {
+        let to_recipients: Vec<serde_json::Value> = to
+            .split(',')
+            .map(|addr| {
+                serde_json::json!({
+                    "emailAddress": { "address": addr.trim() }
+                })
+            })
+            .collect();
+
+        let payload = serde_json::json!({
+            "toRecipients": to_recipients,
+        });
+
+        let resp = self
+            .http
+            .post(format!("{GRAPH_API_BASE}/messages/{message_id}/forward"))
+            .bearer_auth(access_token)
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|e| ProviderError::RequestFailed(e.to_string()))?;
+
+        if !resp.status().is_success() {
+            let err_body = resp.text().await.unwrap_or_default();
+            return Err(ProviderError::RequestFailed(format!(
+                "forward failed: {err_body}"
+            )));
+        }
+        Ok(String::new())
     }
 }
 

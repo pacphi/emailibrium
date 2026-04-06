@@ -135,7 +135,7 @@ pub fn parse_query(query: &str, now: DateTime<Utc>) -> ParsedQuery {
 /// `sent by alice`.  Returns the number of matched characters removed.
 /// Strip trailing punctuation from a captured sender name.
 fn clean_sender(raw: &str) -> String {
-    raw.trim_end_matches(|c: char| matches!(c, '?' | '!' | '.' | ',' | ';' | ':'))
+    raw.trim_end_matches(['?', '!', '.', ',', ';', ':'])
         .to_string()
 }
 

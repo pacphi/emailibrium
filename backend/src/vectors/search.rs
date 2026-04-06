@@ -1008,8 +1008,7 @@ impl HybridSearch {
                     like_clauses.push("from_name LIKE ?".to_string());
                 }
                 // Add space-collapsed variants for multi-word senders.
-                let multi_word: Vec<&String> =
-                    senders.iter().filter(|s| s.contains(' ')).collect();
+                let multi_word: Vec<&String> = senders.iter().filter(|s| s.contains(' ')).collect();
                 for _ in &multi_word {
                     like_clauses.push("from_addr LIKE ?".to_string());
                     like_clauses.push("from_name LIKE ?".to_string());
