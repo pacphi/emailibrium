@@ -361,21 +361,6 @@ async fn get_email_account_id(
         .ok_or_else(|| (StatusCode::NOT_FOUND, "Email not found".to_string()))
 }
 
-/// Get the email address associated with an account (for populating sent mail `from_addr`).
-async fn get_account_email(
-    state: &AppState,
-    account_id: &str,
-) -> Result<String, (StatusCode, String)> {
-    let row: Option<(String,)> =
-        sqlx::query_as("SELECT email_address FROM connected_accounts WHERE id = ?1")
-            .bind(account_id)
-            .fetch_optional(&state.db.pool)
-            .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    row.map(|(email,)| email)
-        .ok_or_else(|| (StatusCode::NOT_FOUND, "Account not found".to_string()))
-}
-
 /// POST /api/v1/emails/:id/archive — archive on provider + update local DB.
 async fn archive_email(
     State(state): State<AppState>,
@@ -1157,8 +1142,7 @@ async fn send_email(
 ) -> Result<Json<SendEmailResponse>, (StatusCode, String)> {
     debug!(account_id = %req.account_id, to = %req.to, "Sending new email");
 
-    let (provider, token, provider_kind) =
-        resolve_provider_and_token(&state, &req.account_id).await?;
+    let (provider, token, _) = resolve_provider_and_token(&state, &req.account_id).await?;
     let draft = SendDraft {
         to: &req.to,
         cc: req.cc.as_deref(),
@@ -1172,36 +1156,9 @@ async fn send_email(
         .await
         .map_err(|e| (StatusCode::BAD_GATEWAY, format!("Send failed: {e}")))?;
 
-    // Insert into local DB so it appears in the Sent folder immediately.
-    let from_addr = get_account_email(&state, &req.account_id)
-        .await
-        .unwrap_or_default();
-    let local_id = if message_id.is_empty() {
-        uuid::Uuid::new_v4().to_string()
-    } else {
-        message_id.clone()
-    };
-    let now = chrono::Utc::now().to_rfc3339();
-    let _ = sqlx::query(
-        "INSERT OR IGNORE INTO emails \
-         (id, account_id, provider, message_id, subject, from_addr, to_addrs, cc_addrs, \
-          received_at, body_text, body_html, labels, is_read, is_starred, has_attachments, \
-          embedding_status, category, folder) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'SENT', 1, 0, 0, 'skip', 'Sent', 'SENT')",
-    )
-    .bind(&local_id)
-    .bind(&req.account_id)
-    .bind(provider_kind.as_str())
-    .bind(&message_id)
-    .bind(&req.subject)
-    .bind(&from_addr)
-    .bind(&req.to)
-    .bind(&req.cc)
-    .bind(&now)
-    .bind(&req.body_text)
-    .bind(&req.body_html)
-    .execute(&state.db.pool)
-    .await;
+    // Trigger a delta sync so the sent message appears in the local DB via the
+    // canonical ingestion path — avoids duplicate rows from parallel inserts.
+    let _ = super::ingestion::sync_emails_from_provider(&state, &req.account_id).await;
 
     Ok(Json(SendEmailResponse { message_id }))
 }
@@ -1222,17 +1179,7 @@ async fn reply_email(
     debug!(email_id = %id, "Replying to email");
 
     let account_id = get_email_account_id(&state, &id).await?;
-    let (provider, token, provider_kind) = resolve_provider_and_token(&state, &account_id).await?;
-
-    // Fetch original email metadata for the local DB insertion.
-    let original: Option<(String, String, Option<String>)> =
-        sqlx::query_as("SELECT from_addr, subject, thread_id FROM emails WHERE id = ?1")
-            .bind(&id)
-            .fetch_optional(&state.db.pool)
-            .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let (orig_from, orig_subject, orig_thread) =
-        original.ok_or_else(|| (StatusCode::NOT_FOUND, "Email not found".to_string()))?;
+    let (provider, token, _) = resolve_provider_and_token(&state, &account_id).await?;
 
     let message_id = provider
         .reply_to_message(
@@ -1244,41 +1191,8 @@ async fn reply_email(
         .await
         .map_err(|e| (StatusCode::BAD_GATEWAY, format!("Reply failed: {e}")))?;
 
-    // Insert reply into local DB so it appears in Sent immediately.
-    let from_addr = get_account_email(&state, &account_id)
-        .await
-        .unwrap_or_default();
-    let local_id = if message_id.is_empty() {
-        uuid::Uuid::new_v4().to_string()
-    } else {
-        message_id.clone()
-    };
-    let subject = if orig_subject.starts_with("Re: ") {
-        orig_subject
-    } else {
-        format!("Re: {orig_subject}")
-    };
-    let now = chrono::Utc::now().to_rfc3339();
-    let _ = sqlx::query(
-        "INSERT OR IGNORE INTO emails \
-         (id, account_id, provider, message_id, thread_id, subject, from_addr, to_addrs, \
-          received_at, body_text, body_html, labels, is_read, is_starred, has_attachments, \
-          embedding_status, category, folder) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'SENT', 1, 0, 0, 'skip', 'Sent', 'SENT')",
-    )
-    .bind(&local_id)
-    .bind(&account_id)
-    .bind(provider_kind.as_str())
-    .bind(&message_id)
-    .bind(&orig_thread)
-    .bind(&subject)
-    .bind(&from_addr)
-    .bind(&orig_from)
-    .bind(&now)
-    .bind(&req.body_text)
-    .bind(&req.body_html)
-    .execute(&state.db.pool)
-    .await;
+    // Trigger a delta sync so the sent reply appears via the canonical ingestion path.
+    let _ = super::ingestion::sync_emails_from_provider(&state, &account_id).await;
 
     Ok(Json(SendEmailResponse { message_id }))
 }
@@ -1298,56 +1212,15 @@ async fn forward_email(
     debug!(email_id = %id, to = %req.to, "Forwarding email");
 
     let account_id = get_email_account_id(&state, &id).await?;
-    let (provider, token, provider_kind) = resolve_provider_and_token(&state, &account_id).await?;
-
-    // Fetch original subject for local DB.
-    let orig_subject: Option<(String,)> =
-        sqlx::query_as("SELECT subject FROM emails WHERE id = ?1")
-            .bind(&id)
-            .fetch_optional(&state.db.pool)
-            .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let orig_subject = orig_subject.map(|(s,)| s).unwrap_or_default();
+    let (provider, token, _) = resolve_provider_and_token(&state, &account_id).await?;
 
     let message_id = provider
         .forward_message(&token, &id, &req.to)
         .await
         .map_err(|e| (StatusCode::BAD_GATEWAY, format!("Forward failed: {e}")))?;
 
-    // Insert into local DB so it appears in Sent immediately.
-    let from_addr = get_account_email(&state, &account_id)
-        .await
-        .unwrap_or_default();
-    let local_id = if message_id.is_empty() {
-        uuid::Uuid::new_v4().to_string()
-    } else {
-        message_id.clone()
-    };
-    let subject = if orig_subject.starts_with("Fwd: ") {
-        orig_subject
-    } else {
-        format!("Fwd: {orig_subject}")
-    };
-    let now = chrono::Utc::now().to_rfc3339();
-    let _ = sqlx::query(
-        "INSERT OR IGNORE INTO emails \
-         (id, account_id, provider, message_id, subject, from_addr, to_addrs, \
-          received_at, body_text, body_html, labels, is_read, is_starred, has_attachments, \
-          embedding_status, category, folder) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'SENT', 1, 0, 0, 'skip', 'Sent', 'SENT')",
-    )
-    .bind(&local_id)
-    .bind(&account_id)
-    .bind(provider_kind.as_str())
-    .bind(&message_id)
-    .bind(&subject)
-    .bind(&from_addr)
-    .bind(&req.to)
-    .bind(&now)
-    .bind::<Option<&str>>(None) // body_text — forwarded body is on original
-    .bind::<Option<&str>>(None) // body_html
-    .execute(&state.db.pool)
-    .await;
+    // Trigger a delta sync so the forwarded message appears via the canonical ingestion path.
+    let _ = super::ingestion::sync_emails_from_provider(&state, &account_id).await;
 
     Ok(Json(SendEmailResponse { message_id }))
 }
