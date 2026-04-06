@@ -5,7 +5,7 @@
  * the user's settings store.
  */
 
-import { useMemo, useEffect, useRef } from 'react';
+import { useMemo, useEffect, useRef, useState } from 'react';
 import { useSettings } from '../../features/settings/hooks/useSettings';
 import { GenerativeRouter } from './generative-router';
 import type { GenerativeProvider, GenerativeRouterConfig } from './generative-router';
@@ -63,14 +63,42 @@ export function useGenerativeRouter() {
     }
   }, [config.provider, config.builtInModelId]);
 
+  // Resolve tool calling capability for the active model.
+  // Cloud providers always support tool calling. For builtin, check the model catalog.
+  const [toolCalling, setToolCalling] = useState(config.provider !== 'none');
+
+  useEffect(() => {
+    if (config.provider === 'openai' || config.provider === 'anthropic') {
+      setToolCalling(true);
+      return;
+    }
+    if (config.provider === 'none') {
+      setToolCalling(false);
+      return;
+    }
+    if (config.provider === 'builtin') {
+      fetch('/api/v1/ai/model-catalog', { signal: AbortSignal.timeout(3000) })
+        .then((r) => (r.ok ? r.json() : []))
+        .then((models: { id: string; toolCalling?: boolean }[]) => {
+          const match = models.find((m) => m.id === config.builtInModelId);
+          setToolCalling(match?.toolCalling ?? false);
+        })
+        .catch(() => setToolCalling(false));
+      return;
+    }
+    // Ollama: assume true by default (most models on Ollama support tool calling)
+    setToolCalling(true);
+  }, [config.provider, config.builtInModelId]);
+
   return useMemo(
     () => ({
       classify: router.classify.bind(router),
       chat: router.chat.bind(router),
       provider: config.provider,
       activeModel,
+      toolCalling,
       isReady: true,
     }),
-    [router, config.provider, activeModel],
+    [router, config.provider, activeModel, toolCalling],
   );
 }

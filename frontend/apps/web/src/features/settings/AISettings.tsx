@@ -1,6 +1,7 @@
 import { useSettings, type LlmProvider } from './hooks/useSettings';
 import { useQuery } from '@tanstack/react-query';
 import { useState, useMemo } from 'react';
+import { Wrench } from 'lucide-react';
 import { ModelDownloadProgress } from './components/ModelDownloadProgress';
 
 // ---------------------------------------------------------------------------
@@ -60,6 +61,7 @@ interface LlmModelOption {
   value: string;
   label: string;
   description: string;
+  toolCalling?: boolean;
 }
 
 const LLM_PROVIDERS: {
@@ -133,6 +135,7 @@ interface ModelCatalogEntry {
   quality: string;
   recommended: boolean;
   cached: boolean;
+  toolCalling: boolean;
 }
 
 async function fetchModelCatalog(): Promise<LlmModelOption[]> {
@@ -145,6 +148,7 @@ async function fetchModelCatalog(): Promise<LlmModelOption[]> {
       value: m.id,
       label: `${m.name} (${m.params})`,
       description: `${m.quality} quality, ${m.contextSize.toLocaleString()} ctx, ~${m.diskMb >= 1000 ? `${(m.diskMb / 1000).toFixed(1)}GB` : `${m.diskMb}MB`} disk${m.cached ? ' (cached)' : ''}`,
+      toolCalling: m.toolCalling,
     }));
 }
 
@@ -508,9 +512,23 @@ export function AISettings() {
               </option>
             ))}
           </select>
-          <p className="text-xs text-gray-500 dark:text-gray-400">
-            {availableLlmModels.find((m) => m.value === llmModel)?.description ?? ''}
-          </p>
+          {(() => {
+            const selected = availableLlmModels.find((m) => m.value === llmModel);
+            return selected ? (
+              <p className="flex items-center gap-1 text-xs text-gray-500 dark:text-gray-400">
+                <span>{selected.description}</span>
+                {selected.toolCalling && (
+                  <span
+                    className="inline-flex items-center gap-0.5 text-indigo-500 dark:text-indigo-400"
+                    title="Supports tool calling — email search, rule creation, and other AI actions in Chat"
+                  >
+                    <Wrench className="h-3 w-3" />
+                    <span className="text-[10px] font-medium">Tools</span>
+                  </span>
+                )}
+              </p>
+            ) : null;
+          })()}
           {modelSwitchStatus === 'downloading' && (
             <div className="flex items-center gap-2 mt-2 text-sm text-indigo-600 dark:text-indigo-400">
               <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">

@@ -1,5 +1,5 @@
 import { useRef, useEffect, useCallback } from 'react';
-import { MessageSquare, Trash2, Loader2, Square } from 'lucide-react';
+import { MessageSquare, Trash2, Loader2, Square, Wrench } from 'lucide-react';
 import type { RuleSuggestion } from '@emailibrium/types';
 import { useCreateRule } from '@/features/rules/hooks/useRules';
 import { useGenerativeRouter } from '../../services/ai/useGenerativeRouter';
@@ -59,6 +59,15 @@ export function ChatInterface() {
           <span className="rounded-full bg-emerald-100 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400">
             {router.activeModel}
           </span>
+          {router.toolCalling && (
+            <span
+              className="inline-flex items-center gap-0.5 rounded-full bg-indigo-100 px-1.5 py-0.5 text-[10px] font-medium text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-400"
+              title="This model supports tool calling — email search, rule creation, and other AI actions"
+            >
+              <Wrench className="h-2.5 w-2.5" aria-hidden="true" />
+              Tools
+            </span>
+          )}
           {streamingEnabled && (
             <span className="rounded-full bg-green-100 px-1.5 py-0.5 text-[10px] font-medium text-green-700 dark:bg-green-900/30 dark:text-green-400">
               Live

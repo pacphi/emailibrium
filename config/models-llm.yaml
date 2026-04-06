@@ -32,13 +32,14 @@ providers:
         quality: fair
         chat_template: chatml
         rag_capable: true
+        tool_calling: true
         default_for_ram_mb: 4096
         repo_id: "unsloth/Qwen3-1.7B-GGUF"
         filename: "Qwen3-1.7B-Q4_K_M.gguf"
         tuning:
           temperature: 0.7
-          top_p: 0.9
-          repeat_penalty: 1.1
+          top_p: 0.8
+          repeat_penalty: 1.05
           max_tokens: 2048
 
       - id: qwen2.5-3b-q4km
@@ -46,18 +47,19 @@ providers:
         family: qwen2
         params: "3B"
         quantization: Q4_K_M
-        context_size: 32768
+        context_size: 131072
         disk_mb: 2000
         min_ram_mb: 2500
         quality: good
         chat_template: chatml
         rag_capable: true
+        tool_calling: true
         repo_id: "Qwen/Qwen2.5-3B-Instruct-GGUF"
         filename: "qwen2.5-3b-instruct-q4_k_m.gguf"
         tuning:
           temperature: 0.7
-          top_p: 0.9
-          repeat_penalty: 1.1
+          top_p: 0.8
+          repeat_penalty: 1.05
           max_tokens: 2048
 
       # Tier 2: 16GB RAM machines
@@ -72,12 +74,13 @@ providers:
         quality: good
         chat_template: chatml
         rag_capable: true
+        tool_calling: true
         repo_id: "Qwen/Qwen3-4B-GGUF"
         filename: "Qwen3-4B-Q4_K_M.gguf"
         tuning:
           temperature: 0.7
-          top_p: 0.9
-          repeat_penalty: 1.1
+          top_p: 0.8
+          repeat_penalty: 1.05
           max_tokens: 4096
 
       - id: gemma3-4b-q4km
@@ -85,35 +88,81 @@ providers:
         family: gemma3
         params: "4B"
         quantization: Q4_K_M
-        context_size: 128000
+        context_size: 131072
         disk_mb: 2490
         min_ram_mb: 4500
         quality: good
         chat_template: gemma
         rag_capable: true
+        tool_calling: false
         repo_id: "unsloth/gemma-3-4b-it-GGUF"
         filename: "gemma-3-4b-it-Q4_K_M.gguf"
         tuning:
-          temperature: 0.7
-          top_p: 0.9
+          temperature: 1.0
+          top_p: 0.95
+          repeat_penalty: 1.0
           max_tokens: 4096
+
+      - id: gemma4-e4b-q4km
+        name: "Gemma 4 E4B IT"
+        family: gemma4
+        params: "4B effective"
+        quantization: Q4_K_M
+        context_size: 131072
+        disk_mb: 2800
+        min_ram_mb: 4500
+        quality: excellent
+        chat_template: gemma
+        rag_capable: true
+        tool_calling: true
+        repo_id: "unsloth/gemma-4-E4B-it-GGUF"
+        filename: "gemma-4-E4B-it-Q4_K_M.gguf"
+        notes: "Gemma 4 dense E4B — major reasoning upgrade over Gemma 3 4B, native multimodal."
+        tuning:
+          temperature: 1.0
+          top_p: 0.95
+          repeat_penalty: 1.0
+          max_tokens: 8192
+
+      - id: nemotron3-nano-4b-q4km
+        name: "Nemotron 3 Nano 4B"
+        family: nemotron3
+        params: "4B"
+        quantization: Q4_K_M
+        context_size: 262144
+        disk_mb: 2700
+        min_ram_mb: 5000
+        quality: good
+        chat_template: nemotron
+        rag_capable: true
+        tool_calling: true
+        repo_id: "nvidia/NVIDIA-Nemotron-3-Nano-4B-GGUF"
+        filename: "NVIDIA-Nemotron-3-Nano-4B-Q4_K_M.gguf"
+        notes: "Hybrid Mamba-Transformer from Nvidia. Unified reasoning/non-reasoning with <think> toggle."
+        tuning:
+          temperature: 0.6
+          top_p: 0.95
+          repeat_penalty: 1.0
+          max_tokens: 16384
 
       - id: phi4-mini-q4km
         name: "Phi-4 Mini Instruct"
         family: phi4
         params: "3.8B"
         quantization: Q4_K_M
-        context_size: 128000
+        context_size: 131072
         disk_mb: 2400
         min_ram_mb: 4000
         quality: good
         chat_template: chatml
         rag_capable: true
+        tool_calling: true
         repo_id: "bartowski/microsoft_Phi-4-mini-instruct-GGUF"
         filename: "microsoft_Phi-4-mini-instruct-Q4_K_M.gguf"
         tuning:
           temperature: 0.7
-          top_p: 0.9
+          top_p: 0.95
+          repeat_penalty: 1.0
           max_tokens: 4096
 
       - id: qwen3-8b-q4km
@@ -127,13 +176,14 @@ providers:
         quality: excellent
         chat_template: chatml
         rag_capable: true
+        tool_calling: true
         default_for_ram_mb: 16384
         repo_id: "Qwen/Qwen3-8B-GGUF"
         filename: "Qwen3-8B-Q4_K_M.gguf"
         tuning:
           temperature: 0.7
-          top_p: 0.9
-          repeat_penalty: 1.1
+          top_p: 0.8
+          repeat_penalty: 1.05
           max_tokens: 4096
 
       # Tier 3: 32GB RAM machines
@@ -142,17 +192,19 @@ providers:
         family: gemma3
         params: "12B"
         quantization: Q4_K_M
-        context_size: 128000
+        context_size: 131072
         disk_mb: 8100
         min_ram_mb: 11000
         quality: excellent
         chat_template: gemma
         rag_capable: true
+        tool_calling: false
         repo_id: "unsloth/gemma-3-12b-it-GGUF"
         filename: "gemma-3-12b-it-Q4_K_M.gguf"
         tuning:
-          temperature: 0.7
-          top_p: 0.9
+          temperature: 1.0
+          top_p: 0.95
+          repeat_penalty: 1.0
           max_tokens: 8192
 
       - id: qwen3-14b-q4km
@@ -166,14 +218,15 @@ providers:
         quality: excellent
         chat_template: chatml
         rag_capable: true
+        tool_calling: true
         default_for_ram_mb: 32768
         repo_id: "Qwen/Qwen3-14B-GGUF"
         filename: "Qwen3-14B-Q4_K_M.gguf"
         tuning:
           temperature: 0.7
-          top_p: 0.9
-          repeat_penalty: 1.1
-          max_tokens: 4096
+          top_p: 0.8
+          repeat_penalty: 1.05
+          max_tokens: 8192
 
       # Tier 4: 64-128GB RAM machines
       - id: mistral-small-24b-q4km
@@ -181,39 +234,105 @@ providers:
         family: mistral
         params: "24B"
         quantization: Q4_K_M
-        context_size: 128000
+        context_size: 131072
         disk_mb: 14000
         min_ram_mb: 18000
         quality: excellent
         chat_template: mistral
         rag_capable: true
+        tool_calling: true
         repo_id: "unsloth/Mistral-Small-3.2-24B-Instruct-2506-GGUF"
         filename: "Mistral-Small-3.2-24B-Instruct-2506-Q4_K_M.gguf"
         tuning:
-          temperature: 0.7
+          temperature: 0.3
           top_p: 0.9
+          repeat_penalty: 1.0
           max_tokens: 8192
+
+      - id: gemma4-26b-a4b-q4km
+        name: "Gemma 4 26B-A4B IT (MoE)"
+        family: gemma4
+        params: "26B/4B active"
+        quantization: Q4_K_M
+        context_size: 262144
+        disk_mb: 16000
+        min_ram_mb: 20000
+        quality: excellent
+        chat_template: gemma
+        rag_capable: true
+        tool_calling: true
+        repo_id: "unsloth/gemma-4-26B-A4B-it-GGUF"
+        filename: "gemma-4-26B-A4B-it-Q4_K_M.gguf"
+        notes: "MoE: 26B total, 4B active per token. Near-31B quality at fraction of compute."
+        tuning:
+          temperature: 1.0
+          top_p: 0.95
+          repeat_penalty: 1.0
+          max_tokens: 16384
+
+      - id: gemma4-31b-q4km
+        name: "Gemma 4 31B IT"
+        family: gemma4
+        params: "31B"
+        quantization: Q4_K_M
+        context_size: 262144
+        disk_mb: 20000
+        min_ram_mb: 24000
+        quality: excellent
+        chat_template: gemma
+        rag_capable: true
+        tool_calling: true
+        repo_id: "unsloth/gemma-4-31B-it-GGUF"
+        filename: "gemma-4-31B-it-Q4_K_M.gguf"
+        notes: "Ranked 3rd on Arena AI open-model leaderboard. 89.2% AIME 2026 (vs Gemma 3 27B at 20.8%)."
+        tuning:
+          temperature: 1.0
+          top_p: 0.95
+          repeat_penalty: 1.0
+          max_tokens: 16384
+
+      - id: nemotron3-nano-30b-a3b-q4km
+        name: "Nemotron 3 Nano 30B-A3B (MoE)"
+        family: nemotron3
+        params: "30B/3B active"
+        quantization: Q4_K_M
+        context_size: 262144
+        disk_mb: 18000
+        min_ram_mb: 20000
+        quality: excellent
+        chat_template: nemotron
+        rag_capable: true
+        tool_calling: true
+        repo_id: "unsloth/Nemotron-3-Nano-30B-A3B-GGUF"
+        filename: "Nemotron-3-Nano-30B-A3B-Q4_K_M.gguf"
+        notes: "MoE: 30B total, 3B active. Hybrid Mamba-Transformer with 256K context and reasoning toggle."
+        tuning:
+          temperature: 0.6
+          top_p: 0.95
+          repeat_penalty: 1.0
+          max_tokens: 16384
 
       - id: qwen3-30b-a3b-q4km
         name: "Qwen 3 30B-A3B (MoE)"
         family: qwen3
         params: "30B/3B active"
         quantization: Q4_K_M
-        context_size: 32768
+        context_size: 131072
         disk_mb: 18600
         min_ram_mb: 22000
         quality: excellent
         chat_template: chatml
         rag_capable: true
+        tool_calling: true
         default_for_ram_mb: 65536
         repo_id: "Qwen/Qwen3-30B-A3B-GGUF"
         filename: "Qwen3-30B-A3B-Q4_K_M.gguf"
         notes: "MoE: 30B total, 3B active per token. Best local RAG model of 2026."
         tuning:
           temperature: 0.7
-          top_p: 0.9
-          repeat_penalty: 1.1
-          max_tokens: 4096
+          top_p: 0.8
+          repeat_penalty: 1.05
+          max_tokens: 8192
 
       - id: qwen3-32b-q4km
         name: "Qwen 3 32B"
@@ -226,13 +345,14 @@ providers:
         quality: excellent
         chat_template: chatml
         rag_capable: true
+        tool_calling: true
         repo_id: "Qwen/Qwen3-32B-GGUF"
         filename: "Qwen3-32B-Q4_K_M.gguf"
         tuning:
           temperature: 0.7
-          top_p: 0.9
-          repeat_penalty: 1.1
-          max_tokens: 4096
+          top_p: 0.8
+          repeat_penalty: 1.05
+          max_tokens: 8192
 
   # ── Ollama (local server) ──────────────────────────────────────────────────
   ollama:
@@ -247,6 +367,7 @@ providers:
         min_ram_mb: 1500
         quality: fair
         rag_capable: true
+        tool_calling: true
         ollama_tag: "qwen3:1.7b"
 
       - id: qwen3:4b
@@ -256,6 +377,7 @@ providers:
         min_ram_mb: 4000
         quality: good
         rag_capable: true
+        tool_calling: true
         ollama_tag: "qwen3:4b"
 
       - id: qwen3:8b
@@ -265,6 +387,7 @@ providers:
         min_ram_mb: 7000
         quality: excellent
         rag_capable: true
+        tool_calling: true
         ollama_tag: "qwen3:8b"
 
       - id: qwen3:14b
@@ -274,42 +397,97 @@ providers:
         min_ram_mb: 12000
         quality: excellent
         rag_capable: true
+        tool_calling: true
         ollama_tag: "qwen3:14b"
 
       - id: gemma3:4b
         name: "Gemma 3 4B"
         params: "4B"
-        context_size: 128000
+        context_size: 131072
         min_ram_mb: 4500
         quality: good
         rag_capable: true
+        tool_calling: false
         ollama_tag: "gemma3:4b"
 
       - id: gemma3:12b
         name: "Gemma 3 12B"
         params: "12B"
-        context_size: 128000
+        context_size: 131072
         min_ram_mb: 11000
         quality: excellent
         rag_capable: true
+        tool_calling: false
         ollama_tag: "gemma3:12b"
+
+      - id: gemma4:e4b
+        name: "Gemma 4 E4B"
+        params: "4B effective"
+        context_size: 131072
+        min_ram_mb: 5000
+        quality: excellent
+        rag_capable: true
+        tool_calling: true
+        ollama_tag: "gemma4:e4b"
+
+      - id: gemma4:26b
+        name: "Gemma 4 26B-A4B (MoE)"
+        params: "26B/4B active"
+        context_size: 262144
+        min_ram_mb: 20000
+        quality: excellent
+        rag_capable: true
+        tool_calling: true
+        ollama_tag: "gemma4:26b"
+
+      - id: gemma4:31b
+        name: "Gemma 4 31B"
+        params: "31B"
+        context_size: 262144
+        min_ram_mb: 24000
+        quality: excellent
+        rag_capable: true
+        tool_calling: true
+        ollama_tag: "gemma4:31b"
+
+      - id: nemotron-3-nano:4b
+        name: "Nemotron 3 Nano 4B"
+        params: "4B"
+        context_size: 262144
+        min_ram_mb: 5000
+        quality: good
+        rag_capable: true
+        tool_calling: true
+        ollama_tag: "nemotron-3-nano:4b"
+
+      - id: nemotron-3-nano:30b
+        name: "Nemotron 3 Nano 30B-A3B (MoE)"
+        params: "30B/3B active"
+        context_size: 262144
+        min_ram_mb: 20000
+        quality: excellent
+        rag_capable: true
+        tool_calling: true
+        ollama_tag: "nemotron-3-nano:30b"
 
       - id: mistral-nemo:12b
         name: "Mistral Nemo 12B"
         params: "12B"
-        context_size: 128000
+        context_size: 131072
         min_ram_mb: 10000
         quality: excellent
         rag_capable: true
+        tool_calling: true
         ollama_tag: "mistral-nemo:12b"
 
       - id: deepseek-r1:14b
         name: "DeepSeek R1 Distill 14B"
         params: "14B"
-        context_size: 32768
+        context_size: 131072
         min_ram_mb: 12000
         quality: excellent
         rag_capable: true
+        tool_calling: false
         ollama_tag: "deepseek-r1:14b"
 
   # ── OpenAI (cloud) ────────────────────────────────────────────────────────
@@ -323,6 +501,7 @@ providers:
         context_size: 1000000
         quality: good
         rag_capable: true
+        tool_calling: true
         cost_per_1m_input: 0.10
         cost_per_1m_output: 0.40
 
@@ -331,6 +510,7 @@ providers:
         context_size: 1000000
         quality: excellent
         rag_capable: true
+        tool_calling: true
         cost_per_1m_input: 0.40
         cost_per_1m_output: 1.60
 
@@ -339,6 +519,7 @@ providers:
         context_size: 1000000
         quality: excellent
         rag_capable: true
+        tool_calling: true
         cost_per_1m_input: 2.00
         cost_per_1m_output: 8.00
 
@@ -353,6 +534,7 @@ providers:
         context_size: 200000
         quality: good
         rag_capable: true
+        tool_calling: true
         cost_per_1m_input: 1.00
         cost_per_1m_output: 5.00
 
@@ -361,6 +543,7 @@ providers:
         context_size: 1000000
         quality: excellent
         rag_capable: true
+        tool_calling: true
         cost_per_1m_input: 3.00
         cost_per_1m_output: 15.00
 
@@ -369,6 +552,7 @@ providers:
         context_size: 1000000
         quality: excellent
         rag_capable: true
+        tool_calling: true
         cost_per_1m_input: 5.00
         cost_per_1m_output: 25.00
 
@@ -388,33 +572,39 @@ providers:
         context_size: 1000000
         quality: excellent
         rag_capable: true
+        tool_calling: true
 
       - id: anthropic/claude-sonnet-4-6
         name: "Claude Sonnet 4.6 (via OpenRouter)"
         context_size: 1000000
         quality: excellent
         rag_capable: true
+        tool_calling: true
 
       - id: google/gemini-2.5-pro
         name: "Gemini 2.5 Pro (via OpenRouter)"
         context_size: 1000000
         quality: excellent
         rag_capable: true
+        tool_calling: true
 
       - id: qwen/qwen3-32b
         name: "Qwen 3 32B (via OpenRouter)"
         context_size: 32768
         quality: excellent
         rag_capable: true
+        tool_calling: true
 
       - id: deepseek/deepseek-r1
         name: "DeepSeek R1 (via OpenRouter)"
-        context_size: 32768
+        context_size: 131072
         quality: excellent
         rag_capable: true
+        tool_calling: false
 
       - id: meta-llama/llama-4-scout
         name: "Llama 4 Scout (via OpenRouter)"
         context_size: 131072
         quality: excellent
         rag_capable: true
+        tool_calling: true

@@ -694,6 +694,7 @@ async fn model_catalog(
                         family: m.family.clone(),
                         chat_template: m.chat_template.clone(),
                         rag_capable: m.rag_capable,
+                        tool_calling: m.tool_calling,
                         default_for_ram_mb: m.default_for_ram_mb,
                         notes: m.notes.clone(),
                         cost_per_1m_input: m.cost_per_1m_input,

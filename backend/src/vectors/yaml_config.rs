@@ -1164,6 +1164,8 @@ pub struct LlmModelEntry {
     #[serde(default)]
     pub rag_capable: bool,
     #[serde(default)]
+    pub tool_calling: bool,
+    #[serde(default)]
     pub default_for_ram_mb: Option<u32>,
     #[serde(default)]
     pub repo_id: Option<String>,

@@ -39,6 +39,8 @@ pub struct ModelInfo {
     pub chat_template: Option<String>,
     /// Whether this model supports retrieval-augmented generation.
     pub rag_capable: bool,
+    /// Whether this model supports native tool/function calling.
+    pub tool_calling: bool,
     /// RAM threshold (MB) at or above which this model is the default choice.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_for_ram_mb: Option<u32>,
@@ -277,6 +279,7 @@ pub fn get_model_catalog_with_config(
                 family: entry.family.clone(),
                 chat_template: entry.chat_template.clone(),
                 rag_capable: entry.rag_capable,
+                tool_calling: entry.tool_calling,
                 default_for_ram_mb: entry.default_for_ram_mb,
                 notes: entry.notes.clone(),
                 cost_per_1m_input: entry.cost_per_1m_input,
