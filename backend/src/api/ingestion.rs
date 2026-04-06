@@ -1355,8 +1355,8 @@ mod tests {
         assert!((deserialized.emails_per_second - 10.5).abs() < 0.01);
     }
 
-    #[test]
-    fn test_broadcast_send_no_receivers() {
+    #[tokio::test]
+    async fn test_broadcast_send_no_receivers() {
         let broadcast = IngestionBroadcast::new(16);
         let progress = IngestionProgress {
             job_id: "j1".to_string(),
@@ -1459,8 +1459,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_ingestion_broadcast_default() {
+    #[tokio::test]
+    async fn test_ingestion_broadcast_default() {
         let broadcast = IngestionBroadcast::default();
         // Should create without panicking and have no receivers.
         let progress = IngestionProgress {

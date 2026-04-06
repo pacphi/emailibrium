@@ -113,6 +113,15 @@ struct LoadedModel {
     model: LlamaModel,
 }
 
+/// Chat template format for the model.
+#[derive(Debug, Clone, PartialEq)]
+enum ChatTemplate {
+    /// Qwen/Phi-style ChatML: `<|im_start|>role\n...<|im_end|>`
+    ChatML,
+    /// Gemma-style: `<start_of_turn>role\n...<end_of_turn>`
+    Gemma,
+}
+
 /// Built-in generative model using llama.cpp via the `llama-cpp-2` crate.
 pub struct BuiltInGenerativeModel {
     config: BuiltInLlmConfig,
@@ -131,6 +140,8 @@ pub struct BuiltInGenerativeModel {
     /// Effective context size, incorporating the global `default_context_size`
     /// fallback from `tuning.yaml` when the per-model config uses the default.
     effective_context_size: u32,
+    /// Chat template format resolved from `models-llm.yaml`.
+    chat_template: ChatTemplate,
 }
 
 impl BuiltInGenerativeModel {
@@ -189,10 +200,30 @@ impl BuiltInGenerativeModel {
         } else {
             global_default_ctx
         };
+        // Resolve chat template from the YAML catalog entry.
+        let chat_template = yaml
+            .as_ref()
+            .and_then(|y| {
+                y.llm_catalog
+                    .providers
+                    .get("builtin")?
+                    .models
+                    .iter()
+                    .find(|m| m.id == config.model_id)?
+                    .chat_template
+                    .as_deref()
+            })
+            .map(|t| match t {
+                "gemma" => ChatTemplate::Gemma,
+                _ => ChatTemplate::ChatML,
+            })
+            .unwrap_or(ChatTemplate::ChatML);
+
         debug!(
             config_ctx = config.context_size,
             global_default = global_default_ctx,
             effective = effective_context_size,
+            chat_template = ?chat_template,
             "Resolved effective context size for built-in LLM"
         );
 
@@ -206,6 +237,7 @@ impl BuiltInGenerativeModel {
             prompts,
             last_accessed: Arc::new(Mutex::new(Instant::now())),
             effective_context_size,
+            chat_template,
         })
     }
 
@@ -262,8 +294,15 @@ impl BuiltInGenerativeModel {
                             ))
                         })?;
 
-                    // Tokenize a trivial prompt.
-                    let warmup_prompt = "<|im_start|>user\nHi<|im_end|>\n<|im_start|>assistant\n";
+                    // Tokenize a trivial prompt using the correct template.
+                    let warmup_prompt = match &self.chat_template {
+                        ChatTemplate::Gemma => {
+                            "<start_of_turn>user\nHi<end_of_turn>\n<start_of_turn>model\n"
+                        }
+                        ChatTemplate::ChatML => {
+                            "<|im_start|>user\nHi<|im_end|>\n<|im_start|>assistant\n"
+                        }
+                    };
                     let tokens = loaded
                         .model
                         .str_to_token(warmup_prompt, llama_cpp_2::model::AddBos::Never)
@@ -295,15 +334,9 @@ impl BuiltInGenerativeModel {
         Ok(guard)
     }
 
-    /// Convert a prompt from `[System]`/`[User]`/`[Assistant]`/`[Email Context]`
-    /// tagged format into Qwen-style ChatML.
-    ///
-    /// Uses tag-based splitting (not `\n\n`) so that multi-line content like
-    /// email bodies is kept intact within its ChatML block.
-    fn to_chatml(raw_prompt: &str) -> String {
-        let mut result = String::new();
-
-        // Split on tag boundaries: lines starting with [System], [User], etc.
+    /// Parse a prompt from `[System]`/`[User]`/`[Assistant]`/`[Email Context]`
+    /// tagged format into a list of `(role, content)` segments.
+    fn parse_prompt_segments(raw_prompt: &str) -> Vec<(&'static str, String)> {
         let tag_pattern = [
             "\n[System]\n",
             "\n[User]\n",
@@ -311,10 +344,8 @@ impl BuiltInGenerativeModel {
             "\n[Email Context]\n",
         ];
 
-        // Prepend \n so the first tag matches too.
         let normalized = format!("\n{raw_prompt}");
 
-        // Find all tag positions.
         let mut segments: Vec<(&str, usize)> = Vec::new();
         for tag in &tag_pattern {
             let mut start = 0;
@@ -326,24 +357,24 @@ impl BuiltInGenerativeModel {
         segments.sort_by_key(|&(_, pos)| pos);
 
         if segments.is_empty() {
-            // No tags found — treat entire prompt as user message.
-            result.push_str("<|im_start|>user\n");
-            result.push_str(raw_prompt.trim());
-            result.push_str("<|im_end|>\n");
-        } else {
-            for (i, &(tag, pos)) in segments.iter().enumerate() {
-                let content_start = pos + tag.len();
-                let content_end = if i + 1 < segments.len() {
-                    segments[i + 1].1
-                } else {
-                    normalized.len()
-                };
-                let content = normalized[content_start..content_end].trim();
-                if content.is_empty() {
-                    continue;
-                }
+            return vec![("user", raw_prompt.trim().to_string())];
+        }
 
-                let role = if tag.contains("[System]") || tag.contains("[Email Context]") {
+        let mut result = Vec::new();
+        for (i, &(tag, pos)) in segments.iter().enumerate() {
+            let content_start = pos + tag.len();
+            let content_end = if i + 1 < segments.len() {
+                segments[i + 1].1
+            } else {
+                normalized.len()
+            };
+            let content = normalized[content_start..content_end].trim().to_string();
+            if content.is_empty() {
+                continue;
+            }
+
+            let role: &'static str =
+                if tag.contains("[System]") || tag.contains("[Email Context]") {
                     "system"
                 } else if tag.contains("[Assistant]") {
                     "assistant"
@@ -351,15 +382,81 @@ impl BuiltInGenerativeModel {
                     "user"
                 };
 
-                result.push_str(&format!("<|im_start|>{role}\n"));
-                result.push_str(content);
-                result.push_str("\n<|im_end|>\n");
+            result.push((role, content));
+        }
+        result
+    }
+
+    /// Format prompt segments into ChatML format (`<|im_start|>`/`<|im_end|>`).
+    fn format_chatml(segments: &[(&str, String)]) -> String {
+        let mut result = String::new();
+        for (role, content) in segments {
+            result.push_str(&format!("<|im_start|>{role}\n"));
+            result.push_str(content);
+            result.push_str("\n<|im_end|>\n");
+        }
+        result.push_str("<|im_start|>assistant\n");
+        result
+    }
+
+    /// Format prompt segments into Gemma format (`<start_of_turn>`/`<end_of_turn>`).
+    ///
+    /// Gemma models don't have a "system" role. System messages are prepended
+    /// to the first user turn instead.
+    fn format_gemma(segments: &[(&str, String)]) -> String {
+        let mut result = String::new();
+        let mut pending_system = String::new();
+
+        for (role, content) in segments {
+            match *role {
+                "system" => {
+                    // Gemma doesn't support system role — accumulate and
+                    // prepend to the next user turn.
+                    if !pending_system.is_empty() {
+                        pending_system.push('\n');
+                    }
+                    pending_system.push_str(content);
+                }
+                "user" => {
+                    result.push_str("<start_of_turn>user\n");
+                    if !pending_system.is_empty() {
+                        result.push_str(&pending_system);
+                        result.push_str("\n\n");
+                        pending_system.clear();
+                    }
+                    result.push_str(content);
+                    result.push_str("<end_of_turn>\n");
+                }
+                "assistant" => {
+                    result.push_str("<start_of_turn>model\n");
+                    result.push_str(content);
+                    result.push_str("<end_of_turn>\n");
+                }
+                _ => {}
             }
         }
 
-        // Signal the model to generate an assistant response.
-        result.push_str("<|im_start|>assistant\n");
+        // If there's remaining system content but no user turn followed,
+        // emit it as a user turn.
+        if !pending_system.is_empty() {
+            result.push_str("<start_of_turn>user\n");
+            result.push_str(&pending_system);
+            result.push_str("<end_of_turn>\n");
+        }
+
+        // Signal the model to generate.
+        result.push_str("<start_of_turn>model\n");
         result
+    }
+
+    /// Convert a prompt from `[System]`/`[User]`/`[Assistant]`/`[Email Context]`
+    /// tagged format into the model's native chat template.
+    fn format_prompt(raw_prompt: &str, template: &ChatTemplate) -> String {
+        let segments = Self::parse_prompt_segments(raw_prompt);
+        match template {
+            ChatTemplate::ChatML => Self::format_chatml(&segments),
+            ChatTemplate::Gemma => Self::format_gemma(&segments),
+        }
     }
 
     /// Run generation on the loaded model. Must be called from a blocking context.
@@ -376,10 +473,11 @@ impl BuiltInGenerativeModel {
         _temperature: f32,
         _repeat_penalty: f32,
         rep_tuning: &super::yaml_config::RepetitionTuning,
+        chat_template: &ChatTemplate,
     ) -> Result<String, VectorError> {
-        let chatml_prompt = Self::to_chatml(prompt);
-        // Dump ChatML for debugging.
-        let _ = std::fs::write("/tmp/emailibrium_last_chatml.txt", &chatml_prompt);
+        let formatted_prompt = Self::format_prompt(prompt, chat_template);
+        // Dump formatted prompt for debugging.
+        let _ = std::fs::write("/tmp/emailibrium_last_chatml.txt", &formatted_prompt);
 
         let ctx_params =
             LlamaContextParams::default().with_n_ctx(std::num::NonZeroU32::new(ctx_size));
@@ -388,9 +486,9 @@ impl BuiltInGenerativeModel {
             .new_context(backend, ctx_params)
             .map_err(|e| VectorError::EmbeddingFailed(format!("Context creation failed: {e}")))?;
 
-        // Tokenize the prompt (no BOS — ChatML handles boundaries)
+        // Tokenize the prompt (no BOS — chat template handles boundaries)
         let tokens = model
-            .str_to_token(&chatml_prompt, llama_cpp_2::model::AddBos::Never)
+            .str_to_token(&formatted_prompt, llama_cpp_2::model::AddBos::Never)
             .map_err(|e| VectorError::EmbeddingFailed(format!("Tokenization failed: {e}")))?;
 
         debug!(
@@ -432,8 +530,12 @@ impl BuiltInGenerativeModel {
                 .token_to_piece(new_token, &mut decoder, true, None)
                 .unwrap_or_default();
 
-            // Stop if the model starts a new turn
-            if piece.contains("<|im_start|>") || piece.contains("<|im_end|>") {
+            // Stop if the model starts a new turn (template-specific markers)
+            if piece.contains("<|im_start|>")
+                || piece.contains("<|im_end|>")
+                || piece.contains("<start_of_turn>")
+                || piece.contains("<end_of_turn>")
+            {
                 break;
             }
 
@@ -524,6 +626,7 @@ impl BuiltInGenerativeModel {
         let ctx_size = self.effective_context_size;
         let repeat_penalty = self.params.repeat_penalty;
         let rep_tuning = self.repetition_tuning.clone();
+        let chat_template = self.chat_template.clone();
 
         let inner = self.inner.clone();
         tokio::task::spawn_blocking(move || {
@@ -538,6 +641,7 @@ impl BuiltInGenerativeModel {
                 temperature,
                 repeat_penalty,
                 &rep_tuning,
+                &chat_template,
             )
         })
         .await

@@ -1657,9 +1657,16 @@ mod tests {
         // verify the API doesn't panic
         let pause_result = pipeline.pause().await;
         if pause_result.is_ok() {
-            // If we caught it running, verify paused state
+            // If we caught it running, verify paused state.
+            // The phase depends on how far the job progressed before being
+            // paused — it could be any in-progress phase (syncing,
+            // embedding, categorizing, etc.).
             let progress = pipeline.get_progress().await.unwrap();
-            assert_eq!(progress.phase, "syncing".to_string());
+            assert!(
+                progress.phase != "complete",
+                "Expected an in-progress phase after pause, got: {}",
+                progress.phase,
+            );
 
             // Resume
             pipeline.resume().await.unwrap();

@@ -68,6 +68,10 @@ impl GenerativeRouter {
     }
 
     /// Register a provider with the given priority.
+    ///
+    /// If a provider of the same type is already registered, it is replaced
+    /// so that model switches (e.g. switching the built-in LLM) take effect
+    /// immediately instead of the old model continuing to win routing.
     pub async fn register(
         &self,
         provider_type: ProviderType,
@@ -75,6 +79,8 @@ impl GenerativeRouter {
         priority: u8,
     ) {
         let mut providers = self.providers.write().await;
+        // Remove any existing provider of the same type before inserting.
+        providers.retain(|p| p.provider_type != provider_type);
         providers.push(RegisteredProvider {
             provider_type,
             model,
