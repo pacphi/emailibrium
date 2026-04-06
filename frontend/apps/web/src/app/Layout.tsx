@@ -40,7 +40,13 @@ const NAV_ITEMS: {
 }[] = [
   { href: '/command-center', label: 'Command Center', icon: LayoutDashboard },
   { href: '/email', label: 'Email', icon: Mail, needsAccount: true },
-  { href: '/inbox-cleaner', label: 'Inbox Cleaner', icon: Wind, needsLlm: true, needsAccount: true },
+  {
+    href: '/inbox-cleaner',
+    label: 'Inbox Cleaner',
+    icon: Wind,
+    needsLlm: true,
+    needsAccount: true,
+  },
   { href: '/insights', label: 'Insights', icon: BarChart3, needsAccount: true },
   { href: '/rules', label: 'Rules', icon: ListChecks, needsAccount: true },
   { href: '/chat', label: 'Chat', icon: MessageSquare, needsLlm: true, needsAccount: true },
@@ -134,7 +140,15 @@ function disabledTitle(label: string, needsLlm?: boolean, needsAccount?: boolean
   return label;
 }
 
-function NavItem({ href, label, icon: Icon, collapsed, needsLlm, needsAccount, disabled }: NavItemProps) {
+function NavItem({
+  href,
+  label,
+  icon: Icon,
+  collapsed,
+  needsLlm,
+  needsAccount,
+  disabled,
+}: NavItemProps) {
   const isActive = window.location.pathname.startsWith(href);
 
   if (disabled) {
