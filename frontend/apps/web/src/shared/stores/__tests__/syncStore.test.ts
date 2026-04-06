@@ -66,6 +66,8 @@ describe('syncStore', () => {
     expect(state.syncing).toBe(false);
     expect(state.status).toBe('');
     expect(state.error).toBe('');
+    // resetStore sets hasAccounts=true for test convenience; the real
+    // default is false until refreshAccounts confirms active accounts.
     expect(state.hasAccounts).toBe(true);
   });
 

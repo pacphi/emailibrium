@@ -1,4 +1,4 @@
-import { type ReactNode, useState } from 'react';
+import { type ReactNode, useEffect, useState } from 'react';
 import {
   LayoutDashboard,
   Mail,
@@ -10,6 +10,7 @@ import {
   ChevronLeft,
 } from 'lucide-react';
 import { useSettings } from '../features/settings/hooks/useSettings';
+import { useSyncStore } from '../shared/stores/syncStore';
 
 interface LayoutProps {
   children: ReactNode;
@@ -35,21 +36,29 @@ const NAV_ITEMS: {
   label: string;
   icon: React.ComponentType<{ className?: string }>;
   needsLlm?: boolean;
+  needsAccount?: boolean;
 }[] = [
   { href: '/command-center', label: 'Command Center', icon: LayoutDashboard },
-  { href: '/email', label: 'Email', icon: Mail },
-  { href: '/inbox-cleaner', label: 'Inbox Cleaner', icon: Wind, needsLlm: true },
-  { href: '/insights', label: 'Insights', icon: BarChart3 },
-  { href: '/rules', label: 'Rules', icon: ListChecks },
-  { href: '/chat', label: 'Chat', icon: MessageSquare, needsLlm: true },
+  { href: '/email', label: 'Email', icon: Mail, needsAccount: true },
+  { href: '/inbox-cleaner', label: 'Inbox Cleaner', icon: Wind, needsLlm: true, needsAccount: true },
+  { href: '/insights', label: 'Insights', icon: BarChart3, needsAccount: true },
+  { href: '/rules', label: 'Rules', icon: ListChecks, needsAccount: true },
+  { href: '/chat', label: 'Chat', icon: MessageSquare, needsLlm: true, needsAccount: true },
   { href: '/settings', label: 'Settings', icon: Cog },
 ];
 
 function Sidebar() {
   const { sidebarPosition, llmProvider } = useSettings();
+  const hasAccounts = useSyncStore((s) => s.hasAccounts);
+  const refreshAccounts = useSyncStore((s) => s.refreshAccounts);
   const [collapsed, setCollapsed] = useState(false);
   const borderClass = sidebarPosition === 'right' ? 'border-l' : 'border-r';
   const hasLlm = llmProvider !== 'none';
+
+  // Ensure account state is fresh on mount
+  useEffect(() => {
+    refreshAccounts();
+  }, [refreshAccounts]);
 
   return (
     <nav
@@ -100,7 +109,8 @@ function Sidebar() {
             icon={item.icon}
             collapsed={collapsed}
             needsLlm={item.needsLlm}
-            disabled={item.needsLlm && !hasLlm}
+            needsAccount={item.needsAccount}
+            disabled={(item.needsLlm && !hasLlm) || (item.needsAccount && !hasAccounts)}
           />
         ))}
       </div>
@@ -114,17 +124,24 @@ interface NavItemProps {
   icon: React.ComponentType<{ className?: string }>;
   collapsed: boolean;
   needsLlm?: boolean;
+  needsAccount?: boolean;
   disabled?: boolean;
 }
 
-function NavItem({ href, label, icon: Icon, collapsed, needsLlm, disabled }: NavItemProps) {
+function disabledTitle(label: string, needsLlm?: boolean, needsAccount?: boolean): string {
+  if (needsAccount) return `${label} — Connect an email account first`;
+  if (needsLlm) return `${label} — Configure an LLM provider in Settings > AI / LLM`;
+  return label;
+}
+
+function NavItem({ href, label, icon: Icon, collapsed, needsLlm, needsAccount, disabled }: NavItemProps) {
   const isActive = window.location.pathname.startsWith(href);
 
   if (disabled) {
     return (
       <div
         className={`flex items-center gap-3 rounded-md text-sm font-medium text-gray-400 dark:text-gray-600 cursor-not-allowed ${collapsed ? 'justify-center px-2 py-2' : 'px-3 py-2'}`}
-        title={needsLlm ? `${label} — Configure an LLM provider in Settings > AI / LLM` : label}
+        title={disabledTitle(label, needsLlm, needsAccount)}
       >
         <Icon className="h-4 w-4 shrink-0" />
         {!collapsed && <span className="flex-1 truncate">{label}</span>}

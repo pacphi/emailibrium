@@ -92,7 +92,7 @@ export const useSyncStore = create<SyncState>((set, get) => ({
   syncing: false,
   status: '',
   error: '',
-  hasAccounts: true, // optimistic default
+  hasAccounts: false, // default to false until accounts are confirmed
 
   refreshAccounts: async () => {
     try {
