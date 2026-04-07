@@ -116,7 +116,7 @@ proptest = { version = "1", optional = true }
 criterion = { version = "0.8", features = ["async_tokio"] }
 tempfile = "3"
 tokio-test = "0.4"
-axum-test = "19"
+axum-test = "20"
 emailibrium = { path = ".", features = ["test-vectors"] }
 
 [[bench]]
