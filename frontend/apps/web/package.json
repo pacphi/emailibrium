@@ -51,7 +51,7 @@
     "@radix-ui/react-switch": "^1.2.6",
     "@radix-ui/react-tabs": "^1.1.13",
     "@radix-ui/react-tooltip": "^1.2.8",
-    "@storybook/react": "^10.3.3",
+    "@storybook/react": "^10.3.5",
     "@storybook/test": "^8.6.18",
     "@tailwindcss/postcss": "^4.1.7",
     "@testing-library/jest-dom": "^6.9.1",
