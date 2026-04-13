@@ -170,7 +170,7 @@ jobs:
         with:
           name: changelog
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           body_path: changelog-${{ needs.validate-tag.outputs.version }}.md
           prerelease: ${{ needs.validate-tag.outputs.is_prerelease == 'true' }}
