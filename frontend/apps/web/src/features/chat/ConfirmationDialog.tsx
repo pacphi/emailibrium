@@ -1,4 +1,3 @@
-
 interface ConfirmationDialogProps {
   toolName: string;
   description: string;

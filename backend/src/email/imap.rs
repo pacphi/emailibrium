@@ -120,11 +120,6 @@ impl ImapProvider {
         let _greeting = client
             .read_response()
             .await
-            .ok_or_else(|| {
-                ProviderError::RequestFailed(
-                    "Unexpected end of stream while reading IMAP greeting".into(),
-                )
-            })?
             .map_err(|e| ProviderError::RequestFailed(format!("Failed to read greeting: {e}")))?;
 
         let session = client

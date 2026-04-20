@@ -19,7 +19,7 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("proptest"
 [dependencies]
 # Web framework
 axum = { version = "0.8", features = ["json", "query", "macros"] }
-tokio = { version = "1", features = ["full"] }
+tokio = { version = "1.51", features = ["full"] }
 tower = "0.5"
 tower-http = { version = "0.6", features = ["cors", "set-header", "trace"] }
 
@@ -32,14 +32,14 @@ sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "chrono", "uuid
 
 # Caching
 moka = { version = "0.12", features = ["future"] }
-redis = { version = "1.1", features = ["tokio-comp", "connection-manager"] }
+redis = { version = "1.2", features = ["tokio-comp", "connection-manager"] }
 
 # Auth & Security
 argon2 = "0.5"
 aes-gcm = "0.10"
 sha2 = "0.11"
 zeroize = { version = "1", features = ["derive"] }
-rand = "0.10"
+rand = "0.10.1"
 base64 = "0.22"
 
 # HTTP client
@@ -53,9 +53,9 @@ tokio-util = { version = "0.7", features = ["io", "compat"] }
 async_zip = { version = "0.0.18", features = ["tokio", "deflate"] }
 
 # IMAP
-async-imap = { version = "0.10", default-features = false, features = ["runtime-tokio"] }
-async-native-tls = { version = "0.5", default-features = false, features = ["runtime-tokio"] }
-mail-parser = "0.9"
+async-imap = { version = "0.11", default-features = false, features = ["runtime-tokio"] }
+async-native-tls = { version = "0.6", default-features = false, features = ["runtime-tokio"] }
+mail-parser = "0.11"
 
 # SMTP (outbound email for IMAP accounts)
 lettre = { version = "0.11", default-features = false, features = ["tokio1-rustls-tls", "builder", "smtp-transport"] }
@@ -93,11 +93,11 @@ tracing-appender = "0.2"
 # Config
 figment = { version = "0.10", features = ["yaml", "env", "toml"] }
 serde_yaml = "0.9"
-fastembed = "5.13.0"
+fastembed = "5.13.2"
 
 # MCP (Model Context Protocol) server (ADR-028)
 rmcp = { version = "1.3", features = ["server", "macros", "transport-streamable-http-server"] }
-schemars = "0.8"
+schemars = "1.2"
 
 # Vector database (ADR-003: RuVector as primary)
 ruvector-core = { path = "../ruvector/crates/ruvector-core", default-features = false, features = ["hnsw", "storage", "simd", "parallel"] }
@@ -105,7 +105,7 @@ ruvector-collections = { path = "../ruvector/crates/ruvector-collections" }
 ruvector-gnn = { path = "../ruvector/crates/ruvector-gnn", default-features = false }
 
 # Built-in local LLM (ADR-021 addendum, opt-in via --features builtin-llm)
-llama-cpp-4 = { version = "0.2", optional = true }
+llama-cpp-4 = { version = "0.2.43", optional = true }
 hf-hub = { version = "0.5", optional = true }
 encoding_rs = { version = "0.8", optional = true }
 shellexpand = "3"
@@ -116,7 +116,7 @@ proptest = { version = "1", optional = true }
 criterion = { version = "0.8", features = ["async_tokio"] }
 tempfile = "3"
 tokio-test = "0.4"
-axum-test = "19"
+axum-test = "20"
 emailibrium = { path = ".", features = ["test-vectors"] }
 
 [[bench]]
