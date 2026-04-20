@@ -22,7 +22,7 @@
     "@emailibrium/ui": "workspace:*",
     "@tanstack/react-query": "^5.99.0",
     "@tanstack/react-router": "^1.168.22",
-    "@tanstack/react-virtual": "^3.13.23",
+    "@tanstack/react-virtual": "^3.13.24",
     "cmdk": "^1.1.1",
     "date-fns": "^4.1.0",
     "framer-motion": "^12.38.0",
