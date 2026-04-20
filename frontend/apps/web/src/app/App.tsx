@@ -1,10 +1,7 @@
 import { useEffect } from 'react';
 import { Providers } from './Providers';
 import { AppRouter } from './Router';
-import {
-  useSettings,
-  hydrateFromBackend,
-} from '../features/settings/hooks/useSettings';
+import { useSettings, hydrateFromBackend } from '../features/settings/hooks/useSettings';
 
 /**
  * Apply the user's theme preference to the <html> element so Tailwind's

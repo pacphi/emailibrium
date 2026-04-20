@@ -15,7 +15,8 @@ const { mockCreate, mockGet, mockPost, mockDelete, mockPatch, mockPut, capturedH
     const mockPatch = vi.fn().mockReturnValue(responseLike);
     const mockPut = vi.fn().mockReturnValue(responseLike);
 
-    const capturedHooks: { beforeRequest: Array<(req: Request) => void> } = {
+    type BeforeRequestState = { request: Request; options: unknown; retryCount: 0 };
+    const capturedHooks: { beforeRequest: Array<(state: BeforeRequestState) => void> } = {
       beforeRequest: [],
     };
 
@@ -29,7 +30,9 @@ const { mockCreate, mockGet, mockPost, mockDelete, mockPatch, mockPut, capturedH
 
     const mockCreate = vi.fn().mockImplementation((options: Record<string, unknown>) => {
       if (options?.hooks) {
-        const hooks = options.hooks as { beforeRequest?: Array<(req: Request) => void> };
+        const hooks = options.hooks as {
+          beforeRequest?: Array<(state: BeforeRequestState) => void>;
+        };
         capturedHooks.beforeRequest = hooks.beforeRequest ?? [];
       }
       return mockInstance;
@@ -76,7 +79,7 @@ describe('client', () => {
       vi.resetModules();
       await import('../client.js');
 
-      expect(mockCreate).toHaveBeenCalledWith(expect.objectContaining({ prefixUrl: '/api/v1' }));
+      expect(mockCreate).toHaveBeenCalledWith(expect.objectContaining({ prefix: '/api/v1' }));
     });
 
     it('configures a 30-second timeout', async () => {
@@ -118,7 +121,7 @@ describe('client', () => {
       expect(hook).toBeDefined();
 
       const fakeRequest = new Request('http://localhost/api/v1/test');
-      hook(fakeRequest);
+      hook({ request: fakeRequest, options: {}, retryCount: 0 });
 
       expect(fakeRequest.headers.get('Authorization')).toBe('Bearer test-jwt-token');
     });
@@ -131,7 +134,7 @@ describe('client', () => {
 
       const hook = capturedHooks.beforeRequest[0];
       const fakeRequest = new Request('http://localhost/api/v1/test');
-      hook(fakeRequest);
+      hook({ request: fakeRequest, options: {}, retryCount: 0 });
 
       expect(fakeRequest.headers.get('Authorization')).toBeNull();
     });
@@ -145,7 +148,7 @@ describe('client', () => {
       const hook = capturedHooks.beforeRequest[0];
       const fakeRequest = new Request('http://localhost/api/v1/test');
 
-      expect(() => hook(fakeRequest)).not.toThrow();
+      expect(() => hook({ request: fakeRequest, options: {}, retryCount: 0 })).not.toThrow();
     });
 
     it('reads from the auth_token key in localStorage', async () => {
@@ -156,7 +159,7 @@ describe('client', () => {
 
       const hook = capturedHooks.beforeRequest[0];
       const fakeRequest = new Request('http://localhost/api/v1/test');
-      hook(fakeRequest);
+      hook({ request: fakeRequest, options: {}, retryCount: 0 });
 
       expect(mockLocalStorage.getItem).toHaveBeenCalledWith('auth_token');
     });
@@ -169,7 +172,7 @@ describe('client', () => {
 
       const hook = capturedHooks.beforeRequest[0];
       const fakeRequest = new Request('http://localhost/api/v1/test');
-      hook(fakeRequest);
+      hook({ request: fakeRequest, options: {}, retryCount: 0 });
 
       const header = fakeRequest.headers.get('Authorization');
       expect(header).toMatch(/^Bearer /);

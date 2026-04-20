@@ -1,5 +1,5 @@
 # Stage 1: Build
-FROM node:24-alpine AS builder
+FROM node:25-alpine AS builder
 RUN npm install -g pnpm@10
 WORKDIR /app
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml turbo.json ./
@@ -15,7 +15,7 @@ COPY nginx.conf /etc/nginx/conf.d/default.conf
 USER 1000:1000
 
 # Stage 3: Development
-FROM node:24-alpine AS development
+FROM node:25-alpine AS development
 RUN npm install -g pnpm@10
 WORKDIR /app
 CMD ["pnpm", "dev"]

@@ -1,4 +1,3 @@
-
 interface ToolCallIndicatorProps {
   toolName: string;
   status: 'calling' | 'complete' | 'error';
