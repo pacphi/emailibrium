@@ -98,3 +98,4 @@ docker-compose.override.yml
 *.orig
 *.rej
 .git-rewrite/
+.gitnexus
