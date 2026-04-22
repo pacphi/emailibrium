@@ -27,7 +27,7 @@
     "date-fns": "^4.1.0",
     "framer-motion": "^12.38.0",
     "idb-keyval": "^6.2.2",
-    "ky": "^2.0.0",
+    "ky": "^2.0.2",
     "lucide-react": "^1.7.0",
     "nanoid": "^5.1.7",
     "node-llama-cpp": "^3.0.0",
