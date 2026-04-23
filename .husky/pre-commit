@@ -4,63 +4,57 @@
 #
 # Fails fast on the first error so the user gets back to a shell prompt
 # instead of hanging. Missing tools = hard failure with an install hint.
+# Bash 3.2 compatible (macOS default).
 
 set -euo pipefail
 
-# 1) Prettier + ESLint on staged files (via lint-staged + package.json config).
+# 1) Prettier + ESLint on staged files (via lint-staged + package.json).
 pnpm lint-staged
 
-# Collect staged files once, grouped by type.
-staged() { git diff --cached --name-only --diff-filter=ACMR -- "$@"; }
+staged_list() { git diff --cached --name-only --diff-filter=ACMR -- "$@" | tr '\n' '\0' | xargs -0 -I{} echo "{}"; }
 
-mapfile -t STAGED_MD   < <(staged '*.md')
-mapfile -t STAGED_YAML < <(staged '*.yaml' '*.yml')
-mapfile -t STAGED_SH   < <(staged '*.sh')
-HAS_BACKEND=$(staged 'backend/' | head -n1 || true)
+STAGED_MD=$(git diff --cached --name-only --diff-filter=ACMR -- '*.md')
+STAGED_YAML=$(git diff --cached --name-only --diff-filter=ACMR -- '*.yaml' '*.yml' | grep -v 'pnpm-lock.yaml$' || true)
+STAGED_SH=$(git diff --cached --name-only --diff-filter=ACMR -- '*.sh')
+STAGED_BACKEND=$(git diff --cached --name-only --diff-filter=ACMR -- 'backend/')
 
 # 2) Markdownlint (if .md staged).
-if [ "${#STAGED_MD[@]}" -gt 0 ]; then
+if [ -n "$STAGED_MD" ]; then
   if ! command -v markdownlint-cli2 >/dev/null 2>&1; then
     echo "✗ markdownlint-cli2 not installed. Run: npm i -g markdownlint-cli2" >&2
     exit 1
   fi
-  echo "→ markdownlint on ${#STAGED_MD[@]} staged .md file(s)..."
-  markdownlint-cli2 "${STAGED_MD[@]}"
+  COUNT=$(echo "$STAGED_MD" | wc -l | tr -d ' ')
+  echo "→ markdownlint on $COUNT staged .md file(s)..."
+  echo "$STAGED_MD" | xargs markdownlint-cli2
 fi
 
 # 3) yamllint (if .yaml/.yml staged, excluding lockfiles).
-if [ "${#STAGED_YAML[@]}" -gt 0 ]; then
-  FILTERED=()
-  for f in "${STAGED_YAML[@]}"; do
-    case "$f" in
-      *pnpm-lock.yaml) ;;
-      *) FILTERED+=("$f") ;;
-    esac
-  done
-  if [ "${#FILTERED[@]}" -gt 0 ]; then
-    if ! command -v yamllint >/dev/null 2>&1; then
-      echo "✗ yamllint not installed. Run: pip install yamllint" >&2
-      exit 1
-    fi
-    echo "→ yamllint on ${#FILTERED[@]} staged YAML file(s)..."
-    yamllint -c .yamllint.yaml "${FILTERED[@]}"
+if [ -n "$STAGED_YAML" ]; then
+  if ! command -v yamllint >/dev/null 2>&1; then
+    echo "✗ yamllint not installed. Run: pip install yamllint" >&2
+    exit 1
   fi
+  COUNT=$(echo "$STAGED_YAML" | wc -l | tr -d ' ')
+  echo "→ yamllint on $COUNT staged YAML file(s)..."
+  echo "$STAGED_YAML" | xargs yamllint -c .yamllint.yaml
 fi
 
 # 4) shellcheck (if .sh staged).
-if [ "${#STAGED_SH[@]}" -gt 0 ]; then
+if [ -n "$STAGED_SH" ]; then
   if ! command -v shellcheck >/dev/null 2>&1; then
     echo "✗ shellcheck not installed. Run: brew install shellcheck" >&2
     exit 1
   fi
-  echo "→ shellcheck on ${#STAGED_SH[@]} staged shell script(s)..."
-  shellcheck "${STAGED_SH[@]}"
+  COUNT=$(echo "$STAGED_SH" | wc -l | tr -d ' ')
+  echo "→ shellcheck on $COUNT staged shell script(s)..."
+  echo "$STAGED_SH" | xargs shellcheck
 fi
 
 # 5) Rust fmt + clippy (if backend/ touched). Matches CI strictness: deny
-# all warnings but allow dead_code/unused_* so pre-existing noise doesn't
-# block commits.
-if [ -n "${HAS_BACKEND}" ]; then
+# all warnings but allow dead_code/unused_* so pre-existing noise does
+# not block commits.
+if [ -n "$STAGED_BACKEND" ]; then
   echo "→ cargo fmt + clippy on backend/..."
   (
     cd backend
