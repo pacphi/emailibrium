@@ -71,13 +71,11 @@ jobs:
     name: Rust Security Audit
     runs-on: ubuntu-latest
     steps:
+      # cargo audit only reads backend/Cargo.lock — no source code needed.
+      # Do NOT fetch submodules: ruvector is a third-party submodule whose
+      # availability we cannot control, and its HTTP 500s from GitHub cause
+      # spurious job failures unrelated to our security posture.
       - uses: actions/checkout@v6
-        with:
-          submodules: true
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: backend
       - name: Install cargo-audit
         run: cargo install --locked cargo-audit
       # Fetch the RUSTSEC advisory DB with retry so a transient GitHub 500
