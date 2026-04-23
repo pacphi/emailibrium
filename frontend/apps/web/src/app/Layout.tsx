@@ -88,19 +88,11 @@ function Sidebar() {
           </button>
         ) : (
           <>
-            <div className="flex items-center gap-1.5">
-              <img
-                src="/emailibrium-text.svg"
-                alt="Emailibrium"
-                className="h-5 w-auto dark:invert dark:hue-rotate-180"
-              />
-              <span
-                className="px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-gray-100 dark:bg-gray-700 text-gray-400 dark:text-gray-500 tracking-wide"
-                title={`Version ${APP_VERSION}`}
-              >
-                v{APP_VERSION}
-              </span>
-            </div>
+            <img
+              src="/emailibrium-text.svg"
+              alt="Emailibrium"
+              className="h-5 w-auto dark:invert dark:hue-rotate-180"
+            />
             <button
               type="button"
               onClick={() => setCollapsed(true)}
@@ -129,6 +121,18 @@ function Sidebar() {
           />
         ))}
       </div>
+
+      {/* Version pill — bottom left */}
+      {!collapsed && (
+        <div className="px-3 py-2">
+          <span
+            className="inline-block px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-gray-100 dark:bg-gray-700 text-gray-400 dark:text-gray-500 tracking-wide"
+            title={`Version ${APP_VERSION}`}
+          >
+            v{APP_VERSION}
+          </span>
+        </div>
+      )}
     </nav>
   );
 }
