@@ -1672,6 +1672,7 @@ mod tests {
     // -- K-Means tests -------------------------------------------------------
 
     #[test]
+    #[allow(clippy::needless_range_loop)]
     fn test_kmeans_two_clear_clusters() {
         // Two well-separated clusters in 2D.
         let cluster_a: Vec<Vec<f32>> = (0..10).map(|i| vec![i as f32 * 0.1, 0.0]).collect();
@@ -1704,6 +1705,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::needless_range_loop)]
     fn test_kmeans_three_clusters() {
         let mut data = Vec::new();
         // Cluster at origin.
@@ -1852,9 +1854,9 @@ mod tests {
 
         assert_eq!(propagated.len(), 3);
         // Output dim equals effective_hidden (rounded to heads multiple).
-        let effective_hidden = ((config.graphsage_hidden_dim + config.graphsage_attention_heads
-            - 1)
-            / config.graphsage_attention_heads)
+        let effective_hidden = config
+            .graphsage_hidden_dim
+            .div_ceil(config.graphsage_attention_heads)
             * config.graphsage_attention_heads;
         for emb in &propagated {
             assert_eq!(emb.len(), effective_hidden);

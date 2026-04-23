@@ -768,7 +768,7 @@ mod tests {
 
         let ratio = original_size as f32 / quantized_size as f32;
         assert!(
-            ratio >= 3.9 && ratio <= 4.1,
+            (3.9..=4.1).contains(&ratio),
             "expected ~4x compression, got {}x",
             ratio
         );

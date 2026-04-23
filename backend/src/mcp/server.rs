@@ -33,6 +33,7 @@ use crate::vectors::search::{HybridSearchQuery, SearchMode};
 /// (database, vector search, etc.) used by the REST API.
 #[derive(Clone)]
 pub struct EmailibriumMcpServer {
+    #[allow(dead_code)]
     tool_router: ToolRouter<Self>,
     state: Arc<AppState>,
     rate_limiter: Arc<rate_limit::ToolRateLimiter>,

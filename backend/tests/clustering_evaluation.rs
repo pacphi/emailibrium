@@ -244,7 +244,7 @@ fn test_subscription_detection_pipeline() {
         headers: Vec<(String, String)>,
     }
 
-    let emails = vec![
+    let emails = [
         TestEmail {
             id: "email-1".into(),
             headers: vec![

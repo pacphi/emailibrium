@@ -653,7 +653,7 @@ mod tests {
                    VALUES (?, 'acct-1', 'test', ?, ?, ?, ?)"#,
             )
             .bind(&id)
-            .bind(&format!("Email from {}", sender))
+            .bind(format!("Email from {}", sender))
             .bind(sender)
             .bind(body_text)
             .bind(&received_str)

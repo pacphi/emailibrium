@@ -95,7 +95,7 @@ check_submodule() {
 echo "${BOLD}Checking prerequisites...${RESET}"
 echo ""
 
-check_tool "Rust"           "rustc"  "1.94"   "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
+check_tool "Rust"           "rustc"  "1.95"   "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
 check_tool "Node.js"        "node"   "22.12"  "brew install node@22  OR  https://nodejs.org/"
 check_tool "pnpm"           "pnpm"   "10.32"  "corepack enable && corepack prepare pnpm@latest --activate"
 check_tool "Docker"         "docker" "24.0"   "https://docs.docker.com/get-docker/"

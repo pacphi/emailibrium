@@ -20,6 +20,7 @@ use std::sync::Arc;
 // Helper: Mock Provider
 // ---------------------------------------------------------------------------
 
+#[allow(dead_code)]
 struct MockEmailProvider {
     messages: Vec<EmailMessage>,
     concurrent_counter: Arc<AtomicUsize>,

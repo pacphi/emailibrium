@@ -1,0 +1,30 @@
+[advisories]
+# Non-actionable transitive advisory exceptions — reviewed by maintainers.
+# See each entry in backend/audit-ignore for full rationale.
+# Mirrored here so cargo-audit picks them up directly (.cargo/audit.toml
+# is the canonical config path searched from the Cargo.lock directory).
+ignore = [
+    # rsa Marvin attack — reachable only via sqlx-mysql (unused at runtime)
+    "RUSTSEC-2023-0071",
+
+    # rustls-webpki 0.101.7 — old chain via ruvector's reqwest 0.11;
+    # fixed chain already at 0.103.13. Remove when ruvector bumps reqwest.
+    "RUSTSEC-2026-0098",
+    "RUSTSEC-2026-0099",
+    "RUSTSEC-2026-0104",
+
+    # Unmaintained informational advisories for deep transitive deps
+    "RUSTSEC-2025-0141",  # bincode
+    "RUSTSEC-2024-0395",  # chrono-english
+    "RUSTSEC-2025-0119",  # number_prefix
+    "RUSTSEC-2024-0436",  # paste
+    "RUSTSEC-2025-0134",  # rustls-pemfile 1.x
+]
+
+[yanked]
+# Disable yanked-status checks. ruvector's dependencies include packages
+# from git / non-crates.io sources; cargo audit cannot look them up in
+# the crates.io index and logs a red "error:" line per package even
+# though the exit code stays 0. Disabling prevents the false-negative
+# noise in CI output.
+enabled = false

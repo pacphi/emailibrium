@@ -7,7 +7,7 @@ Run `make setup` for an interactive wizard that automates these steps.
 
 | Tool           | Minimum Version | Install Command                                                   |
 | -------------- | --------------- | ----------------------------------------------------------------- |
-| Rust           | 1.94            | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \| sh` |
+| Rust           | 1.95            | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \| sh` |
 | Node.js        | 24 (LTS)        | `brew install node@24` or [nodejs.org](https://nodejs.org/)       |
 | pnpm           | 10.32           | `npm install -g pnpm@10`                                          |
 | Docker         | 24.0+           | [docs.docker.com/get-docker](https://docs.docker.com/get-docker/) |

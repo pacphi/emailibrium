@@ -2,7 +2,7 @@
 name = "emailibrium"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.94"
+rust-version = "1.95"
 description = "Vector-native email intelligence platform"
 license = "MIT"
 

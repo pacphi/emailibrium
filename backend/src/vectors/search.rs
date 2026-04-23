@@ -2030,9 +2030,11 @@ mod tests {
         .unwrap();
 
         // SONA-enabled search config.
-        let mut search_config = SearchConfig::default();
-        search_config.sona_reranking_enabled = true;
-        search_config.sona_weight = 0.8;
+        let search_config = SearchConfig {
+            sona_reranking_enabled: true,
+            sona_weight: 0.8,
+            ..SearchConfig::default()
+        };
 
         let hs = HybridSearch::new(store.clone(), embedding.clone(), db.clone(), search_config);
 
@@ -2127,8 +2129,10 @@ mod tests {
         .unwrap();
 
         // Configure multi-collection search.
-        let mut search_config = SearchConfig::default();
-        search_config.collections = vec!["email_text".to_string(), "attachment_text".to_string()];
+        let mut search_config = SearchConfig {
+            collections: vec!["email_text".to_string(), "attachment_text".to_string()],
+            ..SearchConfig::default()
+        };
         search_config
             .collection_weights
             .insert("email_text".to_string(), 1.0);

@@ -71,14 +71,31 @@ jobs:
     name: Rust Security Audit
     runs-on: ubuntu-latest
     steps:
+      # cargo audit only reads backend/Cargo.lock — no source code needed.
+      # Do NOT fetch submodules: ruvector is a third-party submodule whose
+      # availability we cannot control, and its HTTP 500s from GitHub cause
+      # spurious job failures unrelated to our security posture.
       - uses: actions/checkout@v6
-        with:
-          submodules: true
-      - uses: rustsec/audit-check@v2
-        with:
-          working-directory: backend
-          token: ${{ secrets.GITHUB_TOKEN }}
-        continue-on-error: true
+      - name: Install cargo-audit
+        run: cargo install --locked cargo-audit
+      # Fetch the RUSTSEC advisory DB with retry so a transient GitHub 500
+      # does not fail the job. The audit step uses --no-fetch after this.
+      - name: Fetch advisory database
+        run: |
+          DB="$HOME/.cargo/advisory-db"
+          for attempt in 1 2 3; do
+            if [ -d "$DB" ]; then
+              git -C "$DB" fetch --depth=1 origin master && break
+            else
+              git clone --depth=1 https://github.com/RustSec/advisory-db.git "$DB" && break
+            fi
+            echo "Attempt $attempt failed; retrying in 15s..."
+            sleep 15
+          done
+      # Exceptions sourced from backend/audit-ignore (mirrors sindri pattern).
+      # --no-fetch skips the network since we just fetched above.
+      - name: Run cargo audit
+        run: bash .github/scripts/cargo-audit.sh --no-fetch
 
   # Frontend jobs
   frontend-install:

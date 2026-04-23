@@ -540,6 +540,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::approx_constant)]
     fn test_vector_blob_roundtrip() {
         let original = vec![1.0_f32, -0.5, 0.0, 3.14, -999.0];
         let blob = vector_to_blob(&original);

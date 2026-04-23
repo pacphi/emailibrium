@@ -167,7 +167,7 @@ When the Rust backend gains `llama-cpp-2` (RBL-1), the Docker build will need a 
 ARG ENABLE_BUILTIN_LLM=false
 
 # Build stage with optional LLM
-FROM rust:1.94 AS builder
+FROM rust:1.95 AS builder
 ARG ENABLE_BUILTIN_LLM
 RUN if [ "$ENABLE_BUILTIN_LLM" = "true" ]; then \
       apt-get update && apt-get install -y cmake; \
