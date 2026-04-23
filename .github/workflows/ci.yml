@@ -80,10 +80,24 @@ jobs:
           workspaces: backend
       - name: Install cargo-audit
         run: cargo install --locked cargo-audit
+      # Fetch the RUSTSEC advisory DB with retry so a transient GitHub 500
+      # does not fail the job. The audit step uses --no-fetch after this.
+      - name: Fetch advisory database
+        run: |
+          DB="$HOME/.cargo/advisory-db"
+          for attempt in 1 2 3; do
+            if [ -d "$DB" ]; then
+              git -C "$DB" fetch --depth=1 origin master && break
+            else
+              git clone --depth=1 https://github.com/RustSec/advisory-db.git "$DB" && break
+            fi
+            echo "Attempt $attempt failed; retrying in 15s..."
+            sleep 15
+          done
       # Exceptions sourced from backend/audit-ignore (mirrors sindri pattern).
-      # See that file for rationale on each suppressed advisory.
+      # --no-fetch skips the network since we just fetched above.
       - name: Run cargo audit
-        run: bash .github/scripts/cargo-audit.sh
+        run: bash .github/scripts/cargo-audit.sh --no-fetch
 
   # Frontend jobs
   frontend-install:
