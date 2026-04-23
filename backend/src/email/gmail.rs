@@ -434,29 +434,28 @@ impl EmailProvider for GmailProvider {
 
         let token = access_token.to_string();
         let http = self.http.clone();
-        let results: Vec<Result<EmailMessage, ProviderError>> =
-            futures::stream::iter(msg_ids)
-                .map(|msg_id| {
-                    let t = token.clone();
-                    let h = http.clone();
-                    let lm = label_map.clone();
-                    async move {
-                        let full: serde_json::Value = h
-                            .get(format!("{GMAIL_API_BASE}/messages/{msg_id}?format=full"))
-                            .bearer_auth(&t)
-                            .send()
-                            .await
-                            .map_err(|e| ProviderError::RequestFailed(e.to_string()))?
-                            .json()
-                            .await
-                            .map_err(|e| ProviderError::ParseError(e.to_string()))?;
-                        check_error_response(&full)?;
-                        Self::parse_message(&full, &lm)
-                    }
-                })
-                .buffer_unordered(5)
-                .collect()
-                .await;
+        let results: Vec<Result<EmailMessage, ProviderError>> = futures::stream::iter(msg_ids)
+            .map(|msg_id| {
+                let t = token.clone();
+                let h = http.clone();
+                let lm = label_map.clone();
+                async move {
+                    let full: serde_json::Value = h
+                        .get(format!("{GMAIL_API_BASE}/messages/{msg_id}?format=full"))
+                        .bearer_auth(&t)
+                        .send()
+                        .await
+                        .map_err(|e| ProviderError::RequestFailed(e.to_string()))?
+                        .json()
+                        .await
+                        .map_err(|e| ProviderError::ParseError(e.to_string()))?;
+                    check_error_response(&full)?;
+                    Self::parse_message(&full, &lm)
+                }
+            })
+            .buffer_unordered(5)
+            .collect()
+            .await;
 
         let mut messages = Vec::with_capacity(results.len());
         for result in results {

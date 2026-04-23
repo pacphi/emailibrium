@@ -1854,7 +1854,9 @@ mod tests {
 
         assert_eq!(propagated.len(), 3);
         // Output dim equals effective_hidden (rounded to heads multiple).
-        let effective_hidden = config.graphsage_hidden_dim.div_ceil(config.graphsage_attention_heads)
+        let effective_hidden = config
+            .graphsage_hidden_dim
+            .div_ceil(config.graphsage_attention_heads)
             * config.graphsage_attention_heads;
         for emb in &propagated {
             assert_eq!(emb.len(), effective_hidden);
