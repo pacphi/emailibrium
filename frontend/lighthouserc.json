@@ -1,9 +1,9 @@
 {
   "ci": {
     "collect": {
-      "staticDistDir": "apps/web/dist",
+      "staticDistDir": "frontend/apps/web/dist",
       "isSinglePageApplication": true,
-      "url": ["http://localhost/"],
+      "url": ["http://localhost/index.html"],
       "numberOfRuns": 3
     },
     "assert": {
