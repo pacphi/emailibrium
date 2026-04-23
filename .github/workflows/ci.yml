@@ -74,15 +74,16 @@ jobs:
       - uses: actions/checkout@v6
         with:
           submodules: true
-      - uses: rustsec/audit-check@v2
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
         with:
-          working-directory: backend
-          token: ${{ secrets.GITHUB_TOKEN }}
-        env:
-          # audit-check@v2 ships on Node 20 (deprecated). Opt into Node 24
-          # until upstream releases a Node 24-native action.
-          FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-        continue-on-error: true
+          workspaces: backend
+      - name: Install cargo-audit
+        run: cargo install --locked cargo-audit
+      # Exceptions sourced from backend/audit-ignore (mirrors sindri pattern).
+      # See that file for rationale on each suppressed advisory.
+      - name: Run cargo audit
+        run: bash .github/scripts/cargo-audit.sh
 
   # Frontend jobs
   frontend-install:

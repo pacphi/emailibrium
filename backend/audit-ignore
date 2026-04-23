@@ -1,0 +1,42 @@
+# cargo-audit exceptions — non-actionable transitive advisories
+# Format: one RUSTSEC ID per line; lines starting with # are comments.
+# Reviewed by maintainers; remove an entry once the upstream dep is patched.
+
+# RUSTSEC-2023-0071: rsa Marvin attack (timing side-channel)
+# Pulled in by sqlx-mysql (sqlx's proc-macro compile-time dependency).
+# We build sqlx with the "sqlite" feature only and never enable mysql at
+# runtime, so this path is never reachable. No upstream patch exists yet.
+# Track: https://github.com/RustCrypto/RSA/issues/19
+RUSTSEC-2023-0071
+
+# RUSTSEC-2026-0098: rustls-webpki URI name constraints incorrectly accepted
+# RUSTSEC-2026-0099: rustls-webpki wildcard name constraints accepted
+# RUSTSEC-2026-0104: rustls-webpki reachable panic in CRL parsing
+# All three affect rustls-webpki 0.101.7 via the ruvector git submodule's
+# reqwest 0.11 -> rustls 0.21 chain. The modern chain (our own reqwest 0.12)
+# already uses rustls-webpki 0.103.13 which patches all three.
+# Remove these entries once ruvector bumps reqwest to 0.12.
+RUSTSEC-2026-0098
+RUSTSEC-2026-0099
+RUSTSEC-2026-0104
+
+# RUSTSEC-2025-0141: bincode 1.x/2.x unmaintained (informational, no CVE)
+# Deep transitive dep; no drop-in replacement wired up yet.
+RUSTSEC-2025-0141
+
+# RUSTSEC-2024-0395: chrono-english unmaintained (informational, no CVE)
+# Transitive dep; upstream unresponsive.
+RUSTSEC-2024-0395
+
+# RUSTSEC-2025-0119: number_prefix unmaintained (informational, no CVE)
+# Transitive dep.
+RUSTSEC-2025-0119
+
+# RUSTSEC-2024-0436: paste unmaintained (informational, no CVE)
+# Transitive dep via fastembed/tokenizers; no drop-in replacement used.
+RUSTSEC-2024-0436
+
+# RUSTSEC-2025-0134: rustls-pemfile 1.x unmaintained (informational, no CVE)
+# Transitive dep via ruvector's old reqwest 0.11 chain.
+# Remove once ruvector bumps reqwest to 0.12.
+RUSTSEC-2025-0134
