@@ -38,7 +38,7 @@ pub fn apply_actions(
 /// collecting pending actions.
 pub fn process_email(rules: &[Rule], email: &EmailMessage) -> Vec<PendingAction> {
     let mut sorted: Vec<&Rule> = rules.iter().filter(|r| r.enabled).collect();
-    sorted.sort_by(|a, b| b.priority.cmp(&a.priority));
+    sorted.sort_by_key(|r| std::cmp::Reverse(r.priority));
 
     let mut pending = Vec::new();
     for rule in sorted {

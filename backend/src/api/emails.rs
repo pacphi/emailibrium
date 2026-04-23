@@ -968,7 +968,7 @@ async fn list_all_labels(
         })
         .collect();
 
-    result.sort_by(|a, b| b.email_count.cmp(&a.email_count));
+    result.sort_by_key(|a| std::cmp::Reverse(a.email_count));
     Ok(Json(result))
 }
 

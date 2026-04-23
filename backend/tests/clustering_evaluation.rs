@@ -244,8 +244,7 @@ fn test_subscription_detection_pipeline() {
         headers: Vec<(String, String)>,
     }
 
-    let emails = vec![
-        TestEmail {
+    let emails = [TestEmail {
             id: "email-1".into(),
             headers: vec![
                 ("From".into(), "newsletter@example.com".into()),
@@ -279,8 +278,7 @@ fn test_subscription_detection_pipeline() {
         TestEmail {
             id: "email-5".into(),
             headers: vec![("From".into(), "coworker@company.com".into())],
-        },
-    ];
+        }];
 
     // Ground truth: emails with List-Unsubscribe are actual subscriptions.
     let actual_subs: Vec<String> = emails

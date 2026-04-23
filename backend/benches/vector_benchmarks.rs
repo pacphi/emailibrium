@@ -245,7 +245,7 @@ fn bench_ingestion_pipeline(c: &mut Criterion) {
                     let embedding = model.embed(email).await.unwrap();
                     let doc = VectorDocument {
                         id: VectorId::new(),
-                        email_id: format!("bench-email"),
+                        email_id: "bench-email".to_string(),
                         vector: embedding,
                         metadata: HashMap::new(),
                         collection: VectorCollection::EmailText,
@@ -335,7 +335,7 @@ fn bench_clustering_scaling(c: &mut Criterion) {
     for &size in &[100usize, 1_000, 10_000] {
         let data: Vec<Vec<f32>> = (0..size).map(|i| make_vector(i as u64, dims)).collect();
         let k = (size as f64).sqrt().ceil() as usize;
-        let k = k.max(2).min(50);
+        let k = k.clamp(2, 50);
 
         group.sample_size(10);
         group.bench_with_input(BenchmarkId::from_parameter(size), &size, |bencher, _| {

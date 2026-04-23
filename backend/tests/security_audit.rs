@@ -213,7 +213,7 @@ async fn test_embedding_invertibility_risk() {
         .map(|i| {
             // Each text has a unique prefix character repeated i+1 times,
             // ensuring distinct char_sum values across all 100 samples.
-            let padding: String = std::iter::repeat('A').take(i + 1).collect();
+            let padding: String = std::iter::repeat_n('A', i + 1).collect();
             format!("{padding} email content sample {i}")
         })
         .collect();

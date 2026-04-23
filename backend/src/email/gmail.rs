@@ -435,7 +435,7 @@ impl EmailProvider for GmailProvider {
         let token = access_token.to_string();
         let http = self.http.clone();
         let results: Vec<Result<EmailMessage, ProviderError>> =
-            futures::stream::iter(msg_ids.into_iter())
+            futures::stream::iter(msg_ids)
                 .map(|msg_id| {
                     let t = token.clone();
                     let h = http.clone();
@@ -1245,6 +1245,42 @@ fn check_error_response(resp: &serde_json::Value) -> Result<(), ProviderError> {
     Ok(())
 }
 
+/// Build a minimal RFC 2822 message for Gmail's `messages.send` API.
+#[allow(clippy::too_many_arguments)]
+fn build_rfc2822(
+    in_reply_to: Option<&str>,
+    to: &str,
+    cc: Option<&str>,
+    bcc: Option<&str>,
+    subject: &str,
+    _thread_id: Option<&str>,
+    body_text: Option<&str>,
+    body_html: Option<&str>,
+) -> String {
+    let mut headers = format!("To: {to}\r\nSubject: {subject}\r\n");
+    if let Some(cc) = cc {
+        headers.push_str(&format!("Cc: {cc}\r\n"));
+    }
+    if let Some(bcc) = bcc {
+        headers.push_str(&format!("Bcc: {bcc}\r\n"));
+    }
+    if let Some(reply_id) = in_reply_to {
+        headers.push_str(&format!(
+            "In-Reply-To: <{reply_id}>\r\nReferences: <{reply_id}>\r\n"
+        ));
+    }
+    headers.push_str("MIME-Version: 1.0\r\n");
+
+    if let Some(html) = body_html {
+        headers.push_str("Content-Type: text/html; charset=UTF-8\r\n\r\n");
+        headers.push_str(html);
+    } else {
+        headers.push_str("Content-Type: text/plain; charset=UTF-8\r\n\r\n");
+        headers.push_str(body_text.unwrap_or(""));
+    }
+    headers
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -1590,40 +1626,4 @@ mod tests {
         // Sanitizer should preserve <p> tags.
         assert!(email.body_html.unwrap().contains("<p>"));
     }
-}
-
-/// Build a minimal RFC 2822 message for Gmail's `messages.send` API.
-#[allow(clippy::too_many_arguments)]
-fn build_rfc2822(
-    in_reply_to: Option<&str>,
-    to: &str,
-    cc: Option<&str>,
-    bcc: Option<&str>,
-    subject: &str,
-    _thread_id: Option<&str>,
-    body_text: Option<&str>,
-    body_html: Option<&str>,
-) -> String {
-    let mut headers = format!("To: {to}\r\nSubject: {subject}\r\n");
-    if let Some(cc) = cc {
-        headers.push_str(&format!("Cc: {cc}\r\n"));
-    }
-    if let Some(bcc) = bcc {
-        headers.push_str(&format!("Bcc: {bcc}\r\n"));
-    }
-    if let Some(reply_id) = in_reply_to {
-        headers.push_str(&format!(
-            "In-Reply-To: <{reply_id}>\r\nReferences: <{reply_id}>\r\n"
-        ));
-    }
-    headers.push_str("MIME-Version: 1.0\r\n");
-
-    if let Some(html) = body_html {
-        headers.push_str("Content-Type: text/html; charset=UTF-8\r\n\r\n");
-        headers.push_str(html);
-    } else {
-        headers.push_str("Content-Type: text/plain; charset=UTF-8\r\n\r\n");
-        headers.push_str(body_text.unwrap_or(""));
-    }
-    headers
 }

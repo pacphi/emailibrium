@@ -550,7 +550,7 @@ mod tests {
     #[test]
     fn test_mutual_reachability_properties() {
         let mrd = mutual_reachability(0.5, 0.3, 0.2);
-        assert!(mrd >= 0.5 && mrd >= 0.3 && mrd >= 0.2);
+        assert!(mrd >= 0.5);
         assert_eq!(mrd, 0.5);
     }
 }

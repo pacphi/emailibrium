@@ -475,7 +475,7 @@ mod tests {
         };
         let json = serde_json::to_string(&cfg).unwrap();
         let deserialized: ExtractiveConfig = serde_json::from_str(&json).unwrap();
-        assert_eq!(deserialized.enabled, true);
+        assert!(deserialized.enabled);
         assert_eq!(deserialized.max_passages_per_email, 5);
         assert_eq!(deserialized.min_sentence_chars, 30);
     }
