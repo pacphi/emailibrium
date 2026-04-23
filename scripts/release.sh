@@ -33,7 +33,7 @@ done
 (cd backend && cargo check --quiet)
 
 # 4. Regenerate CHANGELOG.md
-git-cliff --output CHANGELOG.md
+git-cliff --tag "v$VERSION" --output CHANGELOG.md
 
 # 5. Stage changes
 git add backend/Cargo.toml \
