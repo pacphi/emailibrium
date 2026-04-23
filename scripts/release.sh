@@ -34,6 +34,11 @@ done
 
 # 4. Regenerate CHANGELOG.md
 git-cliff --tag "v$VERSION" --output CHANGELOG.md
+# Format to satisfy pre-commit prettier check
+if command -v npx >/dev/null 2>&1; then
+  npx --no-install prettier --write --config .prettierrc CHANGELOG.md >/dev/null 2>&1 || \
+    npx prettier --write --config .prettierrc CHANGELOG.md >/dev/null
+fi
 
 # 5. Stage changes
 git add backend/Cargo.toml \
