@@ -34,10 +34,13 @@ done
 
 # 4. Regenerate CHANGELOG.md
 git-cliff --tag "v$VERSION" --output CHANGELOG.md
-# Format to satisfy pre-commit prettier check
+# Format to satisfy pre-commit lint checks
 if command -v npx >/dev/null 2>&1; then
   npx --no-install prettier --write --config .prettierrc CHANGELOG.md >/dev/null 2>&1 || \
     npx prettier --write --config .prettierrc CHANGELOG.md >/dev/null
+fi
+if command -v markdownlint-cli2 >/dev/null 2>&1; then
+  markdownlint-cli2 --fix CHANGELOG.md >/dev/null 2>&1 || true
 fi
 
 # 5. Stage changes
