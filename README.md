@@ -51,7 +51,7 @@ make setup-secrets    # generate dev secrets (first time only)
 make docker-up-dev    # start with hot-reload
 ```
 
-**Prerequisites:** Rust 1.94+, Node.js 24 (LTS)+, pnpm 10.32+ — or just Docker. See [Setup Guide](docs/setup-guide.md) for details.
+**Prerequisites:** Rust 1.95+, Node.js 24 (LTS)+, pnpm 10.32+ — or just Docker. See [Setup Guide](docs/setup-guide.md) for details.
 
 ## Architecture
 

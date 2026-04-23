@@ -1,5 +1,5 @@
 # Stage 1: Build
-FROM rust:1.94-slim AS builder
+FROM rust:1.95-slim AS builder
 WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
 COPY src/ src/
@@ -19,7 +19,7 @@ ENTRYPOINT ["/app/entrypoint.sh"]
 CMD ["/app/emailibrium"]
 
 # Stage 3: Development (for docker-compose.dev.yml)
-FROM rust:1.94-slim AS development
+FROM rust:1.95-slim AS development
 RUN cargo install cargo-watch
 WORKDIR /app
 CMD ["cargo", "watch", "-x", "run"]

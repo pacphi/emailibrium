@@ -23,7 +23,7 @@ This plan implements the ADR-021 addendum (Rust backend LLM). It adds `llama-cpp
 ### 1.1 Prerequisites
 
 - Sprint BL-1 through BL-4 complete (frontend implementation serves as reference)
-- Rust 1.94+, CMake 3.14+, C/C++ compiler (Xcode CLT on macOS)
+- Rust 1.95+, CMake 3.14+, C/C++ compiler (Xcode CLT on macOS)
 
 ---
 
