@@ -1,0 +1,31 @@
+#  cargo-audit / rustsec/audit-check configuration.
+#  Entries here are transitive advisories in dependencies we cannot directly
+#  patch from our Cargo.toml. Each ignore must document the reason and a
+#  review cadence.
+
+[advisories]
+ignore = [
+    # RSA timing side-channel (Marvin Attack). Pulled in only by sqlx-mysql,
+    # which is an unused backend — we build sqlx with the "sqlite" feature
+    # only and never enable mysql at runtime. No upstream patch is available
+    # yet; tracked at https://github.com/RustCrypto/RSA/issues/19.
+    "RUSTSEC-2023-0071",
+
+    # rustls-webpki 0.101.7 issues — transitive via ruvector submodule's
+    # reqwest 0.11 / rustls 0.21 chain. Upstream ruvector needs to move to
+    # reqwest 0.12 / rustls 0.23 (our other path is already on 0.103.13 which
+    # includes all three fixes). These advisories are not reachable from our
+    # own code paths (which use the newer chain).
+    "RUSTSEC-2026-0098", # URI name constraints accepted (webpki)
+    "RUSTSEC-2026-0099", # wildcard name constraints accepted (webpki)
+    "RUSTSEC-2026-0104", # CRL parsing panic (webpki) — fixed in 0.103.13+
+
+    # Unmaintained warnings for transitive deps we don't control. All are
+    # informational (no CVE); revisit when upstream crates migrate.
+    "RUSTSEC-2025-0141", # bincode 1.3.3 / 2.0.1 — via numerous deps
+    "RUSTSEC-2024-0395", # chrono-english — transitive
+    "RUSTSEC-2025-0119", # number_prefix — transitive
+    "RUSTSEC-2024-0436", # paste — transitive, no drop-in replacement yet
+    "RUSTSEC-2025-0134", # rustls-pemfile 1.x — transitive via old reqwest chain
+]
+informational_warnings = ["unmaintained", "unsound", "notice"]

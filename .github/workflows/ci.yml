@@ -78,6 +78,10 @@ jobs:
         with:
           working-directory: backend
           token: ${{ secrets.GITHUB_TOKEN }}
+        env:
+          # audit-check@v2 ships on Node 20 (deprecated). Opt into Node 24
+          # until upstream releases a Node 24-native action.
+          FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
         continue-on-error: true
 
   # Frontend jobs
