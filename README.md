@@ -87,6 +87,7 @@ React TypeScript SPA ──REST + SSE──→ Axum API Gateway
 | Document                                                   | Description                                   |
 | ---------------------------------------------------------- | --------------------------------------------- |
 | [User Guide](docs/user-guide.md)                           | Getting started, features, keyboard shortcuts |
+| [UI Overview](docs/user-interface-overview.md)             | Visual tour — screenshots of every screen     |
 | [Deployment Guide](docs/deployment-guide.md)               | Install, Docker, production setup             |
 | [Configuration Reference](docs/configuration-reference.md) | Every config key, default, and env override   |
 
