@@ -12,7 +12,7 @@
     "typecheck": "turbo typecheck"
   },
   "devDependencies": {
-    "turbo": "^2.9.5",
+    "turbo": "^2.9.6",
     "typescript": "^6.0.3"
   },
   "packageManager": "pnpm@10.32.1",
@@ -21,6 +21,12 @@
       "brace-expansion@<1.1.13": "1.1.13",
       "brace-expansion@>=4.0.0 <5.0.5": "5.0.5",
       "lodash@>=4.0.0 <=4.17.23": "4.18.1"
-    }
+    },
+    "peerDependencyRules": {
+      "allowedVersions": {
+        "eslint-plugin-react>eslint": "10"
+      }
+    },
+    "onlyBuiltDependencies": ["esbuild"]
   }
 }
