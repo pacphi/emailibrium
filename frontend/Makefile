@@ -18,6 +18,7 @@ BOLD   := $(shell tput bold 2>/dev/null || echo '')
 GREEN  := $(shell tput setaf 2 2>/dev/null || echo '')
 YELLOW := $(shell tput setaf 3 2>/dev/null || echo '')
 BLUE   := $(shell tput setaf 4 2>/dev/null || echo '')
+RED    := $(shell tput setaf 1 2>/dev/null || echo '')
 RESET  := $(shell tput sgr0 2>/dev/null || echo '')
 
 .DEFAULT_GOAL := help
@@ -101,8 +102,8 @@ test-e2e: ## Run E2E tests (Playwright)
 # ============================================================================
 
 .PHONY: lint
-lint: ## Lint TypeScript (ESLint)
-	@cd $(WEB) && npx eslint src/ --ext .ts,.tsx 2>/dev/null || echo "$(YELLOW)ESLint not configured — skipping$(RESET)"
+lint: ## Lint TypeScript (ESLint — strict)
+	@cd $(WEB) && npx --no-install eslint src/ --ext .ts,.tsx
 
 .PHONY: format
 format: ## Format code (Prettier)
@@ -151,14 +152,16 @@ outdated: ## Show outdated packages
 # ============================================================================
 
 .PHONY: lint-docs
-lint-docs: ## Lint Markdown + YAML in frontend/
-	@markdownlint-cli2 '**/*.md' '#node_modules' 2>/dev/null || true
-	@yamllint -c ../.yamllint.yaml . 2>/dev/null || true
+lint-docs: ## Lint Markdown + YAML in frontend/ (strict)
+	@command -v markdownlint-cli2 >/dev/null 2>&1 || { echo "$(RED)markdownlint-cli2 not installed. Run: npm i -g markdownlint-cli2$(RESET)"; exit 1; }
+	@command -v yamllint >/dev/null 2>&1 || { echo "$(RED)yamllint not installed. Run: pip install yamllint$(RESET)"; exit 1; }
+	@markdownlint-cli2 '**/*.md' '#node_modules'
+	@yamllint -c ../.yamllint.yaml .
 
 .PHONY: format-docs
 format-docs: ## Format Markdown + YAML in frontend/
-	@npx prettier --write '**/*.md' '**/*.{yaml,yml}' --config ../.prettierrc --ignore-path .gitignore 2>/dev/null || true
+	@npx --no-install prettier --write '**/*.md' '**/*.{yaml,yml}' --config ../.prettierrc --ignore-path .gitignore
 
 .PHONY: format-check-docs
 format-check-docs: ## Check Markdown + YAML formatting
-	@npx prettier --check '**/*.md' '**/*.{yaml,yml}' --config ../.prettierrc --ignore-path .gitignore 2>/dev/null || true
+	@npx --no-install prettier --check '**/*.md' '**/*.{yaml,yml}' --config ../.prettierrc --ignore-path .gitignore

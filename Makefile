@@ -33,6 +33,7 @@ BOLD   := $(shell tput bold 2>/dev/null || echo '')
 GREEN  := $(shell tput setaf 2 2>/dev/null || echo '')
 YELLOW := $(shell tput setaf 3 2>/dev/null || echo '')
 BLUE   := $(shell tput setaf 4 2>/dev/null || echo '')
+RED    := $(shell tput setaf 1 2>/dev/null || echo '')
 RESET  := $(shell tput sgr0 2>/dev/null || echo '')
 
 # ============================================================================
@@ -365,14 +366,16 @@ outdated: ## Show outdated dependencies (no changes)
 # ============================================================================
 
 .PHONY: lint-md
-lint-md: ## Lint Markdown files
+lint-md: ## Lint Markdown files (strict — fails on errors or missing tool)
 	@echo "$(GREEN)Linting Markdown...$(RESET)"
-	@if command -v markdownlint-cli2 >/dev/null 2>&1; then markdownlint-cli2 '**/*.md' '#**/node_modules' '#**/target' '#.claude/worktrees/**' '#ruvector/**' || true; else echo "$(YELLOW)markdownlint-cli2 not installed. Run: npm i -g markdownlint-cli2$(RESET)"; fi
+	@command -v markdownlint-cli2 >/dev/null 2>&1 || { echo "$(RED)markdownlint-cli2 not installed. Run: npm i -g markdownlint-cli2$(RESET)"; exit 1; }
+	@markdownlint-cli2 '**/*.md' '#**/node_modules' '#**/target' '#.claude/worktrees/**' '#ruvector/**'
 
 .PHONY: lint-yaml
-lint-yaml: ## Lint YAML files
+lint-yaml: ## Lint YAML files (strict — fails on errors or missing tool)
 	@echo "$(GREEN)Linting YAML...$(RESET)"
-	@find . \( -name node_modules -o -name target -o -name ruvector -o -name .claude -o -name .claude-flow \) -prune -o \( -name '*.yaml' -o -name '*.yml' \) ! -name 'pnpm-lock.yaml' -print | xargs yamllint -c .yamllint.yaml 2>/dev/null || echo "$(YELLOW)yamllint not installed. Run: pip install yamllint$(RESET)"
+	@command -v yamllint >/dev/null 2>&1 || { echo "$(RED)yamllint not installed. Run: pip install yamllint$(RESET)"; exit 1; }
+	@find . \( -name node_modules -o -name target -o -name ruvector -o -name .claude -o -name .claude-flow \) -prune -o \( -name '*.yaml' -o -name '*.yml' \) ! -name 'pnpm-lock.yaml' -print | xargs -r yamllint -c .yamllint.yaml
 
 .PHONY: lint-docs
 lint-docs: lint-md lint-yaml ## Lint all docs (Markdown + YAML)

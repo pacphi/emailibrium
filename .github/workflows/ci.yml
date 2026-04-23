@@ -46,7 +46,10 @@ jobs:
           workspaces: backend
       - name: Clippy
         working-directory: backend
-        run: cargo clippy --workspace --all-targets -- -D warnings 2>&1 | grep -v "dead_code\|never used\|never constructed" || true
+        run: |
+          cargo clippy --workspace --all-targets -- \
+            -D warnings \
+            -A dead_code -A unused_variables -A unused_imports -A unused_mut
 
   rust-test:
     name: Rust Tests
@@ -145,7 +148,7 @@ jobs:
         run: npx prettier --check 'src/**/*.{ts,tsx}'
       - name: Lint
         working-directory: frontend/apps/web
-        run: npx eslint src/ || true
+        run: npx eslint src/
       - name: Build
         working-directory: frontend
         run: pnpm turbo build
@@ -228,7 +231,6 @@ jobs:
         with:
           globs: "**/*.md"
           config: .markdownlint.yaml
-        continue-on-error: true
 
   validate-yaml:
     name: Validate YAML
@@ -238,7 +240,7 @@ jobs:
       - name: Install yamllint
         run: pip install yamllint
       - name: Lint YAML
-        run: yamllint -c .yamllint.yaml .github/ backend/ docker-compose*.yml || true
+        run: yamllint -c .yamllint.yaml .github/ backend/ docker-compose*.yml
 
   validate-shell:
     name: Validate Shell Scripts
@@ -247,7 +249,15 @@ jobs:
       - uses: actions/checkout@v6
       - name: ShellCheck
         run: |
-          find . -name "*.sh" -not -path "*/node_modules/*" -not -path "*/target/*" | while read -r script; do
-            echo "Checking: $script"
-            shellcheck "$script" || true
-          done
+          set -e
+          mapfile -t scripts < <(find . -name "*.sh" \
+            -not -path "*/node_modules/*" \
+            -not -path "*/target/*" \
+            -not -path "*/ruvector/*" \
+            -not -path "*/.claude/*")
+          if [ "${#scripts[@]}" -eq 0 ]; then
+            echo "No shell scripts found."
+            exit 0
+          fi
+          printf 'Checking: %s\n' "${scripts[@]}"
+          shellcheck "${scripts[@]}"

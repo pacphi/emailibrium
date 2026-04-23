@@ -67,7 +67,7 @@ Before making any changes, `scripts/release.sh` validates:
 
 After bumping versions and regenerating the changelog the script prompts:
 
-```
+```text
 Commit and tag v0.1.0? [y/N]
 Push main and tag to origin? [y/N]
 ```
