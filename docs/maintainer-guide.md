@@ -516,7 +516,59 @@ For architectural decisions that affect multiple modules or introduce new depend
 
 ---
 
-## 9. Useful Commands Reference
+## 9. Cutting a Release
+
+### One-time Setup
+
+```bash
+cargo install cargo-edit   # provides `cargo set-version`
+cargo install git-cliff    # provides changelog generation
+```
+
+### Happy Path
+
+```bash
+make release VERSION=0.1.0
+```
+
+This runs `scripts/release.sh`, which:
+
+1. Validates you are on `main` with a clean, synced working tree and that the tag doesn't exist.
+2. Bumps `backend/Cargo.toml` via `cargo set-version`.
+3. Bumps all five frontend `package.json` files (`apps/web`, `packages/{ui,types,core,api}`).
+4. Refreshes `backend/Cargo.lock` with `cargo check`.
+5. Regenerates `CHANGELOG.md` from conventional commits via `git-cliff`.
+6. Stages all changed files and prompts before committing (`chore(release): vX.Y.Z`) and tagging.
+7. Prompts before pushing `main` and the tag to origin.
+
+### CI Verification
+
+Once the tag is pushed, `.github/workflows/release.yml`:
+
+- Verifies the tag version matches both `backend/Cargo.toml` and `frontend/apps/web/package.json`.
+- Runs the full CI gate (backend format + tests, frontend typecheck + format + lint + vitest).
+- Generates release notes via `git-cliff --latest`.
+- Builds and pushes `ghcr.io/pacphi/emailibrium/{backend,frontend}:{version}` (+ `:major.minor` and `:latest` for stable releases).
+- Creates a GitHub Release with the generated notes.
+- Commits the updated `CHANGELOG.md` back to `main`.
+
+### Rollback
+
+```bash
+# Delete the local tag
+git tag -d v0.1.0
+
+# Delete the remote tag
+git push origin :refs/tags/v0.1.0
+
+# Revert the release commit
+git revert <release-commit-sha>
+git push origin main
+```
+
+---
+
+## 10. Useful Commands Reference
 
 ### Build and Install
 

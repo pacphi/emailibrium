@@ -525,10 +525,10 @@ release-push: ## Push latest tag to trigger release workflow
 	git push origin "$$TAG"
 
 .PHONY: release
-release: release-check release-tag release-push ## Full release (CI + tag + push)
+release: ## Cut a release (bumps versions, updates CHANGELOG, commits, tags, pushes). Usage: make release VERSION=0.1.0
+	@[ -n "$(VERSION)" ] || (echo "usage: make release VERSION=X.Y.Z" >&2; exit 1)
+	@./scripts/release.sh $(VERSION)
 
 .PHONY: changelog
-changelog: ## Preview changelog (usage: make changelog VERSION=0.1.0)
-	@if [ -z "$(VERSION)" ]; then echo "$(YELLOW)Usage: make changelog VERSION=0.1.0$(RESET)"; exit 1; fi
-	@.github/scripts/generate-changelog.sh "$(VERSION)"
-	@cat changelog.md
+changelog: ## Regenerate CHANGELOG.md from git history using git-cliff
+	git-cliff --output CHANGELOG.md

@@ -45,6 +45,23 @@ jobs:
             echo "is_prerelease=false" >> "$GITHUB_OUTPUT"
           fi
 
+      - uses: actions/checkout@v6
+      - name: Verify version consistency
+        run: |
+          TAG_VERSION="${{ steps.parse.outputs.version }}"
+          CARGO_VERSION=$(grep '^version' backend/Cargo.toml | head -1 | awk -F'"' '{print $2}')
+          FRONTEND_VERSION=$(jq -r .version frontend/apps/web/package.json)
+
+          if [[ "$CARGO_VERSION" != "$TAG_VERSION" ]]; then
+            echo "::error::backend/Cargo.toml ($CARGO_VERSION) != tag ($TAG_VERSION)"
+            exit 1
+          fi
+          if [[ "$FRONTEND_VERSION" != "$TAG_VERSION" ]]; then
+            echo "::error::frontend/apps/web/package.json ($FRONTEND_VERSION) != tag ($TAG_VERSION)"
+            exit 1
+          fi
+          echo "Version consistency verified: $TAG_VERSION"
+
   # ── Job 2: Full CI gate ─────────────────────────────────────────────
   ci-gate:
     name: CI Gate
@@ -97,22 +114,19 @@ jobs:
     name: Generate Changelog
     needs: [validate-tag]
     runs-on: ubuntu-latest
-    outputs:
-      changelog_file: changelog-${{ needs.validate-tag.outputs.version }}.md
     steps:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-      - name: Generate changelog
-        run: |
-          chmod +x .github/scripts/generate-changelog.sh
-          .github/scripts/generate-changelog.sh \
-            "${{ needs.validate-tag.outputs.version }}" \
-            "changelog-${{ needs.validate-tag.outputs.version }}.md"
+      - name: Generate release notes
+        uses: orhun/git-cliff-action@v4
+        with:
+          config: cliff.toml
+          args: --latest --output RELEASE_NOTES.md
       - uses: actions/upload-artifact@v7
         with:
           name: changelog
-          path: changelog-${{ needs.validate-tag.outputs.version }}.md
+          path: RELEASE_NOTES.md
 
   # ── Job 4: Build Docker images ──────────────────────────────────────
   docker-images:
@@ -172,21 +186,19 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         with:
-          body_path: changelog-${{ needs.validate-tag.outputs.version }}.md
+          body_path: RELEASE_NOTES.md
           prerelease: ${{ needs.validate-tag.outputs.is_prerelease == 'true' }}
           generate_release_notes: false
       - name: Update CHANGELOG.md
         run: |
-          VERSION="${{ needs.validate-tag.outputs.version }}"
-          CHANGELOG_FILE="changelog-${VERSION}.md"
           MARKER="<!-- This file is auto-maintained by the release workflow on each tag. -->"
 
           if grep -q "$MARKER" CHANGELOG.md; then
             sed -i "/$MARKER/a\\" CHANGELOG.md
-            sed -i "/$MARKER/r $CHANGELOG_FILE" CHANGELOG.md
+            sed -i "/$MARKER/r RELEASE_NOTES.md" CHANGELOG.md
           else
             echo "" >> CHANGELOG.md
-            cat "$CHANGELOG_FILE" >> CHANGELOG.md
+            cat RELEASE_NOTES.md >> CHANGELOG.md
           fi
       - name: Push CHANGELOG.md update
         run: |

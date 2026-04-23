@@ -13,64 +13,66 @@ Emailibrium uses a tag-based release workflow. Pushing a semver tag (e.g., `v0.1
 
 ## Quick Release
 
+**One-time setup:**
+
 ```bash
-# 1. Ensure you're on main with clean working tree
-git checkout main
-git pull origin main
-git status  # should be clean
+cargo install cargo-edit  # provides `cargo set-version`
+cargo install git-cliff   # provides changelog generation
+```
 
-# 2. Run pre-release checks
-make release-check
+**Cut a release (single command):**
 
-# 3. Tag and push (triggers the release workflow)
+```bash
 make release VERSION=0.1.0
 
 # Or for pre-releases:
 make release VERSION=0.2.0-alpha.1
 ```
 
+`make release` handles all version bumping, changelog regeneration, git commit, tag, and push.
+
 ## Step-by-Step
 
-### 1. Pre-release Validation
+### 1. One-time Setup
+
+Install the required tools if not already present:
 
 ```bash
-make release-check
+cargo install cargo-edit
+cargo install git-cliff
 ```
 
-This runs the full `make ci` pipeline: format check, lint, typecheck, and all tests.
+### 2. Version Bumping (automated)
 
-### 2. Version Bumping
-
-Update version numbers in:
+`make release VERSION=x.y.z` automatically updates:
 
 | File                               | Field                |
 | ---------------------------------- | -------------------- |
-| `backend/Cargo.toml`               | `version = "0.1.0"`  |
-| `frontend/apps/web/package.json`   | `"version": "0.1.0"` |
-| `frontend/packages/*/package.json` | `"version": "0.1.0"` |
+| `backend/Cargo.toml`               | `version = "x.y.z"`  |
+| `frontend/apps/web/package.json`   | `"version": "x.y.z"` |
+| `frontend/packages/*/package.json` | `"version": "x.y.z"` |
 
-Then commit:
+It also refreshes `backend/Cargo.lock` and regenerates `CHANGELOG.md` via git-cliff.
 
-```bash
-git add -A
-git commit -m "chore: bump version to 0.1.0"
+### 3. Script Pre-flight Checks
+
+Before making any changes, `scripts/release.sh` validates:
+
+- You are on the `main` branch
+- Working tree is clean
+- Local `main` is in sync with `origin/main`
+- The target tag does not already exist
+
+### 4. Commit, Tag, and Push
+
+After bumping versions and regenerating the changelog the script prompts:
+
+```
+Commit and tag v0.1.0? [y/N]
+Push main and tag to origin? [y/N]
 ```
 
-### 3. Tagging
-
-```bash
-make release-tag VERSION=0.1.0
-```
-
-This creates an annotated git tag `v0.1.0`.
-
-### 4. Push to Trigger Release
-
-```bash
-make release-push
-```
-
-This pushes the tag to origin, triggering `.github/workflows/release.yml`.
+Answering `y` to both triggers `.github/workflows/release.yml`.
 
 ### 5. Monitor the Release
 
@@ -78,10 +80,11 @@ Watch the Actions tab: `https://github.com/pacphi/emailibrium/actions/workflows/
 
 The workflow will:
 
+- Verify the tag version matches `backend/Cargo.toml` and `frontend/apps/web/package.json`
 - Run CI gate (backend format + test, frontend typecheck + format + lint + vitest)
-- Generate changelog from commit messages since last tag
+- Generate release notes via git-cliff (`--latest`)
 - Build `ghcr.io/pacphi/emailibrium/backend:<version>` and `ghcr.io/pacphi/emailibrium/frontend:<version>`
-- Create GitHub Release with changelog body
+- Create GitHub Release with the generated notes
 - Push updated CHANGELOG.md to main
 
 ## Versioning
@@ -143,10 +146,13 @@ make dev
 
 ## Useful Commands
 
-| Command                          | Description                         |
-| -------------------------------- | ----------------------------------- |
-| `make release-check`             | Run full CI pipeline                |
-| `make release-tag VERSION=x.y.z` | Create annotated tag                |
-| `make release-push`              | Push latest tag to origin           |
-| `make release VERSION=x.y.z`     | All three in sequence               |
-| `make changelog VERSION=x.y.z`   | Preview changelog without releasing |
+| Command                          | Description                                                   |
+| -------------------------------- | ------------------------------------------------------------- |
+| `make release-check`             | Run full CI pipeline                                          |
+| `make release-tag VERSION=x.y.z` | Create annotated tag                                          |
+| `make release-push`              | Push latest tag to origin                                     |
+| `make release VERSION=x.y.z`     | Full one-command release (bump, changelog, commit, tag, push) |
+| `make changelog`                 | Regenerate CHANGELOG.md via git-cliff                         |
+| `make release-check`             | Run full CI pipeline only                                     |
+| `make release-tag VERSION=x.y.z` | Create annotated tag only                                     |
+| `make release-push`              | Push latest tag to origin only                                |

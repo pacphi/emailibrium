@@ -1,0 +1,28 @@
+[changelog]
+header = "# Changelog\n\nAll notable changes to Emailibrium are documented here.\nThis project follows [Semantic Versioning](https://semver.org/).\n\n<!-- This file is auto-maintained by the release workflow on each tag. -->\n"
+body = "## [{{ version }}] - {{ timestamp | date(format='%Y-%m-%d') }}\n{% for group, commits in commits | group_by(attribute='group') %}\n### {{ group }}\n{% for commit in commits %}\n- {{ commit.message | upper_first }}{% if commit.body %}\n\n  {{ commit.body | indent(n=2) }}{% endif %}\n{% endfor %}\n{% endfor %}\n"
+trim = true
+footer = ""
+
+[git]
+conventional_commits = true
+filter_unconventional = true
+split_commits = false
+commit_parsers = [
+  { message = "^feat",     group = "Features" },
+  { message = "^fix",      group = "Bug Fixes" },
+  { message = "^perf",     group = "Performance" },
+  { message = "^deps",     group = "Dependencies" },
+  { message = "^docs",     group = "Documentation" },
+  { message = "^refactor", group = "Refactors" },
+  { message = "^security", group = "Security" },
+  { message = "^revert",   group = "Reverts" },
+  { message = "^chore",    skip = true },
+  { message = "^ci",       skip = true },
+  { message = "^style",    skip = true },
+  { message = "^test",     skip = true },
+  { message = "^build",    skip = true },
+]
+protect_breaking_commits = false
+filter_commits = true
+tag_pattern = "v[0-9]*"

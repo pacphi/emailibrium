@@ -1,4 +1,5 @@
 import { type ReactNode, useEffect, useState } from 'react';
+import { APP_VERSION } from '../utils/version';
 import {
   LayoutDashboard,
   Mail,
@@ -87,11 +88,19 @@ function Sidebar() {
           </button>
         ) : (
           <>
-            <img
-              src="/emailibrium-text.svg"
-              alt="Emailibrium"
-              className="h-5 w-auto dark:invert dark:hue-rotate-180"
-            />
+            <div className="flex items-center gap-1.5">
+              <img
+                src="/emailibrium-text.svg"
+                alt="Emailibrium"
+                className="h-5 w-auto dark:invert dark:hue-rotate-180"
+              />
+              <span
+                className="px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-gray-100 dark:bg-gray-700 text-gray-400 dark:text-gray-500 tracking-wide"
+                title={`Version ${APP_VERSION}`}
+              >
+                v{APP_VERSION}
+              </span>
+            </div>
             <button
               type="button"
               onClick={() => setCollapsed(true)}
