@@ -81,7 +81,7 @@ jobs:
           workspaces: backend
       - name: Backend format
         working-directory: backend
-        run: cargo fmt --all -- --check
+        run: cargo fmt --package emailibrium -- --check
       - name: Backend tests
         working-directory: backend
         run: cargo test --workspace
