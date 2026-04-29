@@ -28,7 +28,7 @@
     "framer-motion": "^12.38.0",
     "idb-keyval": "^6.2.2",
     "ky": "^2.0.2",
-    "lucide-react": "^1.9.0",
+    "lucide-react": "^1.12.0",
     "nanoid": "^5.1.9",
     "node-llama-cpp": "^3.18.1",
     "react": "^19.2.5",
