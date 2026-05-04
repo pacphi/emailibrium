@@ -2235,6 +2235,8 @@ User opens Chat from Command Center
 
 ### 10.3 Inbox Cleaner Wizard
 
+> **Superseded in part by ADR-030** (2026-05-04). The single-shot "Execute Cleanup" path shown here is replaced by a Plan/Apply split with a Step 4.5 "Review & Confirm" screen. See `docs/ADRs/ADR-030-cleanup-dry-run.md`, the DDD-008 addendum, and `docs/plan/cleanup-dry-run-implementation.md`.
+
 ```text
 ┌──────────────────────────────────────────────────────────────────────┐
 │ ◉ Emailibrium                    ☰ Menu    🔔 3    ⚙ Settings      │
