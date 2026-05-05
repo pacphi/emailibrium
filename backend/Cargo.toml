@@ -19,7 +19,7 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("proptest"
 [dependencies]
 # Web framework
 axum = { version = "0.8", features = ["json", "query", "macros"] }
-tokio = { version = "1.51", features = ["full"] }
+tokio = { version = "1.52", features = ["full"] }
 tower = "0.5"
 tower-http = { version = "0.6", features = ["cors", "set-header", "trace"] }
 
