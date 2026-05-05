@@ -105,7 +105,7 @@ ruvector-collections = { path = "../ruvector/crates/ruvector-collections" }
 ruvector-gnn = { path = "../ruvector/crates/ruvector-gnn", default-features = false }
 
 # Built-in local LLM (ADR-021 addendum, opt-in via --features builtin-llm)
-llama-cpp-4 = { version = "0.2.43", optional = true }
+llama-cpp-4 = { version = "0.2.52", optional = true }
 hf-hub = { version = "0.5", optional = true }
 encoding_rs = { version = "0.8", optional = true }
 shellexpand = "3"
