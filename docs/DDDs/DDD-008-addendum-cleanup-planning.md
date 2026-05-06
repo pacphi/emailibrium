@@ -1,13 +1,25 @@
 # DDD-008 Addendum: Cleanup Planning Subdomain
 
-| Field       | Value                                            |
-| ----------- | ------------------------------------------------ |
-| Status      | Accepted                                         |
-| Date        | 2026-05-04                                       |
-| Type        | Subdomain of Email Operations (Core)             |
-| Context     | Cleanup Planning                                 |
-| Realises    | ADR-030 (Cleanup Dry-Run / Plan-Apply)           |
-| Informed by | `docs/research/cleanup-dry-run-due-diligence.md` |
+| Field       | Value                                                                                               |
+| ----------- | --------------------------------------------------------------------------------------------------- |
+| Status      | **Implemented (2026-05-05).** See `docs/plan/cleanup-dry-run-implementation.md` for delivery state. |
+| Date        | 2026-05-04 (accepted) · 2026-05-05 (delivered)                                                      |
+| Type        | Subdomain of Email Operations (Core)                                                                |
+| Context     | Cleanup Planning                                                                                    |
+| Realises    | ADR-030 (Cleanup Dry-Run / Plan-Apply)                                                              |
+| Informed by | `docs/research/cleanup-dry-run-due-diligence.md`                                                    |
+
+> **Implementation amendments (2026-05-05).** The lived domain model added the following on top of this addendum:
+>
+> - **`CleanupPlan.account_providers: Map<AccountId, Provider>`** — populated by `PlanBuilder` from the injected `provider_for` callback; included in `canonical_plan_hash` so re-auth / provider-type changes invalidate the plan. Persisted inline in the `totals_json` envelope (no new column).
+> - **`AccountStateEtag::Pop3Sentinel { last_uidl: String }`** — POP3 has no incremental delta; any UID-LIST diff is Hard drift. `HardDriftReason::Pop3Invalidated` is the corresponding signal.
+> - **`JobCounts.skipped_by_reason: BTreeMap<SkipReason, u64>`** — preserves _why_ rows were skipped (drift / unack / cancel / dedup) for Phase D telemetry + GDPR audit.
+> - **`SkipReason::Unacknowledged`** — when an unacked High-row is filtered out at apply start, it transitions to `Skipped { Unacknowledged }` rather than 4xx-failing the apply call (matches "Apply Low only" semantics).
+> - **SSE `Snapshot` event** is the first event on every `/apply/:jobId/stream` subscription, carrying `{ jobId, planId, counts, accountStates }`. Phase B+ clients reconcile from this on reconnect; there is no replay log.
+> - **SSE `OpApplied` / `OpFailed` / `OpSkipped`** carry `action_type: String` (camelCase serde tag of the row's `PlanAction`) for client-side per-action aggregation.
+> - **`EmailProviderFactory` trait** abstracts per-account provider resolution; the concrete `OAuthEmailProviderFactory` reuses the existing `api/provider_helpers.rs` config builders. Phase E will widen IMAP/POP3 support (today returns `provider_unsupported` for those).
+> - **`refresh` is rejected with 409 `apply_in_progress`** when a Running apply job exists for the plan. The §Invariants exception "`RefreshAccount` may delete and rebuild the rows for a single account in `hard_drift` state" still holds, but only when no apply is in flight.
+> - **`UnsubscribeService::execute` does not exist** in the codebase; ApplyOrchestrator dispatches via `UnsubscribeService::batch_unsubscribe(&[target])` with a single-element batch. Functionally equivalent.
 
 ## Overview
 

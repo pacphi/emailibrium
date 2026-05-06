@@ -1,11 +1,24 @@
 # ADR-030: Cleanup Dry-Run and Plan/Apply Separation
 
-- **Status**: Accepted
-- **Date**: 2026-05-04
+- **Status**: **Implemented (Phases A–D shipped 2026-05-05).** See `docs/plan/cleanup-dry-run-implementation.md` for the lived state.
+- **Date**: 2026-05-04 (accepted) · 2026-05-05 (delivered)
 - **Extends**: DDD-008 (Email Operations), DDD-007 (Rules), ADR-018 (Provider Folder/Label Operations)
 - **Supersedes (partially)**: Inbox Cleaner Wizard execute path described in `docs/plan/inception.md` §10.3 (single-shot Execute Cleanup button)
 - **Informed by**: `docs/research/cleanup-dry-run-due-diligence.md` (competitive analysis, provider technical limits, resolution of all three originally-deferred questions)
 - **Implementation plan**: `docs/plan/cleanup-dry-run-implementation.md`
+
+> **Implementation amendments (2026-05-05).** Parts of this decision document were superseded by lived contracts during delivery. The amendments below are normative; the rest of this ADR remains the design rationale.
+>
+> 1. **Storage path.** All paths to `backend/src/storage/` in §10/§11 should be read as `backend/src/db/`. There is no `storage/` directory in the repo.
+> 2. **Wire format.** Every cleanup DTO carries `#[serde(rename_all = "camelCase")]`. The frontend consumes camelCase directly; there is no transformer in `frontend/packages/api/`. `PlanStatus`/`SkipReason`/`PredicateStatus` JSON values are camelCase (the snake-cased `as_str()` form on the Rust enums is for DB-storage round-trip only).
+> 3. **Encryption interceptor.** §10's claim that `*_json` columns use the "existing encryption interceptor (ADR-016/017)" is aspirational — no such interceptor exists in `backend/src/db/` today. Migration 024 / 025 store JSON as plaintext `TEXT`, matching the existing convention in `topic_clusters` etc. Switching to encrypted blobs later is purely additive and tracked as a deferred follow-up.
+> 4. **SSE event taxonomy.** §C.2 of the implementation plan lists 9 forward events; an additional `snapshot` variant was added during Phase C as the first event on every subscription, carrying `{ jobId, planId, counts, accountStates }`. Reconnecting clients reconcile from the snapshot and resume forward — there is no replay log.
+> 5. **`AccountStateEtag` gained a `Pop3Sentinel { last_uidl }` variant.** §8 originally had `etag_kind = none` for POP3; a new variant lets the drift detector flag any UID-LIST diff as Hard drift.
+> 6. **`JobCounts.skipped_by_reason: BTreeMap<SkipReason, u64>`** is part of the wire so Phase D telemetry / GDPR audit can see drift vs. unack vs. cancel vs. dedup.
+> 7. **`CleanupPlan.account_providers: BTreeMap<String, Provider>`** is part of the envelope and the canonical plan hash. Frontend reads it directly; the inference hack from `accountStateEtags[id].kind === 'none'` was retired.
+> 8. **SSE op events carry `actionType: String`** (camelCase serde tag of the row's `PlanAction`) so the frontend can compute per-action breakdowns without a side-channel lookup.
+> 9. **Refresh-while-applying is rejected.** `POST /plan/:id/refresh?accountId=A` returns `409 { error: "apply_in_progress" }` when a `Running` apply job exists for the plan, to prevent deletion of rows whose `applied_at` was just written.
+> 10. **`UnsubscribeService::execute` does not exist.** §11 alludes to it; the actual orchestrator dispatch path uses `UnsubscribeService::batch_unsubscribe(&[target])` with single-element batches.
 
 ## Context
 

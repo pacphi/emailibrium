@@ -2,13 +2,56 @@
 
 | Field            | Value                                                                |
 | ---------------- | -------------------------------------------------------------------- |
-| Status           | Approved for implementation                                          |
-| Date             | 2026-05-04                                                           |
+| Status           | **Phases A–D shipped (2026-05-05). 5 of 8 open follow-ups closed.**  |
+| Date             | 2026-05-04 (drafted) · 2026-05-05 (delivered)                        |
 | Realises         | ADR-030, DDD-008 Addendum, DDD-007 Addendum                          |
 | Informed by      | `docs/research/cleanup-dry-run-due-diligence.md`                     |
 | Estimated effort | 6–8 weeks (Phases A–D); Phase E (Undo) and F (cross-device) deferred |
 
 This plan operationalises ADR-030 into concrete tasks with file-level targets, acceptance criteria, and ordering. It does not restate the design — read ADR-030 first.
+
+## Implementation status (2026-05-05)
+
+All four active phases shipped end-to-end across five commits on `main`:
+
+| Commit    | Phase                                  | Test gate             |
+| --------- | -------------------------------------- | --------------------- |
+| `fc56b3a` | Phase A — backend domain + Plan API    | 31 cleanup + 56 rules |
+| `8477c34` | Phase B — frontend review screen       | 5 Storybook scenarios |
+| `98a42f3` | Phase C — apply + SSE + drift handling | 53 cleanup tests      |
+| `7a3c474` | Phase D — risk + telemetry + history   | 67 cleanup tests      |
+| `a1b44a1` | Close 5 of 8 open follow-ups           | 72 cleanup tests      |
+
+`cargo test cleanup::` → **72 passed, 0 failed, 1 ignored** (the 50k-row PlanBuilder perf test, P95 = 71 ms vs 800 ms budget). `cargo clippy -p emailibrium --all-targets` (with the project's `-A dead_code …` allowance set) → clean. Web app `pnpm tsc --noEmit` and `pnpm lint` → clean. Every wizard-driven cleanup now flows Steps 1–4 → `POST /cleanup/plan` → Step 4.5 review → `POST /cleanup/apply` → SSE-driven `CleanupProgress`, with the original `setInterval` simulator deleted.
+
+### Spec deviations adopted (conservative interpretations, surfaced here for the next reader)
+
+1. **`backend/src/storage/` does not exist in the repo.** All storage actually lives under `backend/src/db/`. Treat every reference to `backend/src/storage/` in this plan and ADR-030 as a typo for `backend/src/db/`.
+2. **The wire is camelCase end-to-end via `#[serde(rename_all = "camelCase")]`** on every cleanup DTO. The plan's mention of a "snake_case → camelCase transformer" in §B.2 is incorrect — no such transformer exists in `frontend/packages/api/src/`. Frontend types in `frontend/packages/types/src/cleanup.ts` consume the camelCase wire directly. `PlanStatus`, `SkipReason`, `PredicateStatus` JSON values are camelCase (`"partiallyApplied"`, `"stateDrift"`, `"userCancelled"`); the snake-cased `as_str()` form on the Rust enums is for DB-storage only.
+3. **`engine.rs::execute` does not exist; the live rule engine is `backend/src/rules/rule_processor.rs`.** Phase A added `RuleExecutionMode::EvaluateOnly` types to `rules/types.rs` and a top-level `evaluate_rules()` to `rule_processor.rs`. The dead `engine.rs::evaluate(&mut self, &EmailContext)` was left untouched.
+4. **`*_json` columns in migration 024 / 025 are plaintext `TEXT`.** ADR-030 §10 calls for an "encryption interceptor" pattern from ADR-016/017, but no such interceptor exists in `backend/src/db/` today (existing tables like `topic_clusters` also store JSON as plaintext). Switching to encrypted blobs later is additive (column-type swap + serializer wrapper). Tracked as deferred follow-up §3 below.
+5. **`UnsubscribeService::execute` does not exist.** The closest method is `batch_unsubscribe(&[target])`. The `account_worker` dispatch path uses a single-element batch for unsubscribe rows.
+6. **`InboxCleaner.tsx` simulator anchor.** Plan §C.3 says "lines 168–182"; today the simulator was at lines 146–198 (as of Phase B) and is now deleted entirely (Phase C). Only a one-line historical comment at `InboxCleaner.tsx:141` remains.
+7. **`accountProviders` envelope field, `Pop3Sentinel` etag, `actionType` SSE field, `Snapshot` SSE variant, `JobCounts.skipped_by_reason`, and the 409 refresh-while-applying race-guard** are _additions_ on top of the original spec, surfaced by the cross-phase coherence reviews. They are now part of the lived contract.
+
+### Closed follow-ups (commit `a1b44a1`)
+
+- [x] OAuth-token-aware `EmailProvider` dispatch via the new `EmailProviderFactory` trait + `OAuthEmailProviderFactory` (Gmail/Outlook fully wired, IMAP/POP3 surface clear `provider_unsupported` errors).
+- [x] Worker calls `PredicateExpander::expand_page` and emits `PredicateExpanded`; predicate status transitions Pending → Expanding → Expanded; expanded children get `seq > max(plan.seq)`.
+- [x] `AccountStateEtag::Pop3Sentinel { last_uidl }` variant + `HardDriftReason::Pop3Invalidated` + drift detector mapping.
+- [x] `CleanupPlan.account_providers: BTreeMap<String, Provider>` populated by `PlanBuilder` and included in `canonical_plan_hash`. Frontend reads it; the `accountStateEtags[id].kind === 'none'` POP3 inference hack is gone.
+- [x] SSE op events (`OpApplied`, `OpFailed`, `OpSkipped`) carry `actionType: String`; `useCleanupApply` reducer aggregates `perAction: Record<string, {applied; failed; skipped}>` lazily.
+
+### Deferred follow-ups (warrant separate ADRs)
+
+1. **Per-row precondition re-read** (ADR-030 §8 rule 4) — needs schema work to track `emails.folder` + per-action invariant rules; touches the sync subsystem more than the cleanup domain. Phase E candidate.
+2. **Encryption-at-rest interceptor for `*_json` columns** — workspace-wide infra (every encrypted table needs the wrapper). Belongs in a new `backend/src/db/encryption.rs` middleware module spanning `topic_clusters`, `mcp_tool_audit`, the new `cleanup_plan_*` tables, etc.
+3. **Shared current-user store on the frontend** — every feature today reads `userId` from `localStorage`. `getCurrentUserId()` in cleanup-history is the single migration point when an auth context lands. Frontend infrastructure task.
+
+### Smaller open items (in-code TODOs)
+
+- IMAP/POP3 `EmailProviderFactory` support — providers' host/credentials aren't threaded into the orchestrator; currently surfaces as `OpFailed { error_code: "provider_unsupported" }`.
+- `cleanup_plan_reviewed` time-on-review is a best-effort heuristic (component unmount after 2s). Acceptable; documented as such.
 
 ## Phase summary
 
@@ -26,6 +69,8 @@ Phases A and B can ship independently. C depends on A. D depends on B and C.
 ---
 
 ## Phase A — Backend domain + Plan API (~2 weeks)
+
+> **Status: shipped (commit `fc56b3a`).** All A.1–A.9 deliverables landed. Migration `024_cleanup_planning.sql` applies cleanly. PlanBuilder P95 = 71 ms on 50k fixture (target ≤ 800 ms). Mock-provider mutation-free invariant holds via type signature.
 
 ### A.1 Crate / module layout
 
@@ -221,6 +266,8 @@ Acceptance: existing rule tests pass; new test asserts `EvaluateOnly` returns th
 
 ## Phase B — Frontend Review screen (~1 week)
 
+> **Status: shipped (commit `8477c34`).** All B.1–B.5 deliverables landed except the explicit Lighthouse a11y measurement and the Playwright e2e (semantic markup, `aria-disabled`, `aria-label`, role attributes are in place; a11y measurement deferred until a CI dev-server harness exists). 5 Storybook scenarios ship: empty / low-only / mixed-risk / large-with-warnings / conflict-warnings.
+
 ### B.1 Component layout
 
 ```text
@@ -306,6 +353,8 @@ Add `CleanupPlanEnvelope` / `PlannedOperation` / `RiskLevel` to `frontend/packag
 
 ## Phase C — Apply + SSE + drift handling (~2 weeks)
 
+> **Status: shipped (commit `98a42f3`).** All C.1–C.6 deliverables landed. `setInterval` simulator deleted from `InboxCleaner.tsx`; the ApplyEvent union grew an extra `Snapshot` variant emitted as the first event on every SSE subscription (architecture-review addition); `JobCounts` gained `skipped_by_reason: BTreeMap<SkipReason, u64>` (additive); `POST /plan/:id/refresh` returns `409 { error: "apply_in_progress" }` when a Running job exists for the plan (race-guard).
+
 ### C.1 ApplyOrchestrator — `backend/src/cleanup/orchestrator/`
 
 ```text
@@ -387,6 +436,8 @@ Read each account's current etag from `AccountStateProvider`, compare with `clea
 ---
 
 ## Phase D — Risk + telemetry + history (~1 week)
+
+> **Status: shipped (commit `7a3c474`, plus follow-ups in `a1b44a1`).** All D.1–D.4 deliverables landed. New `cleanup_audit_log` table (migration `025`) with append-only writes from `account_worker`; `cleanup_plan_*` telemetry events emit via `tracing::info!` to target `cleanup.telemetry`; `/cleanup/history` + `/cleanup/history/:planId` routes ship with main-nav entry; `CleanupReview.readOnly` mode for past plans; POP3 typed-confirmation gate ("type DELETE"); action-specific High-risk acknowledgement copy. The audit table schema is enforced free of plan content (no `email_id`, body, folder paths, sender, rule body, or sample ids) by the `audit_excludes_email_content` test using `pragma_table_info` introspection.
 
 ### D.1 Frontend polish
 
