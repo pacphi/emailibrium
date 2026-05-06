@@ -14,6 +14,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 mod api;
 mod cache;
+mod cleanup;
 pub mod config;
 pub mod content;
 mod db;
@@ -52,6 +53,8 @@ pub struct AppState {
     pub tool_calling_provider: Option<Arc<dyn vectors::tool_calling::ToolCallingProvider>>,
     /// Pending tool-call confirmations awaiting user approval (ADR-028).
     pub pending_confirmations: Arc<Mutex<HashMap<String, api::ai::PendingConfirmation>>>,
+    /// Cleanup planning repository (ADR-030 / DDD-008 addendum).
+    pub cleanup_plan_repo: Arc<cleanup::repository::SqliteCleanupPlanRepo>,
 }
 
 #[tokio::main]
@@ -331,6 +334,9 @@ async fn main() -> anyhow::Result<()> {
         &vector_service.config,
     );
 
+    let cleanup_plan_repo = Arc::new(cleanup::repository::SqliteCleanupPlanRepo::new(
+        db.pool.clone(),
+    ));
     let state = AppState {
         vector_service,
         db,
@@ -345,6 +351,7 @@ async fn main() -> anyhow::Result<()> {
         pipeline_locks: sync_lock::AccountLockMap::default(),
         tool_calling_provider,
         pending_confirmations: Arc::new(Mutex::new(HashMap::new())),
+        cleanup_plan_repo,
     };
 
     // Start the background email poll scheduler.

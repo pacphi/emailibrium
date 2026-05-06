@@ -38,5 +38,6 @@ pub fn routes() -> Router<AppState> {
         .nest("/emails", emails::routes())
         .nest("/rules", rules::routes())
         .nest("/unsubscribe", unsubscribe::routes())
+        .nest("/cleanup", crate::cleanup::routes())
         .nest("/wipe", wipe::routes())
 }

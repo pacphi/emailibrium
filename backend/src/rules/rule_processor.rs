@@ -1,6 +1,9 @@
 //! Rule processor -- evaluates rules against emails and generates pending actions (R-03).
 
-use super::types::{EmailField, MatchOperator, PendingAction, Rule, RuleAction, RuleCondition};
+use super::types::{
+    EmailField, EvaluationScope, MatchOperator, PendingAction, Rule, RuleAction, RuleCondition,
+    RuleEvaluation, RuleExecutionMode,
+};
 use crate::email::types::EmailMessage;
 use regex::Regex;
 
@@ -32,6 +35,110 @@ pub fn apply_actions(
             action: action.clone(),
         })
         .collect()
+}
+
+/// Non-mutating, scope-based evaluation used by the cleanup PlanBuilder
+/// (DDD-007 addendum, ADR-030 Phase A).
+///
+/// Runs the same matcher as `process_email` but, in `EvaluateOnly` mode,
+/// returns one `RuleEvaluation` per matched rule **without emitting any
+/// commands**. In `Apply` mode the function still returns the same
+/// `RuleEvaluation` shape (used by integration tests that need to assert
+/// "EvaluateOnly is equivalent to Apply minus side-effects"); production
+/// `Apply` callers continue to use `process_email`.
+///
+/// Determinism contract for `matched_email_ids` (required for `plan_hash`):
+/// emails are first sorted by `(date_asc, id_asc)`, then sampled as
+/// `head 5 + tail 5 + 10 stratified by date index`, deduplicated while
+/// preserving order, and finally capped at `min(scope.sample_size, 20)`.
+pub fn evaluate_rules(
+    mode: RuleExecutionMode,
+    rules: &[Rule],
+    emails: &[EmailMessage],
+    scope: &EvaluationScope,
+) -> Vec<RuleEvaluation> {
+    // Filter to enabled rules; if scope.rule_ids is non-empty, intersect.
+    let selected: Vec<&Rule> = rules
+        .iter()
+        .filter(|r| r.enabled)
+        .filter(|r| scope.rule_ids.is_empty() || scope.rule_ids.iter().any(|id| id == &r.id))
+        .collect();
+
+    let cap = scope.sample_size.min(20) as usize;
+
+    // Pre-sort emails deterministically. We do not mutate the caller's slice.
+    let mut sorted: Vec<&EmailMessage> = emails.iter().collect();
+    sorted.sort_by(|a, b| a.date.cmp(&b.date).then_with(|| a.id.cmp(&b.id)));
+
+    let mut evaluations = Vec::with_capacity(selected.len());
+
+    for rule in selected {
+        let matched: Vec<&EmailMessage> = sorted
+            .iter()
+            .copied()
+            .filter(|e| evaluate_rule(rule, e))
+            .collect();
+
+        let projected_count = matched.len() as u64;
+        let sampled = sample_deterministic(&matched, cap);
+        let basis = RuleEvaluation::basis_for(&rule.conditions);
+
+        // Side-effect contract: `Apply` is identical in this function (it does
+        // NOT emit commands). EvaluateOnly is the same path. Emission of
+        // `PendingAction`s in `Apply` mode is the responsibility of the
+        // existing `process_email` pipeline, which Plan never invokes.
+        let _ = mode; // both modes produce the same evaluation; mode kept for API symmetry
+
+        evaluations.push(RuleEvaluation {
+            rule_id: rule.id.clone(),
+            matched_email_ids: sampled,
+            projected_count,
+            intended_actions: rule.actions.clone(),
+            match_basis: basis,
+        });
+    }
+
+    evaluations
+}
+
+/// Deterministic sampling: head 5 + tail 5 + 10 stratified by index across the
+/// middle, deduplicated, capped at `cap` (≤ 20).
+fn sample_deterministic(matched: &[&EmailMessage], cap: usize) -> Vec<String> {
+    if matched.is_empty() || cap == 0 {
+        return Vec::new();
+    }
+    let n = matched.len();
+    if n <= cap {
+        return matched.iter().map(|e| e.id.clone()).collect();
+    }
+
+    let mut picked: Vec<usize> = Vec::with_capacity(cap);
+    let head = 5.min(cap);
+    let tail = 5.min(cap.saturating_sub(head));
+    let middle = cap.saturating_sub(head + tail);
+
+    for i in 0..head {
+        picked.push(i);
+    }
+    if middle > 0 && n > head + tail {
+        // stratified: evenly spaced indices in (head .. n - tail)
+        let lo = head;
+        let hi = n - tail;
+        let span = hi - lo;
+        for k in 0..middle {
+            // distribute k across [lo, hi)
+            let idx = lo + (k * span) / middle;
+            picked.push(idx);
+        }
+    }
+    for i in 0..tail {
+        picked.push(n - 1 - i);
+    }
+
+    // Sort + dedupe while preserving index order.
+    picked.sort_unstable();
+    picked.dedup();
+    picked.iter().map(|i| matched[*i].id.clone()).collect()
 }
 
 /// Evaluate all rules (sorted by descending priority) against an email,
@@ -301,6 +408,152 @@ mod tests {
         assert_eq!(pending.len(), 2);
         assert_eq!(pending[0].email_id, "msg-001");
         assert_eq!(pending[0].rule_id, "r1");
+    }
+
+    fn email_at(id: &str, date: chrono::DateTime<Utc>, from: &str, subject: &str) -> EmailMessage {
+        EmailMessage {
+            id: id.to_string(),
+            thread_id: None,
+            from: from.to_string(),
+            to: vec!["me@x.com".to_string()],
+            subject: subject.to_string(),
+            snippet: String::new(),
+            body: None,
+            body_html: None,
+            labels: vec![],
+            date,
+            is_read: false,
+            list_unsubscribe: None,
+            list_unsubscribe_post: None,
+        }
+    }
+
+    #[test]
+    fn evaluate_rules_evaluate_only_returns_same_matched_set_as_apply() {
+        // EvaluateOnly MUST be equivalent to Apply minus the command emission.
+        let rules = vec![make_rule(
+            "r1",
+            vec![RuleCondition::FieldMatch {
+                field: EmailField::From,
+                operator: MatchOperator::Contains,
+                value: "boss".to_string(),
+            }],
+            vec![RuleAction::Archive],
+        )];
+        let now = Utc::now();
+        let emails = vec![
+            email_at("a", now, "boss@x.com", "hi"),
+            email_at("b", now, "noise@x.com", "hi"),
+        ];
+        let scope = EvaluationScope {
+            account_id: "acct1".to_string(),
+            rule_ids: vec![],
+            sample_size: 20,
+        };
+
+        let evals_apply = evaluate_rules(RuleExecutionMode::Apply, &rules, &emails, &scope);
+        let evals_eval = evaluate_rules(RuleExecutionMode::EvaluateOnly, &rules, &emails, &scope);
+
+        assert_eq!(evals_apply.len(), evals_eval.len());
+        assert_eq!(
+            evals_apply[0].matched_email_ids,
+            evals_eval[0].matched_email_ids
+        );
+        assert_eq!(evals_apply[0].projected_count, 1);
+        assert_eq!(evals_eval[0].projected_count, 1);
+        assert_eq!(evals_eval[0].matched_email_ids, vec!["a".to_string()]);
+    }
+
+    #[test]
+    fn evaluate_rules_caps_sample_at_20_and_is_deterministic() {
+        let rules = vec![make_rule(
+            "r1",
+            vec![RuleCondition::FieldMatch {
+                field: EmailField::From,
+                operator: MatchOperator::Contains,
+                value: "boss".to_string(),
+            }],
+            vec![RuleAction::MarkRead],
+        )];
+        let base = chrono::DateTime::<Utc>::from_timestamp(1_700_000_000, 0).unwrap();
+        let emails: Vec<EmailMessage> = (0..100)
+            .map(|i| {
+                let d = base + chrono::Duration::seconds(i);
+                email_at(&format!("e{i:03}"), d, "boss@x.com", "x")
+            })
+            .collect();
+        let scope = EvaluationScope {
+            account_id: "acct".to_string(),
+            rule_ids: vec![],
+            sample_size: 20,
+        };
+
+        let r1 = evaluate_rules(RuleExecutionMode::EvaluateOnly, &rules, &emails, &scope);
+        let r2 = evaluate_rules(RuleExecutionMode::EvaluateOnly, &rules, &emails, &scope);
+        assert_eq!(r1[0].matched_email_ids, r2[0].matched_email_ids);
+        assert!(r1[0].matched_email_ids.len() <= 20);
+        assert_eq!(r1[0].projected_count, 100);
+        // Head + tail anchored.
+        assert_eq!(r1[0].matched_email_ids.first().unwrap(), "e000");
+        assert_eq!(r1[0].matched_email_ids.last().unwrap(), "e099");
+    }
+
+    #[test]
+    fn evaluate_rules_no_command_emission() {
+        // Smoke: in EvaluateOnly mode, `intended_actions` is populated but no
+        // `PendingAction` is produced (this function returns RuleEvaluations,
+        // never PendingActions).
+        let rules = vec![make_rule(
+            "r1",
+            vec![RuleCondition::FieldMatch {
+                field: EmailField::From,
+                operator: MatchOperator::Contains,
+                value: "boss".to_string(),
+            }],
+            vec![RuleAction::Delete],
+        )];
+        let emails = vec![email_at("a", Utc::now(), "boss@x.com", "hi")];
+        let scope = EvaluationScope {
+            account_id: "acct".to_string(),
+            rule_ids: vec![],
+            sample_size: 20,
+        };
+        let evals = evaluate_rules(RuleExecutionMode::EvaluateOnly, &rules, &emails, &scope);
+        assert_eq!(evals.len(), 1);
+        assert_eq!(evals[0].intended_actions.len(), 1);
+    }
+
+    #[test]
+    fn evaluate_rules_filters_by_scope_rule_ids() {
+        let rules = vec![
+            make_rule(
+                "keep",
+                vec![RuleCondition::FieldMatch {
+                    field: EmailField::From,
+                    operator: MatchOperator::Contains,
+                    value: "boss".to_string(),
+                }],
+                vec![RuleAction::Archive],
+            ),
+            make_rule(
+                "skip",
+                vec![RuleCondition::FieldMatch {
+                    field: EmailField::From,
+                    operator: MatchOperator::Contains,
+                    value: "boss".to_string(),
+                }],
+                vec![RuleAction::Delete],
+            ),
+        ];
+        let emails = vec![email_at("a", Utc::now(), "boss@x.com", "hi")];
+        let scope = EvaluationScope {
+            account_id: "acct".to_string(),
+            rule_ids: vec!["keep".to_string()],
+            sample_size: 20,
+        };
+        let evals = evaluate_rules(RuleExecutionMode::EvaluateOnly, &rules, &emails, &scope);
+        assert_eq!(evals.len(), 1);
+        assert_eq!(evals[0].rule_id, "keep");
     }
 
     #[test]

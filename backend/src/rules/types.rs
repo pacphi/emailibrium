@@ -160,6 +160,103 @@ pub struct PendingAction {
     pub action: RuleAction,
 }
 
+// ---------------------------------------------------------------------------
+// EvaluateOnly mode (DDD-007 addendum, ADR-030 Phase A)
+// ---------------------------------------------------------------------------
+
+/// How a rule should be processed.
+///
+/// `Apply` is the existing default and emits commands to the Email Operations
+/// context. `EvaluateOnly` (new for ADR-030) returns the same matched set
+/// without emitting any commands or touching providers; PlanBuilder uses it
+/// to produce predicate rows for the cleanup plan.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RuleExecutionMode {
+    Apply,
+    EvaluateOnly,
+}
+
+/// How a matched email was determined to match a rule. Carried through to
+/// the UI on plan rows so users can see *why* a row exists.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RuleMatchBasis {
+    /// All conditions are field-match / structural.
+    Literal,
+    /// At least one condition is semantic / vector-similarity.
+    Semantic,
+    /// Mixed structural + semantic conditions.
+    Hybrid,
+}
+
+/// Scope for `evaluate_rules` in EvaluateOnly mode. Phase A defines a minimal
+/// shape (per-account); Phase C may extend with date filters or label filters.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EvaluationScope {
+    pub account_id: String,
+    /// If empty, evaluates against all enabled rules. Otherwise only the listed rule IDs.
+    #[serde(default)]
+    pub rule_ids: Vec<String>,
+    /// Maximum number of `matched_email_ids` to return per rule (for UI preview).
+    /// Capped at 20. Default 20.
+    #[serde(default = "default_sample_size")]
+    pub sample_size: u32,
+}
+
+fn default_sample_size() -> u32 {
+    20
+}
+
+/// A non-mutating evaluation of one rule against the local email repository.
+///
+/// Produced by `evaluate_rules` in `EvaluateOnly` mode. The plan builder lifts
+/// each `RuleEvaluation` into a `PlannedOperationPredicate`. Determinism of
+/// `matched_email_ids` (head 5 / tail 5 / 10 stratified by date, capped at 20)
+/// is required for `plan_hash` stability.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuleEvaluation {
+    pub rule_id: String,
+    /// Bounded sample (≤ 20) of matched email ids. See `evaluate_rules`.
+    pub matched_email_ids: Vec<String>,
+    /// Total estimated count of all matches (not truncated).
+    pub projected_count: u64,
+    /// Actions the rule would have applied if `Apply` mode had been used.
+    pub intended_actions: Vec<RuleAction>,
+    pub match_basis: RuleMatchBasis,
+}
+
+impl RuleEvaluation {
+    /// Helper: classify a rule's conditions into a single `RuleMatchBasis`.
+    pub fn basis_for(conditions: &[RuleCondition]) -> RuleMatchBasis {
+        let mut has_semantic = false;
+        let mut has_literal = false;
+        for c in conditions {
+            Self::scan(c, &mut has_semantic, &mut has_literal);
+        }
+        match (has_semantic, has_literal) {
+            (true, true) => RuleMatchBasis::Hybrid,
+            (true, false) => RuleMatchBasis::Semantic,
+            _ => RuleMatchBasis::Literal,
+        }
+    }
+
+    fn scan(c: &RuleCondition, has_semantic: &mut bool, has_literal: &mut bool) {
+        match c {
+            RuleCondition::Semantic { .. } => *has_semantic = true,
+            RuleCondition::FieldMatch { .. } => *has_literal = true,
+            RuleCondition::And { conditions } | RuleCondition::Or { conditions } => {
+                for c2 in conditions {
+                    Self::scan(c2, has_semantic, has_literal);
+                }
+            }
+            RuleCondition::Not { condition } => Self::scan(condition, has_semantic, has_literal),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
