@@ -7,9 +7,10 @@ import { Step3Topics } from './Step3Topics';
 import { Step4Rules } from './Step4Rules';
 import { CleanupProgress } from './CleanupProgress';
 import type { CleanupAction, CleanupState } from './CleanupProgress';
-import type { Cluster, PipelineActivity } from '@emailibrium/types';
+import type { Cluster, PipelineActivity, PlanId } from '@emailibrium/types';
 import { getAccounts, getPipelineLockStatus } from '@emailibrium/api';
 import { useGenerativeRouter } from '../../services/ai/useGenerativeRouter';
+import { CleanupReview } from './review/CleanupReview';
 
 const stepLabels: Record<WizardStep, string> = {
   1: 'Connect & Ingest',
@@ -89,9 +90,18 @@ function StepIndicator({ currentStep, onStepClick }: StepIndicatorProps) {
   );
 }
 
-export function InboxCleaner() {
-  const wizard = useInboxCleaner();
+export interface InboxCleanerProps {
+  /** Current authenticated userId. Required to build/review/apply cleanup plans. */
+  userId?: string | null;
+}
+
+export function InboxCleaner({ userId = null }: InboxCleanerProps = {}) {
+  const wizard = useInboxCleaner({ userId });
   const router = useGenerativeRouter();
+  // Phase B: review-step state. Set when user advances from Step 4.
+  const [reviewPlanId, setReviewPlanId] = useState<PlanId | null>(null);
+  const [isAdvancingToReview, setIsAdvancingToReview] = useState(false);
+  const [advanceError, setAdvanceError] = useState<string | null>(null);
   const [ingestionJobId, setIngestionJobId] = useState<string | null>(null);
   const [showCleanupProgress, setShowCleanupProgress] = useState(false);
   const [cleanupActions, setCleanupActions] = useState<CleanupAction[]>([]);
@@ -133,6 +143,11 @@ export function InboxCleaner() {
     setCheckingLock(false);
   }, []);
 
+  // Phase B: kept around (intentionally unused) until Phase C removes the
+  // setInterval-driven simulator entirely. Reference it in a void statement
+  // below to keep the linter quiet without changing behavior.
+  // @ts-expect-error -- intentionally unused; Phase C removes this entirely
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const handleExecuteCleanup = useCallback(() => {
     setShowCleanupProgress(true);
 
@@ -182,10 +197,41 @@ export function InboxCleaner() {
     }, 500);
   }, [wizard.selectedSubscriptions, wizard.clusterSelections, clusters]);
 
+  // Phase B: build a plan and advance to the Review step. Replaces the
+  // old "Execute Cleanup" simulator path on Step 4. The simulator
+  // (`handleExecuteCleanup` above + setInterval) is intentionally kept
+  // alive for now; Phase C removes it once apply is wired end-to-end.
+  const handleContinueToReview = useCallback(async () => {
+    setAdvanceError(null);
+    setIsAdvancingToReview(true);
+    try {
+      const planId = await wizard.buildPlan();
+      setReviewPlanId(planId);
+    } catch (e) {
+      setAdvanceError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setIsAdvancingToReview(false);
+    }
+  }, [wizard]);
+
+  const handleReviewCancel = useCallback(() => {
+    setReviewPlanId(null);
+  }, []);
+
   const handleCleanupDone = useCallback(() => {
     setShowCleanupProgress(false);
     // Navigate away or reset wizard
   }, []);
+
+  // Phase B: review screen — shown after the user clicks "Continue to Review"
+  // on Step 4 and a plan has been successfully built.
+  if (reviewPlanId && userId) {
+    return (
+      <div className="p-6 max-w-5xl mx-auto">
+        <CleanupReview planId={reviewPlanId} userId={userId} onCancel={handleReviewCancel} />
+      </div>
+    );
+  }
 
   // Cleanup progress overlay
   if (showCleanupProgress) {
@@ -381,17 +427,38 @@ export function InboxCleaner() {
           )}
 
           {wizard.currentStep === 4 && (
-            <button
-              onClick={handleExecuteCleanup}
-              disabled={
-                wizard.selectedSubscriptions.size === 0 &&
-                wizard.clusterSelections.size === 0 &&
-                wizard.suggestedRules.filter((r) => r.enabled).length === 0
-              }
-              className="px-5 py-2 text-sm font-medium text-white bg-green-600 rounded-md hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-            >
-              Execute Cleanup
-            </button>
+            <div className="flex flex-col items-end gap-1">
+              <button
+                onClick={handleContinueToReview}
+                disabled={
+                  isAdvancingToReview ||
+                  !userId ||
+                  (wizard.selectedSubscriptions.size === 0 &&
+                    wizard.clusterSelections.size === 0 &&
+                    wizard.suggestedRules.filter((r) => r.enabled).length === 0)
+                }
+                aria-disabled={
+                  isAdvancingToReview ||
+                  !userId ||
+                  (wizard.selectedSubscriptions.size === 0 &&
+                    wizard.clusterSelections.size === 0 &&
+                    wizard.suggestedRules.filter((r) => r.enabled).length === 0)
+                }
+                title={!userId ? 'Sign in required to build a cleanup plan' : undefined}
+                className="px-5 py-2 text-sm font-medium text-white bg-indigo-600 rounded-md hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              >
+                {isAdvancingToReview ? 'Building plan…' : 'Continue to Review'}
+              </button>
+              {advanceError && (
+                <p className="text-xs text-red-600 dark:text-red-400" role="alert">
+                  {advanceError}
+                </p>
+              )}
+              {/* Phase B note: the legacy `handleExecuteCleanup` simulator
+                  (setInterval-driven CleanupProgress) is intentionally kept
+                  available for now and will be removed in Phase C once the
+                  real apply path is wired through CleanupReview. */}
+            </div>
           )}
         </div>
       </div>

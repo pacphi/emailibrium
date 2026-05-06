@@ -1,7 +1,22 @@
 import { useState, useCallback, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import type { SubscriptionInsight, ArchiveStrategy } from '@emailibrium/types';
-import { getSubscriptions } from '@emailibrium/api';
+import type {
+  SubscriptionInsight,
+  ArchiveStrategy,
+  CleanupArchiveStrategy,
+  CleanupClusterAction,
+  CleanupPlan,
+  CreatePlanResponse,
+  PlanId,
+  WizardSelections,
+} from '@emailibrium/types';
+import {
+  getSubscriptions,
+  buildPlan as apiBuildPlan,
+  getPlan as apiGetPlan,
+  refreshPlanAccount as apiRefreshAccount,
+  cancelPlan as apiCancelPlan,
+} from '@emailibrium/api';
 
 export type WizardStep = 1 | 2 | 3 | 4;
 
@@ -25,12 +40,30 @@ export interface CleanupSummary {
   hoursSaved: number;
 }
 
-export function useInboxCleaner() {
+// USERID CONVENTION: This wizard hook accepts an optional `userId` argument.
+// Phase A backend handlers require `?userId=` on every cleanup endpoint
+// (see backend/src/cleanup/api/plan.rs). The rest of the API derives the
+// user from the auth header, so callers will typically pass the current
+// session's userId explicitly here. Phase D will remove the requirement
+// and we can drop this argument.
+export interface UseInboxCleanerOptions {
+  userId?: string | null;
+}
+
+export function useInboxCleaner(options: UseInboxCleanerOptions = {}) {
+  const userId = options.userId ?? null;
+
   const [currentStep, setCurrentStep] = useState<WizardStep>(1);
   const [selectedSubscriptions, setSelectedSubscriptions] = useState<Set<string>>(new Set());
   const [clusterSelections, setClusterSelections] = useState<Map<string, ClusterAction>>(new Map());
   const [archiveStrategy, setArchiveStrategy] = useState<ArchiveStrategy>('instant');
   const [suggestedRules, setSuggestedRules] = useState<SuggestedRule[]>([]);
+
+  // Phase B plan state.
+  const [currentPlanId, setCurrentPlanId] = useState<PlanId | null>(null);
+  const [currentPlanSummary, setCurrentPlanSummary] = useState<CreatePlanResponse | null>(null);
+  const [planError, setPlanError] = useState<string | null>(null);
+  const [isBuildingPlan, setIsBuildingPlan] = useState(false);
 
   const subscriptionsQuery = useQuery<SubscriptionInsight[]>({
     queryKey: ['subscriptions'],
@@ -130,6 +163,122 @@ export function useInboxCleaner() {
     );
   }, []);
 
+  // -------------------------------------------------------------------------
+  // Phase B plan actions
+  // -------------------------------------------------------------------------
+
+  // Translate the wizard's local cluster-action vocabulary into the cleanup
+  // domain vocabulary. The wizard exposes a richer choice ("archive-old" vs
+  // "archive-all"); the Phase A plan domain only distinguishes
+  // archive/deleteSoft/deletePermanent/label. We map conservatively and
+  // drop "keep"/"review" rows.
+  const mapClusterAction = useCallback((action: ClusterAction): CleanupClusterAction | null => {
+    switch (action) {
+      case 'archive-old':
+      case 'archive-all':
+        return 'archive';
+      case 'delete-all':
+        return 'deleteSoft';
+      case 'keep':
+      case 'review':
+        return null;
+    }
+  }, []);
+
+  // Translate the user-preference ArchiveStrategy ('instant'|'delayed'|'manual')
+  // into the cleanup domain ArchiveStrategy. The two vocabularies don't
+  // overlap, so we default to 'olderThan90d' and let Step 3 pick a real
+  // value when present.
+  const mapArchiveStrategy = useCallback((s: ArchiveStrategy): CleanupArchiveStrategy | null => {
+    // Phase B: no fine-grained mapping yet. 'instant' is the closest to
+    // "archive everything ready now", which we model as olderThan30d.
+    if (s === 'instant') return 'olderThan30d';
+    if (s === 'delayed') return 'olderThan90d';
+    return null; // 'manual' → no auto archive strategy in the plan
+  }, []);
+
+  const collectSelections = useCallback((): WizardSelections => {
+    const subs = subscriptions.filter((s) => selectedSubscriptions.has(s.senderAddress));
+    return {
+      // TODO(phase-d): SubscriptionInsight does not currently expose
+      // accountId. Phase A's PlanBuilder uses the user's account scope to
+      // resolve senders to accounts, so an empty accountId is acceptable
+      // for now; once the insight DTO grows accountId we can pass it here.
+      subscriptions: subs.map((s) => ({ sender: s.senderAddress, accountId: '' })),
+      clusterActions: Array.from(clusterSelections.entries())
+        .map(([clusterId, action]) => {
+          const mapped = mapClusterAction(action);
+          if (!mapped) return null;
+          return { clusterId, action: mapped, accountId: '' };
+        })
+        .filter(
+          (c): c is { clusterId: string; action: CleanupClusterAction; accountId: string } =>
+            c !== null,
+        ),
+      ruleSelections: suggestedRules
+        .filter((r) => r.enabled)
+        .map((r) => ({ ruleId: r.id, accountId: '' })),
+      archiveStrategy: mapArchiveStrategy(archiveStrategy),
+      accountIds: [],
+    };
+  }, [
+    subscriptions,
+    selectedSubscriptions,
+    clusterSelections,
+    suggestedRules,
+    archiveStrategy,
+    mapClusterAction,
+    mapArchiveStrategy,
+  ]);
+
+  const buildPlan = useCallback(async (): Promise<PlanId> => {
+    if (!userId) {
+      const msg = 'userId required to build a cleanup plan';
+      setPlanError(msg);
+      throw new Error(msg);
+    }
+    setIsBuildingPlan(true);
+    setPlanError(null);
+    try {
+      const selections = collectSelections();
+      const resp = await apiBuildPlan(userId, selections);
+      setCurrentPlanId(resp.planId);
+      setCurrentPlanSummary(resp);
+      return resp.planId;
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setPlanError(msg);
+      throw e;
+    } finally {
+      setIsBuildingPlan(false);
+    }
+  }, [userId, collectSelections]);
+
+  const refreshAccount = useCallback(
+    async (accountId: string): Promise<void> => {
+      if (!userId || !currentPlanId) return;
+      await apiRefreshAccount(currentPlanId, userId, accountId);
+    },
+    [userId, currentPlanId],
+  );
+
+  const cancelCurrentPlan = useCallback(async (): Promise<void> => {
+    if (!userId || !currentPlanId) return;
+    await apiCancelPlan(currentPlanId, userId);
+    setCurrentPlanId(null);
+    setCurrentPlanSummary(null);
+  }, [userId, currentPlanId]);
+
+  const loadPlan = useCallback(
+    async (planId: PlanId): Promise<CleanupPlan> => {
+      if (!userId) throw new Error('userId required to load a cleanup plan');
+      const plan = await apiGetPlan(userId, planId);
+      setCurrentPlanId(plan.id);
+      return plan;
+    },
+    [userId],
+  );
+
   return {
     currentStep,
     goNext,
@@ -151,5 +300,14 @@ export function useInboxCleaner() {
     setSuggestedRules,
     toggleRule,
     summary,
+    // Phase B plan state + actions
+    currentPlanId,
+    currentPlanSummary,
+    planError,
+    isBuildingPlan,
+    buildPlan,
+    refreshAccount,
+    cancelCurrentPlan,
+    loadPlan,
   };
 }

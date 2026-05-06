@@ -98,6 +98,17 @@ export { bulkArchive, bulkDelete, bulkLabel, unsubscribe } from './actionsApi.js
 export { batchUnsubscribe, undoUnsubscribe, previewUnsubscribe } from './unsubscribeApi.js';
 
 export {
+  buildPlan,
+  getPlan,
+  listPlanOperations,
+  samplePlanOperations,
+  refreshPlanAccount,
+  cancelPlan,
+  listPlans,
+} from './cleanupApi.js';
+export type { ListOpsParams } from './cleanupApi.js';
+
+export {
   sendChatMessage,
   createChatStream,
   streamChatMessage,
