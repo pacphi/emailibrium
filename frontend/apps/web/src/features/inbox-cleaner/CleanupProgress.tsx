@@ -13,7 +13,12 @@ export interface PerActionCounts {
   applied: number;
   failed: number;
   skipped: number;
-  pending: number;
+  /**
+   * Phase D: per-action `pending` is no longer authoritatively known once the
+   * SSE stream drives breakdowns directly. Optional; the progress UI treats
+   * absent `pending` as 0 (i.e. "all observed are processed").
+   */
+  pending?: number;
 }
 
 export interface CleanupProgressProps {
@@ -53,10 +58,11 @@ function totalAll(c: ApplyJobCounts): number {
 }
 
 function actionStatus(c: PerActionCounts, jobState: ApplyJobUiState): ProgressBarStatus {
-  const total = c.applied + c.failed + c.skipped + c.pending;
+  const pending = c.pending ?? 0;
+  const total = c.applied + c.failed + c.skipped + pending;
   if (total === 0) return 'pending';
-  if (c.failed > 0 && c.pending === 0) return 'error';
-  if (c.pending === 0) return 'complete';
+  if (c.failed > 0 && pending === 0) return 'error';
+  if (pending === 0) return 'complete';
   if (jobState === 'running' || jobState === 'starting') return 'running';
   return 'pending';
 }
@@ -192,7 +198,8 @@ export function CleanupProgress({
         {perAction && Object.keys(perAction).length > 0 && (
           <div className="space-y-2 pt-2 border-t border-gray-100 dark:border-gray-700">
             {Object.entries(perAction).map(([actionType, c]) => {
-              const tot = c.applied + c.failed + c.skipped + c.pending;
+              const pending = c.pending ?? 0;
+              const tot = c.applied + c.failed + c.skipped + pending;
               const pct =
                 tot > 0 ? Math.round(((c.applied + c.failed + c.skipped) / tot) * 100) : 0;
               return (

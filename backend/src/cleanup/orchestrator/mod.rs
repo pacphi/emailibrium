@@ -10,6 +10,7 @@ pub mod account_worker;
 pub mod apply;
 pub mod drift;
 pub mod expander;
+pub mod factory;
 pub mod sse;
 
 #[allow(unused_imports)]
@@ -18,5 +19,10 @@ pub use apply::{ApplyOptions, ApplyOrchestrator, BeginApplyError, CancelError};
 pub use drift::{DriftDetector, DriftError, DriftStatus, HardDriftReason};
 #[allow(unused_imports)]
 pub use expander::{ExpandError, PredicateExpander};
+#[allow(unused_imports)]
+pub use factory::{
+    EmailProviderFactory, FactoryError, MockEmailProviderFactory, OAuthEmailProviderFactory,
+    ResolvedProvider,
+};
 #[allow(unused_imports)]
 pub use sse::{ApplyEvent, EventEmitter, PauseReason};

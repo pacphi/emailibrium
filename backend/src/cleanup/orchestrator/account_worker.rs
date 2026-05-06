@@ -30,16 +30,17 @@ use crate::cleanup::audit::{
     AuditOutcome, CleanupAuditEntry, CleanupAuditWriter, NoopCleanupAuditWriter,
 };
 use crate::cleanup::domain::operation::{
-    ErrorCode, OperationStatus, PlanAction, PlannedOperation, PlannedOperationRow, Provider,
-    RiskLevel, RiskMax, SkipReason,
+    ErrorCode, OperationStatus, PlanAction, PlannedOperation, PlannedOperationPredicate,
+    PlannedOperationRow, PredicateStatus, Provider, RiskLevel, RiskMax, SkipReason,
 };
 use crate::cleanup::domain::plan::{JobCounts, JobId, PlanId};
 use crate::cleanup::repository::CleanupPlanRepository;
-use crate::email::provider::{EmailProvider, MoveKind as ProvMoveKind, ProviderError};
+use crate::email::provider::{MoveKind as ProvMoveKind, ProviderError};
 use crate::email::unsubscribe::{SubscriptionTarget, UnsubscribeService};
 
 use super::expander::PredicateExpander;
-use super::sse::{ApplyEvent, EventEmitter, PauseReason};
+use super::factory::{EmailProviderFactory, FactoryError, MockEmailProviderFactory};
+use super::sse::{plan_action_type_str, ApplyEvent, EventEmitter, PauseReason};
 
 #[derive(Debug, Error)]
 pub enum WorkerError {
@@ -54,10 +55,12 @@ pub enum WorkerError {
 #[derive(Clone)]
 pub struct AccountWorkerCtx {
     pub repo: Arc<dyn CleanupPlanRepository>,
-    pub email_provider: Option<Arc<dyn EmailProvider>>,
+    /// Per-account EmailProvider factory (Item #1). The worker calls
+    /// `provider_for(account_id).await?` lazily; tests inject a
+    /// `MockEmailProviderFactory`.
+    pub provider_factory: Arc<dyn EmailProviderFactory>,
     pub unsubscribe: Arc<UnsubscribeService>,
-    /// Reserved for in-worker predicate expansion (Phase D wires this in).
-    #[allow(dead_code)]
+    /// Apply-time predicate expander (Item #2).
     pub expander: Arc<PredicateExpander>,
     pub emitter: EventEmitter,
     /// Per-operation audit writer (Phase D, ADR-030 §Security). Writes
@@ -83,7 +86,8 @@ impl AccountWorkerCtx {
     ) -> Self {
         Self {
             repo,
-            email_provider: None,
+            provider_factory: Arc::new(MockEmailProviderFactory::no_op())
+                as Arc<dyn EmailProviderFactory>,
             unsubscribe,
             expander,
             emitter,
@@ -136,10 +140,14 @@ impl AccountWorker {
             )
             .await?;
 
-        for op in rows {
+        let mut idx = 0usize;
+        let mut rows = rows;
+        while idx < rows.len() {
             if cancel.is_cancelled() {
                 return Err(WorkerError::Cancelled);
             }
+            let op = rows[idx].clone();
+            idx += 1;
 
             // Skip rows above the risk-max threshold: they remain pending
             // for a follow-up apply with a higher risk_max.
@@ -151,8 +159,15 @@ impl AccountWorker {
             // Acknowledgement gates (Phase B passes acked_high_seqs from
             // the apply request; medium "groups" mirror PlanSource group ids).
             if op.risk() == RiskLevel::High && !acked_high_seqs.contains(&op.seq()) {
-                self.skip(plan_id, op.seq(), SkipReason::Unacknowledged, &mut counts)
-                    .await?;
+                let action_type = plan_action_type_str(op.action()).to_string();
+                self.skip(
+                    plan_id,
+                    op.seq(),
+                    SkipReason::Unacknowledged,
+                    action_type,
+                    &mut counts,
+                )
+                .await?;
                 self.write_audit_op(
                     plan_id,
                     &op,
@@ -165,8 +180,15 @@ impl AccountWorker {
             if op.risk() == RiskLevel::Medium {
                 let group = group_key(&op);
                 if !group.is_empty() && !acked_medium_groups.contains(&group) {
-                    self.skip(plan_id, op.seq(), SkipReason::Unacknowledged, &mut counts)
-                        .await?;
+                    let action_type = plan_action_type_str(op.action()).to_string();
+                    self.skip(
+                        plan_id,
+                        op.seq(),
+                        SkipReason::Unacknowledged,
+                        action_type,
+                        &mut counts,
+                    )
+                    .await?;
                     self.write_audit_op(
                         plan_id,
                         &op,
@@ -178,15 +200,47 @@ impl AccountWorker {
                 }
             }
 
-            // Phase C only completes Materialized rows. Predicate rows are
-            // expanded by the orchestrator before the worker runs OR
-            // skipped here (the expander writes children; if the rows
-            // listing still returns the predicate row itself it means
-            // expansion didn't run yet — treat as pending).
+            // Item #2: in-worker predicate expansion. When we encounter a
+            // predicate row that's still pending, expand it page-by-page,
+            // append the materialized children to the plan, and emit
+            // PredicateExpanded for each page. Children get seq values
+            // strictly greater than the current max — they'll be picked up
+            // on the *next* worker invocation since this worker holds an
+            // already-loaded `rows` slice. (Re-issuing apply is the path
+            // for fresh-children processing; this matches the partial-apply
+            // contract.)
             let row = match op {
                 PlannedOperation::Materialized(r) => r,
-                PlannedOperation::Predicate(_) => {
-                    counts.pending = counts.pending.saturating_add(1);
+                PlannedOperation::Predicate(p) => {
+                    if matches!(
+                        p.status,
+                        PredicateStatus::Expanded
+                            | PredicateStatus::Applied
+                            | PredicateStatus::Failed
+                            | PredicateStatus::Skipped
+                    ) {
+                        // Already terminal; nothing to do for the predicate
+                        // row itself — children (if any) are independent rows.
+                        continue;
+                    }
+                    if let Err(err) = self.expand_predicate_into_plan(plan_id, &p).await {
+                        let action_type = plan_action_type_str(&p.action).to_string();
+                        let _ = self
+                            .ctx
+                            .repo
+                            .update_predicate_status(plan_id, p.seq, PredicateStatus::Failed)
+                            .await;
+                        self.ctx.emitter.emit(ApplyEvent::OpFailed {
+                            seq: p.seq,
+                            account_id: self.account_id.clone(),
+                            error: ErrorCode {
+                                code: "predicate_expand_failed".into(),
+                                message: err.to_string(),
+                            },
+                            action_type,
+                        });
+                        counts.failed = counts.failed.saturating_add(1);
+                    }
                     continue;
                 }
             };
@@ -203,6 +257,7 @@ impl AccountWorker {
             };
 
             // Dispatch.
+            let action_type = plan_action_type_str(&row.action).to_string();
             match self.dispatch(&row).await {
                 Ok(()) => {
                     let now = Utc::now();
@@ -216,12 +271,14 @@ impl AccountWorker {
                         seq: row.seq,
                         account_id: self.account_id.clone(),
                         applied_at: now.timestamp_millis(),
+                        action_type: action_type.clone(),
                     });
                     counts.applied = counts.applied.saturating_add(1);
                     self.ctx.emitter.bump_ops();
                 }
                 Err(DispatchError::Skipped(reason)) => {
-                    self.skip(plan_id, row.seq, reason, &mut counts).await?;
+                    self.skip(plan_id, row.seq, reason, action_type.clone(), &mut counts)
+                        .await?;
                     self.write_audit(plan_id, &row, AuditOutcome::Skipped, Some(reason))
                         .await;
                 }
@@ -247,6 +304,7 @@ impl AccountWorker {
                         seq: row.seq,
                         account_id: self.account_id.clone(),
                         error,
+                        action_type: action_type.clone(),
                     });
                     counts.failed = counts.failed.saturating_add(1);
                 }
@@ -329,6 +387,7 @@ impl AccountWorker {
         plan_id: PlanId,
         seq: u64,
         reason: SkipReason,
+        action_type: String,
         counts: &mut JobCounts,
     ) -> Result<(), WorkerError> {
         let now = Utc::now();
@@ -340,6 +399,7 @@ impl AccountWorker {
             seq,
             account_id: self.account_id.clone(),
             reason,
+            action_type,
         });
         counts.skipped = counts.skipped.saturating_add(1);
         let entry = counts.skipped_by_reason.entry(reason).or_insert(0);
@@ -347,27 +407,121 @@ impl AccountWorker {
         Ok(())
     }
 
-    /// Dispatch an action via the provider port. When no `email_provider`
-    /// is wired (Phase C bring-up case) we treat every row as Ok(()) so
-    /// integration tests + the SSE harness can run without a live provider.
+    /// Drive a predicate row through the apply-time expander (Item #2).
+    /// Pages through all children, appending each page to the plan with
+    /// strictly-increasing seq, emits `PredicateExpanded` per page, and
+    /// transitions the predicate row's status from
+    /// Pending → Expanding → Expanded on success.
+    async fn expand_predicate_into_plan(
+        &self,
+        plan_id: PlanId,
+        predicate: &PlannedOperationPredicate,
+    ) -> Result<(), super::expander::ExpandError> {
+        // Mark expanding before producing rows.
+        let _ = self
+            .ctx
+            .repo
+            .update_predicate_status(plan_id, predicate.seq, PredicateStatus::Expanding)
+            .await;
+
+        let page_size: u32 = 1000;
+        let mut page: u32 = 0;
+        loop {
+            let children = self
+                .ctx
+                .expander
+                .expand_page(predicate, page, page_size)
+                .await?;
+            if children.is_empty() {
+                break;
+            }
+            let produced = children.len() as u64;
+            // Allocate a contiguous seq block above the current max.
+            let next_seq_start = self
+                .ctx
+                .repo
+                .max_seq(plan_id)
+                .await
+                .map(|m| m.saturating_add(1))
+                .unwrap_or(predicate.seq.saturating_add(1));
+            let to_insert: Vec<PlannedOperation> = children
+                .into_iter()
+                .enumerate()
+                .map(|(i, mut row)| {
+                    row.seq = next_seq_start.saturating_add(i as u64);
+                    PlannedOperation::Materialized(row)
+                })
+                .collect();
+            self.ctx
+                .repo
+                .append_operations(plan_id, to_insert)
+                .await
+                .map_err(super::expander::ExpandError::from)?;
+            self.ctx.emitter.emit(ApplyEvent::PredicateExpanded {
+                predicate_seq: predicate.seq,
+                produced_rows: produced,
+            });
+            page = page.saturating_add(1);
+        }
+
+        let _ = self
+            .ctx
+            .repo
+            .update_predicate_status(plan_id, predicate.seq, PredicateStatus::Expanded)
+            .await;
+        Ok(())
+    }
+
+    /// Dispatch an action via the provider port. The factory yields a
+    /// per-account `(EmailProvider, access_token)` pair (Item #1). When
+    /// the factory has no provider for this account (Mock no-op default
+    /// used in unit tests) we treat the call as a success so the
+    /// orchestrator + SSE plumbing remains exercisable.
     async fn dispatch(&self, row: &PlannedOperationRow) -> Result<(), DispatchError> {
-        let Some(provider) = self.ctx.email_provider.clone() else {
-            // TODO(phase-c-followup): wire real OAuth-derived EmailProvider
-            // instances per account. Until then we treat the call as a
-            // no-op so the orchestrator + SSE plumbing is exercisable.
-            tracing::debug!(
-                account_id = %self.account_id,
-                seq = row.seq,
-                "dispatch: no email_provider wired — treating as success",
-            );
-            return Ok(());
+        // Unsubscribe is sender-level and routes through UnsubscribeService,
+        // independent of the per-account provider.
+        if matches!(row.action, PlanAction::Unsubscribe { .. }) {
+            return self.dispatch_unsubscribe(row).await;
+        }
+
+        let resolved = match self
+            .ctx
+            .provider_factory
+            .provider_for(&self.account_id)
+            .await
+        {
+            Ok(r) => r,
+            Err(FactoryError::NotFound(_)) => {
+                tracing::debug!(
+                    account_id = %self.account_id,
+                    seq = row.seq,
+                    "dispatch: factory has no provider for account — treating as success",
+                );
+                return Ok(());
+            }
+            Err(FactoryError::OAuth(msg)) => {
+                tracing::warn!(
+                    account_id = %self.account_id,
+                    seq = row.seq,
+                    "dispatch: oauth resolution failed: {msg}",
+                );
+                return Err(DispatchError::AccountPaused(PauseReason::AuthError));
+            }
+            Err(FactoryError::UnsupportedKind(kind)) => {
+                return Err(DispatchError::Failed(ErrorCode {
+                    code: "provider_unsupported".into(),
+                    message: format!("provider kind not supported: {kind}"),
+                }));
+            }
+            Err(e) => {
+                return Err(DispatchError::Failed(ErrorCode {
+                    code: "provider_unavailable".into(),
+                    message: e.to_string(),
+                }));
+            }
         };
-        // Phase C does NOT have access to OAuth tokens at this layer (the
-        // OAuthManager isn't threaded through). When real wiring lands this
-        // call site receives the token from the orchestrator. For now we
-        // pass an empty token and rely on tests using a mock provider that
-        // ignores the token argument.
-        let access_token = "";
+        let provider = resolved.provider;
+        let access_token = resolved.access_token.as_str();
 
         // The repo doesn't replay precondition state today (the SQLite
         // schema doesn't track folder location of an email). Per ADR-030

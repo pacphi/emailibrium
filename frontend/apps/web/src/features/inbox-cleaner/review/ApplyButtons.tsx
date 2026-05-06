@@ -1,5 +1,11 @@
 import { useMemo, useState } from 'react';
-import type { AccountStateEtag, PlanId, PlannedOperation, RiskMax } from '@emailibrium/types';
+import type {
+  AccountStateEtag,
+  CleanupProvider,
+  PlanId,
+  PlannedOperation,
+  RiskMax,
+} from '@emailibrium/types';
 import { opMediumGroupKey } from './groupKey';
 
 export interface ApplyButtonsProps {
@@ -10,13 +16,15 @@ export interface ApplyButtonsProps {
   ackedMediumGroupKeys: string[];
   onApply(riskMax: RiskMax): void;
   /**
-   * Phase D: per-account state etags from the plan envelope. Used to detect
-   * POP3 accounts (`kind === 'none'`) — the High-tier "Apply all" button
-   * gains a typed "DELETE" confirmation when any account is POP3.
-   *
-   * NOTE: The plan envelope does not (yet) carry an explicit `provider`
-   * field per account (TODO from Phase B). For now we infer POP3 from the
-   * etag kind being `none`, which is the only state shape POP3 uses today.
+   * Phase D: per-account provider lookup from the plan envelope. Authoritative
+   * source for POP3 detection — the High-tier "Apply all" button gains a typed
+   * "DELETE" confirmation when any account is POP3.
+   */
+  accountProviders?: Record<string, CleanupProvider>;
+  /**
+   * Phase D: per-account state etags. Retained as a fallback when older cached
+   * plans don't carry `accountProviders` (we then infer POP3 from etag
+   * `kind === 'none'`, the only shape POP3 used pre-Phase-D).
    */
   accountStateEtags?: Record<string, AccountStateEtag>;
 }
@@ -33,13 +41,20 @@ export function ApplyButtons({
   ackedHighSeqs,
   ackedMediumGroupKeys,
   onApply,
+  accountProviders,
   accountStateEtags,
 }: ApplyButtonsProps) {
   // Phase D: typed-confirmation gate for POP3 accounts (ADR-030 §Security).
+  // Closes the prior TODO that inferred POP3 from `etag.kind === 'none'` —
+  // we now consult `plan.accountProviders` directly and only fall back to
+  // the etag-kind heuristic for older cached plans without the new field.
   const hasPop3Account = useMemo(() => {
+    if (accountProviders && Object.keys(accountProviders).length > 0) {
+      return Object.values(accountProviders).some((p) => p === 'pop3');
+    }
     if (!accountStateEtags) return false;
     return Object.values(accountStateEtags).some((e) => e.kind === 'none');
-  }, [accountStateEtags]);
+  }, [accountProviders, accountStateEtags]);
   const [typedConfirmation, setTypedConfirmation] = useState('');
   const typedConfirmationOk = !hasPop3Account || typedConfirmation === 'DELETE';
   const ackedHighSet = useMemo(() => new Set(ackedHighSeqs), [ackedHighSeqs]);

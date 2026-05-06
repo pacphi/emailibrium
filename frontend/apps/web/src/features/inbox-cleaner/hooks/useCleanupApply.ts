@@ -6,11 +6,11 @@
 // subscription is `snapshot`, which replaces (does not accumulate)
 // `counts` + `accountStates`.
 //
-// `perAction` is intentionally NOT computed here — the SSE schema does not
-// carry the action discriminator on op events, so per-action breakdowns
-// must be computed by the consumer (CleanupReview / CleanupProgress) using
-// its existing `plan.operations` map keyed by seq. This keeps the hook
-// lean and avoids prefetching the full plan twice.
+// Phase D: SSE op events now carry `actionType` (camelCase serde tag of the
+// row's PlanAction). The reducer aggregates per-action counters lazily,
+// initializing zero-buckets on first sight of each action type. The
+// `snapshot` event resets perAction to {} (snapshots are point-in-time
+// cumulative — future events forward-reconstruct the breakdown).
 //
 // Reconnect strategy: on EventSource error, exponential backoff (1s, 2s, 4s,
 // up to 30s). We stop reconnecting once the job is in a terminal state
@@ -30,10 +30,22 @@ import { applyStreamUrl, beginApply, cancelApply } from '@emailibrium/api';
 
 export type ApplyJobUiState = 'idle' | 'starting' | 'running' | 'done' | 'error' | 'cancelled';
 
+export interface PerActionCounters {
+  applied: number;
+  failed: number;
+  skipped: number;
+}
+
 export interface UseCleanupApplyState {
   jobId: JobId | null;
   jobState: ApplyJobUiState;
   counts: ApplyJobCounts;
+  /**
+   * Phase D: per-action breakdown driven by the SSE `actionType` discriminator
+   * on opApplied/opFailed/opSkipped. Keys are camelCase PlanAction tags
+   * (e.g. 'archive', 'addLabel', 'delete').
+   */
+  perAction: Record<string, PerActionCounters>;
   accountStates: Record<string, AccountSnapshotState>;
   /** Bounded ring buffer of recent events for UI debug; oldest evicted. */
   events: ApplyEvent[];
@@ -60,10 +72,23 @@ const initialState: UseCleanupApplyState = {
   jobId: null,
   jobState: 'idle',
   counts: emptyCounts(),
+  perAction: {},
   accountStates: {},
   events: [],
   error: null,
 };
+
+function bumpPerAction(
+  prev: Record<string, PerActionCounters>,
+  actionType: string,
+  field: keyof PerActionCounters,
+): Record<string, PerActionCounters> {
+  const existing = prev[actionType] ?? { applied: 0, failed: 0, skipped: 0 };
+  return {
+    ...prev,
+    [actionType]: { ...existing, [field]: existing[field] + 1 },
+  };
+}
 
 function reduceEvent(prev: UseCleanupApplyState, ev: ApplyEvent): UseCleanupApplyState {
   const events = [...prev.events, ev];
@@ -75,6 +100,9 @@ function reduceEvent(prev: UseCleanupApplyState, ev: ApplyEvent): UseCleanupAppl
         ...prev,
         jobId: ev.jobId,
         counts: ev.counts,
+        // Snapshots are cumulative point-in-time — they don't carry per-action
+        // detail. Reset and let subsequent op events forward-reconstruct.
+        perAction: {},
         accountStates: ev.accountStates,
         // Snapshot itself does not flip jobState; subsequent `started` /
         // `progress` / `finished` carry the lifecycle signal.
@@ -107,6 +135,7 @@ function reduceEvent(prev: UseCleanupApplyState, ev: ApplyEvent): UseCleanupAppl
           applied: prev.counts.applied + 1,
           pending: Math.max(0, prev.counts.pending - 1),
         },
+        perAction: bumpPerAction(prev.perAction, ev.actionType, 'applied'),
         events,
       };
     case 'opFailed':
@@ -117,6 +146,7 @@ function reduceEvent(prev: UseCleanupApplyState, ev: ApplyEvent): UseCleanupAppl
           failed: prev.counts.failed + 1,
           pending: Math.max(0, prev.counts.pending - 1),
         },
+        perAction: bumpPerAction(prev.perAction, ev.actionType, 'failed'),
         events,
       };
     case 'opSkipped': {
@@ -130,6 +160,7 @@ function reduceEvent(prev: UseCleanupApplyState, ev: ApplyEvent): UseCleanupAppl
           pending: Math.max(0, prev.counts.pending - 1),
           skippedByReason,
         },
+        perAction: bumpPerAction(prev.perAction, ev.actionType, 'skipped'),
         events,
       };
     }

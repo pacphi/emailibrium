@@ -133,6 +133,13 @@ fn classify(baseline: &AccountStateEtag, live: &AccountStateEtag) -> DriftStatus
             advanced_to: live.clone(),
         },
 
+        // POP3: any uidl difference is hard (no incremental protocol).
+        (E::Pop3Sentinel { last_uidl: a }, E::Pop3Sentinel { last_uidl: b }) if a != b => {
+            DriftStatus::Hard {
+                reason: HardDriftReason::Pop3Invalidated,
+            }
+        }
+
         // Kind changed across the boundary → provider state was reset.
         // Map by baseline kind to the canonical hard-drift reason.
         (E::GmailHistory { .. }, _) => DriftStatus::Hard {
@@ -143,6 +150,9 @@ fn classify(baseline: &AccountStateEtag, live: &AccountStateEtag) -> DriftStatus
         },
         (E::ImapUvms { .. }, _) => DriftStatus::Hard {
             reason: HardDriftReason::ImapUidvalidityChanged,
+        },
+        (E::Pop3Sentinel { .. }, _) => DriftStatus::Hard {
+            reason: HardDriftReason::Pop3Invalidated,
         },
     }
 }
@@ -240,6 +250,22 @@ mod tests {
             classify(&a, &b),
             DriftStatus::Hard {
                 reason: HardDriftReason::GmailHistoryNotFound
+            }
+        );
+    }
+
+    #[test]
+    fn classify_pop3_uidl_change_is_hard() {
+        let a = AccountStateEtag::Pop3Sentinel {
+            last_uidl: "snap-1".into(),
+        };
+        let b = AccountStateEtag::Pop3Sentinel {
+            last_uidl: "snap-2".into(),
+        };
+        assert_eq!(
+            classify(&a, &b),
+            DriftStatus::Hard {
+                reason: HardDriftReason::Pop3Invalidated
             }
         );
     }

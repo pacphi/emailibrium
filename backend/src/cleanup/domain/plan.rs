@@ -29,7 +29,7 @@ use uuid::Uuid;
 
 use super::operation::{
     AccountStateEtag, ArchiveStrategy, ClusterAction, PlanStatus, PlanWarning, PlannedOperation,
-    RiskLevel, SkipReason,
+    Provider, RiskLevel, SkipReason,
 };
 
 // ---------------------------------------------------------------------------
@@ -132,6 +132,12 @@ pub struct CleanupPlan {
     #[serde(with = "hash_hex")]
     pub plan_hash: [u8; 32],
     pub account_state_etags: BTreeMap<String, AccountStateEtag>,
+    /// Per-account provider snapshot taken at plan-build time. Carried so the
+    /// frontend (and any apply-time consumer) can branch on provider semantics
+    /// without inferring from accountId, and so the plan_hash also covers
+    /// provider changes (rare; possible during account re-auth).
+    #[serde(default)]
+    pub account_providers: BTreeMap<String, Provider>,
     pub status: PlanStatus,
     pub totals: PlanTotals,
     pub risk: RiskRollup,
@@ -255,9 +261,10 @@ pub fn canonical_plan_hash(
     selections: &WizardSelections,
     etags: &BTreeMap<String, AccountStateEtag>,
     operations: &[PlannedOperation],
+    account_providers: &BTreeMap<String, Provider>,
 ) -> [u8; 32] {
     let mut h = Hasher::new();
-    let value = canonical_value_for_inputs(selections, etags, operations);
+    let value = canonical_value_for_inputs(selections, etags, operations, account_providers);
     write_canonical(&value, &mut h);
     *h.finalize().as_bytes()
 }
@@ -267,6 +274,7 @@ fn canonical_value_for_inputs(
     selections: &WizardSelections,
     etags: &BTreeMap<String, AccountStateEtag>,
     operations: &[PlannedOperation],
+    account_providers: &BTreeMap<String, Provider>,
 ) -> CanonicalValue {
     use CanonicalValue::*;
 
@@ -373,8 +381,27 @@ fn canonical_value_for_inputs(
     ops_sorted.sort_by_key(|o| o.seq());
     let ops_node = Array(ops_sorted.iter().map(|o| canonical_operation(o)).collect());
 
+    // account_providers — sorted by account id (BTreeMap iter is sorted).
+    let providers_node = Object(
+        account_providers
+            .iter()
+            .map(|(k, v)| {
+                (
+                    nfc(k),
+                    Str(match v {
+                        Provider::Gmail => "gmail".to_string(),
+                        Provider::Outlook => "outlook".to_string(),
+                        Provider::Imap => "imap".to_string(),
+                        Provider::Pop3 => "pop3".to_string(),
+                    }),
+                )
+            })
+            .collect(),
+    );
+
     Object(
         [
+            ("accountProviders".to_string(), providers_node),
             ("etags".to_string(), etags_node),
             ("operations".to_string(), ops_node),
             ("selections".to_string(), selections_node),
@@ -411,6 +438,14 @@ fn canonical_etag(e: &AccountStateEtag) -> CanonicalValue {
                 ("highestModseq".to_string(), U64(*highest_modseq)),
                 ("kind".to_string(), Str("imap_uvms".to_string())),
                 ("uidvalidity".to_string(), U64(*uidvalidity as u64)),
+            ]
+            .into_iter()
+            .collect(),
+        ),
+        AccountStateEtag::Pop3Sentinel { last_uidl } => Object(
+            [
+                ("kind".to_string(), Str("pop3_sentinel".to_string())),
+                ("lastUidl".to_string(), Str(nfc(last_uidl))),
             ]
             .into_iter()
             .collect(),
@@ -647,6 +682,10 @@ mod tests {
         })
     }
 
+    fn empty_providers() -> BTreeMap<String, Provider> {
+        BTreeMap::new()
+    }
+
     #[test]
     fn plan_hash_deterministic_across_instances() {
         let etags = sample_etags();
@@ -656,8 +695,8 @@ mod tests {
         // canonicalization must produce byte-identical hashes.
         let ops1 = vec![op_a(), op_b()];
         let ops2 = vec![op_b(), op_a()];
-        let h1 = canonical_plan_hash(&sel, &etags, &ops1);
-        let h2 = canonical_plan_hash(&sel, &etags, &ops2);
+        let h1 = canonical_plan_hash(&sel, &etags, &ops1, &empty_providers());
+        let h2 = canonical_plan_hash(&sel, &etags, &ops2, &empty_providers());
         assert_eq!(h1, h2);
     }
 
@@ -665,8 +704,8 @@ mod tests {
     fn plan_hash_changes_when_inputs_change() {
         let etags = sample_etags();
         let sel = sample_selections();
-        let h1 = canonical_plan_hash(&sel, &etags, &[op_a()]);
-        let h2 = canonical_plan_hash(&sel, &etags, &[op_b()]);
+        let h1 = canonical_plan_hash(&sel, &etags, &[op_a()], &empty_providers());
+        let h2 = canonical_plan_hash(&sel, &etags, &[op_b()], &empty_providers());
         assert_ne!(h1, h2);
     }
 
@@ -674,9 +713,22 @@ mod tests {
     fn plan_hash_changes_when_selections_change() {
         let etags = sample_etags();
         let mut sel = sample_selections();
-        let h1 = canonical_plan_hash(&sel, &etags, &[op_a()]);
+        let h1 = canonical_plan_hash(&sel, &etags, &[op_a()], &empty_providers());
         sel.subscriptions[0].sender = "different@x.com".into();
-        let h2 = canonical_plan_hash(&sel, &etags, &[op_a()]);
+        let h2 = canonical_plan_hash(&sel, &etags, &[op_a()], &empty_providers());
+        assert_ne!(h1, h2);
+    }
+
+    #[test]
+    fn plan_hash_changes_when_account_providers_change() {
+        let etags = sample_etags();
+        let sel = sample_selections();
+        let mut p1 = empty_providers();
+        p1.insert("acct-a".to_string(), Provider::Gmail);
+        let mut p2 = empty_providers();
+        p2.insert("acct-a".to_string(), Provider::Outlook);
+        let h1 = canonical_plan_hash(&sel, &etags, &[op_a()], &p1);
+        let h2 = canonical_plan_hash(&sel, &etags, &[op_a()], &p2);
         assert_ne!(h1, h2);
     }
 
@@ -716,7 +768,12 @@ mod tests {
 
     #[test]
     fn plan_hash_serde_hex_roundtrip() {
-        let h = canonical_plan_hash(&sample_selections(), &sample_etags(), &[op_a()]);
+        let h = canonical_plan_hash(
+            &sample_selections(),
+            &sample_etags(),
+            &[op_a()],
+            &empty_providers(),
+        );
         // Serialize via the serde shim used on CleanupPlan.
         #[derive(Serialize, Deserialize)]
         struct Wrap(#[serde(with = "super::hash_hex")] [u8; 32]);

@@ -20,7 +20,7 @@ import { RefreshAccountAffordance } from './RefreshAccountAffordance';
 import { sourceKey, sourceLabel } from './groupKey';
 import { useCleanupApply } from '../hooks/useCleanupApply';
 import { useCleanupTelemetry } from '../hooks/useCleanupTelemetry';
-import { CleanupProgress, type PerActionCounts } from '../CleanupProgress';
+import { CleanupProgress } from '../CleanupProgress';
 
 export interface CleanupReviewProps {
   planId: PlanId;
@@ -69,11 +69,11 @@ function highestRisk(rows: PlannedOperation[]): RiskLevel {
   return max;
 }
 
-function detectProvider(_plan: CleanupPlan, _accountId: string): CleanupProvider {
-  // The plan envelope does not (yet) carry provider per account; default to
-  // 'gmail' until Phase D enriches the response. This keeps the tile
-  // visually meaningful without inventing data.
-  return 'gmail';
+function detectProvider(plan: CleanupPlan, accountId: string): CleanupProvider {
+  // Phase D: closes the prior TODO that hardcoded 'gmail'. Reads the
+  // backend-populated `accountProviders` map; falls back to 'gmail' only
+  // for older cached plans missing the new field.
+  return plan.accountProviders?.[accountId] ?? 'gmail';
 }
 
 export function CleanupReview({ planId, userId, onCancel, readOnly = false }: CleanupReviewProps) {
@@ -132,27 +132,6 @@ export function CleanupReview({ planId, userId, onCancel, readOnly = false }: Cl
     },
     [apply, planId, ackedHighSeqs, ackedMediumGroupKeys, telemetry],
   );
-
-  /**
-   * Per-action breakdown derived from the loaded plan operations and the
-   * live SSE counts. The SSE schema does not carry the action discriminator
-   * on op events, so we project ops into action buckets up-front and the
-   * progress component receives a static-shape map.
-   *
-   * For Phase C we present the totals (pending = total) and the global
-   * counts on top; per-row updates from SSE adjust the global `counts`
-   * field, while per-action precision is left for Phase D.
-   */
-  const perActionTotals = useMemo<Record<string, PerActionCounts>>(() => {
-    const m: Record<string, PerActionCounts> = {};
-    for (const op of opsResult.items) {
-      if (op.opKind !== 'materialized') continue;
-      const t = op.action.type;
-      if (!m[t]) m[t] = { applied: 0, failed: 0, skipped: 0, pending: 0 };
-      m[t].pending += 1;
-    }
-    return m;
-  }, [opsResult.items]);
 
   const accountAggregates = useMemo(() => {
     const map = new Map<string, AccountAggregate>();
@@ -244,7 +223,7 @@ export function CleanupReview({ planId, userId, onCancel, readOnly = false }: Cl
         <CleanupProgress
           jobState={apply.jobState}
           counts={apply.counts}
-          perAction={perActionTotals}
+          perAction={apply.perAction}
           accountStates={apply.accountStates}
           errorMessage={apply.error}
           onCancel={() => void apply.cancelApply()}
@@ -428,6 +407,7 @@ export function CleanupReview({ planId, userId, onCancel, readOnly = false }: Cl
           ackedHighSeqs={ackedHighSeqs}
           ackedMediumGroupKeys={ackedMediumGroupKeys}
           onApply={handleApply}
+          accountProviders={plan.accountProviders}
           accountStateEtags={plan.accountStateEtags}
         />
       )}

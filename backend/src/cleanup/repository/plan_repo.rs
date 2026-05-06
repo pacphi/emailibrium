@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 
 use crate::cleanup::domain::operation::{
-    AccountStateEtag, OperationStatus, PlanStatus, PlannedOperation,
+    AccountStateEtag, OperationStatus, PlanStatus, PlannedOperation, Provider,
 };
 use crate::cleanup::domain::plan::{CleanupPlan, CleanupPlanSummary, JobCounts, PlanId};
 use crate::cleanup::domain::ports::RepoError;
@@ -19,6 +19,29 @@ use crate::cleanup::domain::ports::RepoError;
 pub struct Page {
     pub items: usize,
     pub next_cursor: Option<u64>,
+}
+
+/// On-disk envelope for the `totals_json` column. Carries `PlanTotals`
+/// alongside `account_providers` (Item #4) inside the same TEXT blob to
+/// avoid a schema migration. The deserialised side is forgiving:
+/// historical rows with a bare `PlanTotals` JSON still load (account_providers
+/// defaults to empty).
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PersistedTotals<'a> {
+    #[serde(flatten)]
+    totals: &'a crate::cleanup::domain::plan::PlanTotals,
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    account_providers: &'a std::collections::BTreeMap<String, Provider>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PersistedTotalsOwned {
+    #[serde(flatten)]
+    totals: crate::cleanup::domain::plan::PlanTotals,
+    #[serde(default)]
+    account_providers: std::collections::BTreeMap<String, Provider>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -58,12 +81,35 @@ pub trait CleanupPlanRepository: Send + Sync {
         account_id: &str,
         new_rows: Vec<PlannedOperation>,
     ) -> Result<(), RepoError>;
+    /// Append operation rows to an existing plan. Caller is responsible for
+    /// assigning seq values that don't collide with existing rows. Used by
+    /// the apply-time predicate expander to write materialized children.
+    /// Default implementation falls back to `replace_account_rows` is NOT
+    /// possible since that's destructive — implementations MUST insert.
+    async fn append_operations(
+        &self,
+        id: PlanId,
+        rows: Vec<PlannedOperation>,
+    ) -> Result<(), RepoError>;
+    /// Highest seq currently stored on the plan. Used to allocate a
+    /// reservation block before predicate expansion writes new rows.
+    async fn max_seq(&self, id: PlanId) -> Result<u64, RepoError>;
     async fn update_operation_status(
         &self,
         id: PlanId,
         seq: u64,
         status: OperationStatus,
         ts: DateTime<Utc>,
+    ) -> Result<(), RepoError>;
+    /// Update a predicate row's lifecycle status. Distinct from
+    /// `update_operation_status` because predicate rows use
+    /// [`PredicateStatus`](crate::cleanup::domain::operation::PredicateStatus),
+    /// not `OperationStatus`.
+    async fn update_predicate_status(
+        &self,
+        id: PlanId,
+        seq: u64,
+        status: crate::cleanup::domain::operation::PredicateStatus,
     ) -> Result<(), RepoError>;
     /// Phase A stub: returns empty Vec. Phase C wires this to the rule engine /
     /// archive-strategy expansion.
@@ -106,7 +152,13 @@ impl CleanupPlanRepository for SqliteCleanupPlanRepo {
         .bind(plan.valid_until.timestamp_millis())
         .bind(plan.plan_hash.to_vec())
         .bind(plan.status.as_str())
-        .bind(serde_json::to_string(&plan.totals).map_err(|e| RepoError::Internal(e.to_string()))?)
+        .bind(
+            serde_json::to_string(&PersistedTotals {
+                totals: &plan.totals,
+                account_providers: &plan.account_providers,
+            })
+            .map_err(|e| RepoError::Internal(e.to_string()))?,
+        )
         .bind(serde_json::to_string(&plan.risk).map_err(|e| RepoError::Internal(e.to_string()))?)
         .bind(
             serde_json::to_string(&plan.warnings)
@@ -176,8 +228,10 @@ impl CleanupPlanRepository for SqliteCleanupPlanRepo {
 
         let status = PlanStatus::from_str_opt(&status_s)
             .ok_or_else(|| RepoError::Internal(format!("bad plan status: {status_s}")))?;
-        let totals =
+        let persisted: PersistedTotalsOwned =
             serde_json::from_str(&totals_s).map_err(|e| RepoError::Internal(e.to_string()))?;
+        let totals = persisted.totals;
+        let account_providers = persisted.account_providers;
         let risk = serde_json::from_str(&risk_s).map_err(|e| RepoError::Internal(e.to_string()))?;
         let warnings =
             serde_json::from_str(&warn_s).map_err(|e| RepoError::Internal(e.to_string()))?;
@@ -217,6 +271,7 @@ impl CleanupPlanRepository for SqliteCleanupPlanRepo {
             valid_until: DateTime::from_timestamp_millis(valid_ms).unwrap_or_else(Utc::now),
             plan_hash,
             account_state_etags: etags,
+            account_providers,
             status,
             totals,
             risk,
@@ -265,8 +320,9 @@ impl CleanupPlanRepository for SqliteCleanupPlanRepo {
         for (id_b, created, valid, status_s, totals_s, risk_s, warn_s) in rows {
             let id =
                 uuid::Uuid::from_slice(&id_b).map_err(|e| RepoError::Internal(e.to_string()))?;
-            let totals =
-                serde_json::from_str(&totals_s).map_err(|e| RepoError::Internal(e.to_string()))?;
+            let totals = serde_json::from_str::<PersistedTotalsOwned>(&totals_s)
+                .map_err(|e| RepoError::Internal(e.to_string()))?
+                .totals;
             let risk =
                 serde_json::from_str(&risk_s).map_err(|e| RepoError::Internal(e.to_string()))?;
             let warnings: Vec<serde_json::Value> =
@@ -389,6 +445,50 @@ impl CleanupPlanRepository for SqliteCleanupPlanRepo {
         Ok(())
     }
 
+    async fn update_predicate_status(
+        &self,
+        id: PlanId,
+        seq: u64,
+        status: crate::cleanup::domain::operation::PredicateStatus,
+    ) -> Result<(), RepoError> {
+        sqlx::query(
+            r#"UPDATE cleanup_plan_operations
+               SET status = ?
+               WHERE plan_id = ? AND seq = ? AND op_kind = 'predicate'"#,
+        )
+        .bind(status.as_str())
+        .bind(id.as_bytes().to_vec())
+        .bind(seq as i64)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn append_operations(
+        &self,
+        id: PlanId,
+        rows: Vec<PlannedOperation>,
+    ) -> Result<(), RepoError> {
+        if rows.is_empty() {
+            return Ok(());
+        }
+        let mut tx = self.pool.begin().await?;
+        for op in &rows {
+            insert_operation(&mut tx, id, op).await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
+    async fn max_seq(&self, id: PlanId) -> Result<u64, RepoError> {
+        let row: Option<(Option<i64>,)> =
+            sqlx::query_as(r#"SELECT MAX(seq) FROM cleanup_plan_operations WHERE plan_id = ?"#)
+                .bind(id.as_bytes().to_vec())
+                .fetch_optional(&self.pool)
+                .await?;
+        Ok(row.and_then(|(m,)| m).map(|v| v.max(0) as u64).unwrap_or(0))
+    }
+
     async fn expand_predicate(
         &self,
         _id: PlanId,
@@ -498,7 +598,7 @@ mod tests {
     use super::*;
     use crate::cleanup::domain::operation::{
         AccountStateEtag, OperationStatus, PlanAction, PlanSource, PlanStatus, PlannedOperation,
-        PlannedOperationRow, RiskLevel,
+        PlannedOperationRow, Provider, RiskLevel,
     };
     use crate::cleanup::domain::plan::{CleanupPlan, PlanTotals, RiskRollup};
     use chrono::{Duration, Utc};
@@ -564,6 +664,7 @@ mod tests {
             valid_until: now + Duration::minutes(30),
             plan_hash: [0u8; 32],
             account_state_etags: etags,
+            account_providers: std::collections::BTreeMap::new(),
             status: PlanStatus::Ready,
             totals: PlanTotals::default(),
             risk: RiskRollup {
@@ -574,6 +675,24 @@ mod tests {
             warnings: vec![],
             operations: vec![op],
         }
+    }
+
+    #[tokio::test]
+    async fn plan_envelope_carries_per_account_provider() {
+        let pool = fresh_pool().await;
+        let repo = SqliteCleanupPlanRepo::new(pool);
+        let user = "user-providers";
+        let mut plan = sample_plan(user);
+        plan.account_providers
+            .insert("acct-a".into(), Provider::Outlook);
+        let plan_id = plan.id;
+        repo.save(&plan).await.expect("save");
+        let loaded = repo.load(user, plan_id).await.expect("load").unwrap();
+        assert_eq!(loaded.account_providers.len(), 1);
+        assert_eq!(
+            loaded.account_providers.get("acct-a"),
+            Some(&Provider::Outlook)
+        );
     }
 
     #[tokio::test]

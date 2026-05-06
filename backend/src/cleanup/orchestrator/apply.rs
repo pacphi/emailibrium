@@ -32,12 +32,12 @@ use crate::cleanup::domain::operation::{JobState, PlanStatus, Provider, RiskMax}
 use crate::cleanup::domain::plan::{CleanupApplyJob, CleanupPlan, JobCounts, JobId, PlanId};
 use crate::cleanup::repository::{CleanupApplyJobRepository, CleanupPlanRepository};
 use crate::cleanup::telemetry::{hash_user_id, CleanupTelemetryEvent, TelemetryEmitter};
-use crate::email::provider::EmailProvider;
 use crate::email::unsubscribe::UnsubscribeService;
 
 use super::account_worker::{AccountWorker, AccountWorkerCtx};
 use super::drift::{DriftDetector, DriftStatus};
 use super::expander::PredicateExpander;
+use super::factory::{EmailProviderFactory, MockEmailProviderFactory};
 use super::sse::{AccountSnapshotState, ApplyEvent, EventEmitter};
 
 #[derive(Debug, Error)]
@@ -78,7 +78,9 @@ pub struct ApplyOrchestrator {
     pub drift: Arc<DriftDetector>,
     pub expander: Arc<PredicateExpander>,
     pub workers_for: Arc<dyn Fn(&str) -> Provider + Send + Sync>,
-    pub email_providers: Arc<HashMap<Provider, Arc<dyn EmailProvider>>>,
+    /// Per-account EmailProvider factory (Item #1). Defaults to a no-op
+    /// factory; production wiring installs `OAuthEmailProviderFactory`.
+    pub provider_factory: Arc<dyn EmailProviderFactory>,
     pub unsubscribe: Arc<UnsubscribeService>,
     /// Per-operation audit writer (Phase D, ADR-030 §Security).
     pub audit: Arc<dyn CleanupAuditWriter>,
@@ -95,7 +97,6 @@ impl ApplyOrchestrator {
         drift: Arc<DriftDetector>,
         expander: Arc<PredicateExpander>,
         workers_for: Arc<dyn Fn(&str) -> Provider + Send + Sync>,
-        email_providers: Arc<HashMap<Provider, Arc<dyn EmailProvider>>>,
         unsubscribe: Arc<UnsubscribeService>,
     ) -> Self {
         Self {
@@ -104,12 +105,19 @@ impl ApplyOrchestrator {
             drift,
             expander,
             workers_for,
-            email_providers,
+            provider_factory: Arc::new(MockEmailProviderFactory::no_op())
+                as Arc<dyn EmailProviderFactory>,
             unsubscribe,
             audit: Arc::new(NoopCleanupAuditWriter) as Arc<dyn CleanupAuditWriter>,
             telemetry: Arc::new(TelemetryEmitter::new()),
             job_channels: Arc::new(RwLock::new(HashMap::new())),
         }
+    }
+
+    /// Builder-style setter for the EmailProvider factory (Item #1).
+    pub fn with_provider_factory(mut self, factory: Arc<dyn EmailProviderFactory>) -> Self {
+        self.provider_factory = factory;
+        self
     }
 
     /// Builder-style setter for the audit writer (Phase D wiring from main.rs).
@@ -222,10 +230,9 @@ impl ApplyOrchestrator {
             let mut handles = Vec::with_capacity(accounts.len());
             for account_id in accounts {
                 let provider = (me.workers_for)(&account_id);
-                let email_provider = me.email_providers.get(&provider).cloned();
                 let ctx = AccountWorkerCtx {
                     repo: me.plan_repo.clone(),
-                    email_provider,
+                    provider_factory: me.provider_factory.clone(),
                     unsubscribe: me.unsubscribe.clone(),
                     expander: me.expander.clone(),
                     emitter: emitter_outer.clone(),
@@ -502,6 +509,44 @@ mod tests {
         ) -> Result<(), RepoError> {
             Ok(())
         }
+        async fn append_operations(
+            &self,
+            _id: PlanId,
+            rows: Vec<PlannedOperation>,
+        ) -> Result<(), RepoError> {
+            if let Some(p) = self.plan.lock().unwrap().as_mut() {
+                for op in rows {
+                    p.operations.push(op);
+                }
+            }
+            Ok(())
+        }
+        async fn max_seq(&self, _id: PlanId) -> Result<u64, RepoError> {
+            Ok(self
+                .plan
+                .lock()
+                .unwrap()
+                .as_ref()
+                .map(|p| p.operations.iter().map(|o| o.seq()).max().unwrap_or(0))
+                .unwrap_or(0))
+        }
+        async fn update_predicate_status(
+            &self,
+            _id: PlanId,
+            seq: u64,
+            status: crate::cleanup::domain::operation::PredicateStatus,
+        ) -> Result<(), RepoError> {
+            if let Some(p) = self.plan.lock().unwrap().as_mut() {
+                for op in p.operations.iter_mut() {
+                    if let PlannedOperation::Predicate(pr) = op {
+                        if pr.seq == seq {
+                            pr.status = status;
+                        }
+                    }
+                }
+            }
+            Ok(())
+        }
         async fn update_operation_status(
             &self,
             _id: PlanId,
@@ -630,6 +675,7 @@ mod tests {
             valid_until: now + chrono::Duration::minutes(30),
             plan_hash: [0u8; 32],
             account_state_etags: etags,
+            account_providers: std::collections::BTreeMap::new(),
             status: PlanStatus::Ready,
             totals: PlanTotals::default(),
             risk: RiskRollup::default(),
@@ -671,7 +717,6 @@ mod tests {
             drift,
             expander,
             Arc::new(|_| Provider::Gmail),
-            Arc::new(HashMap::new()),
             Arc::new(UnsubscribeService::new()),
         ))
     }
@@ -950,7 +995,6 @@ mod tests {
                 drift,
                 expander,
                 Arc::new(|_| Provider::Gmail),
-                Arc::new(HashMap::new()),
                 Arc::new(UnsubscribeService::new()),
             )
             .with_audit(audit.clone()),

@@ -56,10 +56,12 @@ impl PlanBuilder {
         let now = Utc::now();
         let plan_id = Uuid::now_v7();
 
-        // 1. Per-account etag snapshot.
+        // 1. Per-account etag snapshot + provider snapshot.
         let mut etags: BTreeMap<String, AccountStateEtag> = BTreeMap::new();
+        let mut account_providers: BTreeMap<String, Provider> = BTreeMap::new();
         for acct in &sel.account_ids {
             etags.insert(acct.clone(), self.accounts.etag(acct).await?);
+            account_providers.insert(acct.clone(), (self.provider_for)(acct));
         }
 
         let mut next_seq: u64 = 1;
@@ -310,7 +312,7 @@ impl PlanBuilder {
             });
         }
 
-        let plan_hash = canonical_plan_hash(&sel, &etags, &operations);
+        let plan_hash = canonical_plan_hash(&sel, &etags, &operations, &account_providers);
 
         Ok(CleanupPlan {
             id: plan_id,
@@ -320,6 +322,7 @@ impl PlanBuilder {
             valid_until: now + Duration::minutes(self.plan_ttl_minutes.max(1)),
             plan_hash,
             account_state_etags: etags,
+            account_providers,
             status: PlanStatus::Ready,
             totals,
             risk,

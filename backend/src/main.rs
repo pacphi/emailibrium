@@ -370,6 +370,54 @@ async fn main() -> anyhow::Result<()> {
         cleanup::audit::SqliteCleanupAuditWriter::new(db.pool.clone()),
     );
     let cleanup_telemetry = Arc::new(cleanup::telemetry::TelemetryEmitter::new());
+    // Item #1: build OAuth-derived EmailProvider factory. Gmail/Outlook
+    // configs are sourced from the same OAuth config the rest of the app
+    // reads; if env vars are missing the option is None and the factory
+    // returns FactoryError::Config at apply time so the worker surfaces a
+    // clear OpFailed event. IMAP/POP3 are unsupported by this factory today.
+    let gmail_cfg_for_factory = {
+        let oauth = &vector_service.config.oauth;
+        let gmail = &oauth.gmail;
+        match (
+            std::env::var(&gmail.client_id_env),
+            std::env::var(&gmail.client_secret_env),
+        ) {
+            (Ok(client_id), Ok(client_secret)) => Some(email::types::ProviderConfig {
+                client_id,
+                client_secret,
+                redirect_uri: format!("{}/api/v1/auth/callback", oauth.redirect_base_url),
+                auth_url: gmail.auth_url.clone(),
+                token_url: gmail.token_url.clone(),
+                scopes: gmail.scopes.clone(),
+            }),
+            _ => None,
+        }
+    };
+    let outlook_cfg_for_factory = {
+        let oauth = &vector_service.config.oauth;
+        let outlook = &oauth.outlook;
+        match (
+            std::env::var(&outlook.client_id_env),
+            std::env::var(&outlook.client_secret_env),
+        ) {
+            (Ok(client_id), Ok(client_secret)) => Some(email::types::ProviderConfig {
+                client_id,
+                client_secret,
+                redirect_uri: format!("{}/api/v1/auth/callback", oauth.redirect_base_url),
+                auth_url: outlook.auth_url(),
+                token_url: outlook.token_url(),
+                scopes: outlook.scopes.clone(),
+            }),
+            _ => None,
+        }
+    };
+    let provider_factory: Arc<dyn cleanup::orchestrator::EmailProviderFactory> =
+        Arc::new(cleanup::orchestrator::OAuthEmailProviderFactory::new(
+            oauth_manager.clone(),
+            gmail_cfg_for_factory,
+            outlook_cfg_for_factory,
+        ));
+
     let apply_orchestrator = Arc::new(
         cleanup::orchestrator::ApplyOrchestrator::new(
             cleanup_plan_repo.clone() as Arc<dyn cleanup::repository::CleanupPlanRepository>,
@@ -377,9 +425,9 @@ async fn main() -> anyhow::Result<()> {
             drift_detector,
             predicate_expander,
             Arc::new(|_| cleanup::domain::operation::Provider::Gmail),
-            Arc::new(std::collections::HashMap::new()),
             Arc::new(email::unsubscribe::UnsubscribeService::new()),
         )
+        .with_provider_factory(provider_factory)
         .with_audit(cleanup_audit_writer.clone())
         .with_telemetry(cleanup_telemetry.clone()),
     );

@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, Mutex};
 
-use crate::cleanup::domain::operation::{ErrorCode, JobState, SkipReason};
+use crate::cleanup::domain::operation::{ErrorCode, JobState, PlanAction, SkipReason};
 use crate::cleanup::domain::plan::{JobCounts, JobId, PlanId};
 
 /// Snapshot of one account's runtime state, emitted on reconnect.
@@ -64,18 +64,27 @@ pub enum ApplyEvent {
         account_id: String,
         #[serde(rename = "appliedAt")]
         applied_at: i64,
+        /// CamelCase serde tag of the row's `PlanAction` (e.g., "archive",
+        /// "addLabel"). Carried so the frontend can do per-action-precise
+        /// progress without inferring from the operation list.
+        #[serde(rename = "actionType")]
+        action_type: String,
     },
     OpFailed {
         seq: u64,
         #[serde(rename = "accountId")]
         account_id: String,
         error: ErrorCode,
+        #[serde(rename = "actionType")]
+        action_type: String,
     },
     OpSkipped {
         seq: u64,
         #[serde(rename = "accountId")]
         account_id: String,
         reason: SkipReason,
+        #[serde(rename = "actionType")]
+        action_type: String,
     },
     PredicateExpanded {
         #[serde(rename = "predicateSeq")]
@@ -101,6 +110,20 @@ pub enum ApplyEvent {
         status: JobState,
         counts: JobCounts,
     },
+}
+
+/// Stable camelCase tag of a `PlanAction` variant — used as the
+/// `actionType` field on `OpApplied`/`OpFailed`/`OpSkipped` events.
+pub fn plan_action_type_str(action: &PlanAction) -> &'static str {
+    match action {
+        PlanAction::Archive => "archive",
+        PlanAction::AddLabel { .. } => "addLabel",
+        PlanAction::Move { .. } => "move",
+        PlanAction::Delete { .. } => "delete",
+        PlanAction::Unsubscribe { .. } => "unsubscribe",
+        PlanAction::MarkRead => "markRead",
+        PlanAction::Star { .. } => "star",
+    }
 }
 
 /// Throttling state for `emit_progress`.
@@ -219,12 +242,44 @@ mod tests {
             seq: 42,
             account_id: "acct-a".into(),
             applied_at: 1_700_000_000_000,
+            action_type: "archive".into(),
         };
         let s = serde_json::to_string(&ev).unwrap();
         assert!(s.contains("\"type\":\"opApplied\""));
         assert!(s.contains("\"seq\":42"));
         assert!(s.contains("\"accountId\":\"acct-a\""));
         assert!(s.contains("\"appliedAt\":1700000000000"));
+        assert!(s.contains("\"actionType\":\"archive\""));
+    }
+
+    #[test]
+    fn plan_action_type_str_matches_camelcase_serde() {
+        use crate::cleanup::domain::operation::{MoveKind, UnsubscribeMethodKind};
+        assert_eq!(plan_action_type_str(&PlanAction::Archive), "archive");
+        assert_eq!(
+            plan_action_type_str(&PlanAction::AddLabel {
+                kind: MoveKind::Label
+            }),
+            "addLabel"
+        );
+        assert_eq!(
+            plan_action_type_str(&PlanAction::Move {
+                kind: MoveKind::Folder
+            }),
+            "move"
+        );
+        assert_eq!(
+            plan_action_type_str(&PlanAction::Delete { permanent: true }),
+            "delete"
+        );
+        assert_eq!(
+            plan_action_type_str(&PlanAction::Unsubscribe {
+                method: UnsubscribeMethodKind::None
+            }),
+            "unsubscribe"
+        );
+        assert_eq!(plan_action_type_str(&PlanAction::MarkRead), "markRead");
+        assert_eq!(plan_action_type_str(&PlanAction::Star { on: true }), "star");
     }
 
     #[test]

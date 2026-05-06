@@ -110,6 +110,7 @@ export type AccountStateEtag =
   | { kind: 'gmailHistory'; historyId: string }
   | { kind: 'outlookDelta'; deltaToken: string }
   | { kind: 'imapUvms'; uidvalidity: number; highestModseq: number }
+  | { kind: 'pop3Sentinel'; lastUidl: string }
   | { kind: 'none' };
 
 // ReverseOp — backend: #[serde(tag = "type", rename_all = "camelCase")]
@@ -242,6 +243,12 @@ export interface CleanupPlan {
   /** 64-char hex (blake3). */
   planHash: string;
   accountStateEtags: Record<string, AccountStateEtag>;
+  /**
+   * Phase D: per-account provider lookup populated by the backend PlanBuilder.
+   * Optional for backwards-compat with cached plans built before the field
+   * existed; consumers fall back to etag-kind heuristics when missing.
+   */
+  accountProviders?: Record<string, CleanupProvider>;
   status: PlanStatus;
   totals: PlanTotals;
   risk: RiskRollup;
@@ -349,9 +356,28 @@ export type ApplyEvent =
       planId: PlanId;
       totalsByAccount: Record<string, ApplyJobCounts>;
     }
-  | { type: 'opApplied'; seq: number; accountId: string; appliedAt: number }
-  | { type: 'opFailed'; seq: number; accountId: string; error: CleanupErrorCode }
-  | { type: 'opSkipped'; seq: number; accountId: string; reason: SkipReason }
+  | {
+      type: 'opApplied';
+      seq: number;
+      accountId: string;
+      /** camelCase serde tag of the row's PlanAction (e.g. 'archive', 'addLabel'). */
+      actionType: string;
+      appliedAt: number;
+    }
+  | {
+      type: 'opFailed';
+      seq: number;
+      accountId: string;
+      actionType: string;
+      error: CleanupErrorCode;
+    }
+  | {
+      type: 'opSkipped';
+      seq: number;
+      accountId: string;
+      actionType: string;
+      reason: SkipReason;
+    }
   | { type: 'predicateExpanded'; predicateSeq: number; producedRows: number }
   | { type: 'accountPaused'; accountId: string; reason: PauseReason }
   | { type: 'accountResumed'; accountId: string }

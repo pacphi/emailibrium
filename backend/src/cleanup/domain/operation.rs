@@ -390,6 +390,13 @@ pub enum AccountStateEtag {
         uidvalidity: u32,
         highest_modseq: u64,
     },
+    /// POP3 sentinel — POP3 has no incremental delta protocol so we keep a
+    /// snapshot of the last seen UIDL list. Per ADR-030 §8 any prior op
+    /// invalidates the snapshot, so the drift detector treats *any*
+    /// difference from the baseline as Hard.
+    Pop3Sentinel {
+        last_uidl: String,
+    },
     None,
 }
 
@@ -399,6 +406,7 @@ impl AccountStateEtag {
             Self::GmailHistory { .. } => "gmail_history",
             Self::OutlookDelta { .. } => "outlook_delta",
             Self::ImapUvms { .. } => "imap_uvms",
+            Self::Pop3Sentinel { .. } => "pop3_sentinel",
             Self::None => "none",
         }
     }
@@ -628,6 +636,20 @@ mod tests {
         let back: AccountStateEtag = serde_json::from_str(&j).unwrap();
         assert_eq!(back, etag);
         assert_eq!(etag.kind_str(), "imap_uvms");
+    }
+
+    #[test]
+    fn account_state_etag_roundtrip_pop3() {
+        let etag = AccountStateEtag::Pop3Sentinel {
+            last_uidl: "uidl-abc".into(),
+        };
+        let j = serde_json::to_string(&etag).unwrap();
+        // Wire is camelCase per project convention.
+        assert!(j.contains("\"kind\":\"pop3Sentinel\""));
+        assert!(j.contains("\"lastUidl\":\"uidl-abc\""));
+        let back: AccountStateEtag = serde_json::from_str(&j).unwrap();
+        assert_eq!(back, etag);
+        assert_eq!(etag.kind_str(), "pop3_sentinel");
     }
 
     #[test]
