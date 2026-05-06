@@ -274,3 +274,86 @@ export interface SampleResponse {
 export interface ListPlansResponse {
   items: CleanupPlanSummary[];
 }
+
+// ---------------------------------------------------------------------------
+// Phase C: Apply orchestrator wire types
+//
+// These mirror backend/src/cleanup/orchestrator/sse.rs and
+// backend/src/cleanup/api/apply.rs. All shapes use camelCase per
+// `#[serde(rename_all = "camelCase")]`.
+// ---------------------------------------------------------------------------
+
+export type JobState = 'queued' | 'running' | 'finished' | 'cancelled' | 'failed';
+
+export type PauseReason = 'hardDrift' | 'rateLimit' | 'authError';
+
+/** Per-account paused/active runtime state, included in the `snapshot` event. */
+export interface AccountSnapshotState {
+  paused: boolean;
+  pauseReason?: PauseReason;
+}
+
+/**
+ * Aggregated counters for an in-flight or finished apply job. Mirrors backend
+ * `JobCounts` (Phase C added `skippedByReason`). Backend omits the field when
+ * empty, so it is optional on the wire.
+ */
+export interface ApplyJobCounts {
+  applied: number;
+  failed: number;
+  skipped: number;
+  pending: number;
+  skippedByReason?: Partial<Record<SkipReason, number>>;
+}
+
+/** Body of POST /api/v1/cleanup/apply/:planId. */
+export interface ApplyOptions {
+  acknowledgedHighRiskSeqs: number[];
+  acknowledgedMediumGroups: string[];
+}
+
+/** Response body of POST /api/v1/cleanup/apply/:planId (202 Accepted). */
+export interface BeginApplyResponse {
+  jobId: JobId;
+}
+
+/** GET /api/v1/cleanup/apply/:jobId — full apply-job aggregate. */
+export interface CleanupApplyJob {
+  jobId: JobId;
+  planId: PlanId;
+  startedAt: string;
+  finishedAt: string | null;
+  state: JobState;
+  riskMax: RiskMax;
+  counts: ApplyJobCounts;
+}
+
+/**
+ * Server-sent events emitted on /api/v1/cleanup/apply/:jobId/stream.
+ *
+ * Variant tag is `type` and field names are camelCase. The stream always
+ * begins with a `snapshot` event so clients reconnecting mid-job get a
+ * coherent baseline without replaying historical OpApplied events.
+ */
+export type ApplyEvent =
+  | {
+      type: 'snapshot';
+      jobId: JobId;
+      planId: PlanId;
+      counts: ApplyJobCounts;
+      accountStates: Record<string, AccountSnapshotState>;
+    }
+  | {
+      type: 'started';
+      jobId: JobId;
+      planId: PlanId;
+      totalsByAccount: Record<string, ApplyJobCounts>;
+    }
+  | { type: 'opApplied'; seq: number; accountId: string; appliedAt: number }
+  | { type: 'opFailed'; seq: number; accountId: string; error: CleanupErrorCode }
+  | { type: 'opSkipped'; seq: number; accountId: string; reason: SkipReason }
+  | { type: 'predicateExpanded'; predicateSeq: number; producedRows: number }
+  | { type: 'accountPaused'; accountId: string; reason: PauseReason }
+  | { type: 'accountResumed'; accountId: string }
+  | { type: 'progress'; counts: ApplyJobCounts }
+  | { type: 'finished'; jobId: JobId; status: JobState; counts: ApplyJobCounts };

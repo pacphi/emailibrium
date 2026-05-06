@@ -49,7 +49,7 @@ reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-feature
 async-trait = "0.1"
 futures = "0.3"
 tokio-stream = { version = "0.1", features = ["sync"] }
-tokio-util = { version = "0.7", features = ["io", "compat"] }
+tokio-util = { version = "0.7", features = ["io", "compat", "rt"] }
 async_zip = { version = "0.0.18", features = ["tokio", "deflate"] }
 
 # IMAP

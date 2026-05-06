@@ -96,9 +96,12 @@ export function ApplyButtons({
       };
     }, [rows, ackedHighSet, ackedMediumSet]);
 
+  // Phase C: parent (CleanupReview) holds the useCleanupApply hook and
+  // turns this callback into a real POST /apply. planId/userId are kept on
+  // the props for future telemetry / logging hooks.
+  void planId;
+  void userId;
   const handleApply = (riskMax: RiskMax) => {
-    // Phase B: actual apply call is wired in Phase C.
-    console.warn('apply not yet wired (Phase C)', { planId, userId, riskMax });
     onApply(riskMax);
   };
 

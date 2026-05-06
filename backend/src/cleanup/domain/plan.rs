@@ -29,7 +29,7 @@ use uuid::Uuid;
 
 use super::operation::{
     AccountStateEtag, ArchiveStrategy, ClusterAction, PlanStatus, PlanWarning, PlannedOperation,
-    RiskLevel,
+    RiskLevel, SkipReason,
 };
 
 // ---------------------------------------------------------------------------
@@ -192,6 +192,10 @@ pub struct JobCounts {
     pub failed: u64,
     pub skipped: u64,
     pub pending: u64,
+    /// Per-reason breakdown of skipped rows (Phase D telemetry / GDPR
+    /// audit). Default empty so this is a purely additive Phase C change.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub skipped_by_reason: BTreeMap<SkipReason, u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

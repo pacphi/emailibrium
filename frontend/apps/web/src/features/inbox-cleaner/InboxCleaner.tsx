@@ -5,8 +5,6 @@ import { IngestionProgressScreen } from './IngestionProgress';
 import { Step2Subscriptions } from './Step2Subscriptions';
 import { Step3Topics } from './Step3Topics';
 import { Step4Rules } from './Step4Rules';
-import { CleanupProgress } from './CleanupProgress';
-import type { CleanupAction, CleanupState } from './CleanupProgress';
 import type { Cluster, PipelineActivity, PlanId } from '@emailibrium/types';
 import { getAccounts, getPipelineLockStatus } from '@emailibrium/api';
 import { useGenerativeRouter } from '../../services/ai/useGenerativeRouter';
@@ -103,10 +101,6 @@ export function InboxCleaner({ userId = null }: InboxCleanerProps = {}) {
   const [isAdvancingToReview, setIsAdvancingToReview] = useState(false);
   const [advanceError, setAdvanceError] = useState<string | null>(null);
   const [ingestionJobId, setIngestionJobId] = useState<string | null>(null);
-  const [showCleanupProgress, setShowCleanupProgress] = useState(false);
-  const [cleanupActions, setCleanupActions] = useState<CleanupAction[]>([]);
-  const [cleanupState, setCleanupState] = useState<CleanupState>('running');
-  const [cleanupErrors] = useState<string[]>([]);
   const [pipelineConflict, setPipelineConflict] = useState<PipelineActivity | null>(null);
   const [checkingLock, setCheckingLock] = useState(false);
 
@@ -143,64 +137,9 @@ export function InboxCleaner({ userId = null }: InboxCleanerProps = {}) {
     setCheckingLock(false);
   }, []);
 
-  // Phase B: kept around (intentionally unused) until Phase C removes the
-  // setInterval-driven simulator entirely. Reference it in a void statement
-  // below to keep the linter quiet without changing behavior.
-  // @ts-expect-error -- intentionally unused; Phase C removes this entirely
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const handleExecuteCleanup = useCallback(() => {
-    setShowCleanupProgress(true);
-
-    const actions: CleanupAction[] = [];
-    if (wizard.selectedSubscriptions.size > 0) {
-      actions.push({
-        type: 'unsubscribe',
-        total: wizard.selectedSubscriptions.size,
-        completed: 0,
-        failed: 0,
-      });
-    }
-
-    // Count archive/delete actions from cluster selections
-    let archiveCount = 0;
-    let deleteCount = 0;
-    wizard.clusterSelections.forEach((action, _clusterId) => {
-      const cluster = clusters.find((c) => c.id === _clusterId);
-      const count = cluster?.emailCount ?? 0;
-      if (action === 'archive-old' || action === 'archive-all') archiveCount += count;
-      if (action === 'delete-all') deleteCount += count;
-    });
-
-    if (archiveCount > 0) {
-      actions.push({ type: 'archive', total: archiveCount, completed: 0, failed: 0 });
-    }
-    if (deleteCount > 0) {
-      actions.push({ type: 'delete', total: deleteCount, completed: 0, failed: 0 });
-    }
-
-    setCleanupActions(actions);
-
-    // Simulate progress (in production this would be driven by SSE/API)
-    let tick = 0;
-    const interval = setInterval(() => {
-      tick++;
-      setCleanupActions((prev) =>
-        prev.map((a) => ({
-          ...a,
-          completed: Math.min(a.total, Math.round((tick / 10) * a.total)),
-        })),
-      );
-      if (tick >= 10) {
-        clearInterval(interval);
-        setCleanupState('done');
-      }
-    }, 500);
-  }, [wizard.selectedSubscriptions, wizard.clusterSelections, clusters]);
-
-  // Phase B: build a plan and advance to the Review step. Replaces the
-  // old "Execute Cleanup" simulator path on Step 4. The simulator
-  // (`handleExecuteCleanup` above + setInterval) is intentionally kept
-  // alive for now; Phase C removes it once apply is wired end-to-end.
+  // Phase C: build a plan and advance to the Review step. The Phase B
+  // simulator (setInterval-driven CleanupProgress fake) was removed once
+  // CleanupReview / useCleanupApply wired the real SSE apply path.
   const handleContinueToReview = useCallback(async () => {
     setAdvanceError(null);
     setIsAdvancingToReview(true);
@@ -218,34 +157,12 @@ export function InboxCleaner({ userId = null }: InboxCleanerProps = {}) {
     setReviewPlanId(null);
   }, []);
 
-  const handleCleanupDone = useCallback(() => {
-    setShowCleanupProgress(false);
-    // Navigate away or reset wizard
-  }, []);
-
-  // Phase B: review screen — shown after the user clicks "Continue to Review"
-  // on Step 4 and a plan has been successfully built.
+  // Phase C: review screen owns the apply lifecycle (useCleanupApply) and
+  // renders <CleanupProgress> internally once the user clicks Apply.
   if (reviewPlanId && userId) {
     return (
       <div className="p-6 max-w-5xl mx-auto">
         <CleanupReview planId={reviewPlanId} userId={userId} onCancel={handleReviewCancel} />
-      </div>
-    );
-  }
-
-  // Cleanup progress overlay
-  if (showCleanupProgress) {
-    return (
-      <div className="p-6 max-w-2xl mx-auto">
-        <h2 className="text-lg font-bold text-gray-900 dark:text-gray-100 mb-6 text-center">
-          Executing Cleanup
-        </h2>
-        <CleanupProgress
-          actions={cleanupActions}
-          state={cleanupState}
-          onDone={handleCleanupDone}
-          errors={cleanupErrors}
-        />
       </div>
     );
   }
@@ -454,10 +371,6 @@ export function InboxCleaner({ userId = null }: InboxCleanerProps = {}) {
                   {advanceError}
                 </p>
               )}
-              {/* Phase B note: the legacy `handleExecuteCleanup` simulator
-                  (setInterval-driven CleanupProgress) is intentionally kept
-                  available for now and will be removed in Phase C once the
-                  real apply path is wired through CleanupReview. */}
             </div>
           )}
         </div>

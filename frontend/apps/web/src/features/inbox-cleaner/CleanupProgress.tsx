@@ -1,63 +1,99 @@
+// Phase C: SSE-driven apply progress view. Replaces the Phase B/A simulator
+// shape (`CleanupAction[]` / `CleanupState`) with the orchestrator wire
+// types. The legacy `CleanupAction` / `CleanupState` exports are gone; the
+// only call site (InboxCleaner) was the simulator and that has been removed.
+
+import type { AccountSnapshotState, ApplyJobCounts, PauseReason } from '@emailibrium/types';
 import { ProgressBar } from './ProgressBar';
 import type { ProgressBarStatus } from './ProgressBar';
 
-export type CleanupActionType = 'unsubscribe' | 'archive' | 'delete';
+export type ApplyJobUiState = 'idle' | 'starting' | 'running' | 'done' | 'error' | 'cancelled';
 
-export interface CleanupAction {
-  type: CleanupActionType;
-  total: number;
-  completed: number;
+export interface PerActionCounts {
+  applied: number;
   failed: number;
+  skipped: number;
+  pending: number;
 }
 
-export type CleanupState = 'running' | 'done' | 'error';
-
-interface CleanupProgressProps {
-  actions: CleanupAction[];
-  state: CleanupState;
-  onDone?: () => void;
-  errors: string[];
+export interface CleanupProgressProps {
+  jobState: ApplyJobUiState;
+  counts: ApplyJobCounts;
+  /** Optional per-action breakdown (computed by the parent from plan.operations). */
+  perAction?: Record<string, PerActionCounts>;
+  /** Per-account paused/active state — surfaced in account chips. */
+  accountStates?: Record<string, AccountSnapshotState>;
+  errorMessage?: string | null;
+  onCancel?(): void;
+  onClose?(): void;
 }
 
-const actionLabels: Record<CleanupActionType, string> = {
-  unsubscribe: 'Unsubscribing',
+const pauseReasonLabel: Record<PauseReason, string> = {
+  hardDrift: 'state drifted',
+  rateLimit: 'rate-limited',
+  authError: 'auth error',
+};
+
+const actionLabels: Record<string, string> = {
   archive: 'Archiving',
+  addLabel: 'Labeling',
+  move: 'Moving',
   delete: 'Deleting',
+  unsubscribe: 'Unsubscribing',
+  markRead: 'Marking read',
+  star: 'Starring',
 };
 
-const actionIcons: Record<CleanupActionType, string> = {
-  unsubscribe:
-    'M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636',
-  archive: 'M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4',
-  delete:
-    'M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16',
-};
+function totalProcessed(c: ApplyJobCounts): number {
+  return c.applied + c.failed + c.skipped;
+}
 
-function getActionStatus(action: CleanupAction, state: CleanupState): ProgressBarStatus {
-  if (action.failed > 0 && action.completed + action.failed >= action.total) return 'error';
-  if (action.completed >= action.total) return 'complete';
-  if (action.completed > 0 || state === 'running') return 'running';
+function totalAll(c: ApplyJobCounts): number {
+  return c.applied + c.failed + c.skipped + c.pending;
+}
+
+function actionStatus(c: PerActionCounts, jobState: ApplyJobUiState): ProgressBarStatus {
+  const total = c.applied + c.failed + c.skipped + c.pending;
+  if (total === 0) return 'pending';
+  if (c.failed > 0 && c.pending === 0) return 'error';
+  if (c.pending === 0) return 'complete';
+  if (jobState === 'running' || jobState === 'starting') return 'running';
   return 'pending';
 }
 
-export function CleanupProgress({ actions, state, onDone, errors }: CleanupProgressProps) {
-  const totalCompleted = actions.reduce((sum, a) => sum + a.completed, 0);
-  const totalItems = actions.reduce((sum, a) => sum + a.total, 0);
-  const totalFailed = actions.reduce((sum, a) => sum + a.failed, 0);
+export function CleanupProgress({
+  jobState,
+  counts,
+  perAction,
+  accountStates,
+  errorMessage,
+  onCancel,
+  onClose,
+}: CleanupProgressProps) {
+  const total = totalAll(counts);
+  const processed = totalProcessed(counts);
+  const overallPct = total > 0 ? Math.round((processed / total) * 100) : 0;
+
+  const isRunning = jobState === 'running' || jobState === 'starting';
+  const isDone = jobState === 'done';
+  const isError = jobState === 'error';
+  const isCancelled = jobState === 'cancelled';
+
+  const accountEntries = accountStates ? Object.entries(accountStates) : [];
 
   return (
     <div className="space-y-6">
-      {/* Overall progress */}
+      {/* Overall status */}
       <div className="text-center">
-        {state === 'running' && (
+        {isRunning && (
           <div className="flex flex-col items-center gap-3 mb-4">
             <div className="w-10 h-10 border-4 border-blue-500 border-t-transparent rounded-full animate-spin" />
             <p className="text-sm font-medium text-gray-700 dark:text-gray-300">
-              Cleaning up your inbox...
+              {jobState === 'starting' ? 'Starting cleanup…' : 'Cleaning up your inbox…'}
             </p>
           </div>
         )}
-        {state === 'done' && (
+        {isDone && (
           <div className="flex flex-col items-center gap-3 mb-4">
             <div className="w-12 h-12 rounded-full bg-green-100 dark:bg-green-900/30 flex items-center justify-center">
               <svg
@@ -75,16 +111,41 @@ export function CleanupProgress({ actions, state, onDone, errors }: CleanupProgr
               </svg>
             </div>
             <p className="text-sm font-semibold text-green-700 dark:text-green-400">
-              Cleanup Complete
+              Cleanup complete
             </p>
             <p className="text-xs text-gray-500 dark:text-gray-400">
-              Successfully processed {totalCompleted.toLocaleString()} of{' '}
-              {totalItems.toLocaleString()} items
-              {totalFailed > 0 && ` (${totalFailed} failed)`}
+              Applied {counts.applied.toLocaleString()} ·{' '}
+              {counts.skipped > 0 && `${counts.skipped.toLocaleString()} skipped · `}
+              {counts.failed > 0 && `${counts.failed.toLocaleString()} failed`}
             </p>
           </div>
         )}
-        {state === 'error' && (
+        {isCancelled && (
+          <div className="flex flex-col items-center gap-3 mb-4">
+            <div className="w-12 h-12 rounded-full bg-amber-100 dark:bg-amber-900/30 flex items-center justify-center">
+              <svg
+                className="w-6 h-6 text-amber-600 dark:text-amber-400"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M10 9v6m4-6v6M5 7h14l-1 12a2 2 0 01-2 2H8a2 2 0 01-2-2L5 7z"
+                />
+              </svg>
+            </div>
+            <p className="text-sm font-semibold text-amber-700 dark:text-amber-400">
+              Cleanup cancelled
+            </p>
+            <p className="text-xs text-gray-500 dark:text-gray-400">
+              {counts.applied.toLocaleString()} operations completed before cancel.
+            </p>
+          </div>
+        )}
+        {isError && (
           <div className="flex flex-col items-center gap-3 mb-4">
             <div className="w-12 h-12 rounded-full bg-red-100 dark:bg-red-900/30 flex items-center justify-center">
               <svg
@@ -104,71 +165,126 @@ export function CleanupProgress({ actions, state, onDone, errors }: CleanupProgr
             <p className="text-sm font-semibold text-red-700 dark:text-red-400">
               Cleanup encountered errors
             </p>
+            {errorMessage && (
+              <p className="text-xs text-red-600 dark:text-red-300 max-w-sm">{errorMessage}</p>
+            )}
           </div>
         )}
       </div>
 
-      {/* Per-action progress */}
-      <div className="space-y-4 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-4">
-        {actions.map((action) => {
-          const status = getActionStatus(action, state);
-          const progress =
-            action.total > 0 ? Math.round((action.completed / action.total) * 100) : 0;
+      {/* Overall progress bar */}
+      <div className="rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-4 space-y-3">
+        <div className="flex items-center justify-between text-xs text-gray-500 dark:text-gray-400">
+          <span>
+            {processed.toLocaleString()} / {total.toLocaleString()} operations
+          </span>
+          <span>
+            {counts.applied} applied · {counts.skipped} skipped · {counts.failed} failed
+          </span>
+        </div>
+        <ProgressBar
+          label="Overall progress"
+          value={overallPct}
+          status={isError ? 'error' : isDone ? 'complete' : isRunning ? 'running' : 'pending'}
+        />
 
-          return (
-            <div key={action.type} className="space-y-1">
-              <div className="flex items-center gap-2">
-                <svg
-                  className="w-4 h-4 text-gray-400 shrink-0"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d={actionIcons[action.type]}
+        {/* Per-action mini bars (optional). */}
+        {perAction && Object.keys(perAction).length > 0 && (
+          <div className="space-y-2 pt-2 border-t border-gray-100 dark:border-gray-700">
+            {Object.entries(perAction).map(([actionType, c]) => {
+              const tot = c.applied + c.failed + c.skipped + c.pending;
+              const pct =
+                tot > 0 ? Math.round(((c.applied + c.failed + c.skipped) / tot) * 100) : 0;
+              return (
+                <div key={actionType} className="space-y-1">
+                  <div className="flex items-center justify-between text-xs text-gray-500 dark:text-gray-400">
+                    <span>{actionLabels[actionType] ?? actionType}</span>
+                    <span>
+                      {c.applied}/{tot}
+                      {c.failed > 0 && (
+                        <span className="text-red-500 ml-1">({c.failed} failed)</span>
+                      )}
+                    </span>
+                  </div>
+                  <ProgressBar
+                    label={actionLabels[actionType] ?? actionType}
+                    value={pct}
+                    status={actionStatus(c, jobState)}
                   />
-                </svg>
-                <span className="text-xs text-gray-500 dark:text-gray-400">
-                  {action.completed.toLocaleString()} / {action.total.toLocaleString()}
-                  {action.failed > 0 && (
-                    <span className="text-red-500 ml-1">({action.failed} failed)</span>
-                  )}
-                </span>
-              </div>
-              <ProgressBar label={actionLabels[action.type]} value={progress} status={status} />
-            </div>
-          );
-        })}
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
 
-      {/* Errors */}
-      {errors.length > 0 && (
-        <div className="rounded-lg border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-900/20 p-4">
-          <h4 className="text-sm font-semibold text-red-700 dark:text-red-400 mb-2">Errors</h4>
+      {/* Per-account paused indicators */}
+      {accountEntries.some(([, s]) => s.paused) && (
+        <div className="rounded-lg border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20 p-3 space-y-1">
+          <h4 className="text-xs font-semibold text-amber-800 dark:text-amber-300">
+            Paused accounts
+          </h4>
           <ul className="space-y-1">
-            {errors.map((err, i) => (
-              <li key={i} className="text-xs text-red-600 dark:text-red-300">
-                {err}
+            {accountEntries
+              .filter(([, s]) => s.paused)
+              .map(([accountId, s]) => (
+                <li
+                  key={accountId}
+                  className="text-xs text-amber-700 dark:text-amber-300 flex items-center gap-2"
+                >
+                  <span className="font-mono">{accountId}</span>
+                  <span>
+                    paused
+                    {s.pauseReason ? ` — ${pauseReasonLabel[s.pauseReason]}` : ''}
+                  </span>
+                  {s.pauseReason === 'hardDrift' && (
+                    <span className="text-[10px] uppercase tracking-wide text-amber-600 dark:text-amber-400">
+                      refresh required
+                    </span>
+                  )}
+                </li>
+              ))}
+          </ul>
+        </div>
+      )}
+
+      {/* Skipped breakdown */}
+      {counts.skippedByReason && Object.keys(counts.skippedByReason).length > 0 && (
+        <div className="rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/40 p-3">
+          <h4 className="text-xs font-semibold text-gray-700 dark:text-gray-300 mb-1">
+            Skipped breakdown
+          </h4>
+          <ul className="space-y-0.5 text-xs text-gray-600 dark:text-gray-400">
+            {Object.entries(counts.skippedByReason).map(([reason, n]) => (
+              <li key={reason}>
+                <span className="font-mono">{reason}</span>: {n}
               </li>
             ))}
           </ul>
         </div>
       )}
 
-      {/* Done button */}
-      {state === 'done' && onDone && (
-        <div className="flex justify-center pt-2">
+      {/* Action buttons */}
+      <div className="flex justify-center gap-3 pt-2">
+        {isRunning && onCancel && (
           <button
-            onClick={onDone}
+            type="button"
+            onClick={onCancel}
+            className="px-5 py-2 text-sm font-medium text-amber-700 dark:text-amber-300 border border-amber-300 dark:border-amber-700 rounded-md hover:bg-amber-50 dark:hover:bg-amber-900/20 transition-colors"
+          >
+            Cancel
+          </button>
+        )}
+        {(isDone || isCancelled || isError) && onClose && (
+          <button
+            type="button"
+            onClick={onClose}
             className="px-6 py-2.5 text-sm font-medium text-white bg-indigo-600 rounded-md hover:bg-indigo-700 transition-colors"
           >
-            Done
+            {isDone ? 'View results' : 'Done'}
           </button>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 }

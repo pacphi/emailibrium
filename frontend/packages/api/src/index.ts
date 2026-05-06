@@ -105,6 +105,10 @@ export {
   refreshPlanAccount,
   cancelPlan,
   listPlans,
+  beginApply,
+  cancelApply,
+  getApplyJob,
+  applyStreamUrl,
 } from './cleanupApi.js';
 export type { ListOpsParams } from './cleanupApi.js';
 

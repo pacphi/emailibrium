@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 // Provider + folder/label vocabulary (mirrors ADR-018 / DDD-008)
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Provider {
     Gmail,
@@ -162,7 +162,7 @@ impl OperationStatus {
 
 /// Reasons a row may be `Skipped`. Phase A defines all four so Phase C does
 /// not have to migrate the schema.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum SkipReason {
     StateDrift,

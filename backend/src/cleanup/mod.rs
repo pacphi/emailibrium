@@ -12,6 +12,7 @@
 //! - `docs/plan/cleanup-dry-run-implementation.md`
 
 pub mod domain;
+pub mod orchestrator;
 pub mod repository;
 
 pub mod api;

@@ -10,13 +10,18 @@
 // `?userId=` from the query string.
 
 import type {
+  ApplyOptions,
+  BeginApplyResponse,
+  CleanupApplyJob,
   CleanupPlan,
   CreatePlanResponse,
+  JobId,
   ListOpsResponse,
   ListPlansResponse,
   PlanId,
   PlanStatus,
   RiskLevel,
+  RiskMax,
   SampleResponse,
   WizardSelections,
 } from '@emailibrium/types';
@@ -92,6 +97,54 @@ export async function refreshPlanAccount(
 /** DELETE /api/v1/cleanup/plan/:id?userId=… */
 export async function cancelPlan(planId: PlanId, userId: string): Promise<void> {
   await api.delete(`cleanup/plan/${planId}`, { searchParams: { userId } });
+}
+
+// ---------------------------------------------------------------------------
+// Phase C: Apply orchestrator
+//
+// POST /api/v1/cleanup/apply/:planId?userId=…&riskMax=…  → 202 { jobId }
+// GET  /api/v1/cleanup/apply/:jobId/stream               → SSE
+// POST /api/v1/cleanup/apply/:jobId/cancel               → 204
+// GET  /api/v1/cleanup/apply/:jobId                      → CleanupApplyJob
+//
+// The cancel and get-job handlers do not currently take userId in the query
+// string (verified against backend/src/cleanup/api/apply.rs); only begin and
+// the SSE stream do.
+// ---------------------------------------------------------------------------
+
+/** POST /api/v1/cleanup/apply/:planId?userId=…&riskMax=… */
+export async function beginApply(
+  planId: PlanId,
+  userId: string,
+  riskMax: RiskMax,
+  opts: ApplyOptions,
+): Promise<BeginApplyResponse> {
+  return api
+    .post(`cleanup/apply/${planId}`, {
+      searchParams: { userId, riskMax },
+      json: opts,
+    })
+    .json<BeginApplyResponse>();
+}
+
+/** POST /api/v1/cleanup/apply/:jobId/cancel */
+export async function cancelApply(jobId: JobId): Promise<void> {
+  await api.post(`cleanup/apply/${jobId}/cancel`);
+}
+
+/** GET /api/v1/cleanup/apply/:jobId */
+export async function getApplyJob(jobId: JobId): Promise<CleanupApplyJob> {
+  return api.get(`cleanup/apply/${jobId}`).json<CleanupApplyJob>();
+}
+
+/**
+ * Build the absolute URL for the apply SSE stream. EventSource bypasses ky,
+ * so this is a plain URL builder. The handler does not currently require
+ * userId, but we leave the parameter in the signature to ease the Phase D
+ * migration when auth-derived user resolution lands.
+ */
+export function applyStreamUrl(jobId: JobId, _userId: string): string {
+  return `/api/v1/cleanup/apply/${encodeURIComponent(jobId)}/stream`;
 }
 
 /** GET /api/v1/cleanup/plans?userId=…&status=…&limit=… */

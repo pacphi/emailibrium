@@ -112,4 +112,12 @@ export type {
   ListOpsResponse,
   SampleResponse,
   ListPlansResponse,
+  JobState,
+  PauseReason,
+  AccountSnapshotState,
+  ApplyJobCounts,
+  ApplyOptions,
+  BeginApplyResponse,
+  CleanupApplyJob,
+  ApplyEvent,
 } from './cleanup.js';

@@ -55,6 +55,8 @@ pub struct AppState {
     pub pending_confirmations: Arc<Mutex<HashMap<String, api::ai::PendingConfirmation>>>,
     /// Cleanup planning repository (ADR-030 / DDD-008 addendum).
     pub cleanup_plan_repo: Arc<cleanup::repository::SqliteCleanupPlanRepo>,
+    /// Cleanup apply orchestrator (Phase C, ADR-030 §C / DDD-008 addendum).
+    pub apply_orchestrator: Arc<cleanup::orchestrator::ApplyOrchestrator>,
 }
 
 #[tokio::main]
@@ -337,6 +339,37 @@ async fn main() -> anyhow::Result<()> {
     let cleanup_plan_repo = Arc::new(cleanup::repository::SqliteCleanupPlanRepo::new(
         db.pool.clone(),
     ));
+    // Apply orchestrator (Phase C). Email providers map starts empty;
+    // production wiring will populate per-account `EmailProvider` instances
+    // after OAuth resolution. The unsubscribe service is shared.
+    let cleanup_apply_job_repo = Arc::new(cleanup::repository::SqliteCleanupApplyJobRepo::new(
+        db.pool.clone(),
+    ));
+    let cleanup_email_repo = Arc::new(cleanup::repository::SqlxEmailRepository {
+        pool: db.pool.clone(),
+    }) as Arc<dyn cleanup::domain::ports::EmailRepository>;
+    let cleanup_rule_eval = Arc::new(cleanup::repository::SqlxRuleEvaluator {
+        pool: db.pool.clone(),
+    }) as Arc<dyn cleanup::domain::ports::RuleEvaluator>;
+    let cleanup_account_state = Arc::new(cleanup::repository::SqlxAccountStateProvider {
+        pool: db.pool.clone(),
+    }) as Arc<dyn cleanup::domain::ports::AccountStateProvider>;
+    let drift_detector = Arc::new(cleanup::orchestrator::DriftDetector::new(
+        cleanup_account_state,
+    ));
+    let predicate_expander = Arc::new(cleanup::orchestrator::PredicateExpander::new(
+        cleanup_rule_eval,
+        cleanup_email_repo,
+    ));
+    let apply_orchestrator = Arc::new(cleanup::orchestrator::ApplyOrchestrator::new(
+        cleanup_plan_repo.clone() as Arc<dyn cleanup::repository::CleanupPlanRepository>,
+        cleanup_apply_job_repo as Arc<dyn cleanup::repository::CleanupApplyJobRepository>,
+        drift_detector,
+        predicate_expander,
+        Arc::new(|_| cleanup::domain::operation::Provider::Gmail),
+        Arc::new(std::collections::HashMap::new()),
+        Arc::new(email::unsubscribe::UnsubscribeService::new()),
+    ));
     let state = AppState {
         vector_service,
         db,
@@ -352,6 +385,7 @@ async fn main() -> anyhow::Result<()> {
         tool_calling_provider,
         pending_confirmations: Arc::new(Mutex::new(HashMap::new())),
         cleanup_plan_repo,
+        apply_orchestrator,
     };
 
     // Start the background email poll scheduler.

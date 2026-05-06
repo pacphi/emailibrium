@@ -298,8 +298,16 @@ async fn refresh_account(
     Path(id): Path<Uuid>,
     Query(q): Query<RefreshQuery>,
 ) -> Result<StatusCode, (StatusCode, Json<ErrorBody>)> {
-    // Phase A: recognise the request shape and clear the account's rows; the
-    // rebuild step is Phase C (DriftDetector + per-account PlanBuilder).
+    // Phase C race guard: reject if a job is currently running for this
+    // plan. Otherwise refresh would delete rows whose `applied_at` was
+    // already written, corrupting the audit trail (DDD-008 addendum).
+    if state.apply_orchestrator.is_running_for_plan(id).await {
+        return Err(err(
+            StatusCode::CONFLICT,
+            "apply_in_progress",
+            "cannot refresh while an apply job is running for this plan",
+        ));
+    }
     state
         .cleanup_plan_repo
         .replace_account_rows(id, &q.account_id, Vec::new())

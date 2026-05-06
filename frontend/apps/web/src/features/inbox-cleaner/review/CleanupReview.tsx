@@ -18,6 +18,8 @@ import { RiskAcknowledger } from './RiskAcknowledger';
 import { ApplyButtons } from './ApplyButtons';
 import { RefreshAccountAffordance } from './RefreshAccountAffordance';
 import { sourceKey, sourceLabel } from './groupKey';
+import { useCleanupApply } from '../hooks/useCleanupApply';
+import { CleanupProgress, type PerActionCounts } from '../CleanupProgress';
 
 export interface CleanupReviewProps {
   planId: PlanId;
@@ -106,13 +108,39 @@ export function CleanupReview({ planId, userId, onCancel }: CleanupReviewProps) 
     });
   }, []);
 
+  // Phase C: SSE-driven apply orchestrator hook.
+  const apply = useCleanupApply(userId);
+
   const handleApply = useCallback(
     (riskMax: RiskMax) => {
-      // Phase B: apply is a placeholder. Phase C will wire to POST /apply.
-      console.warn('[CleanupReview] apply placeholder', { planId, riskMax });
+      void apply.startApply(planId, riskMax, {
+        acknowledgedHighRiskSeqs: ackedHighSeqs,
+        acknowledgedMediumGroups: ackedMediumGroupKeys,
+      });
     },
-    [planId],
+    [apply, planId, ackedHighSeqs, ackedMediumGroupKeys],
   );
+
+  /**
+   * Per-action breakdown derived from the loaded plan operations and the
+   * live SSE counts. The SSE schema does not carry the action discriminator
+   * on op events, so we project ops into action buckets up-front and the
+   * progress component receives a static-shape map.
+   *
+   * For Phase C we present the totals (pending = total) and the global
+   * counts on top; per-row updates from SSE adjust the global `counts`
+   * field, while per-action precision is left for Phase D.
+   */
+  const perActionTotals = useMemo<Record<string, PerActionCounts>>(() => {
+    const m: Record<string, PerActionCounts> = {};
+    for (const op of opsResult.items) {
+      if (op.opKind !== 'materialized') continue;
+      const t = op.action.type;
+      if (!m[t]) m[t] = { applied: 0, failed: 0, skipped: 0, pending: 0 };
+      m[t].pending += 1;
+    }
+    return m;
+  }, [opsResult.items]);
 
   const accountAggregates = useMemo(() => {
     const map = new Map<string, AccountAggregate>();
@@ -185,6 +213,35 @@ export function CleanupReview({ planId, userId, onCancel }: CleanupReviewProps) 
   }
 
   const plan = planQuery.data;
+
+  // Phase C: once an apply job exists, swap the review surface for the
+  // SSE-driven progress view. Going `idle` again (e.g. after `onClose`) is
+  // not currently supported — `useCleanupApply` keeps the terminal state
+  // until unmount.
+  if (apply.jobId !== null && apply.jobState !== 'idle') {
+    return (
+      <div className="space-y-4">
+        <header>
+          <h1 className="text-lg font-bold text-gray-900 dark:text-gray-100">
+            Applying cleanup plan
+          </h1>
+          <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+            Plan {plan.id} · job {apply.jobId}
+          </p>
+        </header>
+        <CleanupProgress
+          jobState={apply.jobState}
+          counts={apply.counts}
+          perAction={perActionTotals}
+          accountStates={apply.accountStates}
+          errorMessage={apply.error}
+          onCancel={() => void apply.cancelApply()}
+          onClose={onCancel}
+        />
+      </div>
+    );
+  }
+
   const isTerminal = plan.status === 'expired' || plan.status === 'cancelled';
 
   if (isTerminal) {
