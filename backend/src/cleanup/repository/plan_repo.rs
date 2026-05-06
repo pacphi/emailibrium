@@ -6,20 +6,13 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use sqlx::SqlitePool;
+use sqlx::{Row, SqlitePool};
 
 use crate::cleanup::domain::operation::{
     AccountStateEtag, OperationStatus, PlanStatus, PlannedOperation, Provider,
 };
-use crate::cleanup::domain::plan::{CleanupPlan, CleanupPlanSummary, JobCounts, PlanId};
+use crate::cleanup::domain::plan::{CleanupPlan, CleanupPlanSummary, PlanId};
 use crate::cleanup::domain::ports::RepoError;
-
-/// Cursor for paginating operations: opaque seq value (last seen).
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
-pub struct Page {
-    pub items: usize,
-    pub next_cursor: Option<u64>,
-}
 
 /// On-disk envelope for the `totals_json` column. Carries `PlanTotals`
 /// alongside `account_providers` (Item #4) inside the same TEXT blob to
@@ -111,15 +104,6 @@ pub trait CleanupPlanRepository: Send + Sync {
         seq: u64,
         status: crate::cleanup::domain::operation::PredicateStatus,
     ) -> Result<(), RepoError>;
-    /// Phase A stub: returns empty Vec. Phase C wires this to the rule engine /
-    /// archive-strategy expansion.
-    async fn expand_predicate(
-        &self,
-        id: PlanId,
-        predicate_seq: u64,
-        page: u32,
-        page_size: u32,
-    ) -> Result<Vec<PlannedOperation>, RepoError>;
     async fn cancel(&self, id: PlanId) -> Result<(), RepoError>;
     async fn expire_due(&self, now: DateTime<Utc>) -> Result<u32, RepoError>;
     async fn purge_older_than(&self, cutoff: DateTime<Utc>) -> Result<u32, RepoError>;
@@ -350,41 +334,56 @@ impl CleanupPlanRepository for SqliteCleanupPlanRepo {
     ) -> Result<(Vec<PlannedOperation>, Option<u64>), RepoError> {
         let limit = limit.clamp(1, 1000) as i64;
         let cursor_i = cursor.map(|c| c as i64).unwrap_or(0);
-        // Phase A: filter applied in-memory after fetch (small scale).
-        let rows: Vec<(i64, String, String)> = sqlx::query_as(
-            r#"SELECT seq, op_kind, COALESCE(payload_json, '')
-               FROM cleanup_plan_operations
-               WHERE plan_id = ? AND seq > ?
-               ORDER BY seq ASC LIMIT ?"#,
-        )
-        .bind(id.as_bytes().to_vec())
-        .bind(cursor_i)
-        .bind(limit)
-        .fetch_all(&self.pool)
-        .await
-        .or_else(|_| {
-            // Fallback if the schema doesn't have payload_json yet.
-            Ok::<_, RepoError>(Vec::new())
-        })?;
+
+        // Build the SQL filter clauses dynamically based on which filters are set.
+        // SQLite supports `? IS NULL OR col = ?` style but sqlx requires explicit
+        // parameter binding; dynamic SQL is cleaner and avoids double-binding.
+        let mut sql = String::from(
+            "SELECT seq, COALESCE(payload_json, '') AS payload \
+             FROM cleanup_plan_operations \
+             WHERE plan_id = ? AND seq > ?",
+        );
+        if filter.account_id.is_some() {
+            sql.push_str(" AND account_id = ?");
+        }
+        if filter.risk.is_some() {
+            sql.push_str(" AND risk = ?");
+        }
+        if filter.action.is_some() {
+            // action column stores the PlanAction discriminant string.
+            sql.push_str(" AND action = ?");
+        }
+        sql.push_str(" ORDER BY seq ASC LIMIT ?");
+
+        let mut q = sqlx::query(&sql)
+            .bind(id.as_bytes().to_vec())
+            .bind(cursor_i);
+        if let Some(ref a) = filter.account_id {
+            q = q.bind(a);
+        }
+        if let Some(ref r) = filter.risk {
+            q = q.bind(r);
+        }
+        if let Some(ref act) = filter.action {
+            q = q.bind(act);
+        }
+        q = q.bind(limit);
+
+        let rows = q
+            .fetch_all(&self.pool)
+            .await
+            .or_else(|_| Ok::<_, RepoError>(Vec::new()))?;
 
         let mut ops = Vec::with_capacity(rows.len());
-        let mut last_seq = cursor;
-        for (seq, _kind, payload) in rows {
+        let mut last_seq: Option<u64> = cursor;
+        for r in &rows {
+            let seq: i64 = r.get("seq");
+            let payload: String = r.get("payload");
             if payload.is_empty() {
                 continue;
             }
             if let Ok(op) = serde_json::from_str::<PlannedOperation>(&payload) {
-                if filter
-                    .account_id
-                    .as_deref()
-                    .is_none_or(|a| op.account_id() == a)
-                    && filter
-                        .risk
-                        .as_deref()
-                        .is_none_or(|r| op.risk().as_str() == r)
-                {
-                    ops.push(op);
-                }
+                ops.push(op);
             }
             last_seq = Some(seq as u64);
         }
@@ -393,13 +392,32 @@ impl CleanupPlanRepository for SqliteCleanupPlanRepo {
 
     async fn sample_operations(
         &self,
-        _id: PlanId,
-        _source_kind: &str,
-        _n: u32,
+        id: PlanId,
+        source_kind: &str,
+        n: u32,
     ) -> Result<Vec<String>, RepoError> {
-        // Phase A: stub. Phase B will surface representative emailIds from the
-        // sample_email_ids stored on each predicate row.
-        Ok(Vec::new())
+        let row = sqlx::query(
+            r#"SELECT sample_ids_json
+               FROM cleanup_plan_operations
+               WHERE plan_id = ? AND op_kind = 'predicate' AND source_kind = ?
+               LIMIT 1"#,
+        )
+        .bind(id.as_bytes().to_vec())
+        .bind(source_kind)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        let Some(r) = row else {
+            return Ok(Vec::new());
+        };
+
+        let json_s: Option<String> = r.get("sample_ids_json");
+        let all_ids: Vec<String> = json_s
+            .as_deref()
+            .and_then(|s| serde_json::from_str(s).ok())
+            .unwrap_or_default();
+
+        Ok(all_ids.into_iter().take(n as usize).collect())
     }
 
     async fn replace_account_rows(
@@ -487,17 +505,6 @@ impl CleanupPlanRepository for SqliteCleanupPlanRepo {
                 .fetch_optional(&self.pool)
                 .await?;
         Ok(row.and_then(|(m,)| m).map(|v| v.max(0) as u64).unwrap_or(0))
-    }
-
-    async fn expand_predicate(
-        &self,
-        _id: PlanId,
-        _predicate_seq: u64,
-        _page: u32,
-        _page_size: u32,
-    ) -> Result<Vec<PlannedOperation>, RepoError> {
-        // Phase C will implement.
-        Ok(Vec::new())
     }
 
     async fn cancel(&self, id: PlanId) -> Result<(), RepoError> {

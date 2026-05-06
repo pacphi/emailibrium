@@ -533,7 +533,6 @@ fn canonical_operation(op: &PlannedOperation) -> CanonicalValue {
 #[derive(Debug, Clone)]
 enum CanonicalValue {
     Null,
-    Bool(bool),
     U64(u64),
     Str(String),
     Array(Vec<CanonicalValue>),
@@ -544,9 +543,6 @@ fn write_canonical(v: &CanonicalValue, h: &mut Hasher) {
     match v {
         CanonicalValue::Null => {
             h.update(b"n");
-        }
-        CanonicalValue::Bool(b) => {
-            h.update(if *b { b"t" } else { b"f" });
         }
         CanonicalValue::U64(n) => {
             h.update(b"u");

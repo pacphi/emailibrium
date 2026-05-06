@@ -240,6 +240,17 @@ impl JobState {
             Self::Failed => "failed",
         }
     }
+
+    pub fn from_str_opt(s: &str) -> Option<Self> {
+        match s {
+            "queued" => Some(Self::Queued),
+            "running" => Some(Self::Running),
+            "finished" => Some(Self::Finished),
+            "cancelled" => Some(Self::Cancelled),
+            "failed" => Some(Self::Failed),
+            _ => None,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

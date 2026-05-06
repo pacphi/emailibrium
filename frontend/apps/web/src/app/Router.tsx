@@ -9,6 +9,7 @@ import {
 } from '@tanstack/react-router';
 import { Layout } from './Layout';
 import { useSyncStore } from '@/shared/stores/syncStore';
+import { useCurrentUserId } from '@/shared/hooks/useCurrentUserId';
 
 // Lazy-loaded feature components
 const CommandCenter = lazy(() =>
@@ -90,50 +91,53 @@ const commandCenterRoute = createRoute({
   ),
 });
 
+// userId is derived from the first active connected account's email address.
+// This is the stable identifier used by the cleanup API (Phase A deviation;
+// Phase D will derive it server-side from the auth header instead).
+function InboxCleanerPage() {
+  const userId = useCurrentUserId();
+  return (
+    <Suspense fallback={LoadingFallback}>
+      <InboxCleaner userId={userId} />
+    </Suspense>
+  );
+}
+
+function CleanupHistoryPage() {
+  const userId = useCurrentUserId();
+  return (
+    <Suspense fallback={LoadingFallback}>
+      <CleanupHistory userId={userId} />
+    </Suspense>
+  );
+}
+
+function CleanupHistoryDetailPage() {
+  const userId = useCurrentUserId();
+  const { planId } = cleanupHistoryDetailRoute.useParams();
+  return (
+    <Suspense fallback={LoadingFallback}>
+      <CleanupHistoryDetail userId={userId} planId={planId} />
+    </Suspense>
+  );
+}
+
 const inboxCleanerRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/inbox-cleaner',
-  component: () => (
-    <Suspense fallback={LoadingFallback}>
-      <InboxCleaner />
-    </Suspense>
-  ),
+  component: InboxCleanerPage,
 });
-
-// Phase D: plan-history list view + read-only detail view.
-//
-// userId is sourced from localStorage to match how the rest of the app reads
-// the auth token (see packages/api/client.ts). When unauthenticated, the
-// child components render their own sign-in prompts.
-function getCurrentUserId(): string | null {
-  try {
-    return localStorage.getItem('user_id');
-  } catch {
-    return null;
-  }
-}
 
 const cleanupHistoryRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/cleanup/history',
-  component: () => (
-    <Suspense fallback={LoadingFallback}>
-      <CleanupHistory userId={getCurrentUserId()} />
-    </Suspense>
-  ),
+  component: CleanupHistoryPage,
 });
 
 const cleanupHistoryDetailRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/cleanup/history/$planId',
-  component: () => {
-    const { planId } = cleanupHistoryDetailRoute.useParams();
-    return (
-      <Suspense fallback={LoadingFallback}>
-        <CleanupHistoryDetail userId={getCurrentUserId()} planId={planId} />
-      </Suspense>
-    );
-  },
+  component: CleanupHistoryDetailPage,
 });
 
 const insightsRoute = createRoute({

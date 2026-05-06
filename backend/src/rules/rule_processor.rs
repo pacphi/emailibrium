@@ -51,6 +51,7 @@ pub fn apply_actions(
 /// emails are first sorted by `(date_asc, id_asc)`, then sampled as
 /// `head 5 + tail 5 + 10 stratified by date index`, deduplicated while
 /// preserving order, and finally capped at `min(scope.sample_size, 20)`.
+#[allow(dead_code)]
 pub fn evaluate_rules(
     mode: RuleExecutionMode,
     rules: &[Rule],

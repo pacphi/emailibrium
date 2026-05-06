@@ -14,12 +14,12 @@
 //! replace those stubs with adapters that read real `emails` /
 //! `topic_clusters` / subscription tables.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
-    response::IntoResponse,
     routing::{get, post},
     Json, Router,
 };
@@ -76,9 +76,31 @@ fn err(code: StatusCode, error: &str, message: &str) -> (StatusCode, Json<ErrorB
     )
 }
 
-fn build_plan_builder(state: &AppState) -> PlanBuilder {
+async fn build_plan_builder(state: &AppState) -> Result<PlanBuilder, sqlx::Error> {
     let pool = state.db.pool.clone();
-    PlanBuilder {
+
+    // Load per-account providers once so the closure is sync.
+    let rows = sqlx::query("SELECT id, provider FROM connected_accounts")
+        .fetch_all(&pool)
+        .await?;
+    let provider_map: Arc<HashMap<String, Provider>> = Arc::new(
+        rows.iter()
+            .map(|r| {
+                use sqlx::Row;
+                let id: String = r.get("id");
+                let prov: String = r.get("provider");
+                let p = match prov.as_str() {
+                    "outlook" => Provider::Outlook,
+                    "imap" => Provider::Imap,
+                    "pop3" => Provider::Pop3,
+                    _ => Provider::Gmail,
+                };
+                (id, p)
+            })
+            .collect(),
+    );
+
+    Ok(PlanBuilder {
         emails: Arc::new(SqlxEmailRepository { pool: pool.clone() }) as Arc<dyn EmailRepository>,
         subs: Arc::new(SqlxSubscriptionRepository { pool: pool.clone() })
             as Arc<dyn SubscriptionRepository>,
@@ -87,10 +109,11 @@ fn build_plan_builder(state: &AppState) -> PlanBuilder {
         rules: Arc::new(SqlxRuleEvaluator { pool: pool.clone() }) as Arc<dyn RuleEvaluator>,
         accounts: Arc::new(SqlxAccountStateProvider { pool }) as Arc<dyn AccountStateProvider>,
         classifier: Arc::new(RiskClassifier::new()),
-        // Phase A: default to Gmail; Phase C will read provider per account.
-        provider_for: Arc::new(|_| Provider::Gmail),
+        provider_for: Arc::new(move |account_id: &str| {
+            *provider_map.get(account_id).unwrap_or(&Provider::Gmail)
+        }),
         plan_ttl_minutes: 30,
-    }
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -126,7 +149,13 @@ async fn create_plan(
             "userId required",
         ));
     }
-    let builder = build_plan_builder(&state);
+    let builder = build_plan_builder(&state).await.map_err(|e| {
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "provider_lookup_failed",
+            &e.to_string(),
+        )
+    })?;
     let build_started = std::time::Instant::now();
     let plan: CleanupPlan = builder.build(&q.user_id, selections).await.map_err(|e| {
         err(
@@ -220,7 +249,6 @@ async fn cancel_plan(
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ListOpsQuery {
-    pub user_id: String,
     pub cursor: Option<u64>,
     pub limit: Option<u32>,
     pub risk: Option<String>,
@@ -267,7 +295,6 @@ async fn list_operations(
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SampleQuery {
-    pub user_id: String,
     pub source: String,
     pub n: Option<u32>,
 }

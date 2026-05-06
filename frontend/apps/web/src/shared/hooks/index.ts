@@ -10,3 +10,4 @@ export { useInstallPrompt } from './useInstallPrompt';
 export { useIntersectionObserver } from './useIntersectionObserver';
 export { useMediaQuery, useIsMobile, useIsTablet, useIsDesktop } from './useMediaQuery';
 export { useAppConfig } from './useAppConfig';
+export { useCurrentUserId } from './useCurrentUserId';

@@ -567,15 +567,6 @@ mod tests {
             }
             Ok(())
         }
-        async fn expand_predicate(
-            &self,
-            _id: PlanId,
-            _seq: u64,
-            _page: u32,
-            _ps: u32,
-        ) -> Result<Vec<PlannedOperation>, RepoError> {
-            Ok(Vec::new())
-        }
         async fn cancel(&self, _id: PlanId) -> Result<(), RepoError> {
             Ok(())
         }

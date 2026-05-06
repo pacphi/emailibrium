@@ -9,4 +9,4 @@ pub use adapters::{
     SqlxSubscriptionRepository,
 };
 pub use job_repo::{CleanupApplyJobRepository, SqliteCleanupApplyJobRepo};
-pub use plan_repo::{CleanupPlanRepository, OpsFilter, Page, SqliteCleanupPlanRepo};
+pub use plan_repo::{CleanupPlanRepository, OpsFilter, SqliteCleanupPlanRepo};

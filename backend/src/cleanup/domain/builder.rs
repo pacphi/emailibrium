@@ -16,7 +16,7 @@ use super::classifier::{AccountContext, RiskClassifier};
 use super::operation::{
     AccountStateEtag, ClusterAction, MoveKind, OperationStatus, PlanAction, PlanSource, PlanStatus,
     PlanWarning, PlannedOperation, PlannedOperationPredicate, PlannedOperationRow, PredicateKind,
-    PredicateStatus, Provider, ReverseOp, RiskLevel,
+    PredicateStatus, Provider, ReverseOp,
 };
 use super::plan::{canonical_plan_hash, CleanupPlan, PlanTotals, RiskRollup, WizardSelections};
 use super::ports::{
@@ -30,8 +30,6 @@ pub enum BuildError {
     Repo(#[from] RepoError),
     #[error("rule engine: {0}")]
     Rules(#[from] RuleEvalError),
-    #[error("invalid selection: {0}")]
-    Invalid(String),
 }
 
 pub struct PlanBuilder {
@@ -276,7 +274,7 @@ impl PlanBuilder {
         let mut totals = PlanTotals::default();
         let mut risk = RiskRollup::default();
 
-        let mut bump =
+        let bump =
             |totals: &mut PlanTotals, account_id: &str, action_key: &str, source_key: &str| {
                 totals.total_operations += 1;
                 *totals.by_account.entry(account_id.to_string()).or_insert(0) += 1;
@@ -362,9 +360,36 @@ fn plan_action_from_rule(a: &RuleAction) -> PlanAction {
 }
 
 fn reverse_for(action: &PlanAction) -> Option<ReverseOp> {
+    use crate::cleanup::domain::operation::FolderOrLabel;
     match action {
-        PlanAction::Delete { permanent: true } => Some(ReverseOp::Irreversible),
-        _ => None, // Phase E will fill these in.
+        PlanAction::Delete { permanent: true } | PlanAction::Unsubscribe { .. } => {
+            Some(ReverseOp::Irreversible)
+        }
+        PlanAction::Delete { permanent: false } => Some(ReverseOp::MoveBack {
+            kind: MoveKind::Label,
+            target: FolderOrLabel {
+                id: "INBOX".into(),
+                name: "Inbox".into(),
+                kind: MoveKind::Label,
+            },
+        }),
+        PlanAction::Archive => Some(ReverseOp::AddLabel {
+            kind: MoveKind::Label,
+            target: FolderOrLabel {
+                id: "INBOX".into(),
+                name: "Inbox".into(),
+                kind: MoveKind::Label,
+            },
+        }),
+        PlanAction::AddLabel { kind } => Some(ReverseOp::RemoveLabel {
+            kind: *kind,
+            target: FolderOrLabel {
+                id: String::new(),
+                name: String::new(),
+                kind: *kind,
+            },
+        }),
+        _ => None,
     }
 }
 
@@ -430,17 +455,6 @@ mod tests {
 
     #[async_trait]
     impl SubscriptionRepository for Fakes {
-        async fn list_by_account(
-            &self,
-            a: &str,
-        ) -> Result<Vec<super::super::ports::SubscriptionRecord>, RepoError> {
-            Ok(self
-                .subs
-                .iter()
-                .filter(|((acct, _), _)| acct == a)
-                .map(|(_, v)| v.clone())
-                .collect())
-        }
         async fn find_by_sender(
             &self,
             a: &str,
@@ -501,10 +515,7 @@ mod tests {
         subs.insert(
             ("acct-a".to_string(), "news@x.com".to_string()),
             super::super::ports::SubscriptionRecord {
-                sender: "news@x.com".into(),
-                account_id: "acct-a".into(),
                 method: super::super::operation::UnsubscribeMethodKind::ListUnsubscribePost,
-                message_count: 12,
             },
         );
         let fakes = Arc::new(Fakes {

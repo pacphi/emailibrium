@@ -24,8 +24,6 @@
 //! optional error code+message (which itself MUST NOT contain PII; see
 //! [`crate::middleware::log_scrub`]).
 
-use std::sync::Arc;
-
 use async_trait::async_trait;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -393,9 +391,6 @@ impl CleanupAuditWriter for NoopCleanupAuditWriter {
         Ok(Vec::new())
     }
 }
-
-/// Convenience type for `Arc<dyn CleanupAuditWriter>`.
-pub type SharedCleanupAuditWriter = Arc<dyn CleanupAuditWriter>;
 
 // ---------------------------------------------------------------------------
 // Tests

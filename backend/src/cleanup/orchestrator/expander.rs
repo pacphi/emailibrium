@@ -98,11 +98,35 @@ impl PredicateExpander {
 }
 
 fn reverse_for_action(action: &PlanAction) -> Option<crate::cleanup::domain::operation::ReverseOp> {
-    use crate::cleanup::domain::operation::ReverseOp;
+    use crate::cleanup::domain::operation::{FolderOrLabel, MoveKind, ReverseOp};
     match action {
-        PlanAction::Archive | PlanAction::AddLabel { .. } | PlanAction::Move { .. } => None,
-        PlanAction::Delete { permanent: true } => Some(ReverseOp::Irreversible),
-        PlanAction::Unsubscribe { .. } => Some(ReverseOp::Irreversible),
+        PlanAction::Delete { permanent: true } | PlanAction::Unsubscribe { .. } => {
+            Some(ReverseOp::Irreversible)
+        }
+        PlanAction::Delete { permanent: false } => Some(ReverseOp::MoveBack {
+            kind: MoveKind::Label,
+            target: FolderOrLabel {
+                id: "INBOX".into(),
+                name: "Inbox".into(),
+                kind: MoveKind::Label,
+            },
+        }),
+        PlanAction::Archive => Some(ReverseOp::AddLabel {
+            kind: MoveKind::Label,
+            target: FolderOrLabel {
+                id: "INBOX".into(),
+                name: "Inbox".into(),
+                kind: MoveKind::Label,
+            },
+        }),
+        PlanAction::AddLabel { kind } => Some(ReverseOp::RemoveLabel {
+            kind: *kind,
+            target: FolderOrLabel {
+                id: String::new(),
+                name: String::new(),
+                kind: *kind,
+            },
+        }),
         _ => None,
     }
 }
@@ -115,8 +139,6 @@ mod tests {
     use crate::cleanup::domain::operation::{
         EmailRef, PlanSource, PredicateKind, PredicateStatus, RiskLevel,
     };
-    use crate::cleanup::domain::ports::SubscriptionRecord;
-
     struct StubEmailRepo {
         emails: Vec<EmailRef>,
     }
@@ -149,9 +171,6 @@ mod tests {
             Ok(Vec::new())
         }
     }
-
-    #[allow(dead_code)]
-    fn _unused_subscription_record(_s: SubscriptionRecord) {}
 
     fn make_predicate(account_id: &str) -> PlannedOperationPredicate {
         PlannedOperationPredicate {

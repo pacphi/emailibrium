@@ -31,10 +31,9 @@ use super::plan::ErrorBody;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
-        .route("/apply/{plan_id}", post(begin_apply))
-        .route("/apply/{job_id}/stream", get(apply_stream))
-        .route("/apply/{job_id}/cancel", post(cancel_apply))
-        .route("/apply/{job_id}", get(get_apply_job))
+        .route("/apply/{id}", post(begin_apply).get(get_apply_job))
+        .route("/apply/{id}/stream", get(apply_stream))
+        .route("/apply/{id}/cancel", post(cancel_apply))
 }
 
 fn err(code: StatusCode, error: &str, message: &str) -> (StatusCode, Json<ErrorBody>) {

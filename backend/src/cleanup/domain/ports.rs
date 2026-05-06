@@ -32,10 +32,7 @@ pub enum RuleEvalError {
 /// `PlanSource::Subscription`.
 #[derive(Debug, Clone)]
 pub struct SubscriptionRecord {
-    pub sender: String,
-    pub account_id: String,
     pub method: UnsubscribeMethodKind,
-    pub message_count: u64,
 }
 
 #[async_trait]
@@ -47,8 +44,6 @@ pub trait EmailRepository: Send + Sync {
 
 #[async_trait]
 pub trait SubscriptionRepository: Send + Sync {
-    async fn list_by_account(&self, account_id: &str)
-        -> Result<Vec<SubscriptionRecord>, RepoError>;
     async fn find_by_sender(
         &self,
         account_id: &str,

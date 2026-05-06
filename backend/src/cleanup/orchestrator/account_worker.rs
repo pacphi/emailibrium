@@ -26,9 +26,11 @@ use thiserror::Error;
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 
-use crate::cleanup::audit::{
-    AuditOutcome, CleanupAuditEntry, CleanupAuditWriter, NoopCleanupAuditWriter,
-};
+#[cfg(test)]
+use super::factory::MockEmailProviderFactory;
+#[cfg(test)]
+use crate::cleanup::audit::NoopCleanupAuditWriter;
+use crate::cleanup::audit::{AuditOutcome, CleanupAuditEntry, CleanupAuditWriter};
 use crate::cleanup::domain::operation::{
     ErrorCode, OperationStatus, PlanAction, PlannedOperation, PlannedOperationPredicate,
     PlannedOperationRow, PredicateStatus, Provider, RiskLevel, RiskMax, SkipReason,
@@ -39,7 +41,7 @@ use crate::email::provider::{MoveKind as ProvMoveKind, ProviderError};
 use crate::email::unsubscribe::{SubscriptionTarget, UnsubscribeService};
 
 use super::expander::PredicateExpander;
-use super::factory::{EmailProviderFactory, FactoryError, MockEmailProviderFactory};
+use super::factory::{EmailProviderFactory, FactoryError};
 use super::sse::{plan_action_type_str, ApplyEvent, EventEmitter, PauseReason};
 
 #[derive(Debug, Error)]
@@ -141,7 +143,6 @@ impl AccountWorker {
             .await?;
 
         let mut idx = 0usize;
-        let mut rows = rows;
         while idx < rows.len() {
             if cancel.is_cancelled() {
                 return Err(WorkerError::Cancelled);

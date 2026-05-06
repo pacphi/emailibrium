@@ -20,8 +20,3 @@ pub mod telemetry;
 pub mod api;
 
 pub use api::routes;
-pub use audit::{
-    AuditError, AuditOutcome, CleanupAuditEntry, CleanupAuditWriter, NoopCleanupAuditWriter,
-    SharedCleanupAuditWriter, SqliteCleanupAuditWriter,
-};
-pub use telemetry::{hash_account_id, hash_user_id, CleanupTelemetryEvent, TelemetryEmitter};

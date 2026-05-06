@@ -2,9 +2,10 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use sqlx::SqlitePool;
+use sqlx::{Row, SqlitePool};
+use uuid::Uuid;
 
-use crate::cleanup::domain::operation::JobState;
+use crate::cleanup::domain::operation::{JobState, RiskMax};
 use crate::cleanup::domain::plan::{CleanupApplyJob, JobCounts, JobId, PlanId};
 use crate::cleanup::domain::ports::RepoError;
 
@@ -58,9 +59,21 @@ impl CleanupApplyJobRepository for SqliteCleanupApplyJobRepo {
         Ok(())
     }
 
-    async fn load(&self, _job_id: JobId) -> Result<Option<CleanupApplyJob>, RepoError> {
-        // Phase C will fully implement — Phase A only needs the table to exist.
-        Ok(None)
+    async fn load(&self, job_id: JobId) -> Result<Option<CleanupApplyJob>, RepoError> {
+        let row = sqlx::query(
+            r#"SELECT job_id, plan_id, started_at, finished_at, state, risk_max, counts_json
+               FROM cleanup_apply_jobs WHERE job_id = ?"#,
+        )
+        .bind(job_id.as_bytes().to_vec())
+        .fetch_optional(&self.pool)
+        .await?;
+
+        let Some(r) = row else {
+            return Ok(None);
+        };
+
+        let job = map_job_row(&r)?;
+        Ok(Some(job))
     }
 
     async fn update_state(
@@ -86,7 +99,58 @@ impl CleanupApplyJobRepository for SqliteCleanupApplyJobRepo {
         Ok(())
     }
 
-    async fn list_by_plan(&self, _plan_id: PlanId) -> Result<Vec<CleanupApplyJob>, RepoError> {
-        Ok(Vec::new())
+    async fn list_by_plan(&self, plan_id: PlanId) -> Result<Vec<CleanupApplyJob>, RepoError> {
+        let rows = sqlx::query(
+            r#"SELECT job_id, plan_id, started_at, finished_at, state, risk_max, counts_json
+               FROM cleanup_apply_jobs WHERE plan_id = ?
+               ORDER BY started_at DESC"#,
+        )
+        .bind(plan_id.as_bytes().to_vec())
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.iter().map(map_job_row).collect()
     }
+}
+
+fn map_job_row(r: &sqlx::sqlite::SqliteRow) -> Result<CleanupApplyJob, RepoError> {
+    let job_id_bytes: Vec<u8> = r.get("job_id");
+    let plan_id_bytes: Vec<u8> = r.get("plan_id");
+
+    let job_id = Uuid::from_slice(&job_id_bytes)
+        .map_err(|e| RepoError::Internal(format!("bad job_id: {e}")))?;
+    let plan_id = Uuid::from_slice(&plan_id_bytes)
+        .map_err(|e| RepoError::Internal(format!("bad plan_id: {e}")))?;
+
+    let started_ms: i64 = r.get("started_at");
+    let started_at = DateTime::from_timestamp_millis(started_ms)
+        .ok_or_else(|| RepoError::Internal("bad started_at".into()))?;
+
+    let finished_ms: Option<i64> = r.get("finished_at");
+    let finished_at = finished_ms.and_then(DateTime::from_timestamp_millis);
+
+    let state_s: String = r.get("state");
+    let state = JobState::from_str_opt(&state_s)
+        .ok_or_else(|| RepoError::Internal(format!("bad job state: {state_s}")))?;
+
+    let risk_s: String = r.get("risk_max");
+    let risk_max = match risk_s.as_str() {
+        "medium" => RiskMax::Medium,
+        "high" => RiskMax::High,
+        _ => RiskMax::Low,
+    };
+
+    let counts_s: String = r.get("counts_json");
+    let counts: JobCounts =
+        serde_json::from_str(&counts_s).map_err(|e| RepoError::Internal(e.to_string()))?;
+
+    Ok(CleanupApplyJob {
+        job_id,
+        plan_id,
+        started_at,
+        finished_at,
+        state,
+        risk_max,
+        counts,
+    })
 }
