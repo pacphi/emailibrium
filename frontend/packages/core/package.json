@@ -11,7 +11,7 @@
   "dependencies": {
     "@emailibrium/types": "workspace:*",
     "idb-keyval": "^6.2.2",
-    "zustand": "^5.0.12"
+    "zustand": "^5.0.13"
   },
   "devDependencies": {
     "typescript": "^6.0.3",
