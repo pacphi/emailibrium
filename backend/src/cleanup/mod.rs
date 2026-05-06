@@ -11,10 +11,17 @@
 //! - `docs/DDDs/DDD-008-addendum-cleanup-planning.md`
 //! - `docs/plan/cleanup-dry-run-implementation.md`
 
+pub mod audit;
 pub mod domain;
 pub mod orchestrator;
 pub mod repository;
+pub mod telemetry;
 
 pub mod api;
 
 pub use api::routes;
+pub use audit::{
+    AuditError, AuditOutcome, CleanupAuditEntry, CleanupAuditWriter, NoopCleanupAuditWriter,
+    SharedCleanupAuditWriter, SqliteCleanupAuditWriter,
+};
+pub use telemetry::{hash_account_id, hash_user_id, CleanupTelemetryEvent, TelemetryEmitter};

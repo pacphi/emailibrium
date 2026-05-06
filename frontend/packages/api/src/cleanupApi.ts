@@ -157,3 +157,56 @@ export async function listPlans(
   if (status) sp.status = status;
   return api.get('cleanup/plans', { searchParams: sp }).json<ListPlansResponse>();
 }
+
+// ---------------------------------------------------------------------------
+// Phase D: Telemetry + audit-trail
+// ---------------------------------------------------------------------------
+
+/** Payload for the `cleanup_plan_reviewed` telemetry event. */
+export interface CleanupPlanReviewedPayload {
+  planId: PlanId;
+  /** Time spent on the review screen in milliseconds. */
+  timeOnReviewMs: number;
+  /** Number of PlanDiffGroup expand-toggles fired. */
+  expandedGroups: number;
+  /** Number of SampleEmailPeek opens fired. */
+  samplesViewed: number;
+}
+
+/**
+ * POST /api/v1/cleanup/telemetry — best-effort. Errors are swallowed by
+ * callers; this wrapper still throws so a wrapping `try {} catch {}` can
+ * keep a clean stack trace if the caller wants to log.
+ */
+export async function emitCleanupReviewed(payload: CleanupPlanReviewedPayload): Promise<void> {
+  await api.post('cleanup/telemetry', {
+    json: { event: 'cleanup_plan_reviewed', ...payload },
+  });
+}
+
+/** One audit row emitted by the apply orchestrator (Phase D backend). */
+export interface CleanupAuditEntry {
+  seq: number;
+  accountId: string;
+  /** "applied" | "failed" | "skipped" — mirrors backend audit-log enum. */
+  outcome: 'applied' | 'failed' | 'skipped';
+  at: string;
+  jobId?: JobId;
+  error?: { code: string; message: string };
+  skipReason?: string;
+}
+
+export interface CleanupAuditResponse {
+  items: CleanupAuditEntry[];
+}
+
+/**
+ * GET /api/v1/cleanup/plan/:id/audit?userId=… — optional Phase D endpoint.
+ * Returns 404 when the parallel backend agent hasn't shipped it yet; the
+ * caller should treat any error as "audit history unavailable".
+ */
+export async function listPlanAudit(planId: PlanId, userId: string): Promise<CleanupAuditResponse> {
+  return api
+    .get(`cleanup/plan/${planId}/audit`, { searchParams: { userId } })
+    .json<CleanupAuditResponse>();
+}

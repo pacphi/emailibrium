@@ -57,6 +57,11 @@ pub struct AppState {
     pub cleanup_plan_repo: Arc<cleanup::repository::SqliteCleanupPlanRepo>,
     /// Cleanup apply orchestrator (Phase C, ADR-030 §C / DDD-008 addendum).
     pub apply_orchestrator: Arc<cleanup::orchestrator::ApplyOrchestrator>,
+    /// Cleanup audit log writer (Phase D, ADR-030 §Security; GDPR
+    /// right-to-explanation surface).
+    pub cleanup_audit_writer: Arc<dyn cleanup::audit::CleanupAuditWriter>,
+    /// Cleanup telemetry emitter (Phase D, ADR-030 §Security).
+    pub cleanup_telemetry: Arc<cleanup::telemetry::TelemetryEmitter>,
 }
 
 #[tokio::main]
@@ -361,15 +366,23 @@ async fn main() -> anyhow::Result<()> {
         cleanup_rule_eval,
         cleanup_email_repo,
     ));
-    let apply_orchestrator = Arc::new(cleanup::orchestrator::ApplyOrchestrator::new(
-        cleanup_plan_repo.clone() as Arc<dyn cleanup::repository::CleanupPlanRepository>,
-        cleanup_apply_job_repo as Arc<dyn cleanup::repository::CleanupApplyJobRepository>,
-        drift_detector,
-        predicate_expander,
-        Arc::new(|_| cleanup::domain::operation::Provider::Gmail),
-        Arc::new(std::collections::HashMap::new()),
-        Arc::new(email::unsubscribe::UnsubscribeService::new()),
-    ));
+    let cleanup_audit_writer: Arc<dyn cleanup::audit::CleanupAuditWriter> = Arc::new(
+        cleanup::audit::SqliteCleanupAuditWriter::new(db.pool.clone()),
+    );
+    let cleanup_telemetry = Arc::new(cleanup::telemetry::TelemetryEmitter::new());
+    let apply_orchestrator = Arc::new(
+        cleanup::orchestrator::ApplyOrchestrator::new(
+            cleanup_plan_repo.clone() as Arc<dyn cleanup::repository::CleanupPlanRepository>,
+            cleanup_apply_job_repo as Arc<dyn cleanup::repository::CleanupApplyJobRepository>,
+            drift_detector,
+            predicate_expander,
+            Arc::new(|_| cleanup::domain::operation::Provider::Gmail),
+            Arc::new(std::collections::HashMap::new()),
+            Arc::new(email::unsubscribe::UnsubscribeService::new()),
+        )
+        .with_audit(cleanup_audit_writer.clone())
+        .with_telemetry(cleanup_telemetry.clone()),
+    );
     let state = AppState {
         vector_service,
         db,
@@ -386,6 +399,8 @@ async fn main() -> anyhow::Result<()> {
         pending_confirmations: Arc::new(Mutex::new(HashMap::new())),
         cleanup_plan_repo,
         apply_orchestrator,
+        cleanup_audit_writer,
+        cleanup_telemetry,
     };
 
     // Start the background email poll scheduler.

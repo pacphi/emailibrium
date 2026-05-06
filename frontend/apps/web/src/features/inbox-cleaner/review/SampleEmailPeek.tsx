@@ -7,9 +7,11 @@ export interface SampleEmailPeekProps {
   planId: PlanId;
   userId: string;
   source: PlanSource;
+  /** Phase D telemetry — fires on the first open of this peek instance. */
+  onOpened?: () => void;
 }
 
-export function SampleEmailPeek({ planId, userId, source }: SampleEmailPeekProps) {
+export function SampleEmailPeek({ planId, userId, source, onOpened }: SampleEmailPeekProps) {
   const [open, setOpen] = useState(false);
   const [emailIds, setEmailIds] = useState<string[] | null>(null);
   const [loading, setLoading] = useState(false);
@@ -42,7 +44,13 @@ export function SampleEmailPeek({ planId, userId, source }: SampleEmailPeekProps
     <div className="text-xs">
       <button
         type="button"
-        onClick={() => setOpen((o) => !o)}
+        onClick={() => {
+          setOpen((o) => {
+            const next = !o;
+            if (next && !o && onOpened) onOpened();
+            return next;
+          });
+        }}
         aria-expanded={open}
         className="text-blue-600 dark:text-blue-400 underline hover:no-underline"
       >

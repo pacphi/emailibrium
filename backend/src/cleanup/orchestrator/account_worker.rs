@@ -26,11 +26,14 @@ use thiserror::Error;
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 
+use crate::cleanup::audit::{
+    AuditOutcome, CleanupAuditEntry, CleanupAuditWriter, NoopCleanupAuditWriter,
+};
 use crate::cleanup::domain::operation::{
     ErrorCode, OperationStatus, PlanAction, PlannedOperation, PlannedOperationRow, Provider,
     RiskLevel, RiskMax, SkipReason,
 };
-use crate::cleanup::domain::plan::{JobCounts, PlanId};
+use crate::cleanup::domain::plan::{JobCounts, JobId, PlanId};
 use crate::cleanup::repository::CleanupPlanRepository;
 use crate::email::provider::{EmailProvider, MoveKind as ProvMoveKind, ProviderError};
 use crate::email::unsubscribe::{SubscriptionTarget, UnsubscribeService};
@@ -57,6 +60,38 @@ pub struct AccountWorkerCtx {
     #[allow(dead_code)]
     pub expander: Arc<PredicateExpander>,
     pub emitter: EventEmitter,
+    /// Per-operation audit writer (Phase D, ADR-030 §Security). Writes
+    /// one row per terminal outcome. Failures are logged but do NOT
+    /// abort apply — audit is observational, not authoritative.
+    pub audit: Arc<dyn CleanupAuditWriter>,
+    /// User the apply was issued by — recorded on every audit row so
+    /// `list_for_user` can surface the GDPR right-to-explanation set.
+    pub user_id: String,
+    /// Job id for this apply run; carried into every audit row.
+    pub job_id: JobId,
+}
+
+impl AccountWorkerCtx {
+    /// Convenience constructor for tests that don't care about audit;
+    /// installs a no-op writer + placeholder user/job ids.
+    #[cfg(test)]
+    pub fn for_test(
+        repo: Arc<dyn CleanupPlanRepository>,
+        emitter: EventEmitter,
+        expander: Arc<PredicateExpander>,
+        unsubscribe: Arc<UnsubscribeService>,
+    ) -> Self {
+        Self {
+            repo,
+            email_provider: None,
+            unsubscribe,
+            expander,
+            emitter,
+            audit: Arc::new(NoopCleanupAuditWriter) as Arc<dyn CleanupAuditWriter>,
+            user_id: "test-user".into(),
+            job_id: uuid::Uuid::nil(),
+        }
+    }
 }
 
 pub struct AccountWorker {
@@ -118,6 +153,13 @@ impl AccountWorker {
             if op.risk() == RiskLevel::High && !acked_high_seqs.contains(&op.seq()) {
                 self.skip(plan_id, op.seq(), SkipReason::Unacknowledged, &mut counts)
                     .await?;
+                self.write_audit_op(
+                    plan_id,
+                    &op,
+                    AuditOutcome::Skipped,
+                    Some(SkipReason::Unacknowledged),
+                )
+                .await;
                 continue;
             }
             if op.risk() == RiskLevel::Medium {
@@ -125,6 +167,13 @@ impl AccountWorker {
                 if !group.is_empty() && !acked_medium_groups.contains(&group) {
                     self.skip(plan_id, op.seq(), SkipReason::Unacknowledged, &mut counts)
                         .await?;
+                    self.write_audit_op(
+                        plan_id,
+                        &op,
+                        AuditOutcome::Skipped,
+                        Some(SkipReason::Unacknowledged),
+                    )
+                    .await;
                     continue;
                 }
             }
@@ -161,6 +210,8 @@ impl AccountWorker {
                         .repo
                         .update_operation_status(plan_id, row.seq, OperationStatus::Applied, now)
                         .await?;
+                    self.write_audit(plan_id, &row, AuditOutcome::Applied, None)
+                        .await;
                     self.ctx.emitter.emit(ApplyEvent::OpApplied {
                         seq: row.seq,
                         account_id: self.account_id.clone(),
@@ -171,6 +222,8 @@ impl AccountWorker {
                 }
                 Err(DispatchError::Skipped(reason)) => {
                     self.skip(plan_id, row.seq, reason, &mut counts).await?;
+                    self.write_audit(plan_id, &row, AuditOutcome::Skipped, Some(reason))
+                        .await;
                 }
                 Err(DispatchError::AccountPaused(reason)) => {
                     self.ctx.emitter.emit(ApplyEvent::AccountPaused {
@@ -186,6 +239,10 @@ impl AccountWorker {
                         .repo
                         .update_operation_status(plan_id, row.seq, OperationStatus::Failed, now)
                         .await?;
+                    let mut row_with_err = row.clone();
+                    row_with_err.error = Some(error.clone());
+                    self.write_audit(plan_id, &row_with_err, AuditOutcome::Failed, None)
+                        .await;
                     self.ctx.emitter.emit(ApplyEvent::OpFailed {
                         seq: row.seq,
                         account_id: self.account_id.clone(),
@@ -205,6 +262,66 @@ impl AccountWorker {
         }
 
         Ok(counts)
+    }
+
+    /// Write a single audit row for a materialized operation outcome.
+    /// Failures of the audit write are logged but never abort apply —
+    /// audit is observational, not authoritative (ADR-030 §Security).
+    async fn write_audit(
+        &self,
+        plan_id: PlanId,
+        row: &PlannedOperationRow,
+        outcome: AuditOutcome,
+        skip_reason: Option<SkipReason>,
+    ) {
+        let mut entry = CleanupAuditEntry::from_materialized(
+            plan_id,
+            self.ctx.job_id,
+            &self.ctx.user_id,
+            row,
+            outcome,
+        );
+        if skip_reason.is_some() {
+            entry.skip_reason = skip_reason;
+        }
+        if let Err(e) = self.ctx.audit.write(entry).await {
+            tracing::error!(
+                target: "cleanup.audit",
+                account_id = %self.account_id,
+                seq = row.seq,
+                error = %e,
+                "audit write failed (non-fatal)"
+            );
+        }
+    }
+
+    /// Audit-write variant for any [`PlannedOperation`] — used at the
+    /// pre-dispatch skip sites where we still hold the wrapper enum.
+    async fn write_audit_op(
+        &self,
+        plan_id: PlanId,
+        op: &PlannedOperation,
+        outcome: AuditOutcome,
+        skip_reason: Option<SkipReason>,
+    ) {
+        let entry = CleanupAuditEntry::from_op(
+            plan_id,
+            self.ctx.job_id,
+            &self.ctx.user_id,
+            op,
+            outcome,
+            skip_reason,
+            None,
+        );
+        if let Err(e) = self.ctx.audit.write(entry).await {
+            tracing::error!(
+                target: "cleanup.audit",
+                account_id = %self.account_id,
+                seq = op.seq(),
+                error = %e,
+                "audit write failed (non-fatal)"
+            );
+        }
     }
 
     async fn skip(

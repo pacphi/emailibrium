@@ -17,6 +17,16 @@ const CommandCenter = lazy(() =>
 const InboxCleaner = lazy(() =>
   import('@/features/inbox-cleaner/InboxCleaner').then((m) => ({ default: m.InboxCleaner })),
 );
+const CleanupHistory = lazy(() =>
+  import('@/features/inbox-cleaner/history/CleanupHistory').then((m) => ({
+    default: m.CleanupHistory,
+  })),
+);
+const CleanupHistoryDetail = lazy(() =>
+  import('@/features/inbox-cleaner/history/CleanupHistoryDetail').then((m) => ({
+    default: m.CleanupHistoryDetail,
+  })),
+);
 const InsightsExplorer = lazy(() =>
   import('@/features/insights/InsightsExplorer').then((m) => ({ default: m.InsightsExplorer })),
 );
@@ -90,6 +100,42 @@ const inboxCleanerRoute = createRoute({
   ),
 });
 
+// Phase D: plan-history list view + read-only detail view.
+//
+// userId is sourced from localStorage to match how the rest of the app reads
+// the auth token (see packages/api/client.ts). When unauthenticated, the
+// child components render their own sign-in prompts.
+function getCurrentUserId(): string | null {
+  try {
+    return localStorage.getItem('user_id');
+  } catch {
+    return null;
+  }
+}
+
+const cleanupHistoryRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/cleanup/history',
+  component: () => (
+    <Suspense fallback={LoadingFallback}>
+      <CleanupHistory userId={getCurrentUserId()} />
+    </Suspense>
+  ),
+});
+
+const cleanupHistoryDetailRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/cleanup/history/$planId',
+  component: () => {
+    const { planId } = cleanupHistoryDetailRoute.useParams();
+    return (
+      <Suspense fallback={LoadingFallback}>
+        <CleanupHistoryDetail userId={getCurrentUserId()} planId={planId} />
+      </Suspense>
+    );
+  },
+});
+
 const insightsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/insights',
@@ -154,6 +200,8 @@ const routeTree = rootRoute.addChildren([
   indexRoute,
   commandCenterRoute,
   inboxCleanerRoute,
+  cleanupHistoryRoute,
+  cleanupHistoryDetailRoute,
   insightsRoute,
   emailRoute,
   rulesRoute,

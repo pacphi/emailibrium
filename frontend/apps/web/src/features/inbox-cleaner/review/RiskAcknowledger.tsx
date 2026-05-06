@@ -18,6 +18,7 @@ interface HighRowDescriptor {
   seq: number;
   accountId: string;
   description: string;
+  ackLabel: string;
 }
 
 function describeHighRow(op: PlannedOperation): string {
@@ -26,6 +27,31 @@ function describeHighRow(op: PlannedOperation): string {
   }
   const target = op.target ? ` → ${op.target.name}` : '';
   return `${op.action.type}${target} · email ${op.emailId ?? '(unspecified)'}`;
+}
+
+/**
+ * Phase D — action-specific high-risk acknowledgment copy. Matches §B.3
+ * wireframe and ADR-030 §6 (risk levels). Pure presentation; no logic.
+ */
+function highAckLabel(op: PlannedOperation): string {
+  const action = op.action;
+  switch (action.type) {
+    case 'delete':
+      if (action.permanent) {
+        return 'I understand this will permanently delete this email — it is NOT recoverable from Trash.';
+      }
+      return 'I understand this will move this email to Trash — recoverable for 30 days.';
+    case 'unsubscribe':
+      if (action.method === 'mailto') {
+        return 'I understand this will send an email to the unsubscribe address — visible to the sender.';
+      }
+      if (action.method === 'webLink') {
+        return 'I understand this will open a webpage in my browser — outcome unknown.';
+      }
+      return 'I understand this will send an unsubscribe request — visible to the sender.';
+    default:
+      return `I understand the consequences of #${op.seq}: ${describeHighRow(op)}`;
+  }
 }
 
 export function RiskAcknowledger({ rows, onAcksChange }: RiskAcknowledgerProps) {
@@ -37,7 +63,12 @@ export function RiskAcknowledger({ rows, onAcksChange }: RiskAcknowledgerProps) 
     const groupMap = new Map<string, MediumGroup>();
     for (const op of rows) {
       if (op.risk === 'high') {
-        high.push({ seq: op.seq, accountId: op.accountId, description: describeHighRow(op) });
+        high.push({
+          seq: op.seq,
+          accountId: op.accountId,
+          description: describeHighRow(op),
+          ackLabel: highAckLabel(op),
+        });
       } else if (op.risk === 'medium') {
         const key = mediumGroupKey(op.accountId, op.source);
         const existing = groupMap.get(key);
@@ -171,18 +202,23 @@ export function RiskAcknowledger({ rows, onAcksChange }: RiskAcknowledgerProps) 
           <ul role="list" className="space-y-1 max-h-48 overflow-y-auto">
             {highRows.map((r) => (
               <li key={r.seq} role="listitem">
-                <label className="flex items-center gap-2 text-xs text-gray-800 dark:text-gray-200 cursor-pointer">
+                <label className="flex items-start gap-2 text-xs text-gray-800 dark:text-gray-200 cursor-pointer">
                   <input
                     type="checkbox"
                     checked={ackedHigh.has(r.seq)}
                     onChange={() => toggleHigh(r.seq)}
-                    className="h-4 w-4 rounded border-gray-300 text-red-600 focus:ring-red-500"
-                    aria-label={`Acknowledge high-risk row #${r.seq}: ${r.description}`}
+                    className="mt-0.5 h-4 w-4 rounded border-gray-300 text-red-600 focus:ring-red-500"
+                    aria-label={`Acknowledge high-risk row #${r.seq}: ${r.ackLabel}`}
                   />
-                  <span className="font-mono text-[10px] text-gray-500 dark:text-gray-400">
+                  <span className="font-mono text-[10px] text-gray-500 dark:text-gray-400 mt-0.5">
                     #{r.seq}
                   </span>
-                  <span className="truncate">{r.description}</span>
+                  <span className="flex-1">
+                    <span className="block">{r.ackLabel}</span>
+                    <span className="block text-[10px] text-gray-500 dark:text-gray-400 truncate">
+                      {r.description}
+                    </span>
+                  </span>
                 </label>
               </li>
             ))}

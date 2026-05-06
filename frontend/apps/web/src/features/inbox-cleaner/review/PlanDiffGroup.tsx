@@ -21,6 +21,12 @@ export interface PlanDiffGroupProps {
   ackedMediumGroupKeys: Set<string>;
   onToggleHighAck(seq: number): void;
   onToggleMediumAck(groupKey: string): void;
+  /** Phase D telemetry — fired when this group toggles into the expanded state. */
+  onGroupExpanded?: () => void;
+  /** Phase D telemetry — forwarded to each rendered PlanDiffRow. */
+  onSampleViewed?: () => void;
+  /** Phase D — readOnly disables ack checkboxes (history view). */
+  readOnly?: boolean;
 }
 
 const riskBorderClasses: Record<RiskLevel, string> = {
@@ -44,6 +50,9 @@ export function PlanDiffGroup({
   ackedMediumGroupKeys,
   onToggleHighAck,
   onToggleMediumAck,
+  onGroupExpanded,
+  onSampleViewed,
+  readOnly = false,
 }: PlanDiffGroupProps) {
   const [expanded, setExpanded] = useState(true);
   const [showAll, setShowAll] = useState(false);
@@ -70,7 +79,7 @@ export function PlanDiffGroup({
   const isMediumAcked = groupAckKey ? ackedMediumGroupKeys.has(groupAckKey) : false;
 
   const ackStateForRow = (op: PlannedOperation) =>
-    op.risk === 'high'
+    !readOnly && op.risk === 'high'
       ? {
           isAcked: ackedHighSeqs.has(op.seq),
           onToggle: () => onToggleHighAck(op.seq),
@@ -87,7 +96,13 @@ export function PlanDiffGroup({
       >
         <button
           type="button"
-          onClick={() => setExpanded((e) => !e)}
+          onClick={() => {
+            setExpanded((e) => {
+              const next = !e;
+              if (next && !e && onGroupExpanded) onGroupExpanded();
+              return next;
+            });
+          }}
           aria-expanded={expanded}
           className="flex-1 text-left flex items-center gap-2 min-w-0"
         >
@@ -111,7 +126,7 @@ export function PlanDiffGroup({
           </span>
         </button>
 
-        {group.risk === 'medium' && groupAckKey && (
+        {!readOnly && group.risk === 'medium' && groupAckKey && (
           <label className="flex items-center gap-1.5 text-xs text-amber-800 dark:text-amber-200 cursor-pointer shrink-0">
             <input
               type="checkbox"
@@ -164,6 +179,7 @@ export function PlanDiffGroup({
                         planId={planId}
                         userId={userId}
                         ackState={ackStateForRow(op)}
+                        onSampleViewed={onSampleViewed}
                       />
                     </div>
                   );
@@ -179,6 +195,7 @@ export function PlanDiffGroup({
                   planId={planId}
                   userId={userId}
                   ackState={ackStateForRow(op)}
+                  onSampleViewed={onSampleViewed}
                 />
               ))}
             </ul>

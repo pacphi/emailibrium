@@ -27,9 +27,11 @@ use tokio::sync::{broadcast, RwLock};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
+use crate::cleanup::audit::{CleanupAuditWriter, NoopCleanupAuditWriter};
 use crate::cleanup::domain::operation::{JobState, PlanStatus, Provider, RiskMax};
 use crate::cleanup::domain::plan::{CleanupApplyJob, CleanupPlan, JobCounts, JobId, PlanId};
 use crate::cleanup::repository::{CleanupApplyJobRepository, CleanupPlanRepository};
+use crate::cleanup::telemetry::{hash_user_id, CleanupTelemetryEvent, TelemetryEmitter};
 use crate::email::provider::EmailProvider;
 use crate::email::unsubscribe::UnsubscribeService;
 
@@ -78,6 +80,10 @@ pub struct ApplyOrchestrator {
     pub workers_for: Arc<dyn Fn(&str) -> Provider + Send + Sync>,
     pub email_providers: Arc<HashMap<Provider, Arc<dyn EmailProvider>>>,
     pub unsubscribe: Arc<UnsubscribeService>,
+    /// Per-operation audit writer (Phase D, ADR-030 §Security).
+    pub audit: Arc<dyn CleanupAuditWriter>,
+    /// Telemetry emitter (Phase D).
+    pub telemetry: Arc<TelemetryEmitter>,
     /// Active jobs keyed by job_id, exposing the broadcast::Sender + cancel token.
     job_channels: Arc<RwLock<HashMap<JobId, JobChannels>>>,
 }
@@ -100,8 +106,22 @@ impl ApplyOrchestrator {
             workers_for,
             email_providers,
             unsubscribe,
+            audit: Arc::new(NoopCleanupAuditWriter) as Arc<dyn CleanupAuditWriter>,
+            telemetry: Arc::new(TelemetryEmitter::new()),
             job_channels: Arc::new(RwLock::new(HashMap::new())),
         }
+    }
+
+    /// Builder-style setter for the audit writer (Phase D wiring from main.rs).
+    pub fn with_audit(mut self, audit: Arc<dyn CleanupAuditWriter>) -> Self {
+        self.audit = audit;
+        self
+    }
+
+    /// Builder-style setter for the telemetry emitter (Phase D).
+    pub fn with_telemetry(mut self, telemetry: Arc<TelemetryEmitter>) -> Self {
+        self.telemetry = telemetry;
+        self
     }
 
     pub async fn begin_apply(
@@ -176,12 +196,26 @@ impl ApplyOrchestrator {
             totals_by_account: totals_by_account.clone(),
         });
 
+        // Phase D telemetry: cleanup_apply_started — counts only.
+        self.telemetry
+            .emit(CleanupTelemetryEvent::CleanupApplyStarted {
+                plan_id: plan.id,
+                job_id,
+                user_id_hash: hash_user_id(&plan.user_id),
+                risk_max: opts.risk_max,
+                ack_high_count: opts.acknowledged_high_risk_seqs.len() as u64,
+                ack_medium_count: opts.acknowledged_medium_groups.len() as u64,
+            });
+        let apply_started_at = Utc::now();
+
         // Spawn the orchestrator driver task.
         let acked_high: HashSet<u64> = opts.acknowledged_high_risk_seqs.iter().copied().collect();
         let acked_med: HashSet<String> = opts.acknowledged_medium_groups.iter().cloned().collect();
 
         let plan_id = plan.id;
         let accounts: Vec<String> = totals_by_account.keys().cloned().collect();
+        let user_id_for_audit = plan.user_id.clone();
+        let user_id_for_telemetry = plan.user_id.clone();
         let me = self.clone();
         let emitter_outer = emitter.clone();
         tokio::spawn(async move {
@@ -195,6 +229,9 @@ impl ApplyOrchestrator {
                     unsubscribe: me.unsubscribe.clone(),
                     expander: me.expander.clone(),
                     emitter: emitter_outer.clone(),
+                    audit: me.audit.clone(),
+                    user_id: user_id_for_audit.clone(),
+                    job_id,
                 };
                 let worker = AccountWorker {
                     account_id: account_id.clone(),
@@ -248,6 +285,21 @@ impl ApplyOrchestrator {
                 status: final_state,
                 counts: combined.clone(),
             });
+
+            // Phase D telemetry: cleanup_apply_finished.
+            let duration_ms = (Utc::now() - apply_started_at).num_milliseconds().max(0) as u64;
+            me.telemetry
+                .emit(CleanupTelemetryEvent::CleanupApplyFinished {
+                    plan_id,
+                    job_id,
+                    user_id_hash: hash_user_id(&user_id_for_telemetry),
+                    applied: combined.applied,
+                    failed: combined.failed,
+                    skipped: combined.skipped,
+                    skipped_by_reason: combined.skipped_by_reason.clone(),
+                    duration_ms,
+                    status: final_state,
+                });
 
             // Remove channel from active map.
             let mut guard = me.job_channels.write().await;
@@ -831,6 +883,112 @@ mod tests {
                     r.seq
                 );
             }
+        }
+    }
+
+    // --- Phase D: audit-write integration ---------------------------------
+    //
+    // Verify that running a multi-account apply writes one audit row per
+    // (seq, outcome) for every operation that left Pending. Uses a real
+    // SqliteCleanupAuditWriter against in-memory SQLite.
+
+    #[tokio::test]
+    async fn audit_rows_written_for_each_apply_outcome() {
+        use crate::cleanup::audit::{AuditOutcome, CleanupAuditWriter, SqliteCleanupAuditWriter};
+        use sqlx::sqlite::SqlitePoolOptions;
+
+        // Set up a SQLite pool with migrations 024 + 025 applied so the
+        // audit writer has its table.
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect(":memory:")
+            .await
+            .expect("connect");
+        for raw in [
+            include_str!("../../../migrations/024_cleanup_planning.sql"),
+            include_str!("../../../migrations/025_cleanup_audit_log.sql"),
+        ] {
+            let cleaned: String = raw
+                .lines()
+                .map(|l| {
+                    if let Some(idx) = l.find("--") {
+                        &l[..idx]
+                    } else {
+                        l
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            for stmt in cleaned.split(';') {
+                let s = stmt.trim();
+                if !s.is_empty() {
+                    sqlx::query(s).execute(&pool).await.expect("migrate");
+                }
+            }
+        }
+
+        let plan_repo = Arc::new(InMemPlanRepo::default());
+        let job_repo = Arc::new(InMemJobRepo::default());
+        let plan = sample_plan_with_rows(vec![
+            row(1, RiskLevel::Low),
+            row(2, RiskLevel::Low),
+            row(3, RiskLevel::Low),
+        ]);
+        plan_repo.save(&plan).await.unwrap();
+
+        let drift = Arc::new(DriftDetector::new(Arc::new(CleanProvider)));
+        let expander = Arc::new(PredicateExpander::new(
+            Arc::new(StubRules) as Arc<dyn crate::cleanup::domain::ports::RuleEvaluator>,
+            Arc::new(StubEmailRepo) as Arc<dyn EmailRepository>,
+        ));
+        let audit: Arc<dyn CleanupAuditWriter> =
+            Arc::new(SqliteCleanupAuditWriter::new(pool.clone()));
+        let orch = Arc::new(
+            ApplyOrchestrator::new(
+                plan_repo.clone() as Arc<dyn CleanupPlanRepository>,
+                job_repo.clone() as Arc<dyn CleanupApplyJobRepository>,
+                drift,
+                expander,
+                Arc::new(|_| Provider::Gmail),
+                Arc::new(HashMap::new()),
+                Arc::new(UnsubscribeService::new()),
+            )
+            .with_audit(audit.clone()),
+        );
+
+        let _job_id = orch
+            .clone()
+            .begin_apply(
+                &plan,
+                ApplyOptions {
+                    risk_max: RiskMax::Low,
+                    acknowledged_high_risk_seqs: vec![],
+                    acknowledged_medium_groups: vec![],
+                },
+            )
+            .await
+            .unwrap();
+
+        // Allow background apply task to settle.
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+
+        let entries = audit.list_for_plan(plan.id).await.expect("list");
+        // Three rows applied → at least three audit entries (one per op).
+        assert!(
+            entries.len() >= 3,
+            "expected ≥3 audit rows, got {}",
+            entries.len()
+        );
+        // Every entry is for the right plan and user; no email_id leakage
+        // is possible by construction (struct has no such field).
+        for e in &entries {
+            assert_eq!(e.plan_id, plan.id);
+            assert_eq!(e.user_id, "u");
+            assert_eq!(e.account_id, "acct-a");
+            assert!(matches!(
+                e.outcome,
+                AuditOutcome::Applied | AuditOutcome::Skipped | AuditOutcome::Failed
+            ));
         }
     }
 }

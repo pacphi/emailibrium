@@ -19,12 +19,20 @@ import { ApplyButtons } from './ApplyButtons';
 import { RefreshAccountAffordance } from './RefreshAccountAffordance';
 import { sourceKey, sourceLabel } from './groupKey';
 import { useCleanupApply } from '../hooks/useCleanupApply';
+import { useCleanupTelemetry } from '../hooks/useCleanupTelemetry';
 import { CleanupProgress, type PerActionCounts } from '../CleanupProgress';
 
 export interface CleanupReviewProps {
   planId: PlanId;
   userId: string;
   onCancel(): void;
+  /**
+   * Phase D: when true, render the plan + operations as read-only — Apply
+   * buttons, RiskAcknowledger, and stale-age refresh affordances are hidden.
+   * Used by the plan-history detail route. Defaults to false to preserve
+   * the wizard's existing behaviour.
+   */
+  readOnly?: boolean;
 }
 
 const STALE_MS = 25 * 60 * 1000;
@@ -68,7 +76,9 @@ function detectProvider(_plan: CleanupPlan, _accountId: string): CleanupProvider
   return 'gmail';
 }
 
-export function CleanupReview({ planId, userId, onCancel }: CleanupReviewProps) {
+export function CleanupReview({ planId, userId, onCancel, readOnly = false }: CleanupReviewProps) {
+  // Phase D telemetry — emits cleanup_plan_reviewed on unmount or apply.
+  const telemetry = useCleanupTelemetry(planId);
   const planQuery = useQuery<CleanupPlan>({
     queryKey: ['cleanup', 'plan', planId, userId],
     queryFn: () => getPlan(userId, planId),
@@ -113,12 +123,14 @@ export function CleanupReview({ planId, userId, onCancel }: CleanupReviewProps) 
 
   const handleApply = useCallback(
     (riskMax: RiskMax) => {
+      // Phase D: emit telemetry before kicking off the apply (best-effort).
+      telemetry.emitNow();
       void apply.startApply(planId, riskMax, {
         acknowledgedHighRiskSeqs: ackedHighSeqs,
         acknowledgedMediumGroups: ackedMediumGroupKeys,
       });
     },
-    [apply, planId, ackedHighSeqs, ackedMediumGroupKeys],
+    [apply, planId, ackedHighSeqs, ackedMediumGroupKeys, telemetry],
   );
 
   /**
@@ -274,6 +286,15 @@ export function CleanupReview({ planId, userId, onCancel }: CleanupReviewProps) 
 
   return (
     <div className="space-y-6" aria-labelledby="cleanup-review-heading">
+      {readOnly && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="rounded-md border border-gray-300 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 px-3 py-2 text-xs text-gray-700 dark:text-gray-300"
+        >
+          Read-only — viewing past plan. Apply, refresh, and acknowledgment controls are disabled.
+        </div>
+      )}
       {/* 1. Top-level summary */}
       <header className="rounded-lg border border-indigo-200 dark:border-indigo-800 bg-indigo-50 dark:bg-indigo-900/20 p-4">
         <h1
@@ -305,7 +326,7 @@ export function CleanupReview({ planId, userId, onCancel }: CleanupReviewProps) 
       {plan.warnings.length > 0 && <PlanWarningsBanner warnings={plan.warnings} />}
 
       {/* 4. Stale-age refresh affordances */}
-      {staleAccounts.length > 0 && (
+      {!readOnly && staleAccounts.length > 0 && (
         <div className="space-y-2">
           {staleAccounts.map((accountId) => (
             <RefreshAccountAffordance
@@ -373,6 +394,9 @@ export function CleanupReview({ planId, userId, onCancel }: CleanupReviewProps) 
                 ackedMediumGroupKeys={ackedMediumSet}
                 onToggleHighAck={toggleHighAck}
                 onToggleMediumAck={toggleMediumAck}
+                onGroupExpanded={telemetry.noteGroupExpanded}
+                onSampleViewed={telemetry.noteSampleViewed}
+                readOnly={readOnly}
               />
             ))}
           </section>
@@ -393,17 +417,20 @@ export function CleanupReview({ planId, userId, onCancel }: CleanupReviewProps) 
       )}
 
       {/* 7. Risk acknowledger */}
-      <RiskAcknowledger rows={opsResult.items} onAcksChange={handleAcksChange} />
+      {!readOnly && <RiskAcknowledger rows={opsResult.items} onAcksChange={handleAcksChange} />}
 
       {/* 8. Apply buttons */}
-      <ApplyButtons
-        planId={planId}
-        userId={userId}
-        rows={opsResult.items}
-        ackedHighSeqs={ackedHighSeqs}
-        ackedMediumGroupKeys={ackedMediumGroupKeys}
-        onApply={handleApply}
-      />
+      {!readOnly && (
+        <ApplyButtons
+          planId={planId}
+          userId={userId}
+          rows={opsResult.items}
+          ackedHighSeqs={ackedHighSeqs}
+          ackedMediumGroupKeys={ackedMediumGroupKeys}
+          onApply={handleApply}
+          accountStateEtags={plan.accountStateEtags}
+        />
+      )}
 
       <div className="flex justify-end pt-2 border-t border-gray-200 dark:border-gray-700">
         <button
@@ -411,7 +438,7 @@ export function CleanupReview({ planId, userId, onCancel }: CleanupReviewProps) 
           onClick={onCancel}
           className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-600 rounded-md hover:bg-gray-50 dark:hover:bg-gray-700"
         >
-          Back to wizard
+          {readOnly ? 'Back to history' : 'Back to wizard'}
         </button>
       </div>
     </div>

@@ -127,6 +127,7 @@ async fn create_plan(
         ));
     }
     let builder = build_plan_builder(&state);
+    let build_started = std::time::Instant::now();
     let plan: CleanupPlan = builder.build(&q.user_id, selections).await.map_err(|e| {
         err(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -134,6 +135,7 @@ async fn create_plan(
             &e.to_string(),
         )
     })?;
+    let build_duration_ms = build_started.elapsed().as_millis() as u64;
     state.cleanup_plan_repo.save(&plan).await.map_err(|e| {
         err(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -141,6 +143,20 @@ async fn create_plan(
             &e.to_string(),
         )
     })?;
+    // Phase D telemetry — counts only, no plan content.
+    state.cleanup_telemetry.emit(
+        crate::cleanup::telemetry::CleanupTelemetryEvent::CleanupPlanBuilt {
+            plan_id: plan.id,
+            user_id_hash: crate::cleanup::telemetry::hash_user_id(&q.user_id),
+            total_operations: plan.totals.total_operations,
+            risk_low: plan.risk.low,
+            risk_medium: plan.risk.medium,
+            risk_high: plan.risk.high,
+            accounts: plan.account_ids.len() as u64,
+            warnings_count: plan.warnings.len() as u64,
+            build_duration_ms,
+        },
+    );
     Ok((
         StatusCode::CREATED,
         Json(CreatePlanResponse {
@@ -319,6 +335,15 @@ async fn refresh_account(
                 &e.to_string(),
             )
         })?;
+    // Phase D telemetry — hashed ids only.
+    state.cleanup_telemetry.emit(
+        crate::cleanup::telemetry::CleanupTelemetryEvent::CleanupPlanRefreshed {
+            plan_id: id,
+            user_id_hash: crate::cleanup::telemetry::hash_user_id(&q.user_id),
+            account_id_hash: crate::cleanup::telemetry::hash_account_id(&q.account_id),
+            reason: "manual".to_string(),
+        },
+    );
     Ok(StatusCode::ACCEPTED)
 }
 

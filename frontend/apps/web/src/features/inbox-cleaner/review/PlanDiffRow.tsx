@@ -2,6 +2,7 @@ import type {
   PlanAction,
   PlanId,
   PlannedOperation,
+  PlanSource,
   CleanupFolderOrLabel,
   RiskLevel,
 } from '@emailibrium/types';
@@ -12,6 +13,8 @@ export interface PlanDiffRowProps {
   planId: PlanId;
   userId: string;
   ackState: { isAcked: boolean; onToggle(): void } | null;
+  /** Phase D: telemetry — fired when the SampleEmailPeek for this row opens. */
+  onSampleViewed?: () => void;
 }
 
 const riskPillClasses: Record<RiskLevel, string> = {
@@ -45,39 +48,59 @@ function actionChipText(action: PlanAction): string {
   }
 }
 
+// Phase D — plain-English explainer. Pure presentation, ≤30 lines of branches.
+// Wireframe reference: docs/plan/cleanup-dry-run-implementation.md §B.3.
 function explainOperation(
   action: PlanAction,
   target: CleanupFolderOrLabel | null,
-  count: number | null,
+  count: number,
+  source: PlanSource,
 ): string {
-  const noun =
-    count !== null ? `${count.toLocaleString()} email${count === 1 ? '' : 's'}` : '1 email';
+  const exact = count.toLocaleString();
+  const approx = `~${exact}`;
+  const noun = `${count === 1 ? '' : 's'}`;
+  const sender = source.type === 'subscription' ? source.sender : null;
   switch (action.type) {
     case 'archive':
-      return `Archive ${noun} (recoverable from All Mail).`;
+      return `Archive ${exact} email${noun}`;
     case 'addLabel':
-      return target ? `Add the "${target.name}" label to ${noun}.` : `Add a label to ${noun}.`;
+      return target
+        ? `Add label '${target.name}' to ${approx} email${noun}`
+        : `Add a label to ${approx} email${noun}`;
     case 'move':
-      return target ? `Move ${noun} to "${target.name}".` : `Move ${noun}.`;
+      return target
+        ? `Move ${exact} email${noun} to ${target.kind === 'folder' ? 'folder' : 'label'} '${target.name}' — recoverable from Trash`
+        : `Move ${exact} email${noun} — recoverable from Trash`;
     case 'delete':
       return action.permanent
-        ? `Permanently delete ${noun} — NOT recoverable.`
-        : `Move ${noun} to Trash — recoverable for 30 days.`;
-    case 'unsubscribe':
-      return `Send unsubscribe via ${action.method} for ${noun}.`;
+        ? `DELETE ${exact} email${noun} permanently — irrecoverable`
+        : `Delete ${exact} email${noun} (Trash) — recoverable for 30 days`;
+    case 'unsubscribe': {
+      const methodLabel =
+        action.method === 'listUnsubscribePost'
+          ? 'List-Unsubscribe POST (silent)'
+          : action.method === 'mailto'
+            ? 'a mailto request'
+            : action.method === 'webLink'
+              ? 'opening the unsubscribe webpage'
+              : 'no automated method';
+      return sender
+        ? `Unsubscribe from ${sender} via ${methodLabel}`
+        : `Unsubscribe via ${methodLabel}`;
+    }
     case 'markRead':
-      return `Mark ${noun} as read.`;
+      return `Mark ${exact} email${noun} as read`;
     case 'star':
-      return action.on ? `Star ${noun}.` : `Unstar ${noun}.`;
+      return action.on ? `Star ${exact} email${noun}` : `Unstar ${exact} email${noun}`;
   }
 }
 
-export function PlanDiffRow({ op, planId, userId, ackState }: PlanDiffRowProps) {
+export function PlanDiffRow({ op, planId, userId, ackState, onSampleViewed }: PlanDiffRowProps) {
   const isPredicate = op.opKind === 'predicate';
   const count = isPredicate ? op.projectedCount : 1;
   const target = op.target;
   const actionText = actionChipText(op.action);
-  const explainer = explainOperation(op.action, target, count);
+  const explainer = explainOperation(op.action, target, count, op.source);
 
   return (
     <li
@@ -109,7 +132,12 @@ export function PlanDiffRow({ op, planId, userId, ackState }: PlanDiffRowProps) 
         )}
         {isPredicate && (
           <div className="mt-1">
-            <SampleEmailPeek planId={planId} userId={userId} source={op.source} />
+            <SampleEmailPeek
+              planId={planId}
+              userId={userId}
+              source={op.source}
+              onOpened={onSampleViewed}
+            />
           </div>
         )}
       </div>

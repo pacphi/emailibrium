@@ -9,6 +9,7 @@ import {
   MessageSquare,
   ListChecks,
   ChevronLeft,
+  History,
 } from 'lucide-react';
 import { useSettings } from '../features/settings/hooks/useSettings';
 import { useSyncStore } from '../shared/stores/syncStore';
@@ -46,6 +47,12 @@ const NAV_ITEMS: {
     label: 'Inbox Cleaner',
     icon: Wind,
     needsLlm: true,
+    needsAccount: true,
+  },
+  {
+    href: '/cleanup/history',
+    label: 'Cleanup History',
+    icon: History,
     needsAccount: true,
   },
   { href: '/insights', label: 'Insights', icon: BarChart3, needsAccount: true },

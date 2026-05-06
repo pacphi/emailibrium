@@ -1,5 +1,5 @@
-import { useMemo } from 'react';
-import type { PlanId, PlannedOperation, RiskMax } from '@emailibrium/types';
+import { useMemo, useState } from 'react';
+import type { AccountStateEtag, PlanId, PlannedOperation, RiskMax } from '@emailibrium/types';
 import { opMediumGroupKey } from './groupKey';
 
 export interface ApplyButtonsProps {
@@ -9,6 +9,16 @@ export interface ApplyButtonsProps {
   ackedHighSeqs: number[];
   ackedMediumGroupKeys: string[];
   onApply(riskMax: RiskMax): void;
+  /**
+   * Phase D: per-account state etags from the plan envelope. Used to detect
+   * POP3 accounts (`kind === 'none'`) — the High-tier "Apply all" button
+   * gains a typed "DELETE" confirmation when any account is POP3.
+   *
+   * NOTE: The plan envelope does not (yet) carry an explicit `provider`
+   * field per account (TODO from Phase B). For now we infer POP3 from the
+   * etag kind being `none`, which is the only state shape POP3 uses today.
+   */
+  accountStateEtags?: Record<string, AccountStateEtag>;
 }
 
 interface ButtonState {
@@ -23,7 +33,15 @@ export function ApplyButtons({
   ackedHighSeqs,
   ackedMediumGroupKeys,
   onApply,
+  accountStateEtags,
 }: ApplyButtonsProps) {
+  // Phase D: typed-confirmation gate for POP3 accounts (ADR-030 §Security).
+  const hasPop3Account = useMemo(() => {
+    if (!accountStateEtags) return false;
+    return Object.values(accountStateEtags).some((e) => e.kind === 'none');
+  }, [accountStateEtags]);
+  const [typedConfirmation, setTypedConfirmation] = useState('');
+  const typedConfirmationOk = !hasPop3Account || typedConfirmation === 'DELETE';
   const ackedHighSet = useMemo(() => new Set(ackedHighSeqs), [ackedHighSeqs]);
   const ackedMediumSet = useMemo(() => new Set(ackedMediumGroupKeys), [ackedMediumGroupKeys]);
 
@@ -72,7 +90,8 @@ export function ApplyButtons({
       };
 
       const highS: ButtonState = {
-        enabled: unackedHigh.length === 0 && unackedMediumGroups.length === 0,
+        enabled:
+          unackedHigh.length === 0 && unackedMediumGroups.length === 0 && typedConfirmationOk,
         reason:
           unackedHigh.length > 0
             ? `${unackedHigh.length} high-risk row${
@@ -82,7 +101,9 @@ export function ApplyButtons({
               ? `${unackedMediumGroups.length} medium group${
                   unackedMediumGroups.length === 1 ? '' : 's'
                 } still need acknowledgment`
-              : undefined,
+              : !typedConfirmationOk
+                ? 'Type DELETE to confirm — POP3 deletes are irreversible'
+                : undefined,
       };
 
       return {
@@ -94,7 +115,7 @@ export function ApplyButtons({
         highCount: high,
         totalMediumGroups: allMediumGroups.size,
       };
-    }, [rows, ackedHighSet, ackedMediumSet]);
+    }, [rows, ackedHighSet, ackedMediumSet, typedConfirmationOk]);
 
   // Phase C: parent (CleanupReview) holds the useCleanupApply hook and
   // turns this callback into a real POST /apply. planId/userId are kept on
@@ -149,6 +170,37 @@ export function ApplyButtons({
           'bg-red-600 text-white hover:bg-red-700',
         )}
       </div>
+      {hasPop3Account && (
+        <div className="rounded-md border border-red-300 dark:border-red-700 bg-red-50 dark:bg-red-900/20 px-3 py-2">
+          <label
+            htmlFor="pop3-typed-confirm"
+            className="block text-xs font-medium text-red-900 dark:text-red-200"
+          >
+            POP3 deletes are irreversible. Type <span className="font-mono font-bold">DELETE</span>{' '}
+            to enable Apply all.
+          </label>
+          <input
+            id="pop3-typed-confirm"
+            type="text"
+            value={typedConfirmation}
+            onChange={(e) => setTypedConfirmation(e.target.value)}
+            autoComplete="off"
+            spellCheck={false}
+            placeholder="DELETE"
+            aria-label="Type DELETE to enable Apply all on POP3 account"
+            className="mt-1.5 w-32 px-2 py-1 text-xs font-mono border border-red-300 dark:border-red-600 rounded bg-white dark:bg-gray-800 text-red-900 dark:text-red-100 focus:outline-none focus:ring-2 focus:ring-red-500"
+          />
+          {typedConfirmationOk && (
+            <p
+              className="mt-1 text-[11px] text-red-700 dark:text-red-300"
+              role="status"
+              aria-live="polite"
+            >
+              Confirmation accepted.
+            </p>
+          )}
+        </div>
+      )}
     </section>
   );
 }

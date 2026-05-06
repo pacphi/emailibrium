@@ -2,11 +2,15 @@
 
 pub mod apply;
 pub mod plan;
+pub mod telemetry;
 
 use axum::Router;
 
 use crate::AppState;
 
 pub fn routes() -> Router<AppState> {
-    Router::new().merge(plan::routes()).merge(apply::routes())
+    Router::new()
+        .merge(plan::routes())
+        .merge(apply::routes())
+        .merge(telemetry::routes())
 }

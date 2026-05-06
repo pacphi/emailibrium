@@ -109,8 +109,15 @@ export {
   cancelApply,
   getApplyJob,
   applyStreamUrl,
+  emitCleanupReviewed,
+  listPlanAudit,
 } from './cleanupApi.js';
-export type { ListOpsParams } from './cleanupApi.js';
+export type {
+  ListOpsParams,
+  CleanupPlanReviewedPayload,
+  CleanupAuditEntry,
+  CleanupAuditResponse,
+} from './cleanupApi.js';
 
 export {
   sendChatMessage,
