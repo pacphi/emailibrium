@@ -95,8 +95,6 @@ pub struct TestRuleRequest {
     pub conditions: Vec<serde_json::Value>,
     #[serde(default)]
     pub name: String,
-    #[serde(default)]
-    pub actions: Vec<serde_json::Value>,
 }
 
 #[derive(Debug, Serialize)]

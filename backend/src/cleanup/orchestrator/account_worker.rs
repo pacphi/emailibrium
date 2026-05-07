@@ -26,10 +26,6 @@ use thiserror::Error;
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 
-#[cfg(test)]
-use super::factory::MockEmailProviderFactory;
-#[cfg(test)]
-use crate::cleanup::audit::NoopCleanupAuditWriter;
 use crate::cleanup::audit::{AuditOutcome, CleanupAuditEntry, CleanupAuditWriter};
 use crate::cleanup::domain::operation::{
     ErrorCode, OperationStatus, PlanAction, PlannedOperation, PlannedOperationPredicate,
@@ -76,29 +72,7 @@ pub struct AccountWorkerCtx {
     pub job_id: JobId,
 }
 
-impl AccountWorkerCtx {
-    /// Convenience constructor for tests that don't care about audit;
-    /// installs a no-op writer + placeholder user/job ids.
-    #[cfg(test)]
-    pub fn for_test(
-        repo: Arc<dyn CleanupPlanRepository>,
-        emitter: EventEmitter,
-        expander: Arc<PredicateExpander>,
-        unsubscribe: Arc<UnsubscribeService>,
-    ) -> Self {
-        Self {
-            repo,
-            provider_factory: Arc::new(MockEmailProviderFactory::no_op())
-                as Arc<dyn EmailProviderFactory>,
-            unsubscribe,
-            expander,
-            emitter,
-            audit: Arc::new(NoopCleanupAuditWriter) as Arc<dyn CleanupAuditWriter>,
-            user_id: "test-user".into(),
-            job_id: uuid::Uuid::nil(),
-        }
-    }
-}
+impl AccountWorkerCtx {}
 
 pub struct AccountWorker {
     pub account_id: String,

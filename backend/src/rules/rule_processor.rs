@@ -1,8 +1,8 @@
-//! Rule processor -- evaluates rules against emails and generates pending actions (R-03).
+//! Rule processor -- evaluates rules against emails (R-03).
 
 use super::types::{
-    EmailField, EvaluationScope, MatchOperator, PendingAction, Rule, RuleAction, RuleCondition,
-    RuleEvaluation, RuleExecutionMode,
+    EmailField, EvaluationScope, MatchOperator, Rule, RuleCondition, RuleEvaluation,
+    RuleExecutionMode,
 };
 use crate::email::types::EmailMessage;
 use regex::Regex;
@@ -19,39 +19,15 @@ pub fn evaluate_rule(rule: &Rule, email: &EmailMessage) -> bool {
     rule.conditions.iter().all(|c| evaluate_condition(c, email))
 }
 
-/// Generate pending actions from a list of rule actions without executing them.
-pub fn apply_actions(
-    actions: &[RuleAction],
-    email_id: &str,
-    rule_id: &str,
-    rule_name: &str,
-) -> Vec<PendingAction> {
-    actions
-        .iter()
-        .map(|action| PendingAction {
-            email_id: email_id.to_string(),
-            rule_id: rule_id.to_string(),
-            rule_name: rule_name.to_string(),
-            action: action.clone(),
-        })
-        .collect()
-}
-
 /// Non-mutating, scope-based evaluation used by the cleanup PlanBuilder
 /// (DDD-007 addendum, ADR-030 Phase A).
 ///
-/// Runs the same matcher as `process_email` but, in `EvaluateOnly` mode,
-/// returns one `RuleEvaluation` per matched rule **without emitting any
-/// commands**. In `Apply` mode the function still returns the same
-/// `RuleEvaluation` shape (used by integration tests that need to assert
-/// "EvaluateOnly is equivalent to Apply minus side-effects"); production
-/// `Apply` callers continue to use `process_email`.
+/// Returns one `RuleEvaluation` per matched rule without executing any actions.
 ///
 /// Determinism contract for `matched_email_ids` (required for `plan_hash`):
 /// emails are first sorted by `(date_asc, id_asc)`, then sampled as
 /// `head 5 + tail 5 + 10 stratified by date index`, deduplicated while
 /// preserving order, and finally capped at `min(scope.sample_size, 20)`.
-#[allow(dead_code)]
 pub fn evaluate_rules(
     mode: RuleExecutionMode,
     rules: &[Rule],
@@ -84,11 +60,7 @@ pub fn evaluate_rules(
         let sampled = sample_deterministic(&matched, cap);
         let basis = RuleEvaluation::basis_for(&rule.conditions);
 
-        // Side-effect contract: `Apply` is identical in this function (it does
-        // NOT emit commands). EvaluateOnly is the same path. Emission of
-        // `PendingAction`s in `Apply` mode is the responsibility of the
-        // existing `process_email` pipeline, which Plan never invokes.
-        let _ = mode; // both modes produce the same evaluation; mode kept for API symmetry
+        let _ = mode; // both enum arms produce the same evaluation; kept for API symmetry
 
         evaluations.push(RuleEvaluation {
             rule_id: rule.id.clone(),
@@ -140,22 +112,6 @@ fn sample_deterministic(matched: &[&EmailMessage], cap: usize) -> Vec<String> {
     picked.sort_unstable();
     picked.dedup();
     picked.iter().map(|i| matched[*i].id.clone()).collect()
-}
-
-/// Evaluate all rules (sorted by descending priority) against an email,
-/// collecting pending actions.
-pub fn process_email(rules: &[Rule], email: &EmailMessage) -> Vec<PendingAction> {
-    let mut sorted: Vec<&Rule> = rules.iter().filter(|r| r.enabled).collect();
-    sorted.sort_by_key(|r| std::cmp::Reverse(r.priority));
-
-    let mut pending = Vec::new();
-    for rule in sorted {
-        if evaluate_rule(rule, email) {
-            let actions = apply_actions(&rule.actions, &email.id, &rule.id, &rule.name);
-            pending.extend(actions);
-        }
-    }
-    pending
 }
 
 // ---------------------------------------------------------------------------
@@ -225,6 +181,7 @@ fn apply_operator(op: &MatchOperator, field_value: &str, match_value: &str) -> b
 
 #[cfg(test)]
 mod tests {
+    use super::super::types::RuleAction;
     use super::*;
     use chrono::Utc;
 
@@ -397,20 +354,6 @@ mod tests {
         assert!(!evaluate_rule(&rule, &sample_email()));
     }
 
-    #[test]
-    fn apply_actions_generates_pending() {
-        let actions = vec![
-            RuleAction::AddLabel {
-                label: "work".to_string(),
-            },
-            RuleAction::MarkRead,
-        ];
-        let pending = apply_actions(&actions, "msg-001", "r1", "Rule r1");
-        assert_eq!(pending.len(), 2);
-        assert_eq!(pending[0].email_id, "msg-001");
-        assert_eq!(pending[0].rule_id, "r1");
-    }
-
     fn email_at(id: &str, date: chrono::DateTime<Utc>, from: &str, subject: &str) -> EmailMessage {
         EmailMessage {
             id: id.to_string(),
@@ -501,9 +444,8 @@ mod tests {
 
     #[test]
     fn evaluate_rules_no_command_emission() {
-        // Smoke: in EvaluateOnly mode, `intended_actions` is populated but no
-        // `PendingAction` is produced (this function returns RuleEvaluations,
-        // never PendingActions).
+        // Smoke: evaluate_rules returns RuleEvaluation with intended_actions
+        // populated, but never executes any actions.
         let rules = vec![make_rule(
             "r1",
             vec![RuleCondition::FieldMatch {
@@ -555,38 +497,5 @@ mod tests {
         let evals = evaluate_rules(RuleExecutionMode::EvaluateOnly, &rules, &emails, &scope);
         assert_eq!(evals.len(), 1);
         assert_eq!(evals[0].rule_id, "keep");
-    }
-
-    #[test]
-    fn process_email_respects_priority() {
-        let email = sample_email();
-        let mut low_priority = make_rule(
-            "low",
-            vec![RuleCondition::FieldMatch {
-                field: EmailField::From,
-                operator: MatchOperator::Contains,
-                value: "boss".to_string(),
-            }],
-            vec![RuleAction::MarkRead],
-        );
-        low_priority.priority = 1;
-
-        let mut high_priority = make_rule(
-            "high",
-            vec![RuleCondition::FieldMatch {
-                field: EmailField::From,
-                operator: MatchOperator::Contains,
-                value: "boss".to_string(),
-            }],
-            vec![RuleAction::MarkImportant],
-        );
-        high_priority.priority = 10;
-
-        let rules = vec![low_priority, high_priority];
-        let pending = process_email(&rules, &email);
-
-        assert_eq!(pending.len(), 2);
-        assert_eq!(pending[0].rule_id, "high");
-        assert_eq!(pending[1].rule_id, "low");
     }
 }
