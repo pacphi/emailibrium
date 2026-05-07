@@ -34,6 +34,7 @@ pub fn routes() -> Router<AppState> {
             "/{id}",
             get(get_rule).put(update_rule).delete(delete_rule_handler),
         )
+        .route("/{id}/run", post(run_rule))
         .route("/validate", post(validate_rule))
         .route("/test", post(test_rule))
 }
@@ -540,6 +541,125 @@ async fn test_rule(
 
     Ok(Json(TestResponse {
         match_count,
+        sample_matches,
+    }))
+}
+
+// ---------------------------------------------------------------------------
+// Run rule
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunRuleResponse {
+    pub match_count: i64,
+    pub executed_count: i64,
+    pub sample_matches: Vec<SampleEmailMatch>,
+}
+
+/// POST /api/v1/rules/:id/run -- apply a single rule to the current inbox.
+///
+/// Evaluates the rule against all active (non-trash, non-spam) emails and
+/// applies each action to every matching email via direct DB writes.
+/// Returns counts and a sample of affected emails.
+async fn run_rule(
+    State(state): State<AppState>,
+    Path(rule_id): Path<String>,
+) -> Result<Json<RunRuleResponse>, (StatusCode, Json<ErrorResponse>)> {
+    use crate::rules::executor::apply_rule_action;
+    use crate::rules::rule_processor::evaluate_rule;
+
+    let rule = RuleEngine::get_rule(&state.db.pool, &rule_id)
+        .await
+        .map_err(internal_error)?
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse {
+                    error: format!("Rule '{rule_id}' not found"),
+                }),
+            )
+        })?;
+
+    let rows = sqlx::query(
+        "SELECT id, from_addr, to_addrs, subject, body_text, labels, received_at \
+         FROM emails \
+         WHERE is_trash = 0 AND is_spam = 0 AND deleted_at IS NULL \
+         ORDER BY received_at DESC",
+    )
+    .fetch_all(&state.db.pool)
+    .await
+    .map_err(|e| {
+        tracing::error!("Failed to fetch emails for rule run: {e}");
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: "Failed to run rule against inbox".to_string(),
+            }),
+        )
+    })?;
+
+    let mut match_count: i64 = 0;
+    let mut executed_count: i64 = 0;
+    let mut sample_matches: Vec<SampleEmailMatch> = Vec::new();
+
+    for row in &rows {
+        let email_id: String = row.get("id");
+        let from_addr: String = row.get("from_addr");
+        let to_addrs: String = row.get("to_addrs");
+        let subject: String = row.get("subject");
+        let body_text: Option<String> = row.get("body_text");
+        let labels: String = row.get("labels");
+        let received_at: chrono::DateTime<Utc> = row.get("received_at");
+
+        let email = crate::email::EmailMessage {
+            id: email_id.clone(),
+            thread_id: None,
+            from: from_addr.clone(),
+            to: to_addrs
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect(),
+            subject: subject.clone(),
+            snippet: String::new(),
+            body: body_text,
+            body_html: None,
+            labels: labels
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect(),
+            date: received_at,
+            is_read: false,
+            list_unsubscribe: None,
+            list_unsubscribe_post: None,
+        };
+
+        if evaluate_rule(&rule, &email) {
+            match_count += 1;
+            for action in &rule.actions {
+                if apply_rule_action(&state.db.pool, &email_id, action)
+                    .await
+                    .is_ok()
+                {
+                    executed_count += 1;
+                }
+            }
+            if sample_matches.len() < 5 {
+                sample_matches.push(SampleEmailMatch {
+                    email_id,
+                    subject,
+                    from: from_addr,
+                    received_at: received_at.to_rfc3339(),
+                });
+            }
+        }
+    }
+
+    Ok(Json(RunRuleResponse {
+        match_count,
+        executed_count,
         sample_matches,
     }))
 }

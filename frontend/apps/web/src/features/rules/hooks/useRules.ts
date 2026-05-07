@@ -7,8 +7,9 @@ import {
   getRuleSuggestions,
   validateRule,
   testRule,
+  runRule,
 } from '@emailibrium/api';
-import type { RuleValidationResult, RuleTestResult } from '@emailibrium/api';
+import type { RuleValidationResult, RuleTestResult, RunRuleResult } from '@emailibrium/api';
 import type { Rule, RuleSuggestion } from '@emailibrium/types';
 
 export function useRulesQuery() {
@@ -86,5 +87,15 @@ export function useTestRule() {
     Omit<Rule, 'id' | 'matchCount' | 'accuracy' | 'createdAt'>
   >({
     mutationFn: testRule,
+  });
+}
+
+export function useRunRule() {
+  const queryClient = useQueryClient();
+  return useMutation<RunRuleResult, Error, string>({
+    mutationFn: runRule,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['rules'] });
+    },
   });
 }

@@ -352,6 +352,16 @@ pub async fn sync_emails_from_provider(
         "Starting full sync (onboarding)"
     );
 
+    // Load enabled rules once for the whole sync run so we can apply them
+    // to each email as it arrives, avoiding stragglers.
+    let enabled_rules: Vec<crate::rules::types::Rule> =
+        crate::rules::rule_engine::RuleEngine::load_rules(&state.db.pool)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|r| r.enabled)
+            .collect();
+
     let mut inserted = 0u64;
     let mut page_num = 0u64;
     let mut page_token: Option<String> = None;
@@ -404,7 +414,12 @@ pub async fn sync_emails_from_provider(
         );
 
         for msg in &page.messages {
-            inserted += upsert_email(state, account_id, provider_str, msg).await;
+            let n = upsert_email(state, account_id, provider_str, msg).await;
+            if n > 0 && !enabled_rules.is_empty() {
+                crate::rules::executor::apply_rules_to_email(&state.db.pool, msg, &enabled_rules)
+                    .await;
+            }
+            inserted += n;
         }
 
         // Broadcast per-page progress so the dashboard banner can show
@@ -601,12 +616,30 @@ async fn incremental_sync_delta(
         return Ok(0);
     }
 
+    // Load enabled rules once so actions can be applied to each arriving email.
+    let enabled_rules: Vec<crate::rules::types::Rule> =
+        crate::rules::rule_engine::RuleEngine::load_rules(&state.db.pool)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|r| r.enabled)
+            .collect();
+
     // Fetch full details for new + updated messages.
     let mut inserted = 0u64;
     for msg_id in new_ids.iter().chain(updated_ids.iter()) {
         match provider.get_message(access_token, msg_id).await {
             Ok(msg) => {
-                inserted += upsert_email(state, account_id, provider_str, &msg).await;
+                let n = upsert_email(state, account_id, provider_str, &msg).await;
+                if n > 0 && !enabled_rules.is_empty() {
+                    crate::rules::executor::apply_rules_to_email(
+                        &state.db.pool,
+                        &msg,
+                        &enabled_rules,
+                    )
+                    .await;
+                }
+                inserted += n;
             }
             Err(e) => {
                 warn!(email_id = %msg_id, "Incremental sync: failed to fetch message: {e}");

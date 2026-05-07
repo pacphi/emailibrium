@@ -90,8 +90,9 @@ export {
   getRuleSuggestions,
   validateRule,
   testRule,
+  runRule,
 } from './rulesApi.js';
-export type { RuleValidationResult, RuleTestResult } from './rulesApi.js';
+export type { RuleValidationResult, RuleTestResult, RunRuleResult } from './rulesApi.js';
 
 export { bulkArchive, bulkDelete, bulkLabel, unsubscribe } from './actionsApi.js';
 

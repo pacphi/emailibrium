@@ -1,7 +1,8 @@
-import { useState } from 'react';
-import { Pencil, Trash2, ArrowUpDown, Loader2 } from 'lucide-react';
+import { Fragment, useState } from 'react';
+import { Pencil, Play, Trash2, ArrowUpDown, Loader2 } from 'lucide-react';
 import type { Rule } from '@emailibrium/types';
-import { useToggleRule, useDeleteRule } from './hooks/useRules';
+import type { RunRuleResult } from '@emailibrium/api';
+import { useToggleRule, useDeleteRule, useRunRule } from './hooks/useRules';
 
 interface ActiveRulesListProps {
   rules: Rule[];
@@ -24,8 +25,24 @@ function sortRules(rules: Rule[], field: SortField, dir: SortDir): Rule[] {
 export function ActiveRulesList({ rules, isLoading, isError, onEdit }: ActiveRulesListProps) {
   const [sortField, setSortField] = useState<SortField>('matchCount');
   const [sortDir, setSortDir] = useState<SortDir>('desc');
+  const [runningRuleId, setRunningRuleId] = useState<string | null>(null);
+  const [runResults, setRunResults] = useState<Map<string, RunRuleResult>>(new Map());
   const toggleMutation = useToggleRule();
   const deleteMutation = useDeleteRule();
+  const runMutation = useRunRule();
+
+  function handleRun(rule: Rule) {
+    setRunningRuleId(rule.id);
+    runMutation.mutate(rule.id, {
+      onSuccess: (result) => {
+        setRunResults((prev) => new Map(prev).set(rule.id, result));
+        setRunningRuleId(null);
+      },
+      onError: () => {
+        setRunningRuleId(null);
+      },
+    });
+  }
 
   function handleSort(field: SortField) {
     if (sortField === field) {
@@ -91,74 +108,104 @@ export function ActiveRulesList({ rules, isLoading, isError, onEdit }: ActiveRul
         </thead>
         <tbody>
           {sorted.map((rule) => (
-            <tr
-              key={rule.id}
-              className="border-b border-gray-100 transition-colors hover:bg-gray-50 dark:border-gray-700/50 dark:hover:bg-gray-800/50"
-            >
-              <td className="px-3 py-2.5 font-medium text-gray-900 dark:text-white">{rule.name}</td>
-              <td className="px-3 py-2.5 text-gray-600 dark:text-gray-300">
-                {rule.matchCount.toLocaleString()}
-              </td>
-              <td className="px-3 py-2.5">
-                <span
-                  className={`font-medium ${
-                    rule.accuracy >= 0.9
-                      ? 'text-green-600 dark:text-green-400'
-                      : rule.accuracy >= 0.7
-                        ? 'text-yellow-600 dark:text-yellow-400'
-                        : 'text-red-600 dark:text-red-400'
-                  }`}
-                >
-                  {(rule.accuracy * 100).toFixed(1)}%
-                </span>
-              </td>
-              <td className="px-3 py-2.5">
-                <button
-                  type="button"
-                  role="switch"
-                  aria-checked={rule.isActive}
-                  aria-label={`${rule.isActive ? 'Disable' : 'Enable'} ${rule.name}`}
-                  onClick={() =>
-                    toggleMutation.mutate({
-                      id: rule.id,
-                      isActive: !rule.isActive,
-                    })
-                  }
-                  className={`
+            <Fragment key={rule.id}>
+              <tr className="border-b border-gray-100 transition-colors hover:bg-gray-50 dark:border-gray-700/50 dark:hover:bg-gray-800/50">
+                <td className="px-3 py-2.5 font-medium text-gray-900 dark:text-white">
+                  {rule.name}
+                </td>
+                <td className="px-3 py-2.5 text-gray-600 dark:text-gray-300">
+                  {rule.matchCount.toLocaleString()}
+                </td>
+                <td className="px-3 py-2.5">
+                  <span
+                    className={`font-medium ${
+                      rule.accuracy >= 0.9
+                        ? 'text-green-600 dark:text-green-400'
+                        : rule.accuracy >= 0.7
+                          ? 'text-yellow-600 dark:text-yellow-400'
+                          : 'text-red-600 dark:text-red-400'
+                    }`}
+                  >
+                    {(rule.accuracy * 100).toFixed(1)}%
+                  </span>
+                </td>
+                <td className="px-3 py-2.5">
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={rule.isActive}
+                    aria-label={`${rule.isActive ? 'Disable' : 'Enable'} ${rule.name}`}
+                    onClick={() =>
+                      toggleMutation.mutate({
+                        id: rule.id,
+                        isActive: !rule.isActive,
+                      })
+                    }
+                    className={`
                     relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full transition-colors
                     ${rule.isActive ? 'bg-indigo-600' : 'bg-gray-300 dark:bg-gray-600'}
                   `}
-                >
-                  <span
-                    className={`
+                  >
+                    <span
+                      className={`
                       inline-block h-4 w-4 rounded-full bg-white shadow transition-transform
                       ${rule.isActive ? 'translate-x-4' : 'translate-x-0.5'}
                       mt-0.5
                     `}
-                  />
-                </button>
-              </td>
-              <td className="px-3 py-2.5">
-                <div className="flex items-center gap-1">
-                  <button
-                    type="button"
-                    onClick={() => onEdit(rule)}
-                    className="rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-700 dark:hover:text-gray-300"
-                    aria-label={`Edit ${rule.name}`}
-                  >
-                    <Pencil className="h-4 w-4" />
+                    />
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => deleteMutation.mutate(rule.id)}
-                    className="rounded p-1 text-gray-400 hover:bg-red-100 hover:text-red-600 dark:hover:bg-red-900/30 dark:hover:text-red-400"
-                    aria-label={`Delete ${rule.name}`}
+                </td>
+                <td className="px-3 py-2.5">
+                  <div className="flex items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={() => handleRun(rule)}
+                      disabled={runningRuleId === rule.id}
+                      className="rounded p-1 text-gray-400 hover:bg-indigo-100 hover:text-indigo-600 disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-indigo-900/30 dark:hover:text-indigo-400"
+                      aria-label={`Run ${rule.name}`}
+                      title="Run rule against inbox now"
+                    >
+                      {runningRuleId === rule.id ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <Play className="h-4 w-4" />
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onEdit(rule)}
+                      className="rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-700 dark:hover:text-gray-300"
+                      aria-label={`Edit ${rule.name}`}
+                    >
+                      <Pencil className="h-4 w-4" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => deleteMutation.mutate(rule.id)}
+                      className="rounded p-1 text-gray-400 hover:bg-red-100 hover:text-red-600 dark:hover:bg-red-900/30 dark:hover:text-red-400"
+                      aria-label={`Delete ${rule.name}`}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </div>
+                </td>
+              </tr>
+              {runResults.has(rule.id) && (
+                <tr key={`${rule.id}-result`}>
+                  <td
+                    colSpan={5}
+                    className="px-3 pb-2 pt-0 text-xs text-indigo-600 dark:text-indigo-400"
                   >
-                    <Trash2 className="h-4 w-4" />
-                  </button>
-                </div>
-              </td>
-            </tr>
+                    {(() => {
+                      const r = runResults.get(rule.id)!;
+                      return r.matchCount === 0
+                        ? 'No matching emails found.'
+                        : `Applied to ${r.executedCount} action${r.executedCount === 1 ? '' : 's'} across ${r.matchCount} email${r.matchCount === 1 ? '' : 's'}.`;
+                    })()}
+                  </td>
+                </tr>
+              )}
+            </Fragment>
           ))}
         </tbody>
       </table>

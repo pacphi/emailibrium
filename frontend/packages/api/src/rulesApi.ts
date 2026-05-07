@@ -52,8 +52,23 @@ export interface RuleTestResult {
   }>;
 }
 
+export interface RunRuleResult {
+  matchCount: number;
+  executedCount: number;
+  sampleMatches: Array<{
+    emailId: string;
+    subject: string;
+    from: string;
+    receivedAt: string;
+  }>;
+}
+
 export async function testRule(
   rule: Omit<Rule, 'id' | 'matchCount' | 'accuracy' | 'createdAt'>,
 ): Promise<RuleTestResult> {
   return api.post('rules/test', { json: rule }).json<RuleTestResult>();
+}
+
+export async function runRule(id: string): Promise<RunRuleResult> {
+  return api.post(`rules/${id}/run`).json<RunRuleResult>();
 }

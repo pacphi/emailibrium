@@ -15,6 +15,8 @@ export function AISuggestions({ onCustomize, batchIndex }: AISuggestionsProps) {
   const [isLoading, setIsLoading] = useState(true);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [isError, setIsError] = useState(false);
+  const [pendingAcceptId, setPendingAcceptId] = useState<string | null>(null);
+  const [dismissedIds, setDismissedIds] = useState<Set<string>>(new Set());
   const offsetRef = useRef(0);
   const prevBatchIndex = useRef(0);
   const createMutation = useCreateRule();
@@ -49,12 +51,28 @@ export function AISuggestions({ onCustomize, batchIndex }: AISuggestionsProps) {
   }, [batchIndex, loadBatch]);
 
   function handleAccept(suggestion: RuleSuggestion) {
-    createMutation.mutate({
-      name: suggestion.rule.name,
-      conditions: suggestion.rule.conditions,
-      actions: suggestion.rule.actions,
-      isActive: true,
-    });
+    setPendingAcceptId(suggestion.rule.id);
+    createMutation.mutate(
+      {
+        name: suggestion.rule.name,
+        conditions: suggestion.rule.conditions,
+        actions: suggestion.rule.actions,
+        isActive: true,
+      },
+      {
+        onSuccess: () => {
+          setDismissedIds((prev) => new Set([...prev, suggestion.rule.id]));
+          setPendingAcceptId(null);
+        },
+        onError: () => {
+          setPendingAcceptId(null);
+        },
+      },
+    );
+  }
+
+  function handleDismiss(id: string) {
+    setDismissedIds((prev) => new Set([...prev, id]));
   }
 
   if (isLoading) {
@@ -80,9 +98,11 @@ export function AISuggestions({ onCustomize, batchIndex }: AISuggestionsProps) {
     );
   }
 
+  const visibleSuggestions = allSuggestions.filter((s) => !dismissedIds.has(s.rule.id));
+
   return (
     <div className="space-y-3">
-      {allSuggestions.map((suggestion, index) => (
+      {visibleSuggestions.map((suggestion, index) => (
         <div
           key={index}
           className="rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800"
@@ -118,10 +138,14 @@ export function AISuggestions({ onCustomize, batchIndex }: AISuggestionsProps) {
             <button
               type="button"
               onClick={() => handleAccept(suggestion)}
-              disabled={createMutation.isPending}
-              className="flex items-center gap-1 rounded-md bg-green-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-green-700 disabled:opacity-50"
+              disabled={pendingAcceptId === suggestion.rule.id}
+              className="flex items-center gap-1 rounded-md bg-green-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              <Check className="h-3.5 w-3.5" aria-hidden="true" />
+              {pendingAcceptId === suggestion.rule.id ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+              ) : (
+                <Check className="h-3.5 w-3.5" aria-hidden="true" />
+              )}
               Accept
             </button>
             <button
@@ -134,6 +158,7 @@ export function AISuggestions({ onCustomize, batchIndex }: AISuggestionsProps) {
             </button>
             <button
               type="button"
+              onClick={() => handleDismiss(suggestion.rule.id)}
               className="flex items-center gap-1 rounded-md px-3 py-1.5 text-xs text-gray-400 transition-colors hover:text-gray-600 dark:hover:text-gray-300"
             >
               <X className="h-3.5 w-3.5" aria-hidden="true" />
