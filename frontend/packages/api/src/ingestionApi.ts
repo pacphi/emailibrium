@@ -37,7 +37,8 @@ export async function startIngestion(
     const text = await resp.text().catch(() => resp.statusText);
     throw new Error(`Ingestion start failed (${resp.status}): ${text}`);
   }
-  return resp.json<{ jobId: string }>();
+  const body = await resp.json<{ job_id: string }>();
+  return { jobId: body.job_id };
 }
 
 /** Check if a pipeline is currently active for the given account. */
@@ -55,8 +56,14 @@ export async function resumeIngestion(jobId: string): Promise<void> {
   await api.post('ingestion/resume', { json: { job_id: jobId } });
 }
 
-export function createIngestionStream(jobId: string): SSEStream<IngestionProgress> {
-  return createSSEStream<IngestionProgress>(`/api/v1/ingestion/${jobId}/stream`);
+export function createIngestionStream(
+  _jobId: string,
+  onError?: (e: Event) => void,
+): SSEStream<IngestionProgress> {
+  // No job_id filter: the API job ID and pipeline job ID are distinct.
+  // Since the sync lock prevents concurrent pipelines per account, streaming
+  // all events is safe and is the only way to receive progress events.
+  return createSSEStream<IngestionProgress>(`/api/v1/ingestion/status`, { onError });
 }
 
 export interface EmbeddingStatus {

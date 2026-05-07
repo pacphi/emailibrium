@@ -1,4 +1,4 @@
-import type { SubscriptionInsight, RecurrencePattern, SuggestedAction } from '@emailibrium/types';
+import type { SubscriptionInsight, RecurrencePattern } from '@emailibrium/types';
 
 interface SubscriptionRowProps {
   subscription: SubscriptionInsight;
@@ -24,27 +24,12 @@ const frequencyColors: Record<RecurrencePattern, string> = {
   irregular: 'bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300',
 };
 
-const actionLabels: Record<SuggestedAction, string> = {
-  keep: 'Keep',
-  unsubscribe: 'Unsubscribe',
-  archive: 'Archive',
-  digest: 'Digest',
-};
-
-const actionColors: Record<SuggestedAction, string> = {
-  keep: 'text-green-600 dark:text-green-400',
-  unsubscribe: 'text-red-600 dark:text-red-400',
-  archive: 'text-amber-600 dark:text-amber-400',
-  digest: 'text-blue-600 dark:text-blue-400',
-};
-
 function getInitials(address: string): string {
   const name = address.split('@')[0] ?? '';
   return name.slice(0, 2).toUpperCase();
 }
 
 function getDomainColor(domain: string): string {
-  // Simple hash to pick a color
   let hash = 0;
   for (let i = 0; i < domain.length; i++) {
     hash = domain.charCodeAt(i) + ((hash << 5) - hash);
@@ -62,79 +47,88 @@ function getDomainColor(domain: string): string {
   return colors[Math.abs(hash) % colors.length]!;
 }
 
+// Grid template: avatar | sender | frequency | count | action | indicator
+// Using CSS grid so every row shares identical column widths — flex with optional
+// elements would shift column positions when hasUnsubscribe differs between rows.
+const GRID_COLS = '[grid-template-columns:2rem_1fr_5.5rem_4rem_7.5rem_1.25rem]';
+
 export function SubscriptionRow({ subscription, isSelected, onToggle }: SubscriptionRowProps) {
-  const { senderAddress, senderDomain, frequency, emailCount, suggestedAction, hasUnsubscribe } =
-    subscription;
+  const { senderAddress, senderDomain, frequency, emailCount, hasUnsubscribe } = subscription;
+
+  const currentAction = isSelected ? 'unsubscribe' : 'keep';
+
+  const handleActionChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    e.stopPropagation();
+    const shouldBeSelected = e.target.value === 'unsubscribe';
+    if (shouldBeSelected !== isSelected) {
+      onToggle(senderAddress);
+    }
+  };
 
   return (
-    <label
-      className={`flex items-center gap-3 px-4 py-3 rounded-lg border transition-colors cursor-pointer ${
+    <div
+      className={`grid items-center gap-x-3 px-4 py-3 rounded-lg border transition-colors ${GRID_COLS} ${
         isSelected
           ? 'border-blue-300 bg-blue-50 dark:border-blue-700 dark:bg-blue-900/20'
-          : 'border-gray-200 bg-white hover:border-gray-300 dark:border-gray-700 dark:bg-gray-800 dark:hover:border-gray-600'
+          : 'border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800'
       }`}
     >
-      {/* Checkbox */}
-      <input
-        type="checkbox"
-        checked={isSelected}
-        onChange={() => onToggle(senderAddress)}
-        className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-      />
-
-      {/* Avatar */}
+      {/* Col 1 — Avatar */}
       <div
-        className={`w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-bold shrink-0 ${getDomainColor(senderDomain)}`}
+        className={`w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-bold ${getDomainColor(senderDomain)}`}
       >
         {getInitials(senderAddress)}
       </div>
 
-      {/* Sender info */}
-      <div className="flex-1 min-w-0">
+      {/* Col 2 — Sender info */}
+      <div className="min-w-0">
         <p className="text-sm font-medium text-gray-900 dark:text-gray-100 truncate">
           {senderAddress}
         </p>
-        <p className="text-xs text-gray-500 dark:text-gray-400">{senderDomain}</p>
+        <p className="text-xs text-gray-500 dark:text-gray-400 truncate">{senderDomain}</p>
       </div>
 
-      {/* Frequency badge */}
+      {/* Col 3 — Frequency badge */}
       <span
-        className={`hidden sm:inline-flex px-2 py-0.5 text-xs font-medium rounded-full ${frequencyColors[frequency]}`}
+        className={`inline-flex justify-center px-2 py-0.5 text-xs font-medium rounded-full ${frequencyColors[frequency]}`}
       >
         {frequencyLabels[frequency]}
       </span>
 
-      {/* Email count */}
-      <div className="text-right shrink-0 w-16">
+      {/* Col 4 — Email count */}
+      <div className="text-right">
         <p className="text-sm font-semibold text-gray-900 dark:text-gray-100">
           {emailCount.toLocaleString()}
         </p>
         <p className="text-[10px] text-gray-400">emails</p>
       </div>
 
-      {/* Suggested action */}
-      <span
-        className={`hidden md:inline-flex text-xs font-medium w-20 justify-center ${actionColors[suggestedAction]}`}
+      {/* Col 5 — Action dropdown */}
+      <select
+        value={currentAction}
+        onChange={handleActionChange}
+        onClick={(e) => e.stopPropagation()}
+        className="w-full text-xs rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-200 px-2 py-1 focus:outline-none focus:ring-1 focus:ring-blue-500"
       >
-        {actionLabels[suggestedAction]}
-      </span>
+        <option value="keep">Keep</option>
+        <option value="unsubscribe">Unsubscribe</option>
+      </select>
 
-      {/* Unsubscribe indicator */}
-      {hasUnsubscribe && (
-        <span
-          className="hidden lg:inline-flex text-[10px] text-gray-400 dark:text-gray-500"
-          title="Has unsubscribe link"
-        >
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.878 9.878L3 3m6.878 6.878L21 21"
-            />
-          </svg>
-        </span>
-      )}
-    </label>
+      {/* Col 6 — Unsubscribe indicator (always occupies the column; invisible when absent) */}
+      <div className="flex justify-center">
+        {hasUnsubscribe ? (
+          <span className="text-gray-400 dark:text-gray-500" title="Has unsubscribe link">
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.878 9.878L3 3m6.878 6.878L21 21"
+              />
+            </svg>
+          </span>
+        ) : null}
+      </div>
+    </div>
   );
 }

@@ -1,12 +1,20 @@
 import { useState, useCallback } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { useInboxCleaner } from './hooks/useInboxCleaner';
 import type { WizardStep } from './hooks/useInboxCleaner';
 import { IngestionProgressScreen } from './IngestionProgress';
 import { Step2Subscriptions } from './Step2Subscriptions';
 import { Step3Topics } from './Step3Topics';
 import { Step4Rules } from './Step4Rules';
-import type { Cluster, PipelineActivity, PlanId } from '@emailibrium/types';
-import { getAccounts, getPipelineLockStatus } from '@emailibrium/api';
+import type { PipelineActivity, PlanId } from '@emailibrium/types';
+import {
+  getAccounts,
+  getPipelineLockStatus,
+  startIngestion,
+  PipelineBusyError,
+  getIngestionProgress,
+  getClusters,
+} from '@emailibrium/api';
 import { useGenerativeRouter } from '../../services/ai/useGenerativeRouter';
 import { CleanupReview } from './review/CleanupReview';
 
@@ -104,11 +112,16 @@ export function InboxCleaner({ userId = null }: InboxCleanerProps = {}) {
   const [pipelineConflict, setPipelineConflict] = useState<PipelineActivity | null>(null);
   const [checkingLock, setCheckingLock] = useState(false);
 
-  // Placeholder clusters (would come from an API query in production)
-  const [clusters] = useState<Cluster[]>([]);
-  const [clustersLoading] = useState(false);
+  const clustersQuery = useQuery({
+    queryKey: ['inbox-cleaner-clusters'],
+    queryFn: getClusters,
+    staleTime: 5 * 60 * 1000,
+  });
+  const clusters = clustersQuery.data ?? [];
+  const clustersLoading = clustersQuery.isLoading;
 
   const handleIngestionComplete = useCallback(() => {
+    setIngestionJobId(null); // clear so returning to Step 1 shows "Begin Ingestion"
     wizard.goNext();
   }, [wizard]);
 
@@ -127,15 +140,53 @@ export function InboxCleaner({ userId = null }: InboxCleanerProps = {}) {
           return;
         }
       }
-      // No conflicts — start ingestion.
-      setIngestionJobId('job-' + Date.now());
-    } catch {
-      // If the lock-status check itself fails, proceed optimistically.
-      // The backend will still enforce the 409 if there's a real conflict.
-      setIngestionJobId('job-' + Date.now());
+      if (active.length === 0) {
+        setCheckingLock(false);
+        return;
+      }
+
+      const { jobId } = await startIngestion(active[0]!.id, 'inbox_clean');
+
+      // The pipeline runs asynchronously and may complete in milliseconds for
+      // already-synced accounts. Poll the REST endpoint for up to 3 seconds
+      // before falling back to the SSE progress screen (which is only needed
+      // for long-running pipelines with actual emails to process).
+      const POLL_INTERVAL = 300;
+      const POLL_MAX_MS = 3_000;
+      const deadline = Date.now() + POLL_MAX_MS;
+
+      while (Date.now() < deadline) {
+        await new Promise<void>((r) => setTimeout(r, POLL_INTERVAL));
+        try {
+          const snapshot = await getIngestionProgress();
+          // active:false  → no job in memory (fresh state)
+          // phase:complete → job finished but current_job not yet cleared
+          if (!snapshot.active || snapshot.phase === 'complete') {
+            wizard.goNext();
+            setCheckingLock(false);
+            return;
+          }
+        } catch {
+          // Transient error; keep polling.
+        }
+      }
+
+      // Pipeline still running after 3 s — hand off to the SSE progress screen.
+      setIngestionJobId(jobId);
+    } catch (e) {
+      if (e instanceof PipelineBusyError) {
+        setPipelineConflict({
+          jobId: e.activity.existingJobId,
+          accountId: '',
+          phase: e.activity.existingPhase,
+          startedAt: e.activity.startedAt,
+          source: e.activity.existingSource,
+        });
+      }
+      // Other errors (network, auth): surface nothing, user can retry.
     }
     setCheckingLock(false);
-  }, []);
+  }, [wizard]);
 
   // Phase C: build a plan and advance to the Review step. The Phase B
   // simulator (setInterval-driven CleanupProgress fake) was removed once

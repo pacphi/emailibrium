@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import type { SubscriptionInsight } from '@emailibrium/types';
 import { SubscriptionRow } from './SubscriptionRow';
 
@@ -36,6 +37,8 @@ function Section({
   onDeselectAll,
   badgeColor,
 }: SectionProps) {
+  const [isExpanded, setIsExpanded] = useState(false);
+
   if (subscriptions.length === 0) return null;
 
   const allSelected = subscriptions.every((s) => selectedSubscriptions.has(s.senderAddress));
@@ -44,8 +47,13 @@ function Section({
   ).length;
 
   return (
-    <div className="space-y-3">
-      <div className="flex items-center justify-between">
+    <div className="rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
+      {/* Collapsible header */}
+      <button
+        type="button"
+        onClick={() => setIsExpanded((prev) => !prev)}
+        className="w-full flex items-center justify-between px-4 py-3 bg-gray-50 dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors text-left"
+      >
         <div className="flex items-center gap-2">
           <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100">{title}</h3>
           <span
@@ -59,24 +67,43 @@ function Section({
             </span>
           )}
         </div>
-        <button
-          onClick={() => (allSelected ? onDeselectAll(subscriptions) : onSelectAll(subscriptions))}
-          className="text-xs font-medium text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300"
+        <svg
+          className={`w-4 h-4 text-gray-500 dark:text-gray-400 transition-transform shrink-0 ${isExpanded ? 'rotate-180' : ''}`}
+          fill="none"
+          stroke="currentColor"
+          viewBox="0 0 24 24"
         >
-          {allSelected ? 'Deselect All' : 'Select All'}
-        </button>
-      </div>
-      <p className="text-xs text-gray-500 dark:text-gray-400">{description}</p>
-      <div className="space-y-2">
-        {subscriptions.map((sub) => (
-          <SubscriptionRow
-            key={sub.senderAddress}
-            subscription={sub}
-            isSelected={selectedSubscriptions.has(sub.senderAddress)}
-            onToggle={onToggle}
-          />
-        ))}
-      </div>
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+        </svg>
+      </button>
+
+      {/* Expandable content */}
+      {isExpanded && (
+        <div className="px-4 pb-4 space-y-3">
+          <div className="flex items-center justify-between pt-3">
+            <p className="text-xs text-gray-500 dark:text-gray-400">{description}</p>
+            <button
+              type="button"
+              onClick={() =>
+                allSelected ? onDeselectAll(subscriptions) : onSelectAll(subscriptions)
+              }
+              className="text-xs font-medium text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300 shrink-0 ml-4"
+            >
+              {allSelected ? 'Keep All' : 'Unsubscribe All'}
+            </button>
+          </div>
+          <div className="space-y-2">
+            {subscriptions.map((sub) => (
+              <SubscriptionRow
+                key={sub.senderAddress}
+                subscription={sub}
+                isSelected={selectedSubscriptions.has(sub.senderAddress)}
+                onToggle={onToggle}
+              />
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -137,7 +164,7 @@ export function Step2Subscriptions({
   }, 0);
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-3">
       {/* Summary banner */}
       {selectedSubscriptions.size > 0 && (
         <div className="rounded-lg bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 px-4 py-3">

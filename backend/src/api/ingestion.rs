@@ -1254,19 +1254,23 @@ async fn poll_toggle(
 /// Unlike `/status` (SSE), this is a simple request/response for polling.
 async fn ingestion_progress_json(State(state): State<AppState>) -> Json<serde_json::Value> {
     // First check the pipeline's own job state (covers embedding/categorizing/etc).
+    // current_job is never reset to None, so we must check phase to distinguish
+    // a running job from a completed one.
     if let Some(progress) = state.vector_service.ingestion_pipeline.get_progress().await {
-        return Json(serde_json::json!({
-            "active": true,
-            "jobId": progress.job_id,
-            "phase": progress.phase,
-            "total": progress.total,
-            "processed": progress.processed,
-            "embedded": progress.embedded,
-            "categorized": progress.categorized,
-            "failed": progress.failed,
-            "etaSeconds": progress.eta_seconds,
-            "emailsPerSecond": progress.emails_per_second,
-        }));
+        if progress.phase != "complete" {
+            return Json(serde_json::json!({
+                "active": true,
+                "jobId": progress.job_id,
+                "phase": progress.phase,
+                "total": progress.total,
+                "processed": progress.processed,
+                "embedded": progress.embedded,
+                "categorized": progress.categorized,
+                "failed": progress.failed,
+                "etaSeconds": progress.eta_seconds,
+                "emailsPerSecond": progress.emails_per_second,
+            }));
+        }
     }
 
     // Fall back to the broadcast cache — this covers the syncing phase

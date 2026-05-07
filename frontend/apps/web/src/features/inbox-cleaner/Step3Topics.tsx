@@ -96,21 +96,26 @@ function ClusterCard({ cluster, action, onSetAction }: ClusterCardProps) {
       {/* Expanded preview */}
       {expanded && (
         <div className="border-t border-gray-100 dark:border-gray-700 px-4 py-3 bg-gray-50 dark:bg-gray-800/50">
-          <p className="text-xs font-medium text-gray-500 dark:text-gray-400 mb-2">
-            Sample subjects:
-          </p>
-          <ul className="space-y-1">
-            {/* Placeholder samples derived from cluster description */}
-            <li className="text-xs text-gray-600 dark:text-gray-300 truncate">
-              &bull; {cluster.description} - Example email 1
-            </li>
-            <li className="text-xs text-gray-600 dark:text-gray-300 truncate">
-              &bull; {cluster.description} - Example email 2
-            </li>
-            <li className="text-xs text-gray-600 dark:text-gray-300 truncate">
-              &bull; {cluster.description} - Example email 3
-            </li>
-          </ul>
+          {cluster.representativeEmails.length > 0 ? (
+            <>
+              <p className="text-xs font-medium text-gray-500 dark:text-gray-400 mb-2">
+                Sample subjects:
+              </p>
+              <ul className="space-y-1">
+                {cluster.representativeEmails.slice(0, 5).map((email) => (
+                  <li
+                    key={email.id}
+                    className="text-xs text-gray-600 dark:text-gray-300 truncate"
+                    title={email.subject}
+                  >
+                    &bull; {email.subject}
+                  </li>
+                ))}
+              </ul>
+            </>
+          ) : (
+            <p className="text-xs text-gray-500 dark:text-gray-400">No sample emails available.</p>
+          )}
           <p className="mt-2 text-[10px] text-gray-400">
             Stability: {(cluster.stabilityScore * 100).toFixed(0)}% | Created:{' '}
             {new Date(cluster.createdAt).toLocaleDateString()}

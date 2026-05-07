@@ -12,6 +12,7 @@ import type {
 } from '@emailibrium/types';
 import {
   getSubscriptions,
+  getAccounts,
   buildPlan as apiBuildPlan,
   getPlan as apiGetPlan,
   refreshPlanAccount as apiRefreshAccount,
@@ -64,6 +65,18 @@ export function useInboxCleaner(options: UseInboxCleanerOptions = {}) {
   const [currentPlanSummary, setCurrentPlanSummary] = useState<CreatePlanResponse | null>(null);
   const [planError, setPlanError] = useState<string | null>(null);
   const [isBuildingPlan, setIsBuildingPlan] = useState(false);
+
+  const accountsQuery = useQuery({
+    queryKey: ['accounts'],
+    queryFn: getAccounts,
+    staleTime: 5 * 60 * 1000,
+  });
+
+  const activeAccountIds = useMemo(
+    () => (accountsQuery.data ?? []).filter((a) => a.isActive).map((a) => a.id),
+    [accountsQuery.data],
+  );
+  const primaryAccountId = activeAccountIds[0] ?? '';
 
   const subscriptionsQuery = useQuery<SubscriptionInsight[]>({
     queryKey: ['subscriptions'],
@@ -200,16 +213,12 @@ export function useInboxCleaner(options: UseInboxCleanerOptions = {}) {
   const collectSelections = useCallback((): WizardSelections => {
     const subs = subscriptions.filter((s) => selectedSubscriptions.has(s.senderAddress));
     return {
-      // TODO(phase-d): SubscriptionInsight does not currently expose
-      // accountId. Phase A's PlanBuilder uses the user's account scope to
-      // resolve senders to accounts, so an empty accountId is acceptable
-      // for now; once the insight DTO grows accountId we can pass it here.
-      subscriptions: subs.map((s) => ({ sender: s.senderAddress, accountId: '' })),
+      subscriptions: subs.map((s) => ({ sender: s.senderAddress, accountId: primaryAccountId })),
       clusterActions: Array.from(clusterSelections.entries())
         .map(([clusterId, action]) => {
           const mapped = mapClusterAction(action);
           if (!mapped) return null;
-          return { clusterId, action: mapped, accountId: '' };
+          return { clusterId, action: mapped, accountId: primaryAccountId };
         })
         .filter(
           (c): c is { clusterId: string; action: CleanupClusterAction; accountId: string } =>
@@ -217,9 +226,9 @@ export function useInboxCleaner(options: UseInboxCleanerOptions = {}) {
         ),
       ruleSelections: suggestedRules
         .filter((r) => r.enabled)
-        .map((r) => ({ ruleId: r.id, accountId: '' })),
+        .map((r) => ({ ruleId: r.id, accountId: primaryAccountId })),
       archiveStrategy: mapArchiveStrategy(archiveStrategy),
-      accountIds: [],
+      accountIds: activeAccountIds,
     };
   }, [
     subscriptions,
@@ -229,6 +238,8 @@ export function useInboxCleaner(options: UseInboxCleanerOptions = {}) {
     archiveStrategy,
     mapClusterAction,
     mapArchiveStrategy,
+    primaryAccountId,
+    activeAccountIds,
   ]);
 
   const buildPlan = useCallback(async (): Promise<PlanId> => {

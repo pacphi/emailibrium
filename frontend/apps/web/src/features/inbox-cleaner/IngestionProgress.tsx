@@ -1,4 +1,4 @@
-import { useCallback } from 'react';
+import { useCallback, useEffect } from 'react';
 import { useIngestionProgress } from './hooks/useIngestionProgress';
 import { PhaseIndicator } from './PhaseIndicator';
 import { ProgressBar } from './ProgressBar';
@@ -72,6 +72,17 @@ export function IngestionProgressScreen({
       await pause();
     }
   }, [isPaused, pause, resume]);
+
+  const currentPhaseEarly = progress?.phase ?? null;
+  const totalEarly = progress?.total ?? 0;
+
+  // When the pipeline completes with no emails to process (account already
+  // synced), skip the progress screen and advance directly to the next step.
+  useEffect(() => {
+    if (currentPhaseEarly === 'complete' && totalEarly === 0 && onComplete) {
+      onComplete();
+    }
+  }, [currentPhaseEarly, totalEarly, onComplete]);
 
   if (connectionStatus === 'connecting' && !progress) {
     return (
