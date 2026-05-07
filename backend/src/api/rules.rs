@@ -108,6 +108,7 @@ pub struct RuleResponse {
     pub actions: Vec<RuleAction>,
     pub priority: i32,
     pub enabled: bool,
+    pub match_count: i64,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -122,6 +123,7 @@ impl From<Rule> for RuleResponse {
             actions: r.actions,
             priority: r.priority,
             enabled: r.enabled,
+            match_count: 0,
             created_at: r.created_at.to_rfc3339(),
             updated_at: r.updated_at.to_rfc3339(),
         }
@@ -177,6 +179,16 @@ async fn list_rules(
         .await
         .map_err(internal_error)?;
 
+    // Fetch match_count separately (column added in migration 026).
+    let count_rows = sqlx::query("SELECT id, COALESCE(match_count, 0) as mc FROM rules")
+        .fetch_all(&state.db.pool)
+        .await
+        .unwrap_or_default();
+    let counts: std::collections::HashMap<String, i64> = count_rows
+        .iter()
+        .map(|r| (r.get::<String, _>("id"), r.get::<i64, _>("mc")))
+        .collect();
+
     let mut engine = RuleEngine::new();
     engine.set_rules(loaded);
 
@@ -184,7 +196,12 @@ async fn list_rules(
         .rules()
         .iter()
         .cloned()
-        .map(RuleResponse::from)
+        .map(|r| {
+            let mc = *counts.get(&r.id).unwrap_or(&0);
+            let mut resp = RuleResponse::from(r);
+            resp.match_count = mc;
+            resp
+        })
         .collect();
     Ok(Json(responses))
 }
@@ -559,13 +576,14 @@ pub struct RunRuleResponse {
 
 /// POST /api/v1/rules/:id/run -- apply a single rule to the current inbox.
 ///
-/// Evaluates the rule against all active (non-trash, non-spam) emails and
-/// applies each action to every matching email via direct DB writes.
-/// Returns counts and a sample of affected emails.
+/// Evaluates the rule against all active emails, calls the email provider to
+/// apply each action (archive, mark-read, etc.) on matched emails, then
+/// persists the updated match_count to the rule row.
 async fn run_rule(
     State(state): State<AppState>,
     Path(rule_id): Path<String>,
 ) -> Result<Json<RunRuleResponse>, (StatusCode, Json<ErrorResponse>)> {
+    use crate::api::provider_helpers::resolve_provider_and_token;
     use crate::rules::executor::apply_rule_action;
     use crate::rules::rule_processor::evaluate_rule;
 
@@ -582,7 +600,7 @@ async fn run_rule(
         })?;
 
     let rows = sqlx::query(
-        "SELECT id, from_addr, to_addrs, subject, body_text, labels, received_at \
+        "SELECT id, account_id, from_addr, to_addrs, subject, body_text, labels, received_at \
          FROM emails \
          WHERE is_trash = 0 AND is_spam = 0 AND deleted_at IS NULL \
          ORDER BY received_at DESC",
@@ -605,6 +623,7 @@ async fn run_rule(
 
     for row in &rows {
         let email_id: String = row.get("id");
+        let account_id: String = row.get("account_id");
         let from_addr: String = row.get("from_addr");
         let to_addrs: String = row.get("to_addrs");
         let subject: String = row.get("subject");
@@ -636,26 +655,71 @@ async fn run_rule(
             list_unsubscribe_post: None,
         };
 
-        if evaluate_rule(&rule, &email) {
-            match_count += 1;
-            for action in &rule.actions {
-                if apply_rule_action(&state.db.pool, &email_id, action)
-                    .await
-                    .is_ok()
-                {
-                    executed_count += 1;
+        if !evaluate_rule(&rule, &email) {
+            continue;
+        }
+
+        match_count += 1;
+
+        // Apply each action: provider call (best-effort) then local DB update.
+        for action in &rule.actions {
+            // Provider-level action — errors are logged but don't abort the run.
+            if let Ok((provider, token, _)) = resolve_provider_and_token(&state, &account_id).await
+            {
+                let provider_result = match action {
+                    RuleAction::Archive => provider.archive_message(&token, &email_id).await,
+                    RuleAction::MarkRead => provider.mark_read(&token, &email_id, true).await,
+                    RuleAction::MarkImportant => {
+                        provider.star_message(&token, &email_id, true).await
+                    }
+                    RuleAction::Delete => provider
+                        .move_message(
+                            &token,
+                            &email_id,
+                            "TRASH",
+                            crate::email::provider::MoveKind::Folder,
+                        )
+                        .await
+                        .map(|_| ()),
+                    // AddLabel / RemoveLabel / Forward: local-only or not yet wired to provider.
+                    _ => Ok(()),
+                };
+                if let Err(e) = provider_result {
+                    tracing::warn!(
+                        email_id = %email_id,
+                        "Provider action failed (applying locally): {e}"
+                    );
                 }
             }
-            if sample_matches.len() < 5 {
-                sample_matches.push(SampleEmailMatch {
-                    email_id,
-                    subject,
-                    from: from_addr,
-                    received_at: received_at.to_rfc3339(),
-                });
+
+            // Local DB update (idempotent).
+            if apply_rule_action(&state.db.pool, &email_id, action)
+                .await
+                .is_ok()
+            {
+                executed_count += 1;
             }
         }
+
+        if sample_matches.len() < 5 {
+            sample_matches.push(SampleEmailMatch {
+                email_id,
+                subject,
+                from: from_addr,
+                received_at: received_at.to_rfc3339(),
+            });
+        }
     }
+
+    // Persist updated match count back to the rule.
+    let now = Utc::now().to_rfc3339();
+    let _ =
+        sqlx::query("UPDATE rules SET match_count = match_count + ?, last_run_at = ? WHERE id = ?")
+            .bind(match_count)
+            .bind(&now)
+            .bind(&rule_id)
+            .execute(&state.db.pool)
+            .await;
 
     Ok(Json(RunRuleResponse {
         match_count,
@@ -763,6 +827,7 @@ async fn get_suggestions(
                     actions: vec![action],
                     priority: 0,
                     enabled: true,
+                    match_count: 0,
                     created_at: now.to_rfc3339(),
                     updated_at: now.to_rfc3339(),
                 },

@@ -11,7 +11,7 @@ interface ActiveRulesListProps {
   onEdit: (rule: Rule) => void;
 }
 
-type SortField = 'name' | 'matchCount' | 'accuracy';
+type SortField = 'name' | 'matchCount';
 type SortDir = 'asc' | 'desc';
 
 function sortRules(rules: Rule[], field: SortField, dir: SortDir): Rule[] {
@@ -95,13 +95,7 @@ export function ActiveRulesList({ rules, isLoading, isError, onEdit }: ActiveRul
               currentDir={sortDir}
               onSort={handleSort}
             />
-            <SortableHeader
-              label="Accuracy"
-              field="accuracy"
-              currentField={sortField}
-              currentDir={sortDir}
-              onSort={handleSort}
-            />
+            <th className="px-3 py-2 font-medium text-gray-500 dark:text-gray-400">Accuracy</th>
             <th className="px-3 py-2 font-medium text-gray-500 dark:text-gray-400">Status</th>
             <th className="px-3 py-2 font-medium text-gray-500 dark:text-gray-400">Actions</th>
           </tr>
@@ -116,19 +110,7 @@ export function ActiveRulesList({ rules, isLoading, isError, onEdit }: ActiveRul
                 <td className="px-3 py-2.5 text-gray-600 dark:text-gray-300">
                   {(rule.matchCount ?? 0).toLocaleString()}
                 </td>
-                <td className="px-3 py-2.5">
-                  <span
-                    className={`font-medium ${
-                      (rule.accuracy ?? 0) >= 0.9
-                        ? 'text-green-600 dark:text-green-400'
-                        : (rule.accuracy ?? 0) >= 0.7
-                          ? 'text-yellow-600 dark:text-yellow-400'
-                          : 'text-red-600 dark:text-red-400'
-                    }`}
-                  >
-                    {((rule.accuracy ?? 0) * 100).toFixed(1)}%
-                  </span>
-                </td>
+                <td className="px-3 py-2.5 text-gray-500 dark:text-gray-400 text-xs">—</td>
                 <td className="px-3 py-2.5">
                   <button
                     type="button"
