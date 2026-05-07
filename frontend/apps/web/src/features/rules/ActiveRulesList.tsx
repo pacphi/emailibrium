@@ -114,42 +114,40 @@ export function ActiveRulesList({ rules, isLoading, isError, onEdit }: ActiveRul
                   {rule.name}
                 </td>
                 <td className="px-3 py-2.5 text-gray-600 dark:text-gray-300">
-                  {rule.matchCount.toLocaleString()}
+                  {(rule.matchCount ?? 0).toLocaleString()}
                 </td>
                 <td className="px-3 py-2.5">
                   <span
                     className={`font-medium ${
-                      rule.accuracy >= 0.9
+                      (rule.accuracy ?? 0) >= 0.9
                         ? 'text-green-600 dark:text-green-400'
-                        : rule.accuracy >= 0.7
+                        : (rule.accuracy ?? 0) >= 0.7
                           ? 'text-yellow-600 dark:text-yellow-400'
                           : 'text-red-600 dark:text-red-400'
                     }`}
                   >
-                    {(rule.accuracy * 100).toFixed(1)}%
+                    {((rule.accuracy ?? 0) * 100).toFixed(1)}%
                   </span>
                 </td>
                 <td className="px-3 py-2.5">
                   <button
                     type="button"
                     role="switch"
-                    aria-checked={rule.isActive}
-                    aria-label={`${rule.isActive ? 'Disable' : 'Enable'} ${rule.name}`}
-                    onClick={() =>
-                      toggleMutation.mutate({
-                        id: rule.id,
-                        isActive: !rule.isActive,
-                      })
-                    }
+                    aria-checked={rule.isActive ?? (rule as any).enabled ?? true}
+                    aria-label={`${(rule.isActive ?? (rule as any).enabled ?? true) ? 'Disable' : 'Enable'} ${rule.name}`}
+                    onClick={() => {
+                      const current = rule.isActive ?? (rule as any).enabled ?? true;
+                      toggleMutation.mutate({ id: rule.id, isActive: !current });
+                    }}
                     className={`
                     relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full transition-colors
-                    ${rule.isActive ? 'bg-indigo-600' : 'bg-gray-300 dark:bg-gray-600'}
+                    ${(rule.isActive ?? (rule as any).enabled ?? true) ? 'bg-indigo-600' : 'bg-gray-300 dark:bg-gray-600'}
                   `}
                   >
                     <span
                       className={`
                       inline-block h-4 w-4 rounded-full bg-white shadow transition-transform
-                      ${rule.isActive ? 'translate-x-4' : 'translate-x-0.5'}
+                      ${(rule.isActive ?? (rule as any).enabled ?? true) ? 'translate-x-4' : 'translate-x-0.5'}
                       mt-0.5
                     `}
                     />
