@@ -123,6 +123,11 @@ security:
   rate_limit_refill_per_sec: 20.0 # Tokens refilled per second (supports active frontend polling)
   hsts_max_age_secs: 63072000 # 2 years
 
+# ── Rules Studio ─────────────────────────────────────────────────────────────
+rules:
+  suggestions_page_size: 5 # Suggestions loaded per "Build with AI" click
+  suggestions_min_email_count: 5 # Min emails from a sender to appear in suggestions
+
 # ── Paths ────────────────────────────────────────────────────────────────────
 paths:
   llm_cache_dir: "~/.emailibrium/models/llm"

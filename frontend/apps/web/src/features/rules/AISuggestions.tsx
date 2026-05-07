@@ -1,14 +1,52 @@
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Check, Pencil, X, Loader2, Sparkles } from 'lucide-react';
 import type { RuleSuggestion } from '@emailibrium/types';
-import { useRuleSuggestionsQuery, useCreateRule } from './hooks/useRules';
+import { getRuleSuggestions } from '@emailibrium/api';
+import { useCreateRule } from './hooks/useRules';
 
 interface AISuggestionsProps {
   onCustomize: (suggestion: RuleSuggestion) => void;
+  /** Incremented by the parent each time the user clicks "Build with AI". */
+  batchIndex: number;
 }
 
-export function AISuggestions({ onCustomize }: AISuggestionsProps) {
-  const { data: suggestions, isLoading, isError } = useRuleSuggestionsQuery();
+export function AISuggestions({ onCustomize, batchIndex }: AISuggestionsProps) {
+  const [allSuggestions, setAllSuggestions] = useState<RuleSuggestion[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [isError, setIsError] = useState(false);
+  const offsetRef = useRef(0);
+  const prevBatchIndex = useRef(0);
   const createMutation = useCreateRule();
+
+  const loadBatch = useCallback(async (isFirst: boolean) => {
+    if (isFirst) setIsLoading(true);
+    else setIsLoadingMore(true);
+    try {
+      const data = await getRuleSuggestions(offsetRef.current);
+      setAllSuggestions((prev) => (isFirst ? data : [...prev, ...data]));
+      offsetRef.current += data.length;
+      if (isFirst) setIsError(false);
+    } catch {
+      if (isFirst) setIsError(true);
+    } finally {
+      if (isFirst) setIsLoading(false);
+      else setIsLoadingMore(false);
+    }
+  }, []);
+
+  // Initial load on mount.
+  useEffect(() => {
+    loadBatch(true);
+  }, [loadBatch]);
+
+  // Load next batch when batchIndex is incremented.
+  useEffect(() => {
+    if (batchIndex > prevBatchIndex.current) {
+      prevBatchIndex.current = batchIndex;
+      loadBatch(false);
+    }
+  }, [batchIndex, loadBatch]);
 
   function handleAccept(suggestion: RuleSuggestion) {
     createMutation.mutate({
@@ -32,7 +70,7 @@ export function AISuggestions({ onCustomize }: AISuggestionsProps) {
     return <p className="py-8 text-center text-sm text-red-500">Failed to load suggestions.</p>;
   }
 
-  if (!suggestions || suggestions.length === 0) {
+  if (allSuggestions.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center py-12 text-gray-400 dark:text-gray-500">
         <Sparkles className="mb-2 h-8 w-8" />
@@ -44,7 +82,7 @@ export function AISuggestions({ onCustomize }: AISuggestionsProps) {
 
   return (
     <div className="space-y-3">
-      {suggestions.map((suggestion, index) => (
+      {allSuggestions.map((suggestion, index) => (
         <div
           key={index}
           className="rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800"
@@ -104,6 +142,13 @@ export function AISuggestions({ onCustomize }: AISuggestionsProps) {
           </div>
         </div>
       ))}
+
+      {isLoadingMore && (
+        <div className="flex items-center justify-center py-4">
+          <Loader2 className="h-4 w-4 animate-spin text-indigo-500" />
+          <span className="ml-2 text-xs text-gray-500">Loading more suggestions…</span>
+        </div>
+      )}
     </div>
   );
 }

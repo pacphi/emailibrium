@@ -747,6 +747,34 @@ pub struct AppConfig {
     pub hardware: HardwareConfig,
     #[serde(default)]
     pub email: EmailConfig,
+    #[serde(default)]
+    pub rules: RulesConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RulesConfig {
+    /// Number of AI suggestions returned per batch (Build with AI click).
+    #[serde(default = "default_suggestions_page_size")]
+    pub suggestions_page_size: u32,
+    /// Minimum email count from a sender before they appear in suggestions.
+    #[serde(default = "default_suggestions_min_email_count")]
+    pub suggestions_min_email_count: u32,
+}
+
+fn default_suggestions_page_size() -> u32 {
+    5
+}
+fn default_suggestions_min_email_count() -> u32 {
+    5
+}
+
+impl Default for RulesConfig {
+    fn default() -> Self {
+        Self {
+            suggestions_page_size: default_suggestions_page_size(),
+            suggestions_min_email_count: default_suggestions_min_email_count(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -20,6 +20,8 @@ export function RulesStudio() {
   const [activeTab, setActiveTab] = useState<TabId>('active');
   const [editingRule, setEditingRule] = useState<Rule | undefined>(undefined);
   const [isEditorOpen, setIsEditorOpen] = useState(false);
+  /** Incremented each time the user requests a new batch of AI suggestions. */
+  const [suggestionBatch, setSuggestionBatch] = useState(0);
 
   const rulesQuery = useRulesQuery();
   const rules = rulesQuery.data ?? [];
@@ -58,7 +60,11 @@ export function RulesStudio() {
           <button
             type="button"
             onClick={() => {
-              setActiveTab('suggestions');
+              if (activeTab === 'suggestions') {
+                setSuggestionBatch((b) => b + 1);
+              } else {
+                setActiveTab('suggestions');
+              }
             }}
             className="flex items-center gap-1 rounded-md border border-indigo-200 bg-indigo-50 px-3 py-2 text-sm font-medium text-indigo-700 transition-colors hover:bg-indigo-100 dark:border-indigo-800 dark:bg-indigo-900/30 dark:text-indigo-300 dark:hover:bg-indigo-900/50"
           >
@@ -165,7 +171,9 @@ export function RulesStudio() {
           </div>
         )}
 
-        {activeTab === 'suggestions' && <AISuggestions onCustomize={handleCustomizeSuggestion} />}
+        {activeTab === 'suggestions' && (
+          <AISuggestions onCustomize={handleCustomizeSuggestion} batchIndex={suggestionBatch} />
+        )}
 
         {activeTab === 'metrics' && <RuleMetrics rules={rules} />}
       </div>

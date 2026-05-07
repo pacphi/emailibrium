@@ -135,7 +135,7 @@ export { getClusters, getClusteringStatus, triggerRecluster } from './clusterApi
 export type { ClusteringStatus } from './clusterApi.js';
 
 export { getAppConfig } from './configApi.js';
-export type { AppConfig, AppCacheConfig, AppNetworkConfig } from './configApi.js';
+export type { AppConfig, AppCacheConfig, AppNetworkConfig, AppRulesConfig } from './configApi.js';
 
 export { submitFeedback } from './learningApi.js';
 export type { FeedbackPayload, FeedbackAction } from './learningApi.js';

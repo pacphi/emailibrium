@@ -24,9 +24,15 @@ export interface AppNetworkConfig {
   reembedTimeoutMs: number;
 }
 
+export interface AppRulesConfig {
+  suggestionsPageSize: number;
+  suggestionsMinEmailCount: number;
+}
+
 export interface AppConfig {
   cache: AppCacheConfig;
   network: AppNetworkConfig;
+  rules: AppRulesConfig;
 }
 
 export async function getAppConfig(): Promise<AppConfig> {

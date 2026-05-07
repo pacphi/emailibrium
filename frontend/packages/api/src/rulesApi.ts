@@ -26,8 +26,8 @@ export async function deleteRule(id: string): Promise<void> {
   await api.delete(`rules/${id}`);
 }
 
-export async function getRuleSuggestions(): Promise<RuleSuggestion[]> {
-  return api.get('rules/suggestions').json<RuleSuggestion[]>();
+export async function getRuleSuggestions(offset = 0): Promise<RuleSuggestion[]> {
+  return api.get('rules/suggestions', { searchParams: { offset } }).json<RuleSuggestion[]>();
 }
 
 export interface RuleValidationResult {

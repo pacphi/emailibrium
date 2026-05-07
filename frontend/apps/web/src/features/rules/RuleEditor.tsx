@@ -59,7 +59,7 @@ export function RuleEditor({ rule, onClose }: RuleEditorProps) {
     rule?.actions.length ? rule.actions : [emptyAction()],
   );
   const [semanticThreshold, setSemanticThreshold] = useState(0.75);
-  const [testResult, setTestResult] = useState<string | null>(null);
+  const [testResult, setTestResult] = useState<{ message: string; isError: boolean } | null>(null);
 
   const createMutation = useCreateRule();
   const updateMutation = useUpdateRule();
@@ -104,10 +104,10 @@ export function RuleEditor({ rule, onClose }: RuleEditorProps) {
           result.sampleMatches.length > 0
             ? ` Example: "${result.sampleMatches[0]!.subject}" from ${result.sampleMatches[0]!.from}`
             : '';
-        setTestResult(matchText + sampleText);
+        setTestResult({ message: matchText + sampleText, isError: false });
       },
       onError: () => {
-        setTestResult('Failed to test rule. Please try again.');
+        setTestResult({ message: 'Failed to test rule. Please try again.', isError: true });
       },
     });
   }
@@ -331,8 +331,14 @@ export function RuleEditor({ rule, onClose }: RuleEditorProps) {
 
       {/* Test result */}
       {testResult && (
-        <div className="mb-4 rounded-md border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-700 dark:border-green-800 dark:bg-green-900/20 dark:text-green-400">
-          {testResult}
+        <div
+          className={`mb-4 rounded-md border px-3 py-2 text-sm ${
+            testResult.isError
+              ? 'border-red-200 bg-red-50 text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-400'
+              : 'border-green-200 bg-green-50 text-green-700 dark:border-green-800 dark:bg-green-900/20 dark:text-green-400'
+          }`}
+        >
+          {testResult.message}
         </div>
       )}
 

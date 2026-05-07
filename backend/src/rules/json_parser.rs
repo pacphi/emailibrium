@@ -122,9 +122,9 @@ fn parse_match_operator(s: &str) -> Result<MatchOperator> {
     match s.to_lowercase().as_str() {
         "contains" => Ok(MatchOperator::Contains),
         "equals" | "eq" => Ok(MatchOperator::Equals),
-        "startswith" | "starts_with" => Ok(MatchOperator::StartsWith),
-        "endswith" | "ends_with" => Ok(MatchOperator::EndsWith),
-        "regex" | "matches" => Ok(MatchOperator::Regex),
+        "startswith" | "starts_with" | "starts-with" => Ok(MatchOperator::StartsWith),
+        "endswith" | "ends_with" | "ends-with" => Ok(MatchOperator::EndsWith),
+        "regex" | "matches" | "matches-regex" | "matches_regex" => Ok(MatchOperator::Regex),
         "greaterthan" | "greater_than" | "gt" => Ok(MatchOperator::GreaterThan),
         "lessthan" | "less_than" | "lt" => Ok(MatchOperator::LessThan),
         other => bail!("Unknown match operator: {other}"),

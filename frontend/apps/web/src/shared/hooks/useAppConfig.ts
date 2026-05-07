@@ -36,6 +36,10 @@ const DEFAULTS: AppConfig = {
     reclusterTimeoutMs: 300_000,
     reembedTimeoutMs: 60_000,
   },
+  rules: {
+    suggestionsPageSize: 5,
+    suggestionsMinEmailCount: 5,
+  },
 };
 
 /**
@@ -63,9 +67,13 @@ export function useAppConfig(): AppConfig {
   const remoteNetwork = data.network
     ? snakeToCamel(data.network as unknown as Record<string, unknown>)
     : {};
+  const remoteRules = data.rules
+    ? snakeToCamel(data.rules as unknown as Record<string, unknown>)
+    : {};
 
   return {
     cache: { ...DEFAULTS.cache, ...remoteCache },
     network: { ...DEFAULTS.network, ...remoteNetwork },
+    rules: { ...DEFAULTS.rules, ...remoteRules },
   } as AppConfig;
 }

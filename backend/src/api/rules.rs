@@ -9,18 +9,19 @@
 //! - POST   /api/v1/rules/test     -- test a rule against a sample email
 
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     routing::{get, post},
     Json, Router,
 };
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
+use sqlx::Row;
 
 use crate::rules::json_parser;
 use crate::rules::rule_engine::RuleEngine;
 use crate::rules::rule_validator::{self, Severity};
-use crate::rules::types::{Rule, RuleAction, RuleCondition};
+use crate::rules::types::{EmailField, MatchOperator, Rule, RuleAction, RuleCondition};
 
 use crate::AppState;
 
@@ -28,6 +29,7 @@ use crate::AppState;
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/", get(list_rules).post(create_rule))
+        .route("/suggestions", get(get_suggestions))
         .route(
             "/{id}",
             get(get_rule).put(update_rule).delete(delete_rule_handler),
@@ -88,21 +90,13 @@ pub struct ValidateRequest {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TestRuleRequest {
-    pub conditions: Vec<RuleCondition>,
-    pub actions: Vec<RuleAction>,
-    pub email: TestEmail,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TestEmail {
-    pub from: String,
-    pub to: Vec<String>,
-    pub subject: String,
+    /// Raw condition objects — parsed via json_parser so flat frontend payloads
+    /// (without a `type` discriminant) are accepted alongside the canonical tagged form.
+    pub conditions: Vec<serde_json::Value>,
     #[serde(default)]
-    pub body: String,
+    pub name: String,
     #[serde(default)]
-    pub labels: Vec<String>,
+    pub actions: Vec<serde_json::Value>,
 }
 
 #[derive(Debug, Serialize)]
@@ -146,16 +140,25 @@ pub struct ValidationResponse {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TestResponse {
-    pub matched: bool,
-    pub pending_actions: Vec<PendingActionResponse>,
-    pub validation: ValidationResponse,
+    pub match_count: i64,
+    pub sample_matches: Vec<SampleEmailMatch>,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct PendingActionResponse {
-    pub action_type: String,
-    pub details: serde_json::Value,
+pub struct SampleEmailMatch {
+    pub email_id: String,
+    pub subject: String,
+    pub from: String,
+    pub received_at: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuleSuggestion {
+    pub rule: RuleResponse,
+    pub reason: String,
+    pub estimated_matches: i64,
 }
 
 #[derive(Debug, Serialize)]
@@ -430,92 +433,255 @@ async fn validate_rule(
     })
 }
 
-/// POST /api/v1/rules/test -- test a rule against a sample email.
+/// POST /api/v1/rules/test -- test a rule against the local email corpus.
 ///
-/// Uses `rule_processor::process_email` to exercise the full evaluation
-/// pipeline (priority ordering, condition matching, action generation).
+/// Accepts flat frontend condition payloads (no `type` discriminant required)
+/// via json_parser, scans the inbox, and returns how many emails would match.
 async fn test_rule(
     State(state): State<AppState>,
     Json(req): Json<TestRuleRequest>,
-) -> Json<TestResponse> {
-    use crate::rules::rule_processor;
+) -> Result<Json<TestResponse>, (StatusCode, Json<ErrorResponse>)> {
+    use crate::rules::rule_processor::evaluate_rule;
+
+    // Parse raw condition values — skip any that cannot be parsed.
+    let conditions: Vec<RuleCondition> = req
+        .conditions
+        .iter()
+        .filter_map(|v| {
+            json_parser::parse_condition(v)
+                .map_err(|e| tracing::warn!("Skipping unparseable condition: {e}"))
+                .ok()
+        })
+        .collect();
 
     let now = Utc::now();
-    let rule = Rule {
+    let test_rule = Rule {
         id: "test-rule".to_string(),
-        name: "Test Rule".to_string(),
+        name: if req.name.is_empty() {
+            "Test Rule".to_string()
+        } else {
+            req.name
+        },
         description: String::new(),
-        conditions: req.conditions.clone(),
-        actions: req.actions.clone(),
+        conditions,
+        actions: vec![],
         priority: 0,
         enabled: true,
         created_at: now,
         updated_at: now,
     };
 
-    // Validate first.
-    let findings = rule_validator::validate_rule(&rule);
-    let errors: Vec<String> = findings
-        .iter()
-        .filter(|w| w.severity == Severity::Error)
-        .map(|w| w.message.clone())
-        .collect();
-    let warnings_list: Vec<String> = findings
-        .iter()
-        .filter(|w| w.severity == Severity::Warning)
-        .map(|w| w.message.clone())
-        .collect();
+    // Query all active inbox emails for evaluation so the count matches
+    // what the suggestions panel reports (both use the same unbounded corpus).
+    let rows = sqlx::query(
+        "SELECT id, from_addr, to_addrs, subject, body_text, labels, received_at \
+         FROM emails \
+         WHERE is_trash = 0 AND is_spam = 0 AND deleted_at IS NULL \
+         ORDER BY received_at DESC",
+    )
+    .fetch_all(&state.db.pool)
+    .await
+    .map_err(|e| {
+        tracing::error!("Failed to fetch emails for rule test: {e}");
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: "Failed to evaluate rule against inbox".to_string(),
+            }),
+        )
+    })?;
 
-    // Build a minimal EmailMessage from the test input.
-    let email = crate::email::EmailMessage {
-        id: "test-msg".to_string(),
-        thread_id: None,
-        subject: req.email.subject,
-        from: req.email.from,
-        to: req.email.to,
-        snippet: String::new(),
-        body: if req.email.body.is_empty() {
-            None
-        } else {
-            Some(req.email.body)
-        },
-        body_html: None,
-        labels: req.email.labels,
-        date: now,
-        is_read: false,
-        list_unsubscribe: None,
-        list_unsubscribe_post: None,
-    };
+    let mut match_count: i64 = 0;
+    let mut sample_matches: Vec<SampleEmailMatch> = Vec::new();
 
-    // Load all persisted rules and add the test rule so `process_email`
-    // evaluates the complete rule set with priority ordering.
-    let mut all_rules = RuleEngine::load_rules(&state.db.pool)
+    for row in &rows {
+        let id: String = row.get("id");
+        let from_addr: String = row.get("from_addr");
+        let to_addrs: String = row.get("to_addrs");
+        let subject: String = row.get("subject");
+        let body_text: Option<String> = row.get("body_text");
+        let labels: String = row.get("labels");
+        let received_at: chrono::DateTime<Utc> = row.get("received_at");
+
+        let email = crate::email::EmailMessage {
+            id: id.clone(),
+            thread_id: None,
+            from: from_addr.clone(),
+            to: to_addrs
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect(),
+            subject: subject.clone(),
+            snippet: String::new(),
+            body: body_text,
+            body_html: None,
+            labels: labels
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect(),
+            date: received_at,
+            is_read: false,
+            list_unsubscribe: None,
+            list_unsubscribe_post: None,
+        };
+
+        if evaluate_rule(&test_rule, &email) {
+            match_count += 1;
+            if sample_matches.len() < 5 {
+                sample_matches.push(SampleEmailMatch {
+                    email_id: id,
+                    subject,
+                    from: from_addr,
+                    received_at: received_at.to_rfc3339(),
+                });
+            }
+        }
+    }
+
+    Ok(Json(TestResponse {
+        match_count,
+        sample_matches,
+    }))
+}
+
+/// Query parameters for the suggestions endpoint.
+#[derive(Debug, serde::Deserialize, Default)]
+pub struct SuggestionsParams {
+    /// Number of already-seen suggestions to skip (for batch loading).
+    #[serde(default)]
+    pub offset: usize,
+    /// Max suggestions to return. Defaults to `rules.suggestions_page_size` from config.
+    pub limit: Option<usize>,
+}
+
+/// GET /api/v1/rules/suggestions -- email-pattern-driven rule suggestions.
+///
+/// Returns the next batch of `limit` suggestions starting after `offset`
+/// already-seen ones. Callers accumulate batches to build the full list.
+async fn get_suggestions(
+    State(state): State<AppState>,
+    Query(params): Query<SuggestionsParams>,
+) -> Result<Json<Vec<RuleSuggestion>>, (StatusCode, Json<ErrorResponse>)> {
+    let cfg = &state.yaml_config.app.rules;
+    let page_size = params.limit.unwrap_or(cfg.suggestions_page_size as usize);
+    let min_count = cfg.suggestions_min_email_count as i64;
+
+    let existing = RuleEngine::load_rules(&state.db.pool)
         .await
-        .unwrap_or_default();
-    all_rules.push(rule);
+        .map_err(internal_error)?;
 
-    // Use process_email for the full pipeline (priority sort + evaluate + actions).
-    let pending = rule_processor::process_email(&all_rules, &email);
-
-    let matched = !pending.is_empty();
-
-    let action_responses: Vec<PendingActionResponse> = pending
+    let covered: Vec<String> = existing
         .iter()
-        .map(|p| PendingActionResponse {
-            action_type: p.action.action_type().to_string(),
-            details: serde_json::to_value(&p.action).unwrap_or_default(),
-        })
+        .flat_map(|r| collect_from_values(&r.conditions))
         .collect();
 
-    Json(TestResponse {
-        matched,
-        pending_actions: action_responses,
-        validation: ValidationResponse {
-            valid: errors.is_empty(),
-            errors,
-            warnings: warnings_list,
-        },
-    })
+    // Fetch all qualifying senders (unbounded) so Rust-side pagination is correct
+    // even after filtering out already-covered senders.
+    let rows = sqlx::query(
+        "SELECT from_addr, COUNT(*) as cnt \
+         FROM emails \
+         WHERE is_trash = 0 AND is_spam = 0 AND deleted_at IS NULL AND from_addr != '' \
+         GROUP BY from_addr \
+         HAVING COUNT(*) >= ? \
+         ORDER BY COUNT(*) DESC",
+    )
+    .bind(min_count)
+    .fetch_all(&state.db.pool)
+    .await
+    .map_err(|e| {
+        tracing::error!("Failed to query email patterns for suggestions: {e}");
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: "Failed to generate suggestions".to_string(),
+            }),
+        )
+    })?;
+
+    let now = Utc::now();
+    let suggestions: Vec<RuleSuggestion> = rows
+        .iter()
+        .filter_map(|row| {
+            let from_addr: String = row.get("from_addr");
+            let cnt: i64 = row.get("cnt");
+
+            if covered
+                .iter()
+                .any(|c| from_addr.to_lowercase().contains(c.as_str()))
+            {
+                return None;
+            }
+
+            let (action, reason) = if cnt >= 20 {
+                (
+                    RuleAction::Archive,
+                    format!(
+                        "You have {cnt} emails from this sender. \
+                         Archiving them automatically keeps your inbox clean."
+                    ),
+                )
+            } else {
+                (
+                    RuleAction::MarkRead,
+                    format!(
+                        "You have {cnt} emails from this sender. \
+                         Marking them read reduces notification noise."
+                    ),
+                )
+            };
+
+            Some(RuleSuggestion {
+                rule: RuleResponse {
+                    id: RuleEngine::new_id(),
+                    name: format!("Manage emails from {from_addr}"),
+                    description: format!("Auto-suggested: {cnt} emails from this sender"),
+                    conditions: vec![RuleCondition::FieldMatch {
+                        field: EmailField::From,
+                        operator: MatchOperator::Contains,
+                        value: from_addr,
+                    }],
+                    actions: vec![action],
+                    priority: 0,
+                    enabled: true,
+                    created_at: now.to_rfc3339(),
+                    updated_at: now.to_rfc3339(),
+                },
+                reason,
+                estimated_matches: cnt,
+            })
+        })
+        .skip(params.offset)
+        .take(page_size)
+        .collect();
+
+    Ok(Json(suggestions))
+}
+
+fn collect_from_values(conditions: &[RuleCondition]) -> Vec<String> {
+    let mut out = Vec::new();
+    for c in conditions {
+        collect_condition_from_values(c, &mut out);
+    }
+    out
+}
+
+fn collect_condition_from_values(c: &RuleCondition, out: &mut Vec<String>) {
+    match c {
+        RuleCondition::FieldMatch {
+            field: EmailField::From,
+            value,
+            ..
+        } => out.push(value.to_lowercase()),
+        RuleCondition::And { conditions } | RuleCondition::Or { conditions } => {
+            for sub in conditions {
+                collect_condition_from_values(sub, out);
+            }
+        }
+        RuleCondition::Not { condition } => collect_condition_from_values(condition, out),
+        _ => {}
+    }
 }
 
 // ---------------------------------------------------------------------------
