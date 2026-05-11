@@ -95,7 +95,6 @@ export function ActiveRulesList({ rules, isLoading, isError, onEdit }: ActiveRul
               currentDir={sortDir}
               onSort={handleSort}
             />
-            <th className="px-3 py-2 font-medium text-gray-500 dark:text-gray-400">Accuracy</th>
             <th className="px-3 py-2 font-medium text-gray-500 dark:text-gray-400">Status</th>
             <th className="px-3 py-2 font-medium text-gray-500 dark:text-gray-400">Actions</th>
           </tr>
@@ -110,7 +109,6 @@ export function ActiveRulesList({ rules, isLoading, isError, onEdit }: ActiveRul
                 <td className="px-3 py-2.5 text-gray-600 dark:text-gray-300">
                   {(rule.matchCount ?? 0).toLocaleString()}
                 </td>
-                <td className="px-3 py-2.5 text-gray-500 dark:text-gray-400 text-xs">—</td>
                 <td className="px-3 py-2.5">
                   <button
                     type="button"
@@ -173,7 +171,7 @@ export function ActiveRulesList({ rules, isLoading, isError, onEdit }: ActiveRul
               {runResults.has(rule.id) && (
                 <tr key={`${rule.id}-result`}>
                   <td
-                    colSpan={5}
+                    colSpan={4}
                     className="px-3 pb-2 pt-0 text-xs text-indigo-600 dark:text-indigo-400"
                   >
                     {(() => {

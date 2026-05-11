@@ -71,21 +71,13 @@ export function useToggleRule() {
 }
 
 export function useValidateRule() {
-  return useMutation<
-    RuleValidationResult,
-    Error,
-    Omit<Rule, 'id' | 'matchCount' | 'accuracy' | 'createdAt'>
-  >({
+  return useMutation<RuleValidationResult, Error, Omit<Rule, 'id' | 'matchCount' | 'createdAt'>>({
     mutationFn: validateRule,
   });
 }
 
 export function useTestRule() {
-  return useMutation<
-    RuleTestResult,
-    Error,
-    Omit<Rule, 'id' | 'matchCount' | 'accuracy' | 'createdAt'>
-  >({
+  return useMutation<RuleTestResult, Error, Omit<Rule, 'id' | 'matchCount' | 'createdAt'>>({
     mutationFn: testRule,
   });
 }

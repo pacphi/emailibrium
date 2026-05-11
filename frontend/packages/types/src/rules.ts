@@ -5,7 +5,6 @@ export interface Rule {
   actions: RuleAction[];
   isActive: boolean;
   matchCount: number;
-  accuracy: number;
   createdAt: string;
 }
 

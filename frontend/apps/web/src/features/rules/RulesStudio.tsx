@@ -157,7 +157,6 @@ export function RulesStudio() {
                       actions: template.actions,
                       isActive: true,
                       matchCount: 0,
-                      accuracy: 0,
                       createdAt: '',
                     });
                     setIsEditorOpen(true);

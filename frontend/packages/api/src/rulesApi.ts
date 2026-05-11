@@ -10,7 +10,7 @@ export async function getRule(id: string): Promise<Rule> {
 }
 
 export async function createRule(
-  rule: Omit<Rule, 'id' | 'matchCount' | 'accuracy' | 'createdAt'>,
+  rule: Omit<Rule, 'id' | 'matchCount' | 'createdAt'>,
 ): Promise<Rule> {
   return api.post('rules', { json: rule }).json<Rule>();
 }
@@ -37,7 +37,7 @@ export interface RuleValidationResult {
 }
 
 export async function validateRule(
-  rule: Omit<Rule, 'id' | 'matchCount' | 'accuracy' | 'createdAt'>,
+  rule: Omit<Rule, 'id' | 'matchCount' | 'createdAt'>,
 ): Promise<RuleValidationResult> {
   return api.post('rules/validate', { json: rule }).json<RuleValidationResult>();
 }
@@ -64,7 +64,7 @@ export interface RunRuleResult {
 }
 
 export async function testRule(
-  rule: Omit<Rule, 'id' | 'matchCount' | 'accuracy' | 'createdAt'>,
+  rule: Omit<Rule, 'id' | 'matchCount' | 'createdAt'>,
 ): Promise<RuleTestResult> {
   return api.post('rules/test', { json: rule }).json<RuleTestResult>();
 }
