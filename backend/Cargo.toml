@@ -72,7 +72,7 @@ urlencoding = "2"
 # Content extraction (ADR-006)
 regex = "1"
 ammonia = "4"
-scraper = "0.26"
+scraper = "0.27"
 pdf-extract = "0.10"
 
 # Background jobs (ADR-006)
