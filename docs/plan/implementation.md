@@ -497,23 +497,23 @@ Each sprint is complete when:
 
 ## 9. Cross-Reference Index
 
-| Document                     | Location                                | Purpose                               |
-| ---------------------------- | --------------------------------------- | ------------------------------------- |
-| Original Plan                | docs/plan/inception.md                  | Full technical specification          |
-| Research Evaluation          | docs/research/initial.md                | Academic analysis of plan feasibility |
-| ADR-001 Hybrid Search        | docs/ADRs/ADR-001.md                    | Search architecture decision          |
-| ADR-002 Embedding Model      | docs/ADRs/ADR-002.md                    | Model selection and pluggability      |
-| ADR-003 RuVector             | docs/ADRs/ADR-003.md                    | Vector DB selection with facade       |
-| ADR-004 SONA Specification   | docs/ADRs/ADR-004.md                    | Learning model formalization          |
-| ADR-005 Web SPA              | docs/ADRs/ADR-005.md                    | Frontend architecture decision        |
-| ADR-006 Multi-Asset Pipeline | docs/ADRs/ADR-006.md                    | Content extraction strategy           |
-| ADR-007 Quantization         | docs/ADRs/ADR-007.md                    | Memory optimization strategy          |
-| ADR-008 Privacy              | docs/ADRs/ADR-008.md                    | Embedding security architecture       |
-| ADR-009 GNN Clustering       | docs/ADRs/ADR-009.md                    | Topic discovery architecture          |
-| ADR-010 Ingest-Tag-Archive   | docs/ADRs/ADR-010.md                    | Zero-inbox pipeline strategy          |
-| DDD-000 Context Map          | docs/DDDs/DDD-000-context-map.md        | Bounded context relationships         |
-| DDD-001 Email Intelligence   | docs/DDDs/DDD-001-email-intelligence.md | Core domain model                     |
-| DDD-002 Search               | docs/DDDs/DDD-002-search.md             | Search domain model                   |
-| DDD-003 Ingestion            | docs/DDDs/DDD-003-ingestion.md          | Ingestion domain model                |
-| DDD-004 Learning             | docs/DDDs/DDD-004-learning.md           | SONA learning domain model            |
-| DDD-005 Account Management   | docs/DDDs/DDD-005-account-management.md | Account domain model                  |
+| Document                     | Location                                            | Purpose                               |
+| ---------------------------- | --------------------------------------------------- | ------------------------------------- |
+| Original Plan                | docs/plan/inception.md                              | Full technical specification          |
+| Research Evaluation          | docs/research/initial.md                            | Academic analysis of plan feasibility |
+| ADR-001 Hybrid Search        | docs/ADRs/ADR-001-hybrid-search-architecture.md     | Search architecture decision          |
+| ADR-002 Embedding Model      | docs/ADRs/ADR-002-embedding-model-selection.md      | Model selection and pluggability      |
+| ADR-003 RuVector             | docs/ADRs/ADR-003-ruvector-vector-database.md       | Vector DB selection with facade       |
+| ADR-004 SONA Specification   | docs/ADRs/ADR-004-sona-adaptive-learning.md         | Learning model formalization          |
+| ADR-005 Web SPA              | docs/ADRs/ADR-005-tauri-to-web-spa-migration.md     | Frontend architecture decision        |
+| ADR-006 Multi-Asset Pipeline | docs/ADRs/ADR-006-multi-asset-content-extraction.md | Content extraction strategy           |
+| ADR-007 Quantization         | docs/ADRs/ADR-007-adaptive-quantization-strategy.md | Memory optimization strategy          |
+| ADR-008 Privacy              | docs/ADRs/ADR-008-privacy-embedding-security.md     | Embedding security architecture       |
+| ADR-009 GNN Clustering       | docs/ADRs/ADR-009-gnn-clustering-architecture.md    | Topic discovery architecture          |
+| ADR-010 Ingest-Tag-Archive   | docs/ADRs/ADR-010-ingest-tag-archive-pipeline.md    | Zero-inbox pipeline strategy          |
+| DDD-000 Context Map          | docs/DDDs/DDD-000-context-map.md                    | Bounded context relationships         |
+| DDD-001 Email Intelligence   | docs/DDDs/DDD-001-email-intelligence.md             | Core domain model                     |
+| DDD-002 Search               | docs/DDDs/DDD-002-search.md                         | Search domain model                   |
+| DDD-003 Ingestion            | docs/DDDs/DDD-003-ingestion.md                      | Ingestion domain model                |
+| DDD-004 Learning             | docs/DDDs/DDD-004-learning.md                       | SONA learning domain model            |
+| DDD-005 Account Management   | docs/DDDs/DDD-005-account-management.md             | Account domain model                  |
