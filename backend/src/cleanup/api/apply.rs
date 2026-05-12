@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 use tokio_stream::wrappers::BroadcastStream;
 use uuid::Uuid;
 
-use crate::cleanup::domain::operation::RiskMax;
+use crate::cleanup::domain::operation::{JobState, RiskMax};
 use crate::cleanup::domain::plan::{JobId, PlanId};
 use crate::cleanup::orchestrator::apply::ApplyOptions;
 use crate::cleanup::repository::CleanupPlanRepository;
@@ -143,9 +143,38 @@ async fn apply_stream(
     let snapshot = orch.build_snapshot(job_id).await;
     let rx = orch.subscribe(job_id).await;
 
+    // When no live channel exists (job already finished before this SSE
+    // connection opened), synthesize a Finished event from the persisted
+    // job row. Without this the client receives only a Snapshot and never
+    // transitions out of 'running' state.
+    let terminal_event: Option<crate::cleanup::orchestrator::sse::ApplyEvent> = if rx.is_none() {
+        orch.job_repo
+            .load(job_id)
+            .await
+            .ok()
+            .flatten()
+            .filter(|j| !matches!(j.state, JobState::Running))
+            .map(
+                |j| crate::cleanup::orchestrator::sse::ApplyEvent::Finished {
+                    job_id: j.job_id,
+                    status: j.state,
+                    counts: j.counts,
+                },
+            )
+    } else {
+        None
+    };
+
     let live = rx.map(BroadcastStream::new);
 
     let snapshot_stream = futures::stream::iter(snapshot.into_iter().map(|ev| {
+        let event = Event::default()
+            .json_data(&ev)
+            .unwrap_or_else(|_| Event::default().data(""));
+        Ok::<_, Infallible>(event)
+    }));
+
+    let terminal_stream = futures::stream::iter(terminal_event.into_iter().map(|ev| {
         let event = Event::default()
             .json_data(&ev)
             .unwrap_or_else(|_| Event::default().data(""));
@@ -171,7 +200,7 @@ async fn apply_stream(
         })
     });
 
-    let stream = snapshot_stream.chain(live_stream);
+    let stream = snapshot_stream.chain(terminal_stream).chain(live_stream);
 
     Ok(Sse::new(stream).keep_alive(
         KeepAlive::new()

@@ -117,7 +117,11 @@ impl SubscriptionRepository for SqlxSubscriptionRepository {
             UnsubscribeMethodKind::None
         };
 
-        Ok(Some(SubscriptionRecord { method }))
+        Ok(Some(SubscriptionRecord {
+            method,
+            list_unsubscribe: lu,
+            list_unsubscribe_post: lup,
+        }))
     }
 }
 

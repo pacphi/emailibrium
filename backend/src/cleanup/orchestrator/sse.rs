@@ -274,7 +274,9 @@ mod tests {
         );
         assert_eq!(
             plan_action_type_str(&PlanAction::Unsubscribe {
-                method: UnsubscribeMethodKind::None
+                method: UnsubscribeMethodKind::None,
+                list_unsubscribe_header: None,
+                list_unsubscribe_post: None,
             }),
             "unsubscribe"
         );

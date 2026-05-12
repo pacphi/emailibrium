@@ -23,7 +23,7 @@ export function useRulesQuery() {
 export function useRuleSuggestionsQuery() {
   return useQuery<RuleSuggestion[]>({
     queryKey: ['ruleSuggestions'],
-    queryFn: getRuleSuggestions,
+    queryFn: () => getRuleSuggestions(),
     staleTime: 60_000,
   });
 }

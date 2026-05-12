@@ -227,7 +227,9 @@ export function CleanupReview({ planId, userId, onCancel, readOnly = false }: Cl
           accountStates={apply.accountStates}
           errorMessage={apply.error}
           onCancel={() => void apply.cancelApply()}
-          onClose={onCancel}
+          onClose={() => {
+            window.location.href = `/cleanup/history/${planId}`;
+          }}
         />
       </div>
     );

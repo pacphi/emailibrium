@@ -359,7 +359,9 @@ impl CleanupPlanRepository for SqliteCleanupPlanRepo {
             .bind(id.as_bytes().to_vec())
             .bind(cursor_i);
         if let Some(ref a) = filter.account_id {
-            q = q.bind(a);
+            // account_id is stored as BLOB (bytes); bind as bytes so SQLite
+            // type comparison succeeds (TEXT != BLOB even for equal content).
+            q = q.bind(a.as_bytes().to_vec());
         }
         if let Some(ref r) = filter.risk {
             q = q.bind(r);
@@ -449,13 +451,17 @@ impl CleanupPlanRepository for SqliteCleanupPlanRepo {
         status: OperationStatus,
         ts: DateTime<Utc>,
     ) -> Result<(), RepoError> {
+        // Keep payload_json in sync so list_operations returns current status
+        // without a separate column merge. json_set is available in SQLite ≥ 3.9.
         sqlx::query(
             r#"UPDATE cleanup_plan_operations
-               SET status = ?, applied_at = ?
+               SET status = ?, applied_at = ?,
+                   payload_json = json_set(payload_json, '$.status', ?)
                WHERE plan_id = ? AND seq = ?"#,
         )
         .bind(status.as_str())
         .bind(ts.timestamp_millis())
+        .bind(status.as_str())
         .bind(id.as_bytes().to_vec())
         .bind(seq as i64)
         .execute(&self.pool)
@@ -471,9 +477,11 @@ impl CleanupPlanRepository for SqliteCleanupPlanRepo {
     ) -> Result<(), RepoError> {
         sqlx::query(
             r#"UPDATE cleanup_plan_operations
-               SET status = ?
+               SET status = ?,
+                   payload_json = json_set(payload_json, '$.status', ?)
                WHERE plan_id = ? AND seq = ? AND op_kind = 'predicate'"#,
         )
+        .bind(status.as_str())
         .bind(status.as_str())
         .bind(id.as_bytes().to_vec())
         .bind(seq as i64)

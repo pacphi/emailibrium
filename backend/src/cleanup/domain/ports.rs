@@ -33,6 +33,10 @@ pub enum RuleEvalError {
 #[derive(Debug, Clone)]
 pub struct SubscriptionRecord {
     pub method: UnsubscribeMethodKind,
+    /// Raw List-Unsubscribe header value from the most recent email.
+    pub list_unsubscribe: Option<String>,
+    /// Raw List-Unsubscribe-Post header value (RFC 8058).
+    pub list_unsubscribe_post: Option<String>,
 }
 
 #[async_trait]

@@ -54,7 +54,7 @@ fn base_risk(action: &PlanAction, provider: Provider) -> RiskLevel {
         // POP3 has no Trash → soft delete is also High.
         PlanAction::Delete { .. } if provider == Provider::Pop3 => RiskLevel::High,
         // Unsubscribe risk is per-method.
-        PlanAction::Unsubscribe { method } => match method {
+        PlanAction::Unsubscribe { method, .. } => match method {
             UnsubscribeMethodKind::WebLink => RiskLevel::High,
             UnsubscribeMethodKind::Mailto => RiskLevel::Medium,
             UnsubscribeMethodKind::ListUnsubscribePost => RiskLevel::Low,
@@ -127,7 +127,9 @@ mod tests {
         assert_eq!(
             c.classify(
                 &PlanAction::Unsubscribe {
-                    method: UnsubscribeMethodKind::WebLink
+                    method: UnsubscribeMethodKind::WebLink,
+                    list_unsubscribe_header: None,
+                    list_unsubscribe_post: None,
                 },
                 &p
             ),
@@ -136,7 +138,9 @@ mod tests {
         assert_eq!(
             c.classify(
                 &PlanAction::Unsubscribe {
-                    method: UnsubscribeMethodKind::Mailto
+                    method: UnsubscribeMethodKind::Mailto,
+                    list_unsubscribe_header: None,
+                    list_unsubscribe_post: None,
                 },
                 &p
             ),
@@ -145,7 +149,9 @@ mod tests {
         assert_eq!(
             c.classify(
                 &PlanAction::Unsubscribe {
-                    method: UnsubscribeMethodKind::ListUnsubscribePost
+                    method: UnsubscribeMethodKind::ListUnsubscribePost,
+                    list_unsubscribe_header: None,
+                    list_unsubscribe_post: None,
                 },
                 &p
             ),
@@ -231,7 +237,9 @@ mod tests {
         assert_eq!(
             c.classify(
                 &PlanAction::Unsubscribe {
-                    method: UnsubscribeMethodKind::ListUnsubscribePost
+                    method: UnsubscribeMethodKind::ListUnsubscribePost,
+                    list_unsubscribe_header: None,
+                    list_unsubscribe_post: None,
                 },
                 &p
             ),

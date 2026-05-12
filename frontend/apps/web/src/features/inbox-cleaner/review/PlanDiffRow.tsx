@@ -17,6 +17,25 @@ export interface PlanDiffRowProps {
   onSampleViewed?: () => void;
 }
 
+// Solid-fill badges so they read clearly next to the light-tint risk pill.
+const statusBadgeClasses: Record<string, string> = {
+  applied: 'bg-green-600 text-white dark:bg-green-500',
+  failed: 'bg-red-600 text-white dark:bg-red-500',
+  skipped: 'bg-gray-500 text-white dark:bg-gray-400',
+  partiallyApplied: 'bg-amber-500 text-white dark:bg-amber-400',
+  expanding: 'bg-blue-500 text-white dark:bg-blue-400',
+  expanded: 'bg-blue-400 text-white dark:bg-blue-300',
+};
+
+const statusBadgeLabels: Record<string, string> = {
+  applied: 'Applied',
+  failed: 'Failed',
+  skipped: 'Skipped',
+  partiallyApplied: 'Partial',
+  expanding: 'Expanding',
+  expanded: 'Expanded',
+};
+
 const riskPillClasses: Record<RiskLevel, string> = {
   low: 'bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-200',
   medium: 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200',
@@ -148,6 +167,15 @@ export function PlanDiffRow({ op, planId, userId, ackState, onSampleViewed }: Pl
       >
         {riskPillLabels[op.risk]}
       </span>
+
+      {op.status !== 'pending' && statusBadgeLabels[op.status] && (
+        <span
+          className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide shrink-0 ${statusBadgeClasses[op.status] ?? ''}`}
+          aria-label={`Status: ${statusBadgeLabels[op.status]}`}
+        >
+          {statusBadgeLabels[op.status]}
+        </span>
+      )}
     </li>
   );
 }

@@ -75,11 +75,21 @@ impl PlanBuilder {
                 .subs
                 .find_by_sender(&sub.account_id, &sub.sender)
                 .await?;
-            let method = record
+            let (method, lu_header, lu_post) = record
                 .as_ref()
-                .map(|r| r.method)
-                .unwrap_or(super::operation::UnsubscribeMethodKind::None);
-            let action = PlanAction::Unsubscribe { method };
+                .map(|r| {
+                    (
+                        r.method,
+                        r.list_unsubscribe.clone(),
+                        r.list_unsubscribe_post.clone(),
+                    )
+                })
+                .unwrap_or((super::operation::UnsubscribeMethodKind::None, None, None));
+            let action = PlanAction::Unsubscribe {
+                method,
+                list_unsubscribe_header: lu_header,
+                list_unsubscribe_post: lu_post,
+            };
             let provider = (self.provider_for)(&sub.account_id);
             let ctx = AccountContext::for_provider(provider);
             let risk = self.classifier.classify(&action, &ctx);
@@ -516,6 +526,8 @@ mod tests {
             ("acct-a".to_string(), "news@x.com".to_string()),
             super::super::ports::SubscriptionRecord {
                 method: super::super::operation::UnsubscribeMethodKind::ListUnsubscribePost,
+                list_unsubscribe: Some("<https://example.com/unsub>".to_string()),
+                list_unsubscribe_post: Some("List-Unsubscribe=One-Click".to_string()),
             },
         );
         let fakes = Arc::new(Fakes {

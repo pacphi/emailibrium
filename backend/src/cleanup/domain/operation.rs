@@ -263,12 +263,29 @@ impl JobState {
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum PlanAction {
     Archive,
-    AddLabel { kind: MoveKind },
-    Move { kind: MoveKind },
-    Delete { permanent: bool },
-    Unsubscribe { method: UnsubscribeMethodKind },
+    AddLabel {
+        kind: MoveKind,
+    },
+    Move {
+        kind: MoveKind,
+    },
+    Delete {
+        permanent: bool,
+    },
+    Unsubscribe {
+        method: UnsubscribeMethodKind,
+        /// Carried from the source email's List-Unsubscribe header so the
+        /// worker can invoke the correct URL without an extra DB round-trip.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        list_unsubscribe_header: Option<String>,
+        /// Raw List-Unsubscribe-Post header (RFC 8058).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        list_unsubscribe_post: Option<String>,
+    },
     MarkRead,
-    Star { on: bool },
+    Star {
+        on: bool,
+    },
 }
 
 impl PlanAction {
@@ -598,6 +615,8 @@ mod tests {
             PlanAction::Delete { permanent: true },
             PlanAction::Unsubscribe {
                 method: UnsubscribeMethodKind::ListUnsubscribePost,
+                list_unsubscribe_header: None,
+                list_unsubscribe_post: None,
             },
             PlanAction::MarkRead,
             PlanAction::Star { on: true },

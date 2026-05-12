@@ -574,15 +574,36 @@ impl AccountWorker {
     }
 
     async fn dispatch_unsubscribe(&self, row: &PlannedOperationRow) -> Result<(), DispatchError> {
-        // Use UnsubscribeService.batch_unsubscribe with a single-element
-        // batch as a thin per-row adapter (DDD-008 addendum).
-        let target = SubscriptionTarget {
-            sender: row
+        // Sender is stored in PlanSource::Subscription, not in email_id
+        // (subscription rows are sender-level and have email_id = None).
+        let sender = match &row.source {
+            crate::cleanup::domain::operation::PlanSource::Subscription { sender } => {
+                sender.clone()
+            }
+            _ => row
                 .email_id
                 .clone()
                 .unwrap_or_else(|| "unknown".to_string()),
-            list_unsubscribe_header: None,
-            list_unsubscribe_post: None,
+        };
+
+        // Unsubscribe headers were captured from the source email at plan-build
+        // time and carried in the action so no extra DB round-trip is needed.
+        let (list_unsubscribe_header, list_unsubscribe_post) = match &row.action {
+            PlanAction::Unsubscribe {
+                list_unsubscribe_header,
+                list_unsubscribe_post,
+                ..
+            } => (
+                list_unsubscribe_header.clone(),
+                list_unsubscribe_post.clone(),
+            ),
+            _ => (None, None),
+        };
+
+        let target = SubscriptionTarget {
+            sender,
+            list_unsubscribe_header,
+            list_unsubscribe_post,
             email_id: row.email_id.clone(),
         };
         let batch = self.ctx.unsubscribe.batch_unsubscribe(vec![target]).await;

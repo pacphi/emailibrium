@@ -113,21 +113,21 @@ export function ActiveRulesList({ rules, isLoading, isError, onEdit }: ActiveRul
                   <button
                     type="button"
                     role="switch"
-                    aria-checked={rule.isActive ?? (rule as any).enabled ?? true}
-                    aria-label={`${(rule.isActive ?? (rule as any).enabled ?? true) ? 'Disable' : 'Enable'} ${rule.name}`}
+                    aria-checked={rule.isActive ?? true}
+                    aria-label={`${(rule.isActive ?? true) ? 'Disable' : 'Enable'} ${rule.name}`}
                     onClick={() => {
-                      const current = rule.isActive ?? (rule as any).enabled ?? true;
+                      const current = rule.isActive ?? true;
                       toggleMutation.mutate({ id: rule.id, isActive: !current });
                     }}
                     className={`
                     relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full transition-colors
-                    ${(rule.isActive ?? (rule as any).enabled ?? true) ? 'bg-indigo-600' : 'bg-gray-300 dark:bg-gray-600'}
+                    ${(rule.isActive ?? true) ? 'bg-indigo-600' : 'bg-gray-300 dark:bg-gray-600'}
                   `}
                   >
                     <span
                       className={`
                       inline-block h-4 w-4 rounded-full bg-white shadow transition-transform
-                      ${(rule.isActive ?? (rule as any).enabled ?? true) ? 'translate-x-4' : 'translate-x-0.5'}
+                      ${(rule.isActive ?? true) ? 'translate-x-4' : 'translate-x-0.5'}
                       mt-0.5
                     `}
                     />
