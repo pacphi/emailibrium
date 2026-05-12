@@ -77,7 +77,7 @@ pdf-extract = "0.10"
 
 # Background jobs (ADR-006)
 apalis = { version = "1.0.0-rc.6" }
-apalis-sql = "1.0.0-rc.6"
+apalis-sql = "1.0.0-rc.9"
 
 # Image processing
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif"] }
