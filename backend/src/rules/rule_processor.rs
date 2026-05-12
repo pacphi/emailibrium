@@ -453,7 +453,7 @@ mod tests {
                 operator: MatchOperator::Contains,
                 value: "boss".to_string(),
             }],
-            vec![RuleAction::Delete],
+            vec![RuleAction::Delete { permanent: false }],
         )];
         let emails = vec![email_at("a", Utc::now(), "boss@x.com", "hi")];
         let scope = EvaluationScope {
@@ -485,7 +485,7 @@ mod tests {
                     operator: MatchOperator::Contains,
                     value: "boss".to_string(),
                 }],
-                vec![RuleAction::Delete],
+                vec![RuleAction::Delete { permanent: false }],
             ),
         ];
         let emails = vec![email_at("a", Utc::now(), "boss@x.com", "hi")];

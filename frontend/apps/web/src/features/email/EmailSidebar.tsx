@@ -1,10 +1,10 @@
 import { useState } from 'react';
-import { Inbox, Tag, Hash, Bell, ChevronDown, ChevronRight, Mail } from 'lucide-react';
+import { Inbox, Tag, Hash, Bell, ChevronDown, ChevronRight, Mail, Archive } from 'lucide-react';
 
 export interface SidebarGroup {
   id: string;
   label: string;
-  icon: 'inbox' | 'category' | 'topic' | 'subscription' | 'label';
+  icon: 'inbox' | 'archive' | 'category' | 'topic' | 'subscription' | 'label';
   unreadCount?: number;
   totalCount?: number;
   children?: SidebarGroup[];
@@ -19,6 +19,7 @@ interface EmailSidebarProps {
 
 const iconMap = {
   inbox: Inbox,
+  archive: Archive,
   category: Tag,
   topic: Hash,
   subscription: Bell,
@@ -119,7 +120,7 @@ function CollapsibleSection({
 }
 
 export function EmailSidebar({ groups, activeGroupId, onGroupSelect, width }: EmailSidebarProps) {
-  const inboxGroups = groups.filter((g) => g.icon === 'inbox');
+  const inboxGroups = groups.filter((g) => g.icon === 'inbox' || g.icon === 'archive');
   const categoryGroups = groups.filter((g) => g.icon === 'category');
   const topicGroups = groups.filter((g) => g.icon === 'topic');
   const subscriptionGroups = groups.filter((g) => g.icon === 'subscription');

@@ -38,15 +38,22 @@ pub async fn apply_rule_action(
                 .execute(pool)
                 .await?;
         }
-        RuleAction::Delete => {
-            let now = Utc::now().to_rfc3339();
-            sqlx::query(
-                "UPDATE emails SET is_trash = 1, deleted_at = ?, folder = 'TRASH' WHERE id = ?",
-            )
-            .bind(now)
-            .bind(email_id)
-            .execute(pool)
-            .await?;
+        RuleAction::Delete { permanent } => {
+            if *permanent {
+                sqlx::query("DELETE FROM emails WHERE id = ?")
+                    .bind(email_id)
+                    .execute(pool)
+                    .await?;
+            } else {
+                let now = Utc::now().to_rfc3339();
+                sqlx::query(
+                    "UPDATE emails SET is_trash = 1, deleted_at = ?, folder = 'TRASH' WHERE id = ?",
+                )
+                .bind(now)
+                .bind(email_id)
+                .execute(pool)
+                .await?;
+            }
         }
         RuleAction::AddLabel { label } => {
             let row = sqlx::query("SELECT labels FROM emails WHERE id = ?")

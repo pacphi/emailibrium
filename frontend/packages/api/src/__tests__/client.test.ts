@@ -4,43 +4,41 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 // Mocks (vitest 4: hoist mock variables)
 // ---------------------------------------------------------------------------
 
-const { mockCreate, mockGet, mockPost, mockDelete, mockPatch, mockPut, capturedHooks } = vi.hoisted(
-  () => {
-    const jsonFn = vi.fn().mockResolvedValue({});
-    const responseLike = { json: jsonFn };
+const { mockCreate, mockGet, mockPost, capturedHooks } = vi.hoisted(() => {
+  const jsonFn = vi.fn().mockResolvedValue({});
+  const responseLike = { json: jsonFn };
 
-    const mockGet = vi.fn().mockReturnValue(responseLike);
-    const mockPost = vi.fn().mockReturnValue(responseLike);
-    const mockDelete = vi.fn().mockReturnValue(responseLike);
-    const mockPatch = vi.fn().mockReturnValue(responseLike);
-    const mockPut = vi.fn().mockReturnValue(responseLike);
+  const mockGet = vi.fn().mockReturnValue(responseLike);
+  const mockPost = vi.fn().mockReturnValue(responseLike);
+  const mockDelete = vi.fn().mockReturnValue(responseLike);
+  const mockPatch = vi.fn().mockReturnValue(responseLike);
+  const mockPut = vi.fn().mockReturnValue(responseLike);
 
-    type BeforeRequestState = { request: Request; options: unknown; retryCount: 0 };
-    const capturedHooks: { beforeRequest: Array<(state: BeforeRequestState) => void> } = {
-      beforeRequest: [],
-    };
+  type BeforeRequestState = { request: Request; options: unknown; retryCount: 0 };
+  const capturedHooks: { beforeRequest: Array<(state: BeforeRequestState) => void> } = {
+    beforeRequest: [],
+  };
 
-    const mockInstance = {
-      get: mockGet,
-      post: mockPost,
-      delete: mockDelete,
-      patch: mockPatch,
-      put: mockPut,
-    };
+  const mockInstance = {
+    get: mockGet,
+    post: mockPost,
+    delete: mockDelete,
+    patch: mockPatch,
+    put: mockPut,
+  };
 
-    const mockCreate = vi.fn().mockImplementation((options: Record<string, unknown>) => {
-      if (options?.hooks) {
-        const hooks = options.hooks as {
-          beforeRequest?: Array<(state: BeforeRequestState) => void>;
-        };
-        capturedHooks.beforeRequest = hooks.beforeRequest ?? [];
-      }
-      return mockInstance;
-    });
+  const mockCreate = vi.fn().mockImplementation((options: Record<string, unknown>) => {
+    if (options?.hooks) {
+      const hooks = options.hooks as {
+        beforeRequest?: Array<(state: BeforeRequestState) => void>;
+      };
+      capturedHooks.beforeRequest = hooks.beforeRequest ?? [];
+    }
+    return mockInstance;
+  });
 
-    return { mockCreate, mockGet, mockPost, mockDelete, mockPatch, mockPut, capturedHooks };
-  },
-);
+  return { mockCreate, mockGet, mockPost, mockDelete, mockPatch, mockPut, capturedHooks };
+});
 
 vi.mock('ky', () => ({
   default: { create: mockCreate },

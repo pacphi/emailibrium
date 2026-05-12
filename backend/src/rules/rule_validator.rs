@@ -99,7 +99,10 @@ fn validate_contradictions(rule: &Rule, warnings: &mut Vec<ValidationWarning>) {
         .actions
         .iter()
         .any(|a| matches!(a, RuleAction::Archive));
-    let has_delete = rule.actions.iter().any(|a| matches!(a, RuleAction::Delete));
+    let has_delete = rule
+        .actions
+        .iter()
+        .any(|a| matches!(a, RuleAction::Delete { .. }));
 
     if has_archive && has_delete {
         warnings.push(ValidationWarning {
@@ -379,7 +382,7 @@ mod tests {
                 operator: MatchOperator::Contains,
                 value: "spam".to_string(),
             }],
-            vec![RuleAction::Archive, RuleAction::Delete],
+            vec![RuleAction::Archive, RuleAction::Delete { permanent: false }],
         );
         let warnings = validate_rule(&rule);
         assert!(warnings

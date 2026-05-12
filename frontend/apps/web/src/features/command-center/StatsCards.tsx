@@ -239,6 +239,13 @@ export function StatsCards({ stats, isLoading }: StatsCardsProps) {
       icon: <EmailCountIcon />,
       label: 'Emails',
       value: (emailCounts?.total ?? 0).toLocaleString(),
+      trend:
+        emailCounts && emailCounts.total > 0
+          ? {
+              direction: 'flat' as const,
+              label: `${Math.round((emailCounts.archivedCount / emailCounts.total) * 100)}% archived`,
+            }
+          : undefined,
     },
     {
       icon: <UnreadIcon />,

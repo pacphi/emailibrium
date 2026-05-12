@@ -362,7 +362,9 @@ fn plan_action_from_rule(a: &RuleAction) -> PlanAction {
             kind: MoveKind::Label,
         },
         RuleAction::Archive => PlanAction::Archive,
-        RuleAction::Delete => PlanAction::Delete { permanent: false },
+        RuleAction::Delete { permanent } => PlanAction::Delete {
+            permanent: *permanent,
+        },
         RuleAction::MarkRead => PlanAction::MarkRead,
         RuleAction::MarkImportant => PlanAction::Star { on: true },
         RuleAction::Forward { .. } => PlanAction::Archive, // Forward isn't a cleanup op

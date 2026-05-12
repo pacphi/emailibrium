@@ -70,6 +70,10 @@ pub struct AccountWorkerCtx {
     pub user_id: String,
     /// Job id for this apply run; carried into every audit row.
     pub job_id: JobId,
+    /// Optional local DB pool — when set, a successful provider archive
+    /// also updates `is_archived = 1` in the local emails table so the
+    /// Archive view shows the email immediately without waiting for a sync.
+    pub db: Option<sqlx::SqlitePool>,
 }
 
 impl AccountWorkerCtx {}
@@ -518,7 +522,20 @@ impl AccountWorker {
         };
 
         let result = match &row.action {
-            PlanAction::Archive => provider.archive_message(access_token, email_id).await,
+            PlanAction::Archive => {
+                let r = provider.archive_message(access_token, email_id).await;
+                if r.is_ok() {
+                    if let Some(ref pool) = self.ctx.db {
+                        let _ = sqlx::query(
+                            "UPDATE emails SET labels = 'ARCHIVED', is_archived = 1 WHERE id = ?1",
+                        )
+                        .bind(email_id)
+                        .execute(pool)
+                        .await;
+                    }
+                }
+                r
+            }
             PlanAction::AddLabel { .. } => match &row.target {
                 Some(t) => {
                     provider
@@ -539,11 +556,34 @@ impl AccountWorker {
                 }
                 None => Err(ProviderError::ConfigError("move without target".into())),
             },
-            PlanAction::Delete { permanent: _ } => {
-                // Soft delete: archive. Permanent delete requires a
-                // dedicated provider method that doesn't exist on the
-                // trait yet — surface as Failed for now.
-                provider.archive_message(access_token, email_id).await
+            PlanAction::Delete { permanent } => {
+                if *permanent {
+                    // Permanent: delete from provider, then remove from local DB.
+                    let r = provider.delete_message(access_token, email_id).await;
+                    if r.is_ok() {
+                        if let Some(ref pool) = self.ctx.db {
+                            let _ = sqlx::query("DELETE FROM emails WHERE id = ?1")
+                                .bind(email_id)
+                                .execute(pool)
+                                .await;
+                        }
+                    }
+                    r
+                } else {
+                    // Soft delete: archive on provider + mark locally.
+                    let r = provider.archive_message(access_token, email_id).await;
+                    if r.is_ok() {
+                        if let Some(ref pool) = self.ctx.db {
+                            let _ = sqlx::query(
+                                "UPDATE emails SET labels = 'ARCHIVED', is_archived = 1 WHERE id = ?1",
+                            )
+                            .bind(email_id)
+                            .execute(pool)
+                            .await;
+                        }
+                    }
+                    r
+                }
             }
             PlanAction::Unsubscribe { .. } => {
                 return self.dispatch_unsubscribe(row).await;

@@ -126,11 +126,23 @@ impl MatchOperator {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum RuleAction {
-    AddLabel { label: String },
-    RemoveLabel { label: String },
+    AddLabel {
+        label: String,
+    },
+    RemoveLabel {
+        label: String,
+    },
     Archive,
-    Delete,
-    Forward { to: String },
+    /// Move to trash (`permanent: false`, default) or permanently delete (`permanent: true`).
+    /// `permanent` defaults to `false` so existing serialized rules without the field
+    /// continue to deserialize as soft-delete.
+    Delete {
+        #[serde(default)]
+        permanent: bool,
+    },
+    Forward {
+        to: String,
+    },
     MarkRead,
     MarkImportant,
 }
@@ -142,7 +154,8 @@ impl RuleAction {
             Self::AddLabel { .. } => "addLabel",
             Self::RemoveLabel { .. } => "removeLabel",
             Self::Archive => "archive",
-            Self::Delete => "delete",
+            Self::Delete { permanent: true } => "deletePermanent",
+            Self::Delete { .. } => "delete",
             Self::Forward { .. } => "forward",
             Self::MarkRead => "markRead",
             Self::MarkImportant => "markImportant",

@@ -91,6 +91,16 @@ pub trait EmailProvider: Send + Sync {
     /// Archive a message (Gmail: remove INBOX label; Outlook: move to Archive).
     async fn archive_message(&self, access_token: &str, id: &str) -> Result<(), ProviderError>;
 
+    /// Permanently delete a message from the provider mailbox with no recovery path.
+    /// Gmail: `DELETE /gmail/v1/users/me/messages/{id}`.
+    /// Defaults to ConfigError so providers that don't support permanent delete
+    /// surface a clear failure rather than silently succeeding.
+    async fn delete_message(&self, _access_token: &str, _id: &str) -> Result<(), ProviderError> {
+        Err(ProviderError::ConfigError(
+            "delete_message not supported by this provider".into(),
+        ))
+    }
+
     /// Apply labels/categories to a message.
     async fn label_message(
         &self,

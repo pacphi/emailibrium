@@ -9,6 +9,7 @@ export interface GetEmailsParams {
   isStarred?: boolean;
   isSpam?: boolean;
   isTrash?: boolean;
+  isArchived?: boolean;
   folder?: string;
   limit?: number;
   offset?: number;
@@ -119,6 +120,7 @@ export async function getEnrichedCategories(): Promise<EnrichedCategory[]> {
 export interface EmailCounts {
   total: number;
   unread: number;
+  archivedCount: number;
   spam_count: number;
   trash_count: number;
   sent_count: number;

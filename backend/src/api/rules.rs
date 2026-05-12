@@ -672,7 +672,10 @@ async fn run_rule(
                     RuleAction::MarkImportant => {
                         provider.star_message(&token, &email_id, true).await
                     }
-                    RuleAction::Delete => provider
+                    RuleAction::Delete { permanent: true } => {
+                        provider.delete_message(&token, &email_id).await
+                    }
+                    RuleAction::Delete { .. } => provider
                         .move_message(
                             &token,
                             &email_id,

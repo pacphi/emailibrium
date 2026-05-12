@@ -86,6 +86,9 @@ pub struct ApplyOrchestrator {
     pub audit: Arc<dyn CleanupAuditWriter>,
     /// Telemetry emitter (Phase D).
     pub telemetry: Arc<TelemetryEmitter>,
+    /// Optional DB pool — when present, workers update `is_archived` locally
+    /// after a successful provider archive so the Archive view stays in sync.
+    pub db: Option<sqlx::SqlitePool>,
     /// Active jobs keyed by job_id, exposing the broadcast::Sender + cancel token.
     job_channels: Arc<RwLock<HashMap<JobId, JobChannels>>>,
 }
@@ -110,8 +113,15 @@ impl ApplyOrchestrator {
             unsubscribe,
             audit: Arc::new(NoopCleanupAuditWriter) as Arc<dyn CleanupAuditWriter>,
             telemetry: Arc::new(TelemetryEmitter::new()),
+            db: None,
             job_channels: Arc::new(RwLock::new(HashMap::new())),
         }
+    }
+
+    /// Builder-style setter for the local DB pool (used to sync archive state).
+    pub fn with_db(mut self, pool: sqlx::SqlitePool) -> Self {
+        self.db = Some(pool);
+        self
     }
 
     /// Builder-style setter for the EmailProvider factory (Item #1).
@@ -239,6 +249,7 @@ impl ApplyOrchestrator {
                     audit: me.audit.clone(),
                     user_id: user_id_for_audit.clone(),
                     job_id,
+                    db: me.db.clone(),
                 };
                 let worker = AccountWorker {
                     account_id: account_id.clone(),

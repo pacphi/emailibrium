@@ -55,7 +55,7 @@ describe('ingestionApi', () => {
       mockPost.mockResolvedValueOnce({
         status: 200,
         ok: true,
-        json: vi.fn().mockResolvedValue({ jobId: 'job1' }),
+        json: vi.fn().mockResolvedValue({ job_id: 'job1' }),
       });
 
       const result = await startIngestion('acc1');
@@ -122,7 +122,9 @@ describe('ingestionApi', () => {
     it('calls createSSEStream with correct URL', () => {
       const stream = createIngestionStream('job1');
 
-      expect(mockCreateSSEStream).toHaveBeenCalledWith('/api/v1/ingestion/job1/stream');
+      expect(mockCreateSSEStream).toHaveBeenCalledWith('/api/v1/ingestion/status', {
+        onError: undefined,
+      });
       expect(stream).toBeDefined();
       expect(stream.subscribe).toBeDefined();
       expect(stream.close).toBeDefined();

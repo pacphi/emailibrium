@@ -61,6 +61,7 @@ pub struct ListEmailsParams {
     pub is_starred: Option<bool>,
     pub is_spam: Option<bool>,
     pub is_trash: Option<bool>,
+    pub is_archived: Option<bool>,
     pub folder: Option<String>,
     pub limit: Option<i64>,
     pub offset: Option<i64>,
@@ -171,6 +172,13 @@ async fn list_emails(
         where_parts.push("is_trash = 1".to_string());
     } else if params.is_trash.is_none() {
         where_parts.push("COALESCE(is_trash, 0) = 0".to_string());
+    }
+    // Archived: when explicitly true show only archived; when explicitly false show all;
+    // when omitted (None) exclude archived by default — matching spam/trash behaviour.
+    if let Some(true) = params.is_archived {
+        where_parts.push("COALESCE(is_archived, 0) = 1".to_string());
+    } else if params.is_archived.is_none() {
+        where_parts.push("COALESCE(is_archived, 0) = 0".to_string());
     }
     if params.folder.is_some() {
         where_parts.push("folder = ? COLLATE NOCASE".to_string());
@@ -377,7 +385,7 @@ async fn archive_email(
         }
     }
 
-    let rows = sqlx::query("UPDATE emails SET labels = 'ARCHIVED' WHERE id = ?1")
+    let rows = sqlx::query("UPDATE emails SET labels = 'ARCHIVED', is_archived = 1 WHERE id = ?1")
         .bind(&id)
         .execute(&state.db.pool)
         .await
@@ -509,8 +517,17 @@ async fn delete_email(
     }
 }
 
-/// Hard-delete a single email: remove attachments then DELETE from DB.
+/// Hard-delete a single email: best-effort provider delete, then remove locally.
 async fn hard_delete_email(state: &AppState, email_id: &str) -> Result<(), (StatusCode, String)> {
+    // Best-effort: permanently delete from the provider before removing locally.
+    if let Ok(account_id) = get_email_account_id(state, email_id).await {
+        if let Ok((provider, token, _)) = resolve_provider_and_token(state, &account_id).await {
+            if let Err(e) = provider.delete_message(&token, email_id).await {
+                debug!(email_id = %email_id, "Provider permanent delete failed (continuing locally): {e}");
+            }
+        }
+    }
+
     // Clean up attachment files before deleting the email (DB rows cascade).
     let att_paths: Vec<(Option<String>,)> = sqlx::query_as(
         "SELECT storage_path FROM attachments WHERE email_id = ?1 AND storage_path IS NOT NULL",
@@ -1032,6 +1049,7 @@ async fn list_enriched_categories(
 pub struct EmailCounts {
     pub total: u64,
     pub unread: u64,
+    pub archived_count: u64,
     pub spam_count: u64,
     pub trash_count: u64,
     pub sent_count: u64,
@@ -1046,16 +1064,27 @@ pub struct CategoryCount {
     pub unread: u64,
 }
 
-/// GET /api/v1/emails/counts — accurate total, unread, spam, trash, and per-category counts.
+/// GET /api/v1/emails/counts — accurate total, unread, archived, spam, trash, and per-category counts.
+/// `total` and `unread` include archived emails so callers can derive active counts client-side.
 async fn email_counts(
     State(state): State<AppState>,
 ) -> Result<Json<EmailCounts>, (StatusCode, String)> {
-    // Total and unread (excluding spam/trash).
+    // Total and unread (excluding spam/trash; archived emails included in total).
     let (total, unread): (i64, i64) = sqlx::query_as(
         "SELECT COALESCE(COUNT(*), 0), \
          COALESCE(SUM(CASE WHEN is_read = 0 THEN 1 ELSE 0 END), 0) \
          FROM emails \
          WHERE COALESCE(is_spam, 0) = 0 AND COALESCE(is_trash, 0) = 0",
+    )
+    .fetch_one(&state.db.pool)
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    // Archived count (subset of total above).
+    let (archived_count,): (i64,) = sqlx::query_as(
+        "SELECT COALESCE(COUNT(*), 0) FROM emails \
+         WHERE COALESCE(is_archived, 0) = 1 \
+         AND COALESCE(is_spam, 0) = 0 AND COALESCE(is_trash, 0) = 0",
     )
     .fetch_one(&state.db.pool)
     .await
@@ -1082,7 +1111,7 @@ async fn email_counts(
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    // Per-category (excluding spam/trash).
+    // Per-category (excluding spam/trash; archived included so sidebar counts match toggle-off).
     let cat_rows: Vec<(String, i64, i64)> = sqlx::query_as(
         "SELECT COALESCE(category, 'Uncategorized'), COUNT(*), \
          SUM(CASE WHEN is_read = 0 THEN 1 ELSE 0 END) \
@@ -1106,6 +1135,7 @@ async fn email_counts(
     Ok(Json(EmailCounts {
         total: total as u64,
         unread: unread as u64,
+        archived_count: archived_count as u64,
         spam_count: spam_count as u64,
         trash_count: trash_count as u64,
         sent_count: sent_count as u64,

@@ -72,7 +72,7 @@ describe('secureStorage', () => {
 
       // set() should only be called for the encrypted data, not for a new key
       const keySaveCalls = mockSet.mock.calls.filter(
-        ([k]: [string]) => k === '__emailibrium_crypto_key__',
+        ([k]: string[]) => k === '__emailibrium_crypto_key__',
       );
       expect(keySaveCalls).toHaveLength(0);
     });

@@ -514,6 +514,26 @@ impl EmailProvider for GmailProvider {
         Ok(())
     }
 
+    async fn delete_message(&self, access_token: &str, id: &str) -> Result<(), ProviderError> {
+        // Gmail permanent delete — no recovery possible after this call.
+        let resp = self
+            .http
+            .delete(format!("{GMAIL_API_BASE}/messages/{id}"))
+            .bearer_auth(access_token)
+            .send()
+            .await
+            .map_err(|e| ProviderError::RequestFailed(e.to_string()))?;
+
+        if !resp.status().is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(ProviderError::RequestFailed(format!(
+                "Permanent delete failed: {body}"
+            )));
+        }
+
+        Ok(())
+    }
+
     async fn label_message(
         &self,
         access_token: &str,

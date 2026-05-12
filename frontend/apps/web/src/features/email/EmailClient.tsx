@@ -49,7 +49,7 @@ function ResizeDivider({
 }
 
 function groupToQueryParam(groupId: string): { category?: string; label?: string } {
-  if (groupId === 'inbox') return {};
+  if (groupId === 'inbox' || groupId === 'archived') return {};
   if (groupId.startsWith('cat-')) return { category: groupId.replace('cat-', '') };
   if (groupId.startsWith('topic-')) return { category: groupId.replace('topic-', '') };
   if (groupId.startsWith('sub-')) return { category: groupId.replace('sub-', '') };
@@ -97,7 +97,10 @@ export function EmailClient() {
   }, []);
 
   const queryParams = useMemo(() => {
+    // Archive view: show only archived emails.
+    if (activeGroup === 'archived') return { isArchived: true };
     const base = groupToQueryParam(activeGroup);
+    // All other views exclude archived by default (server omits archived when isArchived is absent).
     if (filter === 'read') return { ...base, isRead: true };
     if (filter === 'unread') return { ...base, isRead: false };
     if (filter === 'starred') return { ...base, isStarred: true };
@@ -198,7 +201,7 @@ export function EmailClient() {
     staleTime: 30_000,
   });
 
-  // Fetch accurate counts (Gap 6).
+  // Fetch accurate counts.
   const countsQuery = useQuery({
     queryKey: ['email-counts'],
     queryFn: () => getEmailCounts(),
@@ -214,8 +217,9 @@ export function EmailClient() {
       .sort((a, b) => a.name.localeCompare(b.name));
     const counts = countsQuery.data;
     const inboxUnread = counts?.unread ?? 0;
-
-    const inboxTotal = counts?.total ?? 0;
+    const archivedCount = counts?.archivedCount ?? 0;
+    // Inbox badge excludes archived emails (server default filters them out).
+    const inboxTotal = Math.max(0, (counts?.total ?? 0) - archivedCount);
 
     const groups: SidebarGroup[] = [
       {
@@ -224,6 +228,12 @@ export function EmailClient() {
         icon: 'inbox',
         totalCount: inboxTotal,
         unreadCount: inboxUnread,
+      },
+      {
+        id: 'archived',
+        label: 'Archive',
+        icon: 'archive',
+        totalCount: archivedCount,
       },
     ];
 

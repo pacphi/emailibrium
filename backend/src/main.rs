@@ -429,7 +429,8 @@ async fn main() -> anyhow::Result<()> {
         )
         .with_provider_factory(provider_factory)
         .with_audit(cleanup_audit_writer.clone())
-        .with_telemetry(cleanup_telemetry.clone()),
+        .with_telemetry(cleanup_telemetry.clone())
+        .with_db(db.pool.clone()),
     );
     let state = AppState {
         vector_service,
