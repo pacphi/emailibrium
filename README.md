@@ -102,29 +102,11 @@ React TypeScript SPA ──REST + SSE──→ Axum API Gateway
 
 ### Architecture Decisions
 
-| ADR                                                            | Decision                             |
-| -------------------------------------------------------------- | ------------------------------------ |
-| [ADR-001](docs/ADRs/ADR-001-hybrid-search-architecture.md)     | Hybrid Search (FTS5 + HNSW + RRF)    |
-| [ADR-002](docs/ADRs/ADR-002-embedding-model-selection.md)      | Pluggable Embedding Model            |
-| [ADR-003](docs/ADRs/ADR-003-ruvector-vector-database.md)       | RuVector with VectorStore Facade     |
-| [ADR-004](docs/ADRs/ADR-004-sona-adaptive-learning.md)         | SONA Adaptive Learning Specification |
-| [ADR-005](docs/ADRs/ADR-005-tauri-to-web-spa-migration.md)     | Web SPA (no Tauri)                   |
-| [ADR-006](docs/ADRs/ADR-006-multi-asset-content-extraction.md) | Multi-Asset Content Extraction       |
-| [ADR-007](docs/ADRs/ADR-007-adaptive-quantization-strategy.md) | Adaptive Quantization                |
-| [ADR-008](docs/ADRs/ADR-008-privacy-embedding-security.md)     | Privacy & Embedding Security         |
-| [ADR-009](docs/ADRs/ADR-009-gnn-clustering-architecture.md)    | GNN Clustering (GraphSAGE)           |
-| [ADR-010](docs/ADRs/ADR-010-ingest-tag-archive-pipeline.md)    | Ingest-Tag-Archive Pipeline          |
+See all ADRs in [docs/ADRs](https://github.com/pacphi/emailibrium/tree/main/docs/ADRs).
 
 ### Domain Model
 
-| Context                                                       | Scope                                 |
-| ------------------------------------------------------------- | ------------------------------------- |
-| [Context Map](docs/DDDs/DDD-000-context-map.md)               | How the 5 domains connect             |
-| [Email Intelligence](docs/DDDs/DDD-001-email-intelligence.md) | Embedding, classification, clustering |
-| [Search](docs/DDDs/DDD-002-search.md)                         | Hybrid search, SONA re-ranking        |
-| [Ingestion](docs/DDDs/DDD-003-ingestion.md)                   | Multi-asset extraction, SSE progress  |
-| [Learning](docs/DDDs/DDD-004-learning.md)                     | 3-tier SONA adaptive model            |
-| [Account Management](docs/DDDs/DDD-005-account-management.md) | OAuth, multi-provider sync            |
+See all DDDs in [docs/DDDs](https://github.com/pacphi/emailibrium/tree/main/docs/DDDs).
 
 ### Research & Evaluation
 
