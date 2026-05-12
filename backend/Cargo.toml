@@ -76,7 +76,7 @@ scraper = "0.26"
 pdf-extract = "0.10"
 
 # Background jobs (ADR-006)
-apalis = { version = "1.0.0-rc.6" }
+apalis = { version = "1.0.0-rc.9" }
 apalis-sql = "1.0.0-rc.6"
 
 # Image processing
