@@ -32,6 +32,22 @@ import {
 } from './hooks/useEmails';
 import { useToast } from '@/shared/hooks/useToast';
 
+function ResizeDivider({
+  onMouseDown,
+}: {
+  onMouseDown: (e: React.MouseEvent<HTMLDivElement>) => void;
+}) {
+  return (
+    <div
+      onMouseDown={onMouseDown}
+      className="group relative hidden w-1 flex-shrink-0 cursor-col-resize bg-gray-200 transition-colors hover:bg-indigo-400 dark:bg-gray-700 dark:hover:bg-indigo-500 lg:block"
+      role="separator"
+      aria-orientation="vertical"
+      aria-label="Resize panel"
+    />
+  );
+}
+
 function groupToQueryParam(groupId: string): { category?: string; label?: string } {
   if (groupId === 'inbox') return {};
   if (groupId.startsWith('cat-')) return { category: groupId.replace('cat-', '') };
@@ -57,6 +73,8 @@ export function EmailClient() {
   const [searchField, setSearchField] = useState<'from' | 'to' | 'cc' | 'subject' | 'body'>('from');
   const [fromSearch, setFromSearch] = useState(false);
   const [scrollToEmailId, setScrollToEmailId] = useState<string | null>(null);
+  const [sidebarWidth, setSidebarWidth] = useState(240);
+  const [listWidth, setListWidth] = useState(600);
 
   // Read URL params on mount (search result deep-link or topic/category deep-link).
   useEffect(() => {
@@ -570,27 +588,75 @@ export function EmailClient() {
     setMobilePanel('list');
   }, []);
 
+  const handleSidebarResizeStart = useCallback(
+    (e: React.MouseEvent<HTMLDivElement>) => {
+      e.preventDefault();
+      const startX = e.clientX;
+      const startWidth = sidebarWidth;
+      const onMove = (ev: MouseEvent) => {
+        setSidebarWidth(Math.max(160, Math.min(480, startWidth + (ev.clientX - startX))));
+      };
+      const onUp = () => {
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+      };
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    },
+    [sidebarWidth],
+  );
+
+  const handleListResizeStart = useCallback(
+    (e: React.MouseEvent<HTMLDivElement>) => {
+      e.preventDefault();
+      const startX = e.clientX;
+      const startWidth = listWidth;
+      const onMove = (ev: MouseEvent) => {
+        setListWidth(Math.max(280, Math.min(900, startWidth + (ev.clientX - startX))));
+      };
+      const onUp = () => {
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+      };
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    },
+    [listWidth],
+  );
+
   const accounts = useMemo(
     () => [] as { id: string; emailAddress: string; provider: string }[],
     [],
   );
 
   return (
-    <div className="flex h-full">
+    <div className="flex h-full overflow-hidden">
       {/* Left sidebar -- hidden on mobile when not active */}
       <div className={`${mobilePanel === 'sidebar' ? 'flex' : 'hidden'} lg:flex`}>
         <EmailSidebar
           groups={groupsWithCounts}
           activeGroupId={activeGroup}
           onGroupSelect={handleGroupSelect}
+          width={sidebarWidth}
         />
       </div>
+
+      <ResizeDivider onMouseDown={handleSidebarResizeStart} />
 
       {/* Middle panel: email list */}
       <div
         className={`${
           mobilePanel === 'list' ? 'flex' : 'hidden'
-        } w-full flex-col border-r border-gray-200 dark:border-gray-700 lg:flex lg:w-[600px]`}
+        } w-full flex-col border-r border-gray-200 dark:border-gray-700 lg:flex lg:w-auto lg:flex-shrink-0 lg:border-r-0`}
+        style={{ width: listWidth }}
       >
         {/* List header */}
         <div className="border-b border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800">
@@ -812,6 +878,8 @@ export function EmailClient() {
           />
         )}
       </div>
+
+      <ResizeDivider onMouseDown={handleListResizeStart} />
 
       {/* Right panel: thread view */}
       <div

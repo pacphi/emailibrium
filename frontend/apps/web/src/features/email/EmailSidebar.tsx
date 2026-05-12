@@ -14,6 +14,7 @@ interface EmailSidebarProps {
   groups: SidebarGroup[];
   activeGroupId: string;
   onGroupSelect: (groupId: string) => void;
+  width?: number;
 }
 
 const iconMap = {
@@ -117,7 +118,7 @@ function CollapsibleSection({
   );
 }
 
-export function EmailSidebar({ groups, activeGroupId, onGroupSelect }: EmailSidebarProps) {
+export function EmailSidebar({ groups, activeGroupId, onGroupSelect, width }: EmailSidebarProps) {
   const inboxGroups = groups.filter((g) => g.icon === 'inbox');
   const categoryGroups = groups.filter((g) => g.icon === 'category');
   const topicGroups = groups.filter((g) => g.icon === 'topic');
@@ -126,7 +127,8 @@ export function EmailSidebar({ groups, activeGroupId, onGroupSelect }: EmailSide
 
   return (
     <nav
-      className="flex h-full w-56 shrink-0 flex-col overflow-y-auto border-r border-gray-200 bg-white p-2 dark:border-gray-700 dark:bg-gray-800 lg:w-60"
+      className="flex h-full shrink-0 flex-col overflow-y-auto border-r border-gray-200 bg-white p-2 dark:border-gray-700 dark:bg-gray-800 lg:border-r-0"
+      style={{ width: width ?? 240 }}
       aria-label="Email groups"
     >
       <div className="space-y-0.5">
