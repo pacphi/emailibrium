@@ -21,7 +21,7 @@
     "@emailibrium/types": "workspace:*",
     "@emailibrium/ui": "workspace:*",
     "@tanstack/react-query": "^5.100.10",
-    "@tanstack/react-router": "^1.168.25",
+    "@tanstack/react-router": "^1.170.4",
     "@tanstack/react-virtual": "^3.13.24",
     "cmdk": "^1.1.1",
     "date-fns": "^4.1.0",
