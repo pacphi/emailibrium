@@ -195,15 +195,17 @@ jobs:
           generate_release_notes: false
       - name: Update CHANGELOG.md
         run: |
-          MARKER="<!-- This file is auto-maintained by the release workflow on each tag. -->"
-
-          if grep -q "$MARKER" CHANGELOG.md; then
-            sed -i "/$MARKER/a\\" CHANGELOG.md
-            sed -i "/$MARKER/r RELEASE_NOTES.md" CHANGELOG.md
-          else
-            echo "" >> CHANGELOG.md
-            cat RELEASE_NOTES.md >> CHANGELOG.md
-          fi
+          python3 << 'EOF'
+          import re, pathlib
+          changelog = pathlib.Path("CHANGELOG.md").read_text()
+          notes = pathlib.Path("RELEASE_NOTES.md").read_text().strip()
+          # Insert new release notes after the "# Changelog" heading line
+          updated = re.sub(r'^(# Changelog\n)', r'\1\n' + notes + '\n\n', changelog, count=1, flags=re.MULTILINE)
+          if updated == changelog:
+              # No "# Changelog" heading found — prepend with heading
+              updated = "# Changelog\n\n" + notes + "\n\n" + changelog
+          pathlib.Path("CHANGELOG.md").write_text(updated)
+          EOF
       - name: Push CHANGELOG.md update
         run: |
           git config user.name "github-actions[bot]"

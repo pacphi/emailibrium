@@ -1,5 +1,5 @@
 [changelog]
-header = "# Changelog\n"
+header = ""
 body = "## [{{ version }}] - {{ timestamp | date(format='%Y-%m-%d') }}\n{% for group, commits in commits | group_by(attribute='group') %}\n### {{ group }}\n{% for commit in commits %}\n- {{ commit.message | upper_first }}{% if commit.body %}\n\n  {{ commit.body | indent(n=2) }}{% endif %}\n{% endfor %}\n{% endfor %}\n"
 trim = true
 footer = ""
