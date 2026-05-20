@@ -24,7 +24,7 @@
     "@tanstack/react-router": "^1.170.4",
     "@tanstack/react-virtual": "^3.13.24",
     "cmdk": "^1.1.1",
-    "date-fns": "^4.1.0",
+    "date-fns": "^4.2.1",
     "framer-motion": "^12.38.0",
     "idb-keyval": "^6.2.2",
     "ky": "^2.0.2",
