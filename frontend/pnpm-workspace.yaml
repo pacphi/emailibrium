@@ -1,3 +1,16 @@
 packages:
   - "apps/*"
   - "packages/*"
+overrides:
+  "brace-expansion@<1.1.13": "1.1.13"
+  "brace-expansion@>=4.0.0 <5.0.6": "5.0.6"
+  "ws@>=8.0.0 <8.20.1": "8.20.1"
+  "lodash@>=4.0.0 <=4.17.23": "4.18.1"
+peerDependencyRules:
+  allowedVersions:
+    "eslint-plugin-react>eslint": "10"
+onlyBuiltDependencies:
+  - esbuild
+  - msw
+allowedDeprecatedVersions:
+  "@ungap/structured-clone": "*"
