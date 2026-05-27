@@ -10,7 +10,7 @@
   },
   "dependencies": {
     "@emailibrium/types": "workspace:*",
-    "idb-keyval": "^6.2.2",
+    "idb-keyval": "^6.2.4",
     "zustand": "^5.0.13"
   },
   "devDependencies": {
