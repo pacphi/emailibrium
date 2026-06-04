@@ -26,7 +26,7 @@
     "cmdk": "^1.1.1",
     "date-fns": "^4.2.1",
     "framer-motion": "^12.39.0",
-    "idb-keyval": "^6.2.2",
+    "idb-keyval": "^6.2.5",
     "ky": "^2.0.2",
     "lucide-react": "^1.16.0",
     "nanoid": "^5.1.11",
