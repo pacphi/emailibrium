@@ -9,7 +9,7 @@ Run `make setup` for an interactive wizard that automates these steps.
 | -------------- | --------------- | ----------------------------------------------------------------- |
 | Rust           | 1.96            | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \| sh` |
 | Node.js        | 26 (LTS)        | `brew install node@26` or [nodejs.org](https://nodejs.org/)       |
-| pnpm           | 10.32           | `npm install -g pnpm@10`                                          |
+| pnpm           | 11.5            | `npm install -g pnpm@11`                                          |
 | Docker         | 24.0+           | [docs.docker.com/get-docker](https://docs.docker.com/get-docker/) |
 | Docker Compose | v2              | Included with Docker Desktop                                      |
 | Make           | 3.81+           | `xcode-select --install` (macOS) or `apt install build-essential` |

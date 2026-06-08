@@ -1,6 +1,13 @@
 packages:
   - "apps/*"
   - "packages/*"
+# pnpm 11 enables a `minimumReleaseAge` cooldown by default, which rejects
+# lockfile entries for packages published within the window (e.g. a fresh
+# typescript-eslint patch) and breaks `--frozen-lockfile` in CI. We pin the
+# "always latest-compatible" dependency policy, so disable the cooldown
+# explicitly and rely on our existing supply-chain controls instead:
+# the `overrides` IOC pins below and Dependabot review.
+minimumReleaseAge: 0
 overrides:
   "brace-expansion@<1.1.13": "1.1.13"
   "brace-expansion@>=4.0.0 <5.0.6": "5.0.6"
@@ -9,8 +16,15 @@ overrides:
 peerDependencyRules:
   allowedVersions:
     "eslint-plugin-react>eslint": "10"
-onlyBuiltDependencies:
-  - esbuild
-  - msw
+# pnpm 11 removed `onlyBuiltDependencies` in favour of the `allowBuilds` map and
+# makes `strictDepBuilds` fatal by default, so every dependency with a lifecycle
+# script must be explicitly classified or `--frozen-lockfile` fails in CI.
+# esbuild + msw need their postinstall (msw writes its service worker); the web
+# app consumes node-llama-cpp via prebuilt binaries, so its postinstall stays
+# disabled (false) — matching the prior pnpm 10 behaviour.
+allowBuilds:
+  esbuild: true
+  msw: true
+  node-llama-cpp: false
 allowedDeprecatedVersions:
   "@ungap/structured-clone": "*"
