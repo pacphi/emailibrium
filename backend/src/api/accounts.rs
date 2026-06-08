@@ -2,6 +2,8 @@
 //!
 //! - POST   /api/v1/auth/gmail/connect    -- initiate Gmail OAuth flow (redirect)
 //! - POST   /api/v1/auth/outlook/connect  -- initiate Outlook OAuth flow (redirect)
+//! - POST   /api/v1/auth/imap/test        -- validate IMAP credentials (no persist)
+//! - POST   /api/v1/auth/imap/connect     -- connect an account via IMAP + app password
 //! - GET    /api/v1/auth/callback         -- OAuth callback handler
 //! - GET    /api/v1/auth/accounts         -- list connected accounts
 //! - PATCH  /api/v1/auth/accounts/:id     -- update account settings
@@ -32,6 +34,8 @@ pub fn routes() -> Router<AppState> {
             "/outlook/connect",
             post(connect_outlook).get(connect_outlook),
         )
+        .route("/imap/test", post(test_imap_connection))
+        .route("/imap/connect", post(connect_imap))
         .route("/callback", get(oauth_callback))
         .route("/accounts", get(list_accounts))
         .route(
@@ -94,6 +98,41 @@ pub struct UpdateAccountRequest {
 pub struct DangerZoneResponse {
     pub messages_processed: u64,
     pub labels_deleted: u64,
+}
+
+/// Request body for the IMAP test/connect endpoints (matches the frontend
+/// `ImapConfig` shape in `frontend/packages/types/src/auth.ts`).
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImapConnectRequest {
+    pub email: String,
+    pub password: String,
+    pub imap_server: String,
+    pub imap_port: u16,
+    pub smtp_server: String,
+    pub smtp_port: u16,
+    /// "ssl" | "tls" | "none". Only "ssl" (implicit TLS) is currently supported
+    /// by the IMAP provider.
+    pub encryption: String,
+}
+
+/// Build an `ImapConfig` from a connect request.
+///
+/// `encryption == "ssl"` maps to implicit TLS (`use_tls = true`), the only mode
+/// `ImapProvider::connect` currently implements; "tls" (STARTTLS) and "none"
+/// map to `false`.
+fn imap_config_from_request(req: &ImapConnectRequest) -> crate::email::imap::ImapConfig {
+    crate::email::imap::ImapConfig {
+        host: req.imap_server.clone(),
+        port: req.imap_port,
+        use_tls: req.encryption == "ssl",
+        username: req.email.clone(),
+        password: req.password.clone(),
+        mailbox: "INBOX".to_string(),
+        archive_folder: "Archive".to_string(),
+        smtp_host: Some(req.smtp_server.clone()),
+        smtp_port: req.smtp_port,
+    }
 }
 
 // --- Helpers ---
@@ -187,6 +226,98 @@ async fn connect_outlook(State(state): State<AppState>) -> Result<Redirect, (Sta
     let (auth_url, _csrf_state) = state.oauth_manager.authorization_url(&config, "outlook");
 
     Ok(Redirect::temporary(&auth_url))
+}
+
+/// POST /api/v1/auth/imap/test
+///
+/// Validates IMAP credentials by performing a real TLS login + logout against
+/// the server. Does not persist anything. Returns 200 on success, or 400 with
+/// the provider error message on failure.
+async fn test_imap_connection(
+    State(_state): State<AppState>,
+    Json(req): Json<ImapConnectRequest>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    let config = imap_config_from_request(&req);
+    let provider = crate::email::imap::ImapProvider::new(config);
+    provider
+        .authenticate("")
+        .await
+        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    Ok(StatusCode::OK)
+}
+
+/// POST /api/v1/auth/imap/connect
+///
+/// Validates IMAP credentials, then persists the account (with the app password
+/// encrypted at rest) and returns the connected account. This is the no-OAuth
+/// "app password" path — works for providers that still accept IMAP basic auth
+/// (personal Gmail, Yahoo, iCloud, Fastmail, Zoho). Outlook.com and Google
+/// Workspace require the OAuth flow instead.
+async fn connect_imap(
+    State(state): State<AppState>,
+    Json(req): Json<ImapConnectRequest>,
+) -> Result<Json<AccountResponse>, (StatusCode, String)> {
+    let config = imap_config_from_request(&req);
+
+    // 1. Validate credentials before persisting.
+    let provider = crate::email::imap::ImapProvider::new(config);
+    provider
+        .authenticate("")
+        .await
+        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+
+    // 2. Reuse the existing account ID if re-connecting the same email.
+    let account_id = state
+        .oauth_manager
+        .find_account_id_by_email(&req.email)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
+
+    // 3. Persist the account with the app password encrypted at rest.
+    state
+        .oauth_manager
+        .save_imap_account(
+            &account_id,
+            &req.email,
+            &req.password,
+            &req.imap_server,
+            req.imap_port,
+            req.encryption == "ssl",
+            &req.smtp_server,
+            req.smtp_port,
+        )
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    tracing::info!("Account connected: {} (imap) as {}", req.email, account_id);
+
+    // 4. Publish AccountConnected domain event.
+    state
+        .event_bus
+        .emit(
+            &account_id,
+            crate::events::DomainEvent::AccountConnected {
+                account_id: account_id.clone(),
+                provider: ProviderKind::Imap.as_str().to_string(),
+                email_address: req.email.clone(),
+            },
+        )
+        .await;
+
+    Ok(Json(AccountResponse {
+        id: account_id,
+        provider: ProviderKind::Imap.as_str().to_string(),
+        email_address: req.email,
+        is_active: true,
+        status: "connected".to_string(),
+        email_count: 0,
+        last_sync_at: None,
+        archive_strategy: "delayed".to_string(),
+        label_prefix: "EM/".to_string(),
+        sync_depth: "30d".to_string(),
+        sync_frequency: 5,
+    }))
 }
 
 /// GET /api/v1/auth/callback
@@ -669,4 +800,65 @@ async fn unarchive_handler(
         messages_processed,
         labels_deleted: 0,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn imap_request_deserializes_from_frontend_camel_case() {
+        let json = r#"{
+            "email": "user@gmail.com",
+            "password": "app-pw-1234",
+            "imapServer": "imap.gmail.com",
+            "imapPort": 993,
+            "smtpServer": "smtp.gmail.com",
+            "smtpPort": 465,
+            "encryption": "ssl"
+        }"#;
+        let req: ImapConnectRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.email, "user@gmail.com");
+        assert_eq!(req.imap_server, "imap.gmail.com");
+        assert_eq!(req.imap_port, 993);
+        assert_eq!(req.smtp_server, "smtp.gmail.com");
+        assert_eq!(req.smtp_port, 465);
+        assert_eq!(req.encryption, "ssl");
+    }
+
+    #[test]
+    fn imap_config_maps_ssl_to_implicit_tls() {
+        let req = ImapConnectRequest {
+            email: "user@gmail.com".to_string(),
+            password: "pw".to_string(),
+            imap_server: "imap.gmail.com".to_string(),
+            imap_port: 993,
+            smtp_server: "smtp.gmail.com".to_string(),
+            smtp_port: 465,
+            encryption: "ssl".to_string(),
+        };
+        let cfg = imap_config_from_request(&req);
+        assert!(cfg.use_tls);
+        assert_eq!(cfg.host, "imap.gmail.com");
+        assert_eq!(cfg.username, "user@gmail.com");
+        assert_eq!(cfg.smtp_host.as_deref(), Some("smtp.gmail.com"));
+        assert_eq!(cfg.mailbox, "INBOX");
+    }
+
+    #[test]
+    fn imap_config_maps_starttls_and_none_to_no_implicit_tls() {
+        for enc in ["tls", "none"] {
+            let req = ImapConnectRequest {
+                email: "u@example.com".to_string(),
+                password: "pw".to_string(),
+                imap_server: "imap.example.com".to_string(),
+                imap_port: 143,
+                smtp_server: "smtp.example.com".to_string(),
+                smtp_port: 587,
+                encryption: enc.to_string(),
+            };
+            let cfg = imap_config_from_request(&req);
+            assert!(!cfg.use_tls, "encryption={enc} should not be implicit TLS");
+        }
+    }
 }

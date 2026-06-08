@@ -44,6 +44,18 @@ type SyncStateRow = (
     String,
 );
 
+/// Row tuple for the IMAP config query: (imap_host, imap_port, imap_use_tls,
+/// smtp_host, smtp_port, encrypted_access_token, email_address).
+type ImapConfigRow = (
+    Option<String>,
+    Option<i64>,
+    Option<i64>,
+    Option<String>,
+    Option<i64>,
+    Option<Vec<u8>>,
+    String,
+);
+
 /// Errors specific to the OAuth subsystem.
 #[derive(Debug, thiserror::Error)]
 pub enum OAuthError {
@@ -281,6 +293,103 @@ impl OAuthManager {
             .await?;
 
         Ok(())
+    }
+
+    /// Persist an IMAP-connected account.
+    ///
+    /// IMAP uses basic auth (app password) rather than OAuth tokens, so the
+    /// password is encrypted into `encrypted_access_token` (reusing the OAuth
+    /// token column) and the connection details are stored in the IMAP columns.
+    /// `encrypted_refresh_token` / `token_expires_at` are left NULL.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn save_imap_account(
+        &self,
+        id: &str,
+        email: &str,
+        password: &str,
+        imap_host: &str,
+        imap_port: u16,
+        imap_use_tls: bool,
+        smtp_host: &str,
+        smtp_port: u16,
+    ) -> Result<(), OAuthError> {
+        let enc_password = self.encrypt_token(password)?;
+
+        sqlx::query(
+            "INSERT INTO connected_accounts \
+             (id, provider, email_address, encrypted_access_token, status, \
+              imap_host, imap_port, imap_use_tls, smtp_host, smtp_port) \
+             VALUES (?1, 'imap', ?2, ?3, 'connected', ?4, ?5, ?6, ?7, ?8) \
+             ON CONFLICT(email_address) DO UPDATE SET \
+                provider = 'imap', \
+                encrypted_access_token = ?3, \
+                encrypted_refresh_token = NULL, \
+                token_expires_at = NULL, \
+                status = 'connected', \
+                imap_host = ?4, \
+                imap_port = ?5, \
+                imap_use_tls = ?6, \
+                smtp_host = ?7, \
+                smtp_port = ?8, \
+                updated_at = datetime('now')",
+        )
+        .bind(id)
+        .bind(email)
+        .bind(&enc_password)
+        .bind(imap_host)
+        .bind(imap_port)
+        .bind(imap_use_tls)
+        .bind(smtp_host)
+        .bind(smtp_port)
+        .execute(&self.pool)
+        .await?;
+
+        // Ensure sync_state row exists.
+        sqlx::query("INSERT OR IGNORE INTO sync_state (account_id) VALUES (?1)")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+
+        Ok(())
+    }
+
+    /// Load the stored IMAP connection config for an account, decrypting the
+    /// app password. Returns a `ValidationError` if the account is not an IMAP
+    /// account (i.e., `imap_host` is NULL).
+    pub async fn load_imap_config(
+        &self,
+        account_id: &str,
+    ) -> Result<super::imap::ImapConfig, OAuthError> {
+        let row: ImapConfigRow = sqlx::query_as(
+            "SELECT imap_host, imap_port, imap_use_tls, smtp_host, smtp_port, \
+                 encrypted_access_token, email_address \
+             FROM connected_accounts WHERE id = ?1",
+        )
+        .bind(account_id)
+        .fetch_optional(&self.pool)
+        .await?
+        .ok_or_else(|| OAuthError::AccountNotFound(account_id.to_string()))?;
+
+        let host = row.0.ok_or_else(|| {
+            OAuthError::ValidationError(format!("Account {account_id} is not an IMAP account"))
+        })?;
+        let enc_password = row.5.ok_or_else(|| {
+            OAuthError::ValidationError(format!("IMAP account {account_id} has no stored password"))
+        })?;
+        let password = self.decrypt_token(&enc_password)?;
+        let email_address = row.6;
+
+        Ok(super::imap::ImapConfig {
+            host,
+            port: row.1.unwrap_or(993) as u16,
+            use_tls: row.2.unwrap_or(1) != 0,
+            username: email_address,
+            password,
+            mailbox: "INBOX".to_string(),
+            archive_folder: "Archive".to_string(),
+            smtp_host: row.3,
+            smtp_port: row.4.unwrap_or(587) as u16,
+        })
     }
 
     /// Update tokens for an existing account (e.g., after refresh).
@@ -690,6 +799,72 @@ mod tests {
         // Encrypting the same token twice should produce different ciphertexts.
         let encrypted2 = mgr.encrypt_token(token).unwrap();
         assert_ne!(encrypted, encrypted2);
+    }
+
+    #[tokio::test]
+    async fn test_save_and_load_imap_account_roundtrip() {
+        // Single-connection in-memory pool so the schema persists across queries.
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        // Apply migrations as raw multi-statement scripts.
+        sqlx::raw_sql(include_str!("../../migrations/004_accounts.sql"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::raw_sql(
+            "ALTER TABLE connected_accounts ADD COLUMN sync_depth TEXT NOT NULL DEFAULT '30d';",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::raw_sql(include_str!("../../migrations/028_imap_accounts.sql"))
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let key = crate::vectors::encryption::derive_key("test-password", TOKEN_KEY_SALT).unwrap();
+        let mgr = OAuthManager {
+            pool,
+            encryption_key: Some(key),
+            http: reqwest::Client::new(),
+        };
+
+        mgr.save_imap_account(
+            "imap-acct-1",
+            "user@gmail.com",
+            "app-password-1234",
+            "imap.gmail.com",
+            993,
+            true,
+            "smtp.gmail.com",
+            465,
+        )
+        .await
+        .unwrap();
+
+        // Account is findable by email.
+        let found = mgr
+            .find_account_id_by_email("user@gmail.com")
+            .await
+            .unwrap();
+        assert_eq!(found.as_deref(), Some("imap-acct-1"));
+
+        // Loaded config matches and the password decrypts.
+        let cfg = mgr.load_imap_config("imap-acct-1").await.unwrap();
+        assert_eq!(cfg.host, "imap.gmail.com");
+        assert_eq!(cfg.port, 993);
+        assert!(cfg.use_tls);
+        assert_eq!(cfg.username, "user@gmail.com");
+        assert_eq!(cfg.password, "app-password-1234");
+        assert_eq!(cfg.smtp_host.as_deref(), Some("smtp.gmail.com"));
+        assert_eq!(cfg.smtp_port, 465);
+
+        // Loading a non-IMAP / missing account errors cleanly.
+        let err = mgr.load_imap_config("does-not-exist").await;
+        assert!(matches!(err, Err(OAuthError::AccountNotFound(_))));
     }
 
     #[tokio::test]

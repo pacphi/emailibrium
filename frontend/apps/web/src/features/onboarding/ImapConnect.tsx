@@ -149,6 +149,27 @@ export function ImapConnect({ onBack, onConnected }: ImapConnectProps) {
         </p>
       </div>
 
+      {/* App-password guidance */}
+      <div className="rounded-lg bg-blue-50 border border-blue-200 px-3 py-2 text-xs text-blue-800 dark:bg-blue-900/20 dark:border-blue-800 dark:text-blue-300">
+        <p>
+          Most providers require an <strong>app password</strong> (not your normal password). For
+          Gmail, enable 2-Step Verification, then generate one at{' '}
+          <a
+            href="https://myaccount.google.com/apppasswords"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline hover:no-underline"
+          >
+            myaccount.google.com/apppasswords
+          </a>
+          .
+        </p>
+        <p className="mt-1">
+          <strong>Outlook.com and Google Workspace</strong> no longer allow IMAP passwords — go back
+          and use the <strong>OAuth</strong> option instead.
+        </p>
+      </div>
+
       {/* Preset selector */}
       <div>
         <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
