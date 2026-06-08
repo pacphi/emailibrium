@@ -389,6 +389,7 @@ impl OAuthManager {
             archive_folder: "Archive".to_string(),
             smtp_host: row.3,
             smtp_port: row.4.unwrap_or(587) as u16,
+            pinned_addr: None,
         })
     }
 

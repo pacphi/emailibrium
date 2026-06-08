@@ -41,6 +41,13 @@ pub struct ImapConfig {
     /// SMTP server port (587 for STARTTLS, 465 for TLS).
     #[serde(default = "default_smtp_port")]
     pub smtp_port: u16,
+    /// Pre-resolved, SSRF-validated socket address to connect to. When set,
+    /// the TCP connection targets this exact IP (TLS still uses `host` for
+    /// SNI/cert validation), preventing a DNS-rebinding TOCTOU between the
+    /// SSRF check and the connect. Not serialized/persisted — populated at
+    /// request/sync time after the guard runs.
+    #[serde(skip)]
+    pub pinned_addr: Option<std::net::SocketAddr>,
 }
 
 fn default_mailbox() -> String {
@@ -97,14 +104,19 @@ impl ImapProvider {
 
     /// Establish a TLS connection, read the greeting, and log in.
     async fn connect(&self) -> Result<ImapSession, ProviderError> {
-        let tcp = tokio::net::TcpStream::connect((&*self.config.host, self.config.port))
-            .await
-            .map_err(|e| {
-                ProviderError::RequestFailed(format!(
-                    "TCP connect to {}:{} failed: {e}",
-                    self.config.host, self.config.port
-                ))
-            })?;
+        // Connect to the pre-resolved, SSRF-validated address when available
+        // (avoids a DNS-rebinding TOCTOU vs. the guard); otherwise resolve the
+        // hostname normally. TLS always uses `host` for SNI/cert validation.
+        let tcp = match self.config.pinned_addr {
+            Some(addr) => tokio::net::TcpStream::connect(addr).await,
+            None => tokio::net::TcpStream::connect((&*self.config.host, self.config.port)).await,
+        }
+        .map_err(|e| {
+            ProviderError::RequestFailed(format!(
+                "TCP connect to {}:{} failed: {e}",
+                self.config.host, self.config.port
+            ))
+        })?;
 
         let tls = async_native_tls::TlsConnector::new();
         let tls_stream = tls.connect(&self.config.host, tcp).await.map_err(|e| {
@@ -911,6 +923,7 @@ mod tests {
             archive_folder: "Archive".to_string(),
             smtp_host: None,
             smtp_port: default_smtp_port(),
+            pinned_addr: None,
         }
     }
 
@@ -926,6 +939,7 @@ mod tests {
             archive_folder: default_archive_folder(),
             smtp_host: None,
             smtp_port: default_smtp_port(),
+            pinned_addr: None,
         };
         assert_eq!(config.mailbox, "INBOX");
         assert_eq!(config.archive_folder, "Archive");
@@ -943,6 +957,7 @@ mod tests {
             archive_folder: "Archive".to_string(),
             smtp_host: None,
             smtp_port: default_smtp_port(),
+            pinned_addr: None,
         };
         let provider = ImapProvider::new(config);
         let result = provider.validate_config();

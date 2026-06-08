@@ -132,6 +132,7 @@ fn imap_config_from_request(req: &ImapConnectRequest) -> crate::email::imap::Ima
         archive_folder: "Archive".to_string(),
         smtp_host: Some(req.smtp_server.clone()),
         smtp_port: req.smtp_port,
+        pinned_addr: None,
     }
 }
 
@@ -228,21 +229,54 @@ async fn connect_outlook(State(state): State<AppState>) -> Result<Redirect, (Sta
     Ok(Redirect::temporary(&auth_url))
 }
 
+/// Validate a request's IMAP/SMTP hosts against SSRF abuse, then verify the
+/// credentials by performing a real TLS login + logout. Errors are mapped to
+/// generic client messages with the real cause logged server-side, so the
+/// endpoint can't be used to probe the internal network or enumerate hosts.
+async fn validate_imap_request(req: &ImapConnectRequest) -> Result<(), (StatusCode, String)> {
+    use crate::api::provider_helpers::{guard_mail_host, ALLOWED_IMAP_PORTS, ALLOWED_SMTP_PORTS};
+
+    // The IMAP provider only implements implicit TLS today. Reject STARTTLS /
+    // plaintext up front with a clear message rather than silently attempting
+    // an implicit-TLS handshake that would fail with a confusing error.
+    if req.encryption != "ssl" {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Only SSL (implicit TLS, typically port 993) is currently supported. \
+             Select SSL and use your provider's TLS port."
+                .to_string(),
+        ));
+    }
+
+    // SSRF guard both hosts; pin the validated IMAP address into the config so
+    // the auth connection targets the exact IP we checked (no rebinding gap).
+    let imap_addr = guard_mail_host(&req.imap_server, req.imap_port, ALLOWED_IMAP_PORTS).await?;
+    guard_mail_host(&req.smtp_server, req.smtp_port, ALLOWED_SMTP_PORTS).await?;
+
+    let mut config = imap_config_from_request(req);
+    config.pinned_addr = Some(imap_addr);
+    let provider = crate::email::imap::ImapProvider::new(config);
+    provider.authenticate("").await.map_err(|e| {
+        tracing::info!(host = %req.imap_server, error = %e, "IMAP credential validation failed");
+        (
+            StatusCode::BAD_REQUEST,
+            "Could not authenticate to the IMAP server. Check the address, port, \
+             email, and app password."
+                .to_string(),
+        )
+    })?;
+    Ok(())
+}
+
 /// POST /api/v1/auth/imap/test
 ///
 /// Validates IMAP credentials by performing a real TLS login + logout against
-/// the server. Does not persist anything. Returns 200 on success, or 400 with
-/// the provider error message on failure.
+/// the server (after an SSRF safety check). Does not persist anything.
 async fn test_imap_connection(
     State(_state): State<AppState>,
     Json(req): Json<ImapConnectRequest>,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    let config = imap_config_from_request(&req);
-    let provider = crate::email::imap::ImapProvider::new(config);
-    provider
-        .authenticate("")
-        .await
-        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    validate_imap_request(&req).await?;
     Ok(StatusCode::OK)
 }
 
@@ -257,21 +291,21 @@ async fn connect_imap(
     State(state): State<AppState>,
     Json(req): Json<ImapConnectRequest>,
 ) -> Result<Json<AccountResponse>, (StatusCode, String)> {
-    let config = imap_config_from_request(&req);
-
-    // 1. Validate credentials before persisting.
-    let provider = crate::email::imap::ImapProvider::new(config);
-    provider
-        .authenticate("")
-        .await
-        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    // 1. SSRF check + validate credentials before persisting.
+    validate_imap_request(&req).await?;
 
     // 2. Reuse the existing account ID if re-connecting the same email.
     let account_id = state
         .oauth_manager
         .find_account_id_by_email(&req.email)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map_err(|e| {
+            tracing::error!(error = %e, "find_account_id_by_email failed");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to connect account".to_string(),
+            )
+        })?
         .unwrap_or_else(|| Uuid::new_v4().to_string());
 
     // 3. Persist the account with the app password encrypted at rest.
@@ -288,7 +322,13 @@ async fn connect_imap(
             req.smtp_port,
         )
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(|e| {
+            tracing::error!(error = %e, "save_imap_account failed");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to connect account".to_string(),
+            )
+        })?;
 
     tracing::info!("Account connected: {} (imap) as {}", req.email, account_id);
 

@@ -148,6 +148,7 @@ async fn imap_authenticate_validates_config() {
         archive_folder: "Archive".into(),
         smtp_host: None,
         smtp_port: 587,
+        pinned_addr: None,
     };
     let provider = ImapProvider::new(config);
     let tokens = provider.authenticate("").await.unwrap();
@@ -167,6 +168,7 @@ async fn imap_authenticate_rejects_empty_host() {
         archive_folder: "Archive".into(),
         smtp_host: None,
         smtp_port: 587,
+        pinned_addr: None,
     };
     let provider = ImapProvider::new(config);
     let result = provider.authenticate("").await;
@@ -186,6 +188,7 @@ async fn imap_list_messages_returns_empty() {
         archive_folder: "Archive".into(),
         smtp_host: None,
         smtp_port: 587,
+        pinned_addr: None,
     };
     let provider = ImapProvider::new(config);
     let params = ListParams {
@@ -216,6 +219,7 @@ async fn imap_create_label_returns_folder_name() {
         archive_folder: "Archive".into(),
         smtp_host: None,
         smtp_port: 587,
+        pinned_addr: None,
     };
     let provider = ImapProvider::new(config);
     let id = provider.create_label("token", "MyFolder").await.unwrap();
