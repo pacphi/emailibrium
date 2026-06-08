@@ -26,6 +26,35 @@ impl Database {
 }
 
 // ---------------------------------------------------------------------------
+// Dynamic SQL safety (sqlx 0.9 `SqlSafeStr`)
+// ---------------------------------------------------------------------------
+
+/// Mark a runtime-built SQL string as safe for sqlx 0.9's [`SqlSafeStr`] guard.
+///
+/// sqlx 0.9 only implements `SqlSafeStr` for `&'static str`. Any query whose
+/// text is assembled at runtime — dynamic `IN (?, ?, …)` placeholder lists,
+/// optional `WHERE` fragments, retention-window `DELETE`s, etc. — must be
+/// explicitly asserted safe via [`sqlx::AssertSqlSafe`].
+///
+/// This function is the crate's single audited choke point for that assertion,
+/// so the invariant is documented and reviewed in one place instead of being
+/// repeated at every call site. Every caller composes SQL the same vetted way:
+/// the query *structure* is built only from string literals and bind-parameter
+/// markers (`?` / `?N`) — never from caller- or user-supplied values, which are
+/// always passed through `.bind(...)`. Bare integer literals that appear inline
+/// (e.g. `bool as i32`, config-derived retention day counts) are never user
+/// input.
+///
+/// Do **not** route a string through here that interpolates untrusted data;
+/// doing so reintroduces the SQL-injection risk the guard exists to prevent.
+///
+/// [`SqlSafeStr`]: sqlx::SqlSafeStr
+#[inline]
+pub fn audited_sql(sql: &str) -> sqlx::AssertSqlSafe<String> {
+    sqlx::AssertSqlSafe(sql.to_owned())
+}
+
+// ---------------------------------------------------------------------------
 // Email state update helper (Phase 4: delta sync state mapping)
 // ---------------------------------------------------------------------------
 

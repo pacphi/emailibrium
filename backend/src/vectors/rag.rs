@@ -340,7 +340,9 @@ impl RagPipeline {
             placeholders.join(", ")
         );
 
-        let mut query = sqlx::query_as::<_, EmailRow>(&sql);
+        // Dynamic SQL: only the `?N` placeholder list is built at runtime; all
+        // values are bound below. See `crate::db::audited_sql`.
+        let mut query = sqlx::query_as::<_, EmailRow>(crate::db::audited_sql(&sql));
         for id in ids {
             query = query.bind(id);
         }

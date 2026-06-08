@@ -355,7 +355,7 @@ impl CleanupPlanRepository for SqliteCleanupPlanRepo {
         }
         sql.push_str(" ORDER BY seq ASC LIMIT ?");
 
-        let mut q = sqlx::query(&sql)
+        let mut q = sqlx::query(crate::db::audited_sql(&sql))
             .bind(id.as_bytes().to_vec())
             .bind(cursor_i);
         if let Some(ref a) = filter.account_id {
@@ -642,7 +642,10 @@ mod tests {
         for stmt in cleaned.split(';') {
             let s = stmt.trim();
             if !s.is_empty() {
-                sqlx::query(s).execute(&pool).await.expect("migrate");
+                sqlx::query(crate::db::audited_sql(s))
+                    .execute(&pool)
+                    .await
+                    .expect("migrate");
             }
         }
         pool

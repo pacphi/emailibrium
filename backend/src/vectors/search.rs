@@ -905,7 +905,9 @@ impl HybridSearch {
         );
         let limit_i64 = limit as i64;
 
-        let mut q = sqlx::query_as::<_, (String,)>(&sql);
+        // Dynamic SQL: static column names + `?N` placeholders only; all
+        // keyword/limit values are bound below. See `crate::db::audited_sql`.
+        let mut q = sqlx::query_as::<_, (String,)>(crate::db::audited_sql(&sql));
         for val in &bind_values {
             q = q.bind(val.as_str());
         }
@@ -1040,7 +1042,10 @@ impl HybridSearch {
         let sql = format!("SELECT id FROM emails WHERE {}", conditions.join(" AND "));
 
         // Use raw query with dynamic bindings.
-        let mut query = sqlx::query_scalar::<_, String>(&sql);
+        // Dynamic SQL: static column names, `?` placeholders, and bool-as-int
+        // literals (0/1) only; all string values are bound below. See
+        // `crate::db::audited_sql`.
+        let mut query = sqlx::query_scalar::<_, String>(crate::db::audited_sql(&sql));
 
         // Bind the email IDs.
         for id in ids {
