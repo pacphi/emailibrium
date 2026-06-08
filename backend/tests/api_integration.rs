@@ -165,7 +165,7 @@ async fn list_emails(
     };
 
     let count_sql = format!("SELECT COUNT(*) FROM emails {where_clause}");
-    let mut count_q = sqlx::query_scalar::<_, i64>(&count_sql);
+    let mut count_q = sqlx::query_scalar::<_, i64>(emailibrium::db::audited_sql(&count_sql));
     if let Some(ref v) = params.account_id {
         count_q = count_q.bind(v);
     }
@@ -180,7 +180,7 @@ async fn list_emails(
     let select_sql = format!(
         "SELECT {EMAIL_COLUMNS} FROM emails {where_clause} ORDER BY received_at DESC LIMIT ? OFFSET ?"
     );
-    let mut query = sqlx::query(&select_sql);
+    let mut query = sqlx::query(emailibrium::db::audited_sql(&select_sql));
     if let Some(ref v) = params.account_id {
         query = query.bind(v);
     }
@@ -203,7 +203,7 @@ async fn get_email(
     Path(id): Path<String>,
 ) -> Result<Json<EmailResponse>, (StatusCode, String)> {
     let sql = format!("SELECT {EMAIL_COLUMNS} FROM emails WHERE id = ?1");
-    let row = sqlx::query(&sql)
+    let row = sqlx::query(emailibrium::db::audited_sql(&sql))
         .bind(&id)
         .fetch_optional(&state.pool)
         .await
@@ -504,7 +504,7 @@ async fn setup_test_db() -> SqlitePool {
     ];
 
     for sql in migrations {
-        sqlx::raw_sql(sql)
+        sqlx::raw_sql(emailibrium::db::audited_sql(sql))
             .execute(&pool)
             .await
             .unwrap_or_else(|e| panic!("Migration failed: {e}\nSQL:\n{sql}"));

@@ -191,7 +191,7 @@ async fn list_emails(
 
     // Count total.
     let count_sql = format!("SELECT COUNT(*) FROM emails {where_clause}");
-    let mut count_q = sqlx::query_scalar::<_, i64>(&count_sql);
+    let mut count_q = sqlx::query_scalar::<_, i64>(crate::db::audited_sql(&count_sql));
     if let Some(ref v) = params.account_id {
         count_q = count_q.bind(v);
     }
@@ -220,7 +220,7 @@ async fn list_emails(
     let select_sql = format!(
         "SELECT {EMAIL_COLUMNS} FROM emails {where_clause} ORDER BY received_at DESC LIMIT ? OFFSET ?"
     );
-    let mut query = sqlx::query(&select_sql);
+    let mut query = sqlx::query(crate::db::audited_sql(&select_sql));
     if let Some(ref v) = params.account_id {
         query = query.bind(v);
     }
@@ -258,7 +258,7 @@ async fn get_email(
     Path(id): Path<String>,
 ) -> Result<Json<EmailResponse>, (StatusCode, String)> {
     let sql = format!("SELECT {EMAIL_COLUMNS} FROM emails WHERE id = ?1");
-    let row = sqlx::query(&sql)
+    let row = sqlx::query(crate::db::audited_sql(&sql))
         .bind(&id)
         .fetch_optional(&state.db.pool)
         .await
@@ -287,7 +287,7 @@ async fn get_thread(
 ) -> Result<Json<ThreadResponse>, (StatusCode, String)> {
     let sql =
         format!("SELECT {EMAIL_COLUMNS} FROM emails WHERE thread_id = ?1 ORDER BY received_at ASC");
-    let rows = sqlx::query(&sql)
+    let rows = sqlx::query(crate::db::audited_sql(&sql))
         .bind(&thread_id)
         .fetch_all(&state.db.pool)
         .await
@@ -296,7 +296,7 @@ async fn get_thread(
     if rows.is_empty() {
         // Fall back: try treating thread_id as a message ID (single-message thread).
         let single_sql = format!("SELECT {EMAIL_COLUMNS} FROM emails WHERE id = ?1");
-        let single = sqlx::query(&single_sql)
+        let single = sqlx::query(crate::db::audited_sql(&single_sql))
             .bind(&thread_id)
             .fetch_optional(&state.db.pool)
             .await
@@ -703,12 +703,14 @@ async fn empty_trash(
 
     // Hard delete all trashed emails.
     let result = if let Some(account_id) = &params.account_id {
-        sqlx::query(&sql)
+        sqlx::query(crate::db::audited_sql(&sql))
             .bind(account_id)
             .execute(&state.db.pool)
             .await
     } else {
-        sqlx::query(&sql).execute(&state.db.pool).await
+        sqlx::query(crate::db::audited_sql(&sql))
+            .execute(&state.db.pool)
+            .await
     };
 
     let rows = result.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;

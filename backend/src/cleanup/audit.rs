@@ -436,7 +436,10 @@ mod tests {
             for stmt in cleaned.split(';') {
                 let s = stmt.trim();
                 if !s.is_empty() {
-                    sqlx::query(s).execute(&pool).await.expect("migrate");
+                    sqlx::query(crate::db::audited_sql(s))
+                        .execute(&pool)
+                        .await
+                        .expect("migrate");
                 }
             }
         }

@@ -294,7 +294,7 @@ impl EmailibriumMcpServer {
             binds.push(before.clone());
         }
 
-        let mut query = sqlx::query_scalar::<_, i64>(&sql);
+        let mut query = sqlx::query_scalar::<_, i64>(crate::db::audited_sql(&sql));
         for b in &binds {
             query = query.bind(b);
         }

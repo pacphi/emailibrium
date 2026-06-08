@@ -614,7 +614,7 @@ async fn main() -> anyhow::Result<()> {
                         "DELETE FROM emails WHERE is_trash = 1 AND deleted_at < datetime('now', '-{} days')",
                         trash_days
                     );
-                    match sqlx::query(&sql).execute(&db.pool).await {
+                    match sqlx::query(db::audited_sql(&sql)).execute(&db.pool).await {
                         Ok(result) if result.rows_affected() > 0 => {
                             tracing::info!(
                                 purged = result.rows_affected(),
@@ -633,7 +633,7 @@ async fn main() -> anyhow::Result<()> {
                         "DELETE FROM emails WHERE is_spam = 1 AND deleted_at < datetime('now', '-{} days')",
                         spam_days
                     );
-                    match sqlx::query(&sql).execute(&db.pool).await {
+                    match sqlx::query(db::audited_sql(&sql)).execute(&db.pool).await {
                         Ok(result) if result.rows_affected() > 0 => {
                             tracing::info!(
                                 purged = result.rows_affected(),

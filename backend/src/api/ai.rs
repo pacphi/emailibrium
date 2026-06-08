@@ -1403,7 +1403,7 @@ fn build_tool_executor(state: &AppState) -> crate::vectors::chat_orchestrator::T
                         binds.push(before.to_string());
                     }
 
-                    let mut query = sqlx::query_scalar::<_, i64>(&sql);
+                    let mut query = sqlx::query_scalar::<_, i64>(crate::db::audited_sql(&sql));
                     for b in &binds {
                         query = query.bind(b);
                     }

@@ -115,7 +115,9 @@ async fn list_clusters(
                 "SELECT id, subject, from_addr, from_name FROM emails WHERE id IN ({})",
                 placeholders.join(", ")
             );
-            let mut query = sqlx::query_as::<_, (String, String, String, Option<String>)>(&sql);
+            let mut query = sqlx::query_as::<_, (String, String, String, Option<String>)>(
+                crate::db::audited_sql(&sql),
+            );
             for id in &all_rep_ids {
                 query = query.bind(id);
             }
