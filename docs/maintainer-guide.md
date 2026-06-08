@@ -82,7 +82,7 @@ emailibrium/
 | ------- | ------- | ----------------------------------------------- |
 | Rust    | 1.96+   | Backend compilation                             |
 | Node.js | 26+     | Frontend toolchain                              |
-| pnpm    | 10.32+  | Frontend package management                     |
+| pnpm    | 11.5+   | Frontend package management                     |
 | Docker  | 24+     | Containerized deployment                        |
 | SQLite  | 3.35+   | Database (usually pre-installed on macOS/Linux) |
 

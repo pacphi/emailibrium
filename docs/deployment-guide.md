@@ -6,7 +6,7 @@
 | ---------------- | ------- | ----------------------------------------------------- |
 | Rust             | 1.96+   | `rustup default stable`                               |
 | Node.js          | 26+     | [nodejs.org](https://nodejs.org/) or `nvm install 26` |
-| pnpm             | 10.32+  | `corepack enable` (ships with Node.js 26+)            |
+| pnpm             | 11.5+   | `corepack enable` (ships with Node.js 26+)            |
 | Docker + Compose | Latest  | [docker.com](https://www.docker.com/) (optional)      |
 | Make             | Any     | Pre-installed on macOS/Linux                          |
 
