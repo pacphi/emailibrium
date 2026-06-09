@@ -71,8 +71,10 @@ cloud project to create.
 
 ## Notes & caveats
 
-- **Encryption mode:** choose **SSL** (implicit TLS on port 993). STARTTLS and plaintext are not
-  yet supported by the IMAP provider.
+- **Encryption mode:** prefer **SSL** (implicit TLS, port 993) — it's the most secure and widely
+  supported. **STARTTLS** (port 143) is also supported for servers that require it; it fails closed
+  (never falls back to cleartext). **None** (plaintext) is intended only for trusted local relays
+  such as ProtonMail Bridge.
 - **Credentials at rest:** your app password is encrypted with AES-256-GCM before it is stored.
 - **Outlook.com / Workspace:** the IMAP form will not work for these — use the
   [OAuth Setup Guide](docs/oauth-setup-guide.md). For Gmail OAuth, _Testing mode_ lets you connect

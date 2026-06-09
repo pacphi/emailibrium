@@ -9,6 +9,6 @@
 -- (populated only for provider = 'imap').
 ALTER TABLE connected_accounts ADD COLUMN imap_host TEXT;
 ALTER TABLE connected_accounts ADD COLUMN imap_port INTEGER;
-ALTER TABLE connected_accounts ADD COLUMN imap_use_tls INTEGER; -- 0/1 boolean
+ALTER TABLE connected_accounts ADD COLUMN imap_encryption TEXT; -- 'ssl' | 'starttls' | 'plaintext'
 ALTER TABLE connected_accounts ADD COLUMN smtp_host TEXT;
 ALTER TABLE connected_accounts ADD COLUMN smtp_port INTEGER;

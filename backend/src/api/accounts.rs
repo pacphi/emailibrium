@@ -118,14 +118,13 @@ pub struct ImapConnectRequest {
 
 /// Build an `ImapConfig` from a connect request.
 ///
-/// `encryption == "ssl"` maps to implicit TLS (`use_tls = true`), the only mode
-/// `ImapProvider::connect` currently implements; "tls" (STARTTLS) and "none"
-/// map to `false`.
+/// Maps the frontend `encryption` string ("ssl" | "tls" | "none") to the
+/// transport mode: ssl = implicit TLS, tls = STARTTLS, none = plaintext.
 fn imap_config_from_request(req: &ImapConnectRequest) -> crate::email::imap::ImapConfig {
     crate::email::imap::ImapConfig {
         host: req.imap_server.clone(),
         port: req.imap_port,
-        use_tls: req.encryption == "ssl",
+        encryption: crate::email::imap::ImapEncryption::from_request_str(&req.encryption),
         username: req.email.clone(),
         password: req.password.clone(),
         mailbox: "INBOX".to_string(),
@@ -236,18 +235,6 @@ async fn connect_outlook(State(state): State<AppState>) -> Result<Redirect, (Sta
 async fn validate_imap_request(req: &ImapConnectRequest) -> Result<(), (StatusCode, String)> {
     use crate::api::provider_helpers::{guard_mail_host, ALLOWED_IMAP_PORTS, ALLOWED_SMTP_PORTS};
 
-    // The IMAP provider only implements implicit TLS today. Reject STARTTLS /
-    // plaintext up front with a clear message rather than silently attempting
-    // an implicit-TLS handshake that would fail with a confusing error.
-    if req.encryption != "ssl" {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            "Only SSL (implicit TLS, typically port 993) is currently supported. \
-             Select SSL and use your provider's TLS port."
-                .to_string(),
-        ));
-    }
-
     // SSRF guard both hosts; pin the validated IMAP address into the config so
     // the auth connection targets the exact IP we checked (no rebinding gap).
     let imap_addr = guard_mail_host(&req.imap_server, req.imap_port, ALLOWED_IMAP_PORTS).await?;
@@ -317,7 +304,7 @@ async fn connect_imap(
             &req.password,
             &req.imap_server,
             req.imap_port,
-            req.encryption == "ssl",
+            crate::email::imap::ImapEncryption::from_request_str(&req.encryption),
             &req.smtp_server,
             req.smtp_port,
         )
@@ -868,6 +855,7 @@ mod tests {
 
     #[test]
     fn imap_config_maps_ssl_to_implicit_tls() {
+        use crate::email::imap::ImapEncryption;
         let req = ImapConnectRequest {
             email: "user@gmail.com".to_string(),
             password: "pw".to_string(),
@@ -878,7 +866,7 @@ mod tests {
             encryption: "ssl".to_string(),
         };
         let cfg = imap_config_from_request(&req);
-        assert!(cfg.use_tls);
+        assert_eq!(cfg.encryption, ImapEncryption::Ssl);
         assert_eq!(cfg.host, "imap.gmail.com");
         assert_eq!(cfg.username, "user@gmail.com");
         assert_eq!(cfg.smtp_host.as_deref(), Some("smtp.gmail.com"));
@@ -886,8 +874,14 @@ mod tests {
     }
 
     #[test]
-    fn imap_config_maps_starttls_and_none_to_no_implicit_tls() {
-        for enc in ["tls", "none"] {
+    fn imap_config_maps_encryption_modes() {
+        use crate::email::imap::ImapEncryption;
+        let cases = [
+            ("ssl", ImapEncryption::Ssl),
+            ("tls", ImapEncryption::StartTls),
+            ("none", ImapEncryption::Plaintext),
+        ];
+        for (enc, expected) in cases {
             let req = ImapConnectRequest {
                 email: "u@example.com".to_string(),
                 password: "pw".to_string(),
@@ -898,7 +892,7 @@ mod tests {
                 encryption: enc.to_string(),
             };
             let cfg = imap_config_from_request(&req);
-            assert!(!cfg.use_tls, "encryption={enc} should not be implicit TLS");
+            assert_eq!(cfg.encryption, expected, "encryption={enc}");
         }
     }
 }

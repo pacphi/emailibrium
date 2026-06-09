@@ -44,12 +44,12 @@ type SyncStateRow = (
     String,
 );
 
-/// Row tuple for the IMAP config query: (imap_host, imap_port, imap_use_tls,
+/// Row tuple for the IMAP config query: (imap_host, imap_port, imap_encryption,
 /// smtp_host, smtp_port, encrypted_access_token, email_address).
 type ImapConfigRow = (
     Option<String>,
     Option<i64>,
-    Option<i64>,
+    Option<String>,
     Option<String>,
     Option<i64>,
     Option<Vec<u8>>,
@@ -309,7 +309,7 @@ impl OAuthManager {
         password: &str,
         imap_host: &str,
         imap_port: u16,
-        imap_use_tls: bool,
+        encryption: super::imap::ImapEncryption,
         smtp_host: &str,
         smtp_port: u16,
     ) -> Result<(), OAuthError> {
@@ -318,7 +318,7 @@ impl OAuthManager {
         sqlx::query(
             "INSERT INTO connected_accounts \
              (id, provider, email_address, encrypted_access_token, status, \
-              imap_host, imap_port, imap_use_tls, smtp_host, smtp_port) \
+              imap_host, imap_port, imap_encryption, smtp_host, smtp_port) \
              VALUES (?1, 'imap', ?2, ?3, 'connected', ?4, ?5, ?6, ?7, ?8) \
              ON CONFLICT(email_address) DO UPDATE SET \
                 provider = 'imap', \
@@ -328,7 +328,7 @@ impl OAuthManager {
                 status = 'connected', \
                 imap_host = ?4, \
                 imap_port = ?5, \
-                imap_use_tls = ?6, \
+                imap_encryption = ?6, \
                 smtp_host = ?7, \
                 smtp_port = ?8, \
                 updated_at = datetime('now')",
@@ -338,7 +338,7 @@ impl OAuthManager {
         .bind(&enc_password)
         .bind(imap_host)
         .bind(imap_port)
-        .bind(imap_use_tls)
+        .bind(encryption.as_str())
         .bind(smtp_host)
         .bind(smtp_port)
         .execute(&self.pool)
@@ -361,7 +361,7 @@ impl OAuthManager {
         account_id: &str,
     ) -> Result<super::imap::ImapConfig, OAuthError> {
         let row: ImapConfigRow = sqlx::query_as(
-            "SELECT imap_host, imap_port, imap_use_tls, smtp_host, smtp_port, \
+            "SELECT imap_host, imap_port, imap_encryption, smtp_host, smtp_port, \
                  encrypted_access_token, email_address \
              FROM connected_accounts WHERE id = ?1",
         )
@@ -378,11 +378,16 @@ impl OAuthManager {
         })?;
         let password = self.decrypt_token(&enc_password)?;
         let email_address = row.6;
+        let encryption = row
+            .2
+            .as_deref()
+            .map(super::imap::ImapEncryption::from_stored_str)
+            .unwrap_or(super::imap::ImapEncryption::Ssl);
 
         Ok(super::imap::ImapConfig {
             host,
             port: row.1.unwrap_or(993) as u16,
-            use_tls: row.2.unwrap_or(1) != 0,
+            encryption,
             username: email_address,
             password,
             mailbox: "INBOX".to_string(),
@@ -839,7 +844,7 @@ mod tests {
             "app-password-1234",
             "imap.gmail.com",
             993,
-            true,
+            crate::email::imap::ImapEncryption::StartTls,
             "smtp.gmail.com",
             465,
         )
@@ -857,7 +862,8 @@ mod tests {
         let cfg = mgr.load_imap_config("imap-acct-1").await.unwrap();
         assert_eq!(cfg.host, "imap.gmail.com");
         assert_eq!(cfg.port, 993);
-        assert!(cfg.use_tls);
+        // Encryption mode round-trips through the DB (StartTls -> "starttls").
+        assert_eq!(cfg.encryption, crate::email::imap::ImapEncryption::StartTls);
         assert_eq!(cfg.username, "user@gmail.com");
         assert_eq!(cfg.password, "app-password-1234");
         assert_eq!(cfg.smtp_host.as_deref(), Some("smtp.gmail.com"));
