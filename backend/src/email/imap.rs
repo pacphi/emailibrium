@@ -7,7 +7,6 @@ use async_trait::async_trait;
 use chrono::{TimeZone, Utc};
 use futures::TryStreamExt;
 use serde::{Deserialize, Serialize};
-use tokio::io::{AsyncRead, AsyncWrite};
 use tracing::debug;
 
 use super::provider::{EmailProvider, FolderOrLabel, MoveKind, ProviderError, SendDraft};
