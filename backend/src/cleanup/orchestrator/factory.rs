@@ -57,10 +57,10 @@ pub trait EmailProviderFactory: Send + Sync {
 // Production: OAuth-derived factory (Gmail / Outlook only).
 // ---------------------------------------------------------------------------
 //
-// IMAP/POP3 require user-supplied credentials (host/port/username/password)
-// that aren't reachable from the cleanup orchestrator today. Those return
-// `UnsupportedKind` and the worker maps the error to a `provider_error`
-// `OpFailed` event. Wiring IMAP/POP3 is a follow-up.
+// Gmail/Outlook use per-account OAuth access tokens. IMAP uses stored
+// credentials loaded via `OAuthManager::load_imap_config` (the access token is
+// unused — ImapProvider re-derives its session from the config). POP3 is not
+// yet implemented and returns `UnsupportedKind`.
 
 pub struct OAuthEmailProviderFactory {
     oauth_manager: Arc<OAuthManager>,
@@ -93,7 +93,14 @@ impl EmailProviderFactory for OAuthEmailProviderFactory {
             .find(|a| a.id == account_id)
             .ok_or_else(|| FactoryError::NotFound(account_id.to_string()))?;
 
-        let access_token = self.oauth_manager.get_access_token(account_id).await?;
+        // IMAP/POP3 use stored credentials, not OAuth tokens, so only fetch an
+        // access token for the OAuth providers.
+        let access_token = match account.provider {
+            ProviderKind::Gmail | ProviderKind::Outlook => {
+                self.oauth_manager.get_access_token(account_id).await?
+            }
+            _ => String::new(),
+        };
 
         // Cached provider instance lookup.
         {
@@ -122,7 +129,16 @@ impl EmailProviderFactory for OAuthEmailProviderFactory {
                     .ok_or_else(|| FactoryError::Config("Outlook OAuth not configured".into()))?;
                 Arc::new(crate::email::outlook::OutlookProvider::new(cfg))
             }
-            ProviderKind::Imap => return Err(FactoryError::UnsupportedKind("imap")),
+            ProviderKind::Imap => {
+                let mut cfg = self.oauth_manager.load_imap_config(account_id).await?;
+                // Re-validate the stored host against SSRF and pin the IP so the
+                // sync-time connection can't be rebound to an internal address.
+                let addr = crate::api::provider_helpers::guard_imap_addr(&cfg.host, cfg.port)
+                    .await
+                    .map_err(FactoryError::Config)?;
+                cfg.pinned_addr = Some(addr);
+                Arc::new(crate::email::imap::ImapProvider::new(cfg))
+            }
             ProviderKind::Pop3 => return Err(FactoryError::UnsupportedKind("pop3")),
         };
 

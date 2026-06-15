@@ -4,7 +4,7 @@
 //! and batch fetching concurrency limits.
 
 use emailibrium::email::delta::{parse_gmail_history, parse_outlook_delta};
-use emailibrium::email::imap::{ImapConfig, ImapProvider};
+use emailibrium::email::imap::{ImapConfig, ImapEncryption, ImapProvider};
 use emailibrium::email::provider::{EmailProvider, ProviderError};
 use emailibrium::email::sync::{ProviderSync, ProviderSyncService};
 use emailibrium::email::types::{
@@ -141,13 +141,14 @@ async fn imap_authenticate_validates_config() {
     let config = ImapConfig {
         host: "imap.test.com".into(),
         port: 993,
-        use_tls: true,
+        encryption: ImapEncryption::Ssl,
         username: "user@test.com".into(),
         password: "password".into(),
         mailbox: "INBOX".into(),
         archive_folder: "Archive".into(),
         smtp_host: None,
         smtp_port: 587,
+        pinned_addr: None,
     };
     let provider = ImapProvider::new(config);
     let tokens = provider.authenticate("").await.unwrap();
@@ -160,13 +161,14 @@ async fn imap_authenticate_rejects_empty_host() {
     let config = ImapConfig {
         host: "".into(),
         port: 993,
-        use_tls: true,
+        encryption: ImapEncryption::Ssl,
         username: "user@test.com".into(),
         password: "password".into(),
         mailbox: "INBOX".into(),
         archive_folder: "Archive".into(),
         smtp_host: None,
         smtp_port: 587,
+        pinned_addr: None,
     };
     let provider = ImapProvider::new(config);
     let result = provider.authenticate("").await;
@@ -179,13 +181,14 @@ async fn imap_list_messages_returns_empty() {
     let config = ImapConfig {
         host: "imap.test.com".into(),
         port: 993,
-        use_tls: true,
+        encryption: ImapEncryption::Ssl,
         username: "user@test.com".into(),
         password: "password".into(),
         mailbox: "INBOX".into(),
         archive_folder: "Archive".into(),
         smtp_host: None,
         smtp_port: 587,
+        pinned_addr: None,
     };
     let provider = ImapProvider::new(config);
     let params = ListParams {
@@ -209,13 +212,14 @@ async fn imap_create_label_returns_folder_name() {
     let config = ImapConfig {
         host: "imap.test.com".into(),
         port: 993,
-        use_tls: true,
+        encryption: ImapEncryption::Ssl,
         username: "user@test.com".into(),
         password: "password".into(),
         mailbox: "INBOX".into(),
         archive_folder: "Archive".into(),
         smtp_host: None,
         smtp_port: 587,
+        pinned_addr: None,
     };
     let provider = ImapProvider::new(config);
     let id = provider.create_label("token", "MyFolder").await.unwrap();

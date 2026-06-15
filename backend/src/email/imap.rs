@@ -7,6 +7,7 @@ use async_trait::async_trait;
 use chrono::{TimeZone, Utc};
 use futures::TryStreamExt;
 use serde::{Deserialize, Serialize};
+use tokio::io::{AsyncRead, AsyncWrite};
 use tracing::debug;
 
 use super::provider::{EmailProvider, FolderOrLabel, MoveKind, ProviderError, SendDraft};
@@ -16,15 +17,72 @@ use super::types::{EmailMessage, EmailPage, ListParams, OAuthTokens};
 // Configuration
 // ---------------------------------------------------------------------------
 
+/// How transport security is established for an IMAP (and the paired SMTP)
+/// connection.
+///
+/// Per RFC 8314, implicit TLS is preferred; STARTTLS is supported for servers
+/// that only offer it, and MUST fail closed (never fall back to cleartext if
+/// the upgrade fails). Plaintext is intended only for trusted local relays
+/// (e.g. a bridge on loopback) and never sends credentials over an untrusted
+/// network in practice because the SSRF guard restricts where it can connect.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ImapEncryption {
+    /// Implicit TLS — TLS negotiated immediately on connect (typically 993).
+    Ssl,
+    /// STARTTLS — plain connect, then upgrade to TLS before login (typically 143).
+    StartTls,
+    /// No transport encryption (local/trusted relays only).
+    Plaintext,
+}
+
+impl ImapEncryption {
+    /// Parse the frontend's encryption string ("ssl" | "tls" | "none").
+    /// "tls" denotes STARTTLS in the UI's vocabulary.
+    pub fn from_request_str(s: &str) -> Self {
+        match s {
+            "ssl" => Self::Ssl,
+            "tls" => Self::StartTls,
+            "none" => Self::Plaintext,
+            // Default to the safest mode for anything unexpected.
+            _ => Self::Ssl,
+        }
+    }
+
+    /// Stable string form for persistence.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Ssl => "ssl",
+            Self::StartTls => "starttls",
+            Self::Plaintext => "plaintext",
+        }
+    }
+
+    /// Parse the persisted string form (tolerates the request forms too).
+    pub fn from_stored_str(s: &str) -> Self {
+        match s {
+            "ssl" => Self::Ssl,
+            "starttls" | "tls" => Self::StartTls,
+            "plaintext" | "none" => Self::Plaintext,
+            _ => Self::Ssl,
+        }
+    }
+}
+
+fn default_encryption() -> ImapEncryption {
+    ImapEncryption::Ssl
+}
+
 /// Configuration for connecting to an IMAP server.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImapConfig {
     /// IMAP server hostname (e.g., "imap.gmail.com").
     pub host: String,
-    /// IMAP server port (993 for TLS, 143 for STARTTLS).
+    /// IMAP server port (993 for implicit TLS, 143 for STARTTLS/plaintext).
     pub port: u16,
-    /// Whether to use implicit TLS (port 993) vs STARTTLS.
-    pub use_tls: bool,
+    /// Transport security mode.
+    #[serde(default = "default_encryption")]
+    pub encryption: ImapEncryption,
     /// Username (typically the email address).
     pub username: String,
     /// Password or app-specific password.
@@ -41,6 +99,13 @@ pub struct ImapConfig {
     /// SMTP server port (587 for STARTTLS, 465 for TLS).
     #[serde(default = "default_smtp_port")]
     pub smtp_port: u16,
+    /// Pre-resolved, SSRF-validated socket address to connect to. When set,
+    /// the TCP connection targets this exact IP (TLS still uses `host` for
+    /// SNI/cert validation), preventing a DNS-rebinding TOCTOU between the
+    /// SSRF check and the connect. Not serialized/persisted — populated at
+    /// request/sync time after the guard runs.
+    #[serde(skip)]
+    pub pinned_addr: Option<std::net::SocketAddr>,
 }
 
 fn default_mailbox() -> String {
@@ -56,10 +121,73 @@ fn default_smtp_port() -> u16 {
 }
 
 // ---------------------------------------------------------------------------
-// Session type alias
+// Stream + session types
 // ---------------------------------------------------------------------------
 
-type ImapSession = async_imap::Session<async_native_tls::TlsStream<tokio::net::TcpStream>>;
+/// A connected IMAP transport that may be either a plaintext TCP stream or a
+/// TLS-wrapped stream. Implementing `AsyncRead`/`AsyncWrite` lets a single
+/// `async_imap::Session` type carry any of the three encryption modes.
+pub enum ImapStream {
+    Plain(tokio::net::TcpStream),
+    Tls(Box<async_native_tls::TlsStream<tokio::net::TcpStream>>),
+}
+
+impl std::fmt::Debug for ImapStream {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ImapStream::Plain(_) => f.write_str("ImapStream::Plain"),
+            ImapStream::Tls(_) => f.write_str("ImapStream::Tls"),
+        }
+    }
+}
+
+impl tokio::io::AsyncRead for ImapStream {
+    fn poll_read(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        match self.get_mut() {
+            ImapStream::Plain(s) => std::pin::Pin::new(s).poll_read(cx, buf),
+            ImapStream::Tls(s) => std::pin::Pin::new(s.as_mut()).poll_read(cx, buf),
+        }
+    }
+}
+
+impl tokio::io::AsyncWrite for ImapStream {
+    fn poll_write(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        match self.get_mut() {
+            ImapStream::Plain(s) => std::pin::Pin::new(s).poll_write(cx, buf),
+            ImapStream::Tls(s) => std::pin::Pin::new(s.as_mut()).poll_write(cx, buf),
+        }
+    }
+
+    fn poll_flush(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        match self.get_mut() {
+            ImapStream::Plain(s) => std::pin::Pin::new(s).poll_flush(cx),
+            ImapStream::Tls(s) => std::pin::Pin::new(s.as_mut()).poll_flush(cx),
+        }
+    }
+
+    fn poll_shutdown(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        match self.get_mut() {
+            ImapStream::Plain(s) => std::pin::Pin::new(s).poll_shutdown(cx),
+            ImapStream::Tls(s) => std::pin::Pin::new(s.as_mut()).poll_shutdown(cx),
+        }
+    }
+}
+
+type ImapSession = async_imap::Session<ImapStream>;
 
 // ---------------------------------------------------------------------------
 // IMAP Provider
@@ -95,32 +223,96 @@ impl ImapProvider {
         Ok(())
     }
 
-    /// Establish a TLS connection, read the greeting, and log in.
-    async fn connect(&self) -> Result<ImapSession, ProviderError> {
-        let tcp = tokio::net::TcpStream::connect((&*self.config.host, self.config.port))
+    /// Open a raw TCP connection to the configured server.
+    ///
+    /// Connects to the pre-resolved, SSRF-validated address when available
+    /// (avoids a DNS-rebinding TOCTOU vs. the guard); otherwise resolves the
+    /// hostname normally.
+    async fn tcp_connect(&self) -> Result<tokio::net::TcpStream, ProviderError> {
+        match self.config.pinned_addr {
+            Some(addr) => tokio::net::TcpStream::connect(addr).await,
+            None => tokio::net::TcpStream::connect((&*self.config.host, self.config.port)).await,
+        }
+        .map_err(|e| {
+            ProviderError::RequestFailed(format!(
+                "TCP connect to {}:{} failed: {e}",
+                self.config.host, self.config.port
+            ))
+        })
+    }
+
+    /// Wrap a TCP stream in TLS, validating the certificate against `host`.
+    ///
+    /// Uses the platform trust store with certificate verification ON (no
+    /// `danger_accept_invalid_certs`). The hostname is used for SNI and
+    /// certificate name validation per RFC 7817.
+    async fn tls_upgrade(
+        &self,
+        tcp: tokio::net::TcpStream,
+    ) -> Result<async_native_tls::TlsStream<tokio::net::TcpStream>, ProviderError> {
+        async_native_tls::TlsConnector::new()
+            .connect(&self.config.host, tcp)
             .await
             .map_err(|e| {
                 ProviderError::RequestFailed(format!(
-                    "TCP connect to {}:{} failed: {e}",
-                    self.config.host, self.config.port
+                    "TLS handshake with {} failed: {e}",
+                    self.config.host
                 ))
-            })?;
+            })
+    }
 
-        let tls = async_native_tls::TlsConnector::new();
-        let tls_stream = tls.connect(&self.config.host, tcp).await.map_err(|e| {
-            ProviderError::RequestFailed(format!(
-                "TLS handshake with {} failed: {e}",
-                self.config.host
-            ))
-        })?;
+    /// Establish a connection per the configured encryption mode, read the
+    /// greeting, and log in. STARTTLS fails closed: if the upgrade fails we
+    /// return an error and never authenticate over cleartext.
+    async fn connect(&self) -> Result<ImapSession, ProviderError> {
+        let tcp = self.tcp_connect().await?;
 
-        let mut client = async_imap::Client::new(tls_stream);
-
-        // Read the server greeting (required before login/authenticate).
-        let _greeting = client
-            .read_response()
-            .await
-            .map_err(|e| ProviderError::RequestFailed(format!("Failed to read greeting: {e}")))?;
+        let client = match self.config.encryption {
+            ImapEncryption::Ssl => {
+                // Implicit TLS: negotiate immediately, then read greeting.
+                let tls = self.tls_upgrade(tcp).await?;
+                let mut client = async_imap::Client::new(ImapStream::Tls(Box::new(tls)));
+                client.read_response().await.map_err(|e| {
+                    ProviderError::RequestFailed(format!("Failed to read greeting: {e}"))
+                })?;
+                client
+            }
+            ImapEncryption::StartTls => {
+                // Plain connect, read greeting, issue STARTTLS, THEN upgrade.
+                let mut plain = async_imap::Client::new(ImapStream::Plain(tcp));
+                plain.read_response().await.map_err(|e| {
+                    ProviderError::RequestFailed(format!("Failed to read greeting: {e}"))
+                })?;
+                // If STARTTLS is rejected/stripped this errors out — we do NOT
+                // continue in cleartext.
+                plain
+                    .run_command_and_check_ok("STARTTLS", None)
+                    .await
+                    .map_err(|e| {
+                        ProviderError::RequestFailed(format!("STARTTLS command failed: {e}"))
+                    })?;
+                // Recover the raw TCP stream and upgrade it. There is no
+                // greeting after a STARTTLS upgrade.
+                let raw = match plain.into_inner() {
+                    ImapStream::Plain(tcp) => tcp,
+                    // Unreachable: we constructed a Plain client above.
+                    ImapStream::Tls(_) => {
+                        return Err(ProviderError::RequestFailed(
+                            "internal: STARTTLS stream already TLS".to_string(),
+                        ))
+                    }
+                };
+                let tls = self.tls_upgrade(raw).await?;
+                async_imap::Client::new(ImapStream::Tls(Box::new(tls)))
+            }
+            ImapEncryption::Plaintext => {
+                let mut client = async_imap::Client::new(ImapStream::Plain(tcp));
+                client.read_response().await.map_err(|e| {
+                    ProviderError::RequestFailed(format!("Failed to read greeting: {e}"))
+                })?;
+                client
+            }
+        };
 
         let session = client
             .login(&self.config.username, &self.config.password)
@@ -335,12 +527,31 @@ impl ImapProvider {
 
         let creds = Credentials::new(self.config.username.clone(), self.config.password.clone());
 
-        let mailer: AsyncSmtpTransport<Tokio1Executor> =
-            AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(smtp_host)
-                .map_err(|e| ProviderError::RequestFailed(format!("SMTP connection failed: {e}")))?
-                .port(self.config.smtp_port)
-                .credentials(creds)
-                .build();
+        // Choose the SMTP transport security to match the account's mode:
+        // - Ssl       -> implicit TLS (typically port 465)
+        // - StartTls  -> STARTTLS upgrade (typically port 587)
+        // - Plaintext -> unencrypted (local/trusted relays only)
+        // TLS modes validate the server certificate (lettre default).
+        let builder = match self.config.encryption {
+            ImapEncryption::Ssl => {
+                AsyncSmtpTransport::<Tokio1Executor>::relay(smtp_host).map_err(|e| {
+                    ProviderError::RequestFailed(format!("SMTP connection failed: {e}"))
+                })?
+            }
+            ImapEncryption::StartTls => {
+                AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(smtp_host).map_err(|e| {
+                    ProviderError::RequestFailed(format!("SMTP connection failed: {e}"))
+                })?
+            }
+            ImapEncryption::Plaintext => {
+                AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(smtp_host)
+            }
+        };
+
+        let mailer: AsyncSmtpTransport<Tokio1Executor> = builder
+            .port(self.config.smtp_port)
+            .credentials(creds)
+            .build();
 
         mailer
             .send(message)
@@ -900,17 +1111,56 @@ impl EmailProvider for ImapProvider {
 mod tests {
     use super::*;
 
+    #[test]
+    fn encryption_from_request_str_maps_ui_vocabulary() {
+        assert_eq!(ImapEncryption::from_request_str("ssl"), ImapEncryption::Ssl);
+        assert_eq!(
+            ImapEncryption::from_request_str("tls"),
+            ImapEncryption::StartTls
+        );
+        assert_eq!(
+            ImapEncryption::from_request_str("none"),
+            ImapEncryption::Plaintext
+        );
+        // Unknown values fall back to the safest mode.
+        assert_eq!(
+            ImapEncryption::from_request_str("garbage"),
+            ImapEncryption::Ssl
+        );
+    }
+
+    #[test]
+    fn encryption_stored_str_roundtrips() {
+        for mode in [
+            ImapEncryption::Ssl,
+            ImapEncryption::StartTls,
+            ImapEncryption::Plaintext,
+        ] {
+            assert_eq!(ImapEncryption::from_stored_str(mode.as_str()), mode);
+        }
+        // Legacy/request spellings are tolerated on read.
+        assert_eq!(
+            ImapEncryption::from_stored_str("tls"),
+            ImapEncryption::StartTls
+        );
+        assert_eq!(
+            ImapEncryption::from_stored_str("none"),
+            ImapEncryption::Plaintext
+        );
+    }
+
     fn test_config() -> ImapConfig {
         ImapConfig {
             host: "imap.example.com".to_string(),
             port: 993,
-            use_tls: true,
+            encryption: ImapEncryption::Ssl,
             username: "user@example.com".to_string(),
             password: "secret".to_string(),
             mailbox: "INBOX".to_string(),
             archive_folder: "Archive".to_string(),
             smtp_host: None,
             smtp_port: default_smtp_port(),
+            pinned_addr: None,
         }
     }
 
@@ -919,13 +1169,14 @@ mod tests {
         let config = ImapConfig {
             host: "imap.test.com".to_string(),
             port: 993,
-            use_tls: true,
+            encryption: ImapEncryption::Ssl,
             username: "test@test.com".to_string(),
             password: "pass".to_string(),
             mailbox: default_mailbox(),
             archive_folder: default_archive_folder(),
             smtp_host: None,
             smtp_port: default_smtp_port(),
+            pinned_addr: None,
         };
         assert_eq!(config.mailbox, "INBOX");
         assert_eq!(config.archive_folder, "Archive");
@@ -936,13 +1187,14 @@ mod tests {
         let config = ImapConfig {
             host: "".to_string(),
             port: 993,
-            use_tls: true,
+            encryption: ImapEncryption::Ssl,
             username: "user@test.com".to_string(),
             password: "pass".to_string(),
             mailbox: "INBOX".to_string(),
             archive_folder: "Archive".to_string(),
             smtp_host: None,
             smtp_port: default_smtp_port(),
+            pinned_addr: None,
         };
         let provider = ImapProvider::new(config);
         let result = provider.validate_config();

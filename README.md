@@ -115,6 +115,11 @@ make docker-up-dev    # start with hot-reload
 
 **Prerequisites:** Rust 1.96+, Node.js 26 (LTS)+, pnpm 11.5+ — or just Docker. See [Setup Guide](docs/setup-guide.md) for details.
 
+> **⏱️ Want value in 15 minutes with no cloud setup?** Connect a personal Gmail (or Yahoo,
+> iCloud, Fastmail, Zoho) account via **IMAP + an app password** — no Google Cloud or Azure
+> project required. See **[QUICKSTART.md](QUICKSTART.md)**. (Outlook.com and Google Workspace
+> require the OAuth path; see the [OAuth Setup Guide](docs/oauth-setup-guide.md).)
+
 ## 🏗️ Architecture
 
 ```text

@@ -247,49 +247,78 @@ pub async fn sync_emails_from_provider(
             )
         })?;
 
-    // Get access token (refresh if needed).
-    let access_token = state
-        .oauth_manager
-        .get_access_token(account_id)
-        .await
-        .map_err(|e| (StatusCode::BAD_GATEWAY, format!("Token error: {e}")))?;
-
     let oauth = &state.vector_service.config.oauth;
     let provider_str = account.provider.as_str();
 
-    // Build provider.
-    let provider: Box<dyn EmailProvider> = match account.provider {
+    // Build the provider and obtain its credential. OAuth providers (Gmail /
+    // Outlook) use a per-account access token; IMAP uses stored credentials and
+    // ignores the token, so only fetch a token for the OAuth kinds.
+    let (provider, access_token): (Box<dyn EmailProvider>, String) = match account.provider {
         ProviderKind::Gmail => {
+            let access_token = state
+                .oauth_manager
+                .get_access_token(account_id)
+                .await
+                .map_err(|e| (StatusCode::BAD_GATEWAY, format!("Token error: {e}")))?;
             let gmail_cfg = &oauth.gmail;
             let client_id = std::env::var(&gmail_cfg.client_id_env).unwrap_or_default();
             let client_secret = std::env::var(&gmail_cfg.client_secret_env).unwrap_or_default();
-            Box::new(crate::email::gmail::GmailProvider::new(
-                crate::email::types::ProviderConfig {
-                    client_id,
-                    client_secret,
-                    redirect_uri: format!("{}/api/v1/auth/callback", oauth.redirect_base_url),
-                    auth_url: gmail_cfg.auth_url.clone(),
-                    token_url: gmail_cfg.token_url.clone(),
-                    scopes: gmail_cfg.scopes.clone(),
-                },
-            ))
+            (
+                Box::new(crate::email::gmail::GmailProvider::new(
+                    crate::email::types::ProviderConfig {
+                        client_id,
+                        client_secret,
+                        redirect_uri: format!("{}/api/v1/auth/callback", oauth.redirect_base_url),
+                        auth_url: gmail_cfg.auth_url.clone(),
+                        token_url: gmail_cfg.token_url.clone(),
+                        scopes: gmail_cfg.scopes.clone(),
+                    },
+                )),
+                access_token,
+            )
         }
         ProviderKind::Outlook => {
+            let access_token = state
+                .oauth_manager
+                .get_access_token(account_id)
+                .await
+                .map_err(|e| (StatusCode::BAD_GATEWAY, format!("Token error: {e}")))?;
             let outlook_cfg = &oauth.outlook;
             let client_id = std::env::var(&outlook_cfg.client_id_env).unwrap_or_default();
             let client_secret = std::env::var(&outlook_cfg.client_secret_env).unwrap_or_default();
-            Box::new(crate::email::outlook::OutlookProvider::new(
-                crate::email::types::ProviderConfig {
-                    client_id,
-                    client_secret,
-                    redirect_uri: format!("{}/api/v1/auth/callback", oauth.redirect_base_url),
-                    auth_url: outlook_cfg.auth_url(),
-                    token_url: outlook_cfg.token_url(),
-                    scopes: outlook_cfg.scopes.clone(),
-                },
-            ))
+            (
+                Box::new(crate::email::outlook::OutlookProvider::new(
+                    crate::email::types::ProviderConfig {
+                        client_id,
+                        client_secret,
+                        redirect_uri: format!("{}/api/v1/auth/callback", oauth.redirect_base_url),
+                        auth_url: outlook_cfg.auth_url(),
+                        token_url: outlook_cfg.token_url(),
+                        scopes: outlook_cfg.scopes.clone(),
+                    },
+                )),
+                access_token,
+            )
         }
-        _ => {
+        ProviderKind::Imap => {
+            let config = state
+                .oauth_manager
+                .load_imap_config(account_id)
+                .await
+                .map_err(|e| {
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        format!("IMAP config: {e}"),
+                    )
+                })?;
+            // SSRF-guard the stored host and pin the resolved IP for the connect.
+            let config = crate::api::provider_helpers::guard_and_pin_imap_config(config).await?;
+            (
+                Box::new(crate::email::imap::ImapProvider::new(config)),
+                String::new(),
+            )
+        }
+        ProviderKind::Pop3 => {
             return Err((
                 StatusCode::BAD_REQUEST,
                 format!("Provider {provider_str} sync not yet supported"),
