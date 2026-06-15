@@ -11,8 +11,15 @@ minimumReleaseAge: 0
 overrides:
   "brace-expansion@<1.1.13": "1.1.13"
   "brace-expansion@>=4.0.0 <5.0.6": "5.0.6"
-  "ws@>=8.0.0 <8.20.1": "8.20.1"
+  # ws < 8.21.0: memory-exhaustion DoS from tiny fragments (GHSA-96hv-2xvq-fx4p)
+  "ws@>=8.0.0 <8.21.0": "8.21.0"
   "lodash@>=4.0.0 <=4.17.23": "4.18.1"
+  # tar <= 7.5.15: PAX/GNU long-name header parser differential / file smuggling (GHSA-vmf3-w455-68vh)
+  "tar@<7.5.16": "7.5.16"
+  # @babel/core <= 7.29.0: arbitrary file read via sourceMappingURL comment (GHSA-4x5r-pxfx-6jf8)
+  "@babel/core@<7.29.6": "7.29.7"
+  # esbuild < 0.28.1: dev-server arbitrary file read + missing binary integrity check / RCE (GHSA-g7r4-m6w7-qqqr, GHSA-gv7w-rqvm-qjhr)
+  "esbuild@<0.28.1": "0.28.1"
 peerDependencyRules:
   allowedVersions:
     "eslint-plugin-react>eslint": "10"
