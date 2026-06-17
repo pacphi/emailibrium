@@ -175,8 +175,8 @@ importers:
         specifier: ^10.4.3
         version: 10.4.5(@emnapi/core@1.10.0)(@emnapi/runtime@1.10.0)(@testing-library/dom@10.4.0)(@types/react@19.2.17)(prettier@3.8.4)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       tailwindcss:
-        specifier: ^4.3.0
-        version: 4.3.0
+        specifier: ^4.3.1
+        version: 4.3.1
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -350,6 +350,10 @@ packages:
 
   '@babel/runtime@7.29.2':
     resolution: {integrity: sha512-JiDShH45zKHWyGe4ZNVRrCjBz8Nh9TMmZG1kh4QTK8hCBTWBi8Da+i7s1fJw7/lYpM4ccepSNfqzZ/QvABBi5g==}
+    engines: {node: '>=6.9.0'}
+
+  '@babel/runtime@7.29.7':
+    resolution: {integrity: sha512-Nq8OhGWiZIZGV6hLHoyAKLLcJihP/xFeBMGJoUrxTX2psI8dCifzLhZISFb+VWS3wFMRDmCGw5R+dOySCqPLhw==}
     engines: {node: '>=6.9.0'}
 
   '@babel/template@7.28.6':
@@ -4200,6 +4204,9 @@ packages:
   tailwindcss@4.3.0:
     resolution: {integrity: sha512-y6nxMGB1nMW9R6k96e5gdIFzcfL/gTJRNaqGes1YvkLnPVXzWgbqFF2yLC0T8G774n24cx3Pe8XrKoniCOAH+Q==}
 
+  tailwindcss@4.3.1:
+    resolution: {integrity: sha512-hk+TB1m+K8CYNrP6rjQaq/Y+4Zylwpa87mLYBKCunwnnQ9p+fHb7kmSfGqyEJoxF/O6CDyABWVFEafNSYKll+Q==}
+
   tapable@2.3.3:
     resolution: {integrity: sha512-uxc/zpqFg6x7C8vOE7lh6Lbda8eEL9zmVm/PLeTPBRhh1xCgdWaQ+J1CUieGpIfm2HdtsUpRv+HshiasBMcc6A==}
     engines: {node: '>=6'}
@@ -4737,6 +4744,8 @@ snapshots:
       '@babel/types': 7.29.7
 
   '@babel/runtime@7.29.2': {}
+
+  '@babel/runtime@7.29.7': {}
 
   '@babel/template@7.28.6':
     dependencies:
@@ -6075,8 +6084,8 @@ snapshots:
 
   '@testing-library/dom@10.4.0':
     dependencies:
-      '@babel/code-frame': 7.29.0
-      '@babel/runtime': 7.29.2
+      '@babel/code-frame': 7.29.7
+      '@babel/runtime': 7.29.7
       '@types/aria-query': 5.0.4
       aria-query: 5.3.0
       chalk: 4.1.2
@@ -8709,6 +8718,8 @@ snapshots:
   tagged-tag@1.0.0: {}
 
   tailwindcss@4.3.0: {}
+
+  tailwindcss@4.3.1: {}
 
   tapable@2.3.3: {}
 
