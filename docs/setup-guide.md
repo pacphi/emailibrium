@@ -56,7 +56,7 @@ OAuth requires registering apps with Google and Microsoft.
 2. Create a project (or select an existing one)
 3. Click **Create Credentials > OAuth client ID**
 4. Application type: **Web application**
-5. Add authorized redirect URI: `http://localhost:8080/api/auth/google/callback`
+5. Add authorized redirect URI: `http://localhost:8080/api/v1/auth/callback`
 6. Copy the **Client ID** and **Client Secret**
 
 #### Microsoft (Azure AD) OAuth
@@ -65,7 +65,7 @@ OAuth requires registering apps with Google and Microsoft.
 2. Click **New registration**
 3. Name: `Emailibrium Dev`
 4. Supported account types: **Accounts in any organizational directory and personal Microsoft accounts**
-5. Redirect URI: **Web** > `http://localhost:8080/api/auth/microsoft/callback`
+5. Redirect URI: **Web** > `http://localhost:8080/api/v1/auth/callback`
 6. Under **Certificates & secrets**, create a new **Client secret**
 7. Copy the **Application (client) ID** from the Overview page and the **secret value**
 
@@ -219,9 +219,8 @@ API reachability, and AI model availability.
 
 ### "OAuth callback error"
 
-- Verify redirect URIs match exactly (including trailing slash)
-- Google: `http://localhost:8080/api/auth/google/callback`
-- Microsoft: `http://localhost:8080/api/auth/microsoft/callback`
+- Verify redirect URIs match exactly (protocol, host, port, path)
+- Both providers use the same callback: `http://localhost:8080/api/v1/auth/callback`
 - Check that client ID and secret are correct in `secrets/dev/`
 
 ## Environment Variables Reference

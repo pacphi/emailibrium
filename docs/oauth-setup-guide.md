@@ -14,6 +14,74 @@ Configure Gmail (Google) and Outlook (Microsoft) OAuth for Emailibrium.
 
 ---
 
+## Multi-Provider Dev Setup (no domain needed)
+
+If you have a **mix** of accounts — personal Gmail, Google Workspace, and
+personal Outlook/Hotmail — you can run everything in dev mode on `localhost`
+with **no public domain**.
+
+The only thing people expect to need a domain for is the OAuth **redirect
+URI**, and both Google and Microsoft explicitly permit `http://localhost` for
+**Web application** clients (localhost is exempt from their HTTPS requirement).
+Emailibrium builds the callback from `oauth.redirect_base_url`, which defaults
+to `http://localhost:8080`:
+
+```text
+http://localhost:8080/api/v1/auth/callback
+```
+
+### Two registrations cover all four account types
+
+You only need **one Google client** and **one Microsoft app registration**.
+Together they handle every account in the mix:
+
+| Your account               | How Emailibrium connects it                  | Registration     |
+| -------------------------- | -------------------------------------------- | ---------------- |
+| Personal Gmail             | Gmail OAuth (or app-password IMAP, no setup) | Google           |
+| Google Workspace           | Gmail OAuth (`gmail.modify`)                 | Google (same)    |
+| Personal Outlook / Hotmail | Microsoft Graph OAuth                        | Microsoft        |
+| Work / school Microsoft    | Microsoft Graph OAuth                        | Microsoft (same) |
+
+Why this works:
+
+- **Outlook/Hotmail uses Microsoft Graph + OAuth, not IMAP** — so Microsoft's
+  retirement of IMAP basic-auth / app passwords doesn't affect Emailibrium.
+- The Microsoft app uses the **`common`** tenant, which accepts **both**
+  personal Microsoft accounts (Hotmail/Outlook.com) **and** work/school accounts.
+- One Google client authorizes any Google account that consents — personal and
+  Workspace alike.
+- The default Microsoft scopes include `offline_access`, so refresh tokens are
+  issued and Outlook accounts stay connected without re-consent.
+
+Multiple inboxes of the same provider are first-class — just run the connect
+flow once per account.
+
+### Dev-mode caveats
+
+- **Google Testing mode**: refresh tokens expire after **7 days**, so you
+  re-authenticate Gmail accounts roughly weekly. Add each Google address as a
+  **test user** (up to 100). See [Testing vs Production](#google-oauth-testing-vs-production).
+- **Unverified-app screen** on Google consent (because `gmail.modify` is a
+  restricted scope) — click **Advanced → Go to (app)**. Expected with test
+  users; no verification needed for dev.
+- **Google Workspace** accounts may be blocked by the org's third-party-app
+  policy. If you control the workspace (or it allows verified third-party
+  apps), you're fine; otherwise an admin must allowlist your client ID.
+  Personal Gmail and personal Outlook have no such gate.
+
+### Next steps
+
+1. Create the Google client → [Google (Gmail)](#google-gmail) below.
+2. Register the Microsoft app → [Microsoft (Outlook / Microsoft 365)](#microsoft-outlook--microsoft-365) below.
+3. `make dev`, then connect each inbox at `http://localhost:3000/onboarding`.
+
+> **Shortcut for personal Gmail only**: it also works via the app-password
+> IMAP path with no Google Cloud setup. But Workspace Gmail and Outlook both
+> _require_ OAuth, so for a mixed setup the two registrations above are the
+> cleaner route.
+
+---
+
 ## Google (Gmail)
 
 ### 1. Create OAuth Credentials
