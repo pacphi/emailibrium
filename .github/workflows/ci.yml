@@ -21,7 +21,7 @@ jobs:
     name: Rust Format
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           submodules: true
       - uses: dtolnay/rust-toolchain@stable
@@ -35,7 +35,7 @@ jobs:
     name: Rust Clippy
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           submodules: true
       - uses: dtolnay/rust-toolchain@stable
@@ -56,7 +56,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [rust-format, rust-clippy]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           submodules: true
       - uses: dtolnay/rust-toolchain@stable
@@ -78,7 +78,7 @@ jobs:
       # Do NOT fetch submodules: ruvector is a third-party submodule whose
       # availability we cannot control, and its HTTP 500s from GitHub cause
       # spurious job failures unrelated to our security posture.
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Install cargo-audit
         run: cargo install --locked cargo-audit
       # Fetch the RUSTSEC advisory DB with retry so a transient GitHub 500
@@ -105,7 +105,7 @@ jobs:
     name: Frontend Install
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6
         with:
           version: 11
@@ -128,7 +128,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: frontend-install
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6
         with:
           version: 11
@@ -159,7 +159,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: frontend-quality
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6
         with:
           version: 11
@@ -186,7 +186,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: frontend-quality
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6
         with:
           version: 11
@@ -226,7 +226,7 @@ jobs:
     name: Validate Markdown
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: DavidAnson/markdownlint-cli2-action@v23
         with:
           globs: "**/*.md"
@@ -236,7 +236,7 @@ jobs:
     name: Validate YAML
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Install yamllint
         run: pip install yamllint
       - name: Lint YAML
@@ -246,7 +246,7 @@ jobs:
     name: Validate Shell Scripts
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: ShellCheck
         run: |
           set -e
