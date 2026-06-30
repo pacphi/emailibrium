@@ -73,7 +73,7 @@ urlencoding = "2"
 regex = "1"
 ammonia = "4"
 scraper = "0.27"
-pdf-extract = "0.10"
+pdf-extract = "0.12"
 
 # Background jobs (ADR-006)
 apalis = { version = "1.0.0-rc.9" }
