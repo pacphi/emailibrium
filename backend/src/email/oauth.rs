@@ -719,10 +719,11 @@ impl OAuthManager {
                     .map_err(|e| OAuthError::EncryptionError(e.to_string()))?;
                 let mut nonce_bytes = [0u8; NONCE_SIZE];
                 rand::rng().fill_bytes(&mut nonce_bytes);
-                let nonce = Nonce::from_slice(&nonce_bytes);
+                let nonce = Nonce::try_from(nonce_bytes.as_slice())
+                    .map_err(|e| OAuthError::EncryptionError(e.to_string()))?;
 
                 let ciphertext = cipher
-                    .encrypt(nonce, plaintext.as_bytes())
+                    .encrypt(&nonce, plaintext.as_bytes())
                     .map_err(|e| OAuthError::EncryptionError(e.to_string()))?;
 
                 let mut output = Vec::with_capacity(NONCE_SIZE + ciphertext.len());
@@ -751,10 +752,11 @@ impl OAuthManager {
                 let cipher = Aes256Gcm::new_from_slice(key.as_ref())
                     .map_err(|e| OAuthError::DecryptionError(e.to_string()))?;
                 let (nonce_bytes, ciphertext) = encrypted.split_at(NONCE_SIZE);
-                let nonce = Nonce::from_slice(nonce_bytes);
+                let nonce = Nonce::try_from(nonce_bytes)
+                    .map_err(|e| OAuthError::DecryptionError(e.to_string()))?;
 
                 let plaintext = cipher
-                    .decrypt(nonce, ciphertext)
+                    .decrypt(&nonce, ciphertext)
                     .map_err(|e| OAuthError::DecryptionError(e.to_string()))?;
 
                 String::from_utf8(plaintext).map_err(|e| OAuthError::DecryptionError(e.to_string()))

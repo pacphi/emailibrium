@@ -9,17 +9,27 @@ packages:
 # the `overrides` IOC pins below and Dependabot review.
 minimumReleaseAge: 0
 overrides:
-  "brace-expansion@<1.1.13": "1.1.13"
-  "brace-expansion@>=4.0.0 <5.0.6": "5.0.6"
+  # brace-expansion < 1.1.16 (1.x line): exponential-time ReDoS via chained {} groups (GHSA-3jxr-9vmj-r5cp)
+  "brace-expansion@<1.1.16": "1.1.16"
+  # brace-expansion 4.x/5.x line < 5.0.8: ReDoS (GHSA-3jxr-9vmj-r5cp) +
+  # unbounded expansion length OOM crash (GHSA-mh99-v99m-4gvg)
+  "brace-expansion@>=4.0.0 <5.0.8": "5.0.8"
   # ws < 8.21.0: memory-exhaustion DoS from tiny fragments (GHSA-96hv-2xvq-fx4p)
   "ws@>=8.0.0 <8.21.0": "8.21.0"
   "lodash@>=4.0.0 <=4.17.23": "4.18.1"
-  # tar <= 7.5.15: PAX/GNU long-name header parser differential / file smuggling (GHSA-vmf3-w455-68vh)
-  "tar@<7.5.16": "7.5.16"
+  # tar <= 7.5.20: gzip-bomb decompression DoS (GHSA-r292-9mhp-454m), supersedes
+  # the prior 7.5.16 pin which itself patched GHSA-vmf3-w455-68vh
+  "tar@<7.5.21": "7.5.21"
   # @babel/core <= 7.29.0: arbitrary file read via sourceMappingURL comment (GHSA-4x5r-pxfx-6jf8)
   "@babel/core@<7.29.6": "7.29.7"
   # esbuild < 0.28.1: dev-server arbitrary file read + missing binary integrity check / RCE (GHSA-g7r4-m6w7-qqqr, GHSA-gv7w-rqvm-qjhr)
   "esbuild@<0.28.1": "0.28.1"
+  # undici < 7.28.0: ProxyAgent silently drops requestTls over SOCKS5, defeating
+  # CA pinning (GHSA-vxpw-j846-p89q, GHSA-hm92-r4w5-c3mj, GHSA-vmh5-mc38-953g, + 4 more)
+  "undici@<7.28.0": "7.28.0"
+  # postcss <= 8.5.17: path traversal via sourceMappingURL leads to arbitrary
+  # .map file disclosure (GHSA-r28c-9q8g-f849)
+  "postcss@<8.5.18": "8.5.18"
 peerDependencyRules:
   allowedVersions:
     "eslint-plugin-react>eslint": "10"

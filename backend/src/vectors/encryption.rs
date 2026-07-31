@@ -119,10 +119,11 @@ impl EncryptedVectorStore {
         // Generate a random 96-bit nonce.
         let mut nonce_bytes = [0u8; NONCE_SIZE];
         rand::rng().fill_bytes(&mut nonce_bytes);
-        let nonce = Nonce::from_slice(&nonce_bytes);
+        let nonce = Nonce::try_from(nonce_bytes.as_slice())
+            .map_err(|e| VectorError::EncryptionError(format!("Invalid nonce: {e}")))?;
 
         let ciphertext = cipher
-            .encrypt(nonce, plaintext.as_ref())
+            .encrypt(&nonce, plaintext.as_ref())
             .map_err(|e| VectorError::EncryptionError(format!("Encryption failed: {e}")))?;
 
         // Prepend nonce to ciphertext.
@@ -146,10 +147,11 @@ impl EncryptedVectorStore {
             .map_err(|e| VectorError::DecryptionError(format!("Cipher init failed: {e}")))?;
 
         let (nonce_bytes, ciphertext) = encrypted.split_at(NONCE_SIZE);
-        let nonce = Nonce::from_slice(nonce_bytes);
+        let nonce = Nonce::try_from(nonce_bytes)
+            .map_err(|e| VectorError::DecryptionError(format!("Invalid nonce: {e}")))?;
 
         let plaintext = cipher
-            .decrypt(nonce, ciphertext)
+            .decrypt(&nonce, ciphertext)
             .map_err(|e| VectorError::DecryptionError(format!("Decryption failed: {e}")))?;
 
         bytes_to_f32_vec(&plaintext)

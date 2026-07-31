@@ -2,7 +2,7 @@
 name = "emailibrium"
 version = "0.2.0"
 edition = "2021"
-rust-version = "1.96"
+rust-version = "1.97"
 description = "Vector-native email intelligence platform"
 license = "MIT"
 
@@ -21,7 +21,7 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("proptest"
 axum = { version = "0.8", features = ["json", "query", "macros"] }
 tokio = { version = "1.52", features = ["full"] }
 tower = "0.5"
-tower-http = { version = "0.6", features = ["cors", "set-header", "trace"] }
+tower-http = { version = "0.7", features = ["cors", "set-header", "trace"] }
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
@@ -36,7 +36,7 @@ redis = { version = "1.2", features = ["tokio-comp", "connection-manager"] }
 
 # Auth & Security
 argon2 = "0.5"
-aes-gcm = "0.10"
+aes-gcm = "0.11"
 sha2 = "0.11"
 zeroize = { version = "1", features = ["derive"] }
 rand = "0.10.1"
@@ -73,7 +73,7 @@ urlencoding = "2"
 regex = "1"
 ammonia = "4"
 scraper = "0.27"
-pdf-extract = "0.10"
+pdf-extract = "0.12"
 
 # Background jobs (ADR-006)
 apalis = { version = "1.0.0-rc.9" }
@@ -117,7 +117,7 @@ proptest = { version = "1", optional = true }
 criterion = { version = "0.8", features = ["async_tokio"] }
 tempfile = "3"
 tokio-test = "0.4"
-axum-test = "20"
+axum-test = "21"
 emailibrium = { path = ".", features = ["test-vectors"] }
 
 [[bench]]
