@@ -119,3 +119,9 @@ docker-compose.override.yml
 # RuVector / ruflo local agent databases -- machine artifacts, not library content
 agentdb.rvf
 agentdb.rvf.lock
+.autopilot/queued/
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+.beads-credential-key
+.beads/proxieddb/

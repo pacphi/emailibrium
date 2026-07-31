@@ -1,103 +1,539 @@
-<!-- gitnexus:start -->
+# emailibrium
 
-# GitNexus — Code Intelligence
+> Multi-agent orchestration framework for agentic coding
 
-This project is indexed by GitNexus as **emailibrium** (228117 symbols, 447347 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+## Project Overview
 
-> If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
+A Claude Flow powered project
 
-## Always Do
+**Tech Stack**: TypeScript, Node.js
+**Architecture**: Domain-Driven Design with bounded contexts
 
-- **MUST run impact analysis before editing any symbol.** Before modifying a function, class, or method, run `gitnexus_impact({target: "symbolName", direction: "upstream"})` and report the blast radius (direct callers, affected processes, risk level) to the user.
-- **MUST run `gitnexus_detect_changes()` before committing** to verify your changes only affect expected symbols and execution flows.
-- **MUST warn the user** if impact analysis returns HIGH or CRITICAL risk before proceeding with edits.
-- When exploring unfamiliar code, use `gitnexus_query({query: "concept"})` to find execution flows instead of grepping. It returns process-grouped results ranked by relevance.
-- When you need full context on a specific symbol — callers, callees, which execution flows it participates in — use `gitnexus_context({name: "symbolName"})`.
+## Quick Start
 
-## When Debugging
-
-1. `gitnexus_query({query: "<error or symptom>"})` — find execution flows related to the issue
-2. `gitnexus_context({name: "<suspect function>"})` — see all callers, callees, and process participation
-3. `READ gitnexus://repo/emailibrium/process/{processName}` — trace the full execution flow step by step
-4. For regressions: `gitnexus_detect_changes({scope: "compare", base_ref: "main"})` — see what your branch changed
-
-## When Refactoring
-
-- **Renaming**: MUST use `gitnexus_rename({symbol_name: "old", new_name: "new", dry_run: true})` first. Review the preview — graph edits are safe, text_search edits need manual review. Then run with `dry_run: false`.
-- **Extracting/Splitting**: MUST run `gitnexus_context({name: "target"})` to see all incoming/outgoing refs, then `gitnexus_impact({target: "target", direction: "upstream"})` to find all external callers before moving code.
-- After any refactor: run `gitnexus_detect_changes({scope: "all"})` to verify only expected files changed.
-
-## Never Do
-
-- NEVER edit a function, class, or method without first running `gitnexus_impact` on it.
-- NEVER ignore HIGH or CRITICAL risk warnings from impact analysis.
-- NEVER rename symbols with find-and-replace — use `gitnexus_rename` which understands the call graph.
-- NEVER commit changes without running `gitnexus_detect_changes()` to check affected scope.
-
-## Tools Quick Reference
-
-| Tool             | When to use                   | Command                                                                 |
-| ---------------- | ----------------------------- | ----------------------------------------------------------------------- |
-| `query`          | Find code by concept          | `gitnexus_query({query: "auth validation"})`                            |
-| `context`        | 360-degree view of one symbol | `gitnexus_context({name: "validateUser"})`                              |
-| `impact`         | Blast radius before editing   | `gitnexus_impact({target: "X", direction: "upstream"})`                 |
-| `detect_changes` | Pre-commit scope check        | `gitnexus_detect_changes({scope: "staged"})`                            |
-| `rename`         | Safe multi-file rename        | `gitnexus_rename({symbol_name: "old", new_name: "new", dry_run: true})` |
-| `cypher`         | Custom graph queries          | `gitnexus_cypher({query: "MATCH ..."})`                                 |
-
-## Impact Risk Levels
-
-| Depth | Meaning                               | Action                |
-| ----- | ------------------------------------- | --------------------- |
-| d=1   | WILL BREAK — direct callers/importers | MUST update these     |
-| d=2   | LIKELY AFFECTED — indirect deps       | Should test           |
-| d=3   | MAY NEED TESTING — transitive         | Test if critical path |
-
-## Resources
-
-| Resource                                     | Use for                                  |
-| -------------------------------------------- | ---------------------------------------- |
-| `gitnexus://repo/emailibrium/context`        | Codebase overview, check index freshness |
-| `gitnexus://repo/emailibrium/clusters`       | All functional areas                     |
-| `gitnexus://repo/emailibrium/processes`      | All execution flows                      |
-| `gitnexus://repo/emailibrium/process/{name}` | Step-by-step execution trace             |
-
-## Self-Check Before Finishing
-
-Before completing any code modification task, verify:
-
-1. `gitnexus_impact` was run for all modified symbols
-2. No HIGH/CRITICAL risk warnings were ignored
-3. `gitnexus_detect_changes()` confirms changes match expected scope
-4. All d=1 (WILL BREAK) dependents were updated
-
-## Keeping the Index Fresh
-
-After committing code changes, the GitNexus index becomes stale. Re-run analyze to update it:
-
+### Installation
 ```bash
-npx gitnexus analyze
+npm install
 ```
 
-If the index previously included embeddings, preserve them by adding `--embeddings`:
-
+### Build
 ```bash
-npx gitnexus analyze --embeddings
+npm run build
 ```
 
-To check whether embeddings exist, inspect `.gitnexus/meta.json` — the `stats.embeddings` field shows the count (0 means no embeddings). **Running analyze without `--embeddings` will delete any previously generated embeddings.**
+### Test
+```bash
+npm test
+```
 
-> Claude Code users: A PostToolUse hook handles this automatically after `git commit` and `git merge`.
+### Development
+```bash
+npm run dev
+```
 
-## CLI
+## Agent Coordination
 
-| Task                                         | Read this skill file                                        |
-| -------------------------------------------- | ----------------------------------------------------------- |
-| Understand architecture / "How does X work?" | `.claude/skills/gitnexus/gitnexus-exploring/SKILL.md`       |
-| Blast radius / "What breaks if I change X?"  | `.claude/skills/gitnexus/gitnexus-impact-analysis/SKILL.md` |
-| Trace bugs / "Why is X failing?"             | `.claude/skills/gitnexus/gitnexus-debugging/SKILL.md`       |
-| Rename / extract / split / refactor          | `.claude/skills/gitnexus/gitnexus-refactoring/SKILL.md`     |
-| Tools, resources, schema reference           | `.claude/skills/gitnexus/gitnexus-guide/SKILL.md`           |
-| Index, status, clean, wiki CLI commands      | `.claude/skills/gitnexus/gitnexus-cli/SKILL.md`             |
+### Swarm Configuration
 
-<!-- gitnexus:end -->
+This project uses hierarchical swarm coordination for complex tasks:
+
+| Setting | Value | Purpose |
+|---------|-------|---------|
+| Topology | `hierarchical` | Queen-led coordination (anti-drift) |
+| Max Agents | 8 | Optimal team size |
+| Strategy | `specialized` | Clear role boundaries |
+| Consensus | `raft` | Leader-based consistency |
+
+### When to Use Swarms
+
+**Invoke swarm for:**
+- Multi-file changes (3+ files)
+- New feature implementation
+- Cross-module refactoring
+- API changes with tests
+- Security-related changes
+- Performance optimization
+
+**Skip swarm for:**
+- Single file edits
+- Simple bug fixes (1-2 lines)
+- Documentation updates
+- Configuration changes
+
+### Available Skills
+
+Use `$skill-name` syntax to invoke:
+
+| Skill | Use Case |
+|-------|----------|
+| `$swarm-orchestration` | Multi-agent task coordination |
+| `$memory-management` | Pattern storage and retrieval |
+| `$sparc-methodology` | Structured development workflow |
+| `$security-audit` | Security scanning and CVE detection |
+| `$performance-analysis` | Profiling and optimization |
+| `$github-automation` | CI/CD and PR management |
+
+### Agent Types
+
+| Type | Role | Use Case |
+|------|------|----------|
+| `researcher` | Requirements analysis | Understanding scope |
+| `architect` | System design | Planning structure |
+| `coder` | Implementation | Writing code |
+| `tester` | Test creation | Quality assurance |
+| `reviewer` | Code review | Security and quality |
+
+## Execution Model
+
+- **claude-flow** = LEDGER (coordinates: memory, routing, swarm state)
+- **Codex** = EXECUTOR (writes code, runs tests, creates files)
+
+**Critical rule:** DON'T STOP after calling claude-flow commands. Coordination commands return instantly — continue immediately with the next implementation step.
+
+## Ruflo + Codex Automated Workflow
+
+Ruflo is the coordination ledger and policy decision point; Codex workers execute code, tests, and commands. A Ruflo coordination call records work but never replaces implementation.
+
+Use `guidance_brain({ mode: "recommend", task: "..." })` when the task can
+benefit from Ruflo-specific capabilities. Its live registry is authoritative
+for tool presence; registration alone does not prove configuration,
+reachability, health, or authorization. If it is not registered, use compatible
+`guidance_recommend`, CLI discovery, and repository instructions.
+
+1. **Recall** — search AgentDB memory and relevant ADRs for patterns and constraints.
+2. **Inspect** — read source, runtime, dependency, policy, and health state.
+3. **Route** — choose the smallest capable topology, agents, skills, and tools.
+4. **Plan** — define acceptance criteria, safety envelope, ownership, and validation.
+5. **Execute** — Codex workers implement in isolated scopes; Ruflo records coordination.
+6. **Test** — run focused tests, regression tests, and failure-path checks.
+7. **Validate** — check types, security, policy, compatibility, and artifact integrity.
+8. **Benchmark** — compare a source-bound candidate with a source-bound baseline.
+9. **Optimize** — improve measured bottlenecks without weakening the safety envelope.
+10. **Receipt** — bind claims, evidence, and decisions to exact source/build inputs.
+11. **Handoff** — reconcile concurrent work and disclose unresolved limitations.
+12. **Publish** — only an independently authorized release gate may publish immutable artifacts.
+
+### Concurrency and authority invariants
+
+- Never allow two writers in one worktree.
+- Read-only research agents may share a checkout; writing agents may not.
+- A child may drop capabilities but can never add tools, servers, namespaces, network access, spend, concurrency, or delegation depth.
+- Cancel dependent and not-yet-started sibling work when policy denies an action or a required dependency fails.
+- MetaHarness may benchmark candidates concurrently, but it cannot promote, serve, or expand its own SafetyEnvelope.
+- Only the integration agent changes shared manifests or lockfiles.
+- Do not auto-commit, push, merge, release, or delete worktrees unless the user authorized that operation.
+- Every consequential action must produce a policy decision receipt; production, destructive, spend, and promotion actions may require human approval.
+
+### Repository harness adapter
+
+When tracked repository instructions define a local collaboration harness:
+
+1. Assign the isolated worktree before starting a writing session.
+2. Start or register the session, inspect current claims, and acquire only the
+   exact paths, resources, and development ports needed for the task.
+3. Renew leases during long work, check acknowledged inbox messages at integration
+   boundaries, and release claims when handing off or ending.
+4. Record focused and integration evidence against the exact source state,
+   then let the designated integration owner decide release.
+
+A repository lease coordinates ownership; it does not grant authorization.
+In-memory reference adapters demonstrate semantics but are not distributed,
+restart-durable release authorities.
+The worker still needs the current ADR-324/325 action capability and fencing
+epoch for every protected side effect. Heartbeat and lease expiry establish
+liveness; a PID is diagnostic only. HEAD alone is not an exact source-state
+identity when tracked or untracked changes exist, so a release receipt must
+bind a clean commit or an immutable snapshot including those changes.
+
+
+## MCP Integration
+
+Use MCP tools for coordination, then keep coding:
+
+| Tool | Purpose | Example |
+|------|---------|---------|
+| `swarm_init` | Start coordination | `swarm_init({topology: "hierarchical"})` |
+| `memory_store` | Save patterns | `memory_store({key: "auth", value: "JWT"})` |
+| `memory_search` | Find patterns | `memory_search({query: "auth patterns"})` |
+| `task_orchestrate` | Assign work | `task_orchestrate({task: "implement"})` |
+
+## Code Standards
+
+### File Organization
+- **NEVER** save to root folder
+- `/src` - Source code files
+- `/tests` - Test files
+- `/docs` - Documentation
+- `/config` - Configuration files
+
+### Quality Rules
+- Files under 500 lines
+- No hardcoded secrets
+- Input validation at boundaries
+- Typed interfaces for public APIs
+- TDD London School (mock-first) preferred
+
+### Commit Messages
+```
+<type>(<scope>): <description>
+
+[optional body]
+```
+
+Types: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `chore`
+
+Do not add a `Co-Authored-By` trailer unless the repository explicitly
+configures and authorizes that attribution.
+
+## Security
+
+### Critical Rules
+- NEVER commit secrets, credentials, or .env files
+- NEVER hardcode API keys
+- Always validate user input
+- Use parameterized queries for SQL
+- Sanitize output to prevent XSS
+
+### Path Security
+- Validate all file paths
+- Prevent directory traversal (../)
+- Use absolute paths internally
+
+## Memory System
+
+### Storing Patterns
+```bash
+npx @claude-flow/cli memory store \
+  --key "pattern-name" \
+  --value "pattern description" \
+  --namespace patterns
+```
+
+### Searching Memory
+```bash
+npx @claude-flow/cli memory search \
+  --query "search terms" \
+  --namespace patterns
+```
+
+## Quick Commands
+
+```bash
+npx @claude-flow/cli memory search --query "relevant patterns"
+npx @claude-flow/cli hooks route --task "current task description"
+npx @claude-flow/cli swarm init --topology hierarchical
+npx @claude-flow/cli hooks pre-task --description "task summary"
+```
+
+## Links
+
+- Documentation: https://github.com/ruvnet/ruflo
+- Issues: https://github.com/ruvnet/ruflo/issues
+
+## Performance Targets
+
+| Metric | Target | Notes |
+|--------|--------|-------|
+| HNSW Search | 150x-12,500x faster | Vector operations |
+| Memory Reduction | 50-75% | Int8 quantization |
+| MCP Response | <100ms | API latency |
+| CLI Startup | <500ms | Cold start |
+| SONA Adaptation | <0.05ms | Neural learning |
+
+## Testing
+
+### Running Tests
+```bash
+# Unit tests
+npm test
+
+# Integration tests
+npm run test:integration
+
+# Coverage
+npm run test:coverage
+
+# Security tests
+npm run test:security
+```
+
+### Test Philosophy
+- TDD London School (mock-first)
+- Unit tests for business logic
+- Integration tests for boundaries
+- E2E tests for critical paths
+- Security tests for sensitive operations
+
+### Coverage Requirements
+- Minimum 80% line coverage
+- 100% coverage for security-critical code
+- All public APIs must have tests
+
+## MCP Integration
+
+Claude Flow exposes tools via Model Context Protocol:
+
+```bash
+# Start MCP server
+npx ruflo mcp start
+
+# List available tools
+npx ruflo mcp tools
+```
+
+### Available Tools
+
+| Tool | Purpose | Example |
+|------|---------|---------|
+| `swarm_init` | Initialize swarm coordination | `swarm_init({topology: "hierarchical"})` |
+| `agent_spawn` | Spawn new agents | `agent_spawn({type: "coder", name: "dev-1"})` |
+| `memory_store` | Store in AgentDB | `memory_store({key: "pattern", value: "..."})` |
+| `memory_search` | Semantic search | `memory_search({query: "auth patterns"})` |
+| `task_orchestrate` | Task coordination | `task_orchestrate({task: "implement feature"})` |
+| `neural_train` | Train neural patterns | `neural_train({iterations: 10})` |
+| `benchmark_run` | Performance benchmarks | `benchmark_run({type: "all"})` |
+
+## Hooks System
+
+Claude Flow uses hooks for lifecycle automation:
+
+### Core Hooks
+
+| Hook | Trigger | Purpose |
+|------|---------|---------|
+| `pre-task` | Before task starts | Get context, load patterns |
+| `post-task` | After task completes | Record completion, train |
+| `pre-edit` | Before file changes | Validate, backup |
+| `post-edit` | After file changes | Train patterns, verify |
+| `pre-command` | Before shell commands | Security check |
+| `post-command` | After shell commands | Log results |
+
+### Session Hooks
+
+| Hook | Purpose |
+|------|---------|
+| `session-start` | Initialize context, load memory |
+| `session-end` | Export metrics, consolidate memory |
+| `session-restore` | Resume from checkpoint |
+| `notify` | Send notifications |
+
+### Intelligence Hooks
+
+| Hook | Purpose |
+|------|---------|
+| `route` | Route task to appropriate agents |
+| `explain` | Generate explanations |
+| `pretrain` | Pre-train neural patterns |
+| `build-agents` | Build specialized agents |
+| `transfer` | Transfer learning between domains |
+
+### Example Usage
+```bash
+# Before starting a task
+npx @claude-flow/cli hooks pre-task \
+  --description "implementing authentication"
+
+# After completing a task
+npx @claude-flow/cli hooks post-task \
+  --task-id "task-123" \
+  --success true
+
+# Route a task to agents
+npx @claude-flow/cli hooks route \
+  --task "implement OAuth2 login flow"
+```
+
+## Background Workers
+
+12 background workers provide continuous optimization:
+
+| Worker | Priority | Purpose |
+|--------|----------|---------|
+| `ultralearn` | normal | Deep knowledge acquisition |
+| `optimize` | high | Performance optimization |
+| `consolidate` | low | Memory consolidation |
+| `predict` | normal | Predictive preloading |
+| `audit` | critical | Security analysis |
+| `map` | normal | Codebase mapping |
+| `preload` | low | Resource preloading |
+| `deepdive` | normal | Deep code analysis |
+| `document` | normal | Auto-documentation |
+| `refactor` | normal | Refactoring suggestions |
+| `benchmark` | normal | Performance benchmarking |
+| `testgaps` | normal | Test coverage analysis |
+
+### Managing Workers
+```bash
+# List workers
+npx @claude-flow/cli hooks worker list
+
+# Trigger specific worker
+npx @claude-flow/cli hooks worker dispatch --trigger audit
+
+# Check worker status
+npx @claude-flow/cli hooks worker status
+```
+
+## Intelligence System
+
+The RuVector Intelligence System provides neural learning:
+
+### Components
+- **SONA**: Self-Optimizing Neural Architecture (<0.05ms adaptation)
+- **MoE**: Mixture of Experts for specialized routing
+- **HNSW**: Hierarchical Navigable Small World for fast search
+- **EWC++**: Elastic Weight Consolidation (prevents forgetting)
+- **Flash Attention**: Optimized attention mechanism
+
+### 4-Step Pipeline
+1. **RETRIEVE** - Fetch relevant patterns via HNSW
+2. **JUDGE** - Evaluate with verdicts (success/failure)
+3. **DISTILL** - Extract key learnings via LoRA
+4. **CONSOLIDATE** - Prevent catastrophic forgetting via EWC++
+
+## Debugging
+
+### Log Levels
+```bash
+# Set log level
+export CLAUDE_FLOW_LOG_LEVEL=debug
+
+# Enable verbose mode
+npx @claude-flow/cli --verbose <command>
+```
+
+### Health Checks
+```bash
+# Run diagnostics
+npx @claude-flow/cli doctor --fix
+
+# Check system status
+npx @claude-flow/cli status
+```
+
+---
+
+# Quality Engineering Standards (Agentic QE)
+
+## AQE MCP Server
+
+This project uses Agentic QE for AI-powered quality engineering. The AQE MCP server provides tools for test generation, coverage analysis, quality assessment, and learning.
+
+## Setup
+
+Always call `fleet_init` before using other AQE tools to initialize the QE fleet.
+
+## Available Tools
+
+### Test Generation
+- `test_generate_enhanced` — AI-powered test generation with pattern recognition and anti-pattern detection
+- Supports unit, integration, and e2e test types
+
+### Coverage Analysis
+- `coverage_analyze_sublinear` — O(log n) coverage gap detection with ML-powered analysis
+- Target: 80% statement coverage minimum, focus on risk-weighted coverage
+
+### Quality Assessment
+- `quality_assess` — Quality gate evaluation with configurable thresholds
+- Run before marking tasks complete
+
+### Security Scanning
+- `security_scan_comprehensive` — SAST/DAST vulnerability scanning
+- Run after changes to auth, security, or middleware code
+
+### Defect Prediction
+- `defect_predict` — AI analysis of code complexity and change history
+
+### Learning & Memory
+- `memory_store` — Store patterns and learnings for future reference
+- `memory_query` — Query past patterns before starting work
+- Always store successful patterns after task completion
+
+## Best Practices
+
+1. **Test Pyramid**: 70% unit, 20% integration, 10% e2e
+2. **AAA Pattern**: Arrange-Act-Assert for clear test structure
+3. **One assertion per test**: Test one behavior at a time
+4. **Descriptive names**: `should_returnValue_when_condition`
+5. **Mock at boundaries**: Only mock external dependencies
+6. **Edge cases first**: Test boundary conditions, not just happy paths
+
+<!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:970c3bf2 -->
+## Beads Issue Tracker
+
+This project uses **bd (beads)** for issue tracking. Run `bd prime` to see full workflow context and commands.
+
+### Quick Reference
+
+```bash
+bd ready              # Find available work
+bd show <id>          # View issue details
+bd update <id> --claim  # Claim work
+bd close <id>         # Complete work
+```
+
+### Rules
+
+- Use `bd` for ALL task tracking — do NOT use TodoWrite, TaskCreate, or markdown TODO lists
+- Run `bd prime` for detailed command reference and session close protocol
+- Use `bd remember` for persistent knowledge — do NOT use MEMORY.md files
+
+**Architecture in one line:** issues live in a local Dolt DB; sync uses `refs/dolt/data` on your git remote; `.beads/issues.jsonl` is a passive export. See https://github.com/gastownhall/beads/blob/main/docs/SYNC_CONCEPTS.md for details and anti-patterns.
+
+## Agent Context Profiles
+
+The managed Beads block is task-tracking guidance, not permission to override repository, user, or orchestrator instructions.
+
+- **Conservative (default)**: Use `bd` for task tracking. Do not run git commits, git pushes, or Dolt remote sync unless explicitly asked. At handoff, report changed files, validation, and suggested next commands.
+- **Minimal**: Keep tool instruction files as pointers to `bd prime`; use the same conservative git policy unless active instructions say otherwise.
+- **Team-maintainer**: Only when the repository explicitly opts in, agents may close beads, run quality gates, commit, and push as part of session close. A current "do not commit" or "do not push" instruction still wins.
+
+## Session Completion
+
+This protocol applies when ending a Beads implementation workflow. It is subordinate to explicit user, repository, and orchestrator instructions.
+
+1. **File issues for remaining work** - Create beads for anything that needs follow-up
+2. **Run quality gates** (if code changed) - Tests, linters, builds
+3. **Update issue status** - Close finished work, update in-progress items
+4. **Handle git/sync by active profile**:
+   ```bash
+   # Conservative/minimal/default: report status and proposed commands; wait for approval.
+   git status
+
+   # Team-maintainer opt-in only, unless current instructions forbid it:
+   git pull --rebase
+   bd dolt push
+   git push
+   git status
+   ```
+5. **Hand off** - Summarize changes, validation, issue status, and any blocked sync/commit/push step
+
+**Critical rules:**
+- Explicit user or orchestrator instructions override this Beads block.
+- Do not commit or push without clear authority from the active profile or the current user request.
+- If a required sync or push is blocked, stop and report the exact command and error.
+<!-- END BEADS INTEGRATION -->
+
+<!-- BEGIN BEADS CODEX SETUP: generated by bd setup codex -->
+## Beads Issue Tracker
+
+Use Beads (`bd`) for durable task tracking in repositories that include it. Use the `beads` skill at `.agents/skills/beads/SKILL.md` (project install) or `~/.agents/skills/beads/SKILL.md` (global install) for Beads workflow guidance, then use the `bd` CLI for issue operations.
+
+### Quick Reference
+
+```bash
+bd ready                # Find available work
+bd show <id>            # View issue details
+bd update <id> --claim  # Claim work
+bd close <id>           # Complete work
+bd prime                # Refresh Beads context
+```
+
+### Rules
+
+- Use `bd` for all task tracking; do not create markdown TODO lists.
+- Run `bd prime` when Beads context is missing or stale. Codex 0.129.0+ can load Beads context automatically through native hooks; use `/hooks` to inspect or toggle them.
+- Keep persistent project memory in Beads via `bd remember`; do not create ad hoc memory files.
+
+**Architecture in one line:** issues live in a local Dolt DB; sync uses `refs/dolt/data` on your git remote; `.beads/issues.jsonl` is a passive export. See https://github.com/gastownhall/beads/blob/main/docs/SYNC_CONCEPTS.md for details and anti-patterns.
+<!-- END BEADS CODEX SETUP -->

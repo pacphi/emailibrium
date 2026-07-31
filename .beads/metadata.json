@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "emailibrium",
+  "project_id": "337e044a-6ee3-4107-aadc-941af8be48fd"
+}
