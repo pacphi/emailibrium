@@ -185,3 +185,33 @@ phases:
     touches: [".github/workflows/docker.yml", ".github/workflows/release.yml"]
     adrs: []
     ddd: []
+
+  - id: 7
+    goal: "just replaces make as the project's task runner, with zero loss of functionality and no dangling references to the old make-based workflow."
+    track: ""
+    deliverables:
+      - "A root `justfile` plus `backend/justfile` and `frontend/justfile` that reproduce every load-bearing recipe from the current three Makefiles (root ~61 targets incl. build/test/lint/format-check/audit/ci/docker-*/setup-*/release-*; backend ~15 incl. build/test/test-integration/lint/format-check/audit/bench; frontend ~15 incl. build/test/test-e2e/lint/format-check/typecheck/audit/deadcode), preserving the existing recursive structure (root delegates to backend/frontend — via `just`'s module system (`mod backend`, `mod frontend`; just 1.57.0 is already available and supports it) or an equivalent recipe-delegation pattern, implementer's call) and the `help` target's category listing."
+      - "Delete `Makefile`, `backend/Makefile`, and `frontend/Makefile`."
+      - "Update `.autopilot/profile.yml`'s `commands.*` (infra_up, format_check, lint, build, test, test_integration, audit) from `make ...` to the equivalent `just ...` invocations — this MUST land in this phase, not after, since the very next gate run depends on it."
+      - "Update the actively-maintained docs that instruct readers to run `make` commands: README.md, QUICKSTART.md, CLAUDE.md, docs/setup-guide.md, docs/maintainer-guide.md, docs/deployment-guide.md, docs/releasing.md, docs/user-guide.md, docs/oauth-setup-guide.md. Leave CHANGELOG.md, docs/ADRs/**, docs/plan/**, and docs/research/** untouched — those are historical/point-in-time records, not live instructions."
+      - "Add a new ADR (docs/ADRs/ADR-0NN-make-to-just-migration.md, next available number) documenting the decision, matching this repo's existing ADR format and its 31 predecessors."
+    definition_of_done:
+      - "cmd: test -f justfile && test -f backend/justfile && test -f frontend/justfile"
+      - "cmd: test ! -f Makefile && test ! -f backend/Makefile && test ! -f frontend/Makefile"
+      - "cmd: just --list && just --justfile backend/justfile --list && just --justfile frontend/justfile --list (each parses without error)"
+      - "cmd: just build (equivalent to old `make build`; must succeed)"
+      - "cmd: just test (equivalent to old `make test`; must succeed, honoring the frontend swallow-bug fix already landed — a real failure must fail this)"
+      - "cmd: just lint (equivalent to old `make lint`; must succeed)"
+      - "cmd: just format-check (equivalent to old `make format-check`; must succeed)"
+      - "grep:absent: 'make build' in README.md QUICKSTART.md CLAUDE.md"
+      - "grep:absent: 'make test' in README.md QUICKSTART.md CLAUDE.md"
+      - "grep: 'just ' in README.md"
+      - "grep: 'just' in .autopilot/profile.yml"
+      - "grep:absent: 'make ' in .autopilot/profile.yml"
+      - "cmd: ls docs/ADRs | grep -qi just"
+      - "prose: every recipe present in the three deleted Makefiles has a behaviorally equivalent `just` recipe — no silent drops. Cite the mapping for any renamed recipe."
+    conventions: "This phase touches nearly every file the other six phases also touch, and profile.yml's commands.* are load-bearing for every future gate run — that's why it's last and depends on all of 0-6, not just file-level `touches` overlap. Preserve exact recipe names where sensible (`just build`, `just test`, `just lint`, `just format-check`, `just audit`, `just ci`) so muscle memory and any external scripts/docs need minimal changes. cargo-machete's `[package.metadata.cargo-machete]` block from phase 0 and the audit-ignore file are untouched by this phase — it's a task-runner swap, not a dependency change. Also a good moment to fix the discovered backend/Makefile audit-swallow bug (pl-mk-audit-swallow, .autopilot/discovered/ci-build-optimization.jsonl) — it disappears for free once backend/Makefile is deleted, but the just recipe must not reintroduce an equivalent swallow."
+    depends_on: [0, 1, 2, 3, 4, 5, 6]
+    touches: ["Makefile", "justfile", "backend/Makefile", "backend/justfile", "frontend/Makefile", "frontend/justfile", ".autopilot/profile.yml", "README.md", "QUICKSTART.md", "CLAUDE.md", "docs/setup-guide.md", "docs/maintainer-guide.md", "docs/deployment-guide.md", "docs/releasing.md", "docs/user-guide.md", "docs/oauth-setup-guide.md", "docs/ADRs/**"]
+    adrs: []
+    ddd: []
