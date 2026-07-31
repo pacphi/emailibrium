@@ -196,8 +196,43 @@ async fn main() -> anyhow::Result<()> {
         .with(middleware::log_scrub::ScrubLayer)
         .init();
 
-    // ── CLI: --download-model <model_id> (ADR-013, Phase 3) ──────────
     let args: Vec<String> = std::env::args().collect();
+
+    // ── CLI: --healthcheck ────────────────────────────────────────────
+    // docker-compose.yml's backend healthcheck runs `/app/emailibrium
+    // --healthcheck`. It has to be the binary rather than an HTTP probe because
+    // the runtime image (debian:trixie-slim + ca-certificates/libssl3/libstdc++6)
+    // ships neither wget nor curl.
+    //
+    // This flag existed in the compose file long before it existed here, so the
+    // unrecognised argument fell through to normal startup: the healthcheck
+    // launched a SECOND server every 30s, which then failed to bind the port,
+    // and the container could never report healthy.
+    //
+    // Probes the already-running server over loopback and exits 0/1. Deliberately
+    // does NOT touch the database or vector store directly — it must observe the
+    // same thing an external caller would.
+    if args.iter().any(|a| a == "--healthcheck") {
+        let config = VectorConfig::load()?;
+        // Bind host may be 0.0.0.0; always probe loopback from inside the container.
+        let url = format!("http://127.0.0.1:{}/api/v1/vectors/health", config.port);
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(5))
+            .build()?;
+        match client.get(&url).send().await {
+            Ok(resp) if resp.status().is_success() => return Ok(()),
+            Ok(resp) => {
+                eprintln!("healthcheck: {} returned HTTP {}", url, resp.status());
+                std::process::exit(1);
+            }
+            Err(e) => {
+                eprintln!("healthcheck: {url} unreachable: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
+
+    // ── CLI: --download-model <model_id> (ADR-013, Phase 3) ──────────
     if let Some(pos) = args.iter().position(|a| a == "--download-model") {
         if let Some(model_id) = args.get(pos + 1) {
             return vectors::model_download::run_download_model_by_id(model_id)

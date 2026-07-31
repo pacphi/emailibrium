@@ -10,11 +10,11 @@ The user fixed the jury routing before this convening (`.claude/skills/qe-court/
 Earlier phase courts could not seat a jury at all because 4 of 8 roles, including the
 jury, routed to Cognitum, which is unconfigured in this environment.
 
-| Role | Provider | Vendor |
-| --- | --- | --- |
-| Writer (author under review) | claude-code | Claude |
-| Jury | codex | GPT |
-| Deeper reviewer | codex (high effort) | GPT |
+| Role                         | Provider            | Vendor |
+| ---------------------------- | ------------------- | ------ |
+| Writer (author under review) | claude-code         | Claude |
+| Jury                         | codex               | GPT    |
+| Deeper reviewer              | codex (high effort) | GPT    |
 
 `writerIsNeverJuror`: **SATISFIED** — the jury is a different vendor from the author.
 `minDistinctVendors: 2`: **SATISFIED**.
@@ -80,7 +80,7 @@ de-duplicated, four swallowed exit codes fixed, and two genuinely broken release
 images (wrong build stage; glibc mismatch that built clean but could not run) now
 fixed and verified on the amd64 architecture that actually ships.
 
-**Strongest case AGAINST:** CI proves images *build*, not that the system *runs*.
+**Strongest case AGAINST:** CI proves images _build_, not that the system _runs_.
 Three disclosed gaps remain open and are not addressed by this branch — the Compose
 healthcheck passes a flag `main.rs` does not parse (so the container can never report
 healthy), the frontend image cannot serve standalone, and the Lighthouse budgets are

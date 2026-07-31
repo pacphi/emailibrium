@@ -121,3 +121,4 @@ agentdb.rvf
 agentdb.rvf.lock
 .autopilot/queued/
 nextest.tar.zst
+.lighthouseci/

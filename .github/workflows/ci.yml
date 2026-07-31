@@ -18,7 +18,12 @@ env:
   # every job starts from a restored cache, so it just bloats target/ and slows
   # the cache save/restore steps. Same for test-profile debuginfo.
   CARGO_INCREMENTAL: 0
-  CARGO_PROFILE_TEST_DEBUG: 0
+  # 1 = line-tables-only, NOT 0. This was 0, which stripped every `at file:line`
+  # frame from RUST_BACKTRACE output above — leaving bare symbol names and making
+  # a CI test failure materially harder to diagnose, which defeats RUST_BACKTRACE: 1
+  # two lines up. Line tables restore file:line at a small fraction of the size of
+  # full debuginfo (debug = 2), so target/ stays lean and the cache stays fast.
+  CARGO_PROFILE_TEST_DEBUG: 1
 
 jobs:
   # Backend jobs (separate for clear failure attribution)
