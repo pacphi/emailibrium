@@ -91,7 +91,7 @@ clean: ## Clean build artifacts
 
 .PHONY: test
 test: ## Run unit tests (Vitest)
-	@$(TURBO) test || true
+	@$(TURBO) test
 
 .PHONY: test-e2e
 test-e2e: ## Run E2E tests (Playwright)
@@ -127,7 +127,7 @@ deadcode: ## Check for unused exports
 
 .PHONY: audit
 audit: ## Security audit
-	@$(PNPM) audit --prod 2>/dev/null || echo "$(YELLOW)pnpm audit completed with findings$(RESET)"
+	@$(PNPM) audit --prod
 
 # ============================================================================
 # Dependency Management
