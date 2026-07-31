@@ -179,7 +179,36 @@ phases:
       - "grep: 'submodules: true' in .github/workflows/release.yml"
       - "grep: ruvector in backend/Dockerfile"
       - "cmd: docker buildx build --target runtime -f backend/Dockerfile --load -t emailibrium-backend:spec-check . (exits 0 from repo root with the reworked context)"
-    conventions: "ruvector is a vendored third-party git submodule consumed via path deps — do not edit it, only fix how the build context references it (OPTIMIZATION_SPEC.md preamble)."
+      - "cmd: test \"$(docker run --rm --entrypoint sh emailibrium-backend:spec-check -c 'ldd /app/emailibrium 2>&1 | grep -c \"not found\"')\" = \"0\" (every shared lib resolves inside the image — a successful BUILD does not prove the binary can run)"
+    conventions: |
+      ruvector is a vendored third-party git submodule consumed via path deps — do not edit it,
+      only fix how the build context references it (OPTIMIZATION_SPEC.md preamble).
+
+      DoD STRENGTHENED 2026-07-31 during execution. A build that exits 0 does NOT prove the image
+      works. This phase produced a clean 179MB image containing a 72MB binary that died instantly
+      on startup with "version `GLIBC_2.39' not found", because `rust:1.97-slim` now resolves to a
+      trixie-based image (glibc 2.41 / GCC 13+) while the runtime stage was debian:bookworm-slim
+      (glibc 2.36 / GCC 12). Shipping that would have reproduced the very defect F-1 exists to fix.
+      The added runtime check is what catches it, so it is now part of the gate rather than a thing
+      the implementer happened to try.
+
+      That check is `ldd`, NOT `--help`. OPTIMIZATION_SPEC F-1 suggests `/app/emailibrium --help`,
+      but this binary parses `std::env::args()` directly with no clap and no --help handler, so it
+      ignores the flag and proceeds to real startup. `ldd` reporting zero unresolved libraries
+      tests exactly the defect class — whether the binary's dynamic dependencies exist in the
+      runtime image — and is independent of app configuration.
+
+      CORRECTION: the `Permission denied (os error 13)` seen while running the image was first
+      written off as an artifact of bare `docker run` (no volume/config/secrets). That was WRONG,
+      and Tier-3 review reproduced the real cause: /app/data did not exist in the image, so the
+      `backend_data:/app/data` mount in docker-compose.yml was created root:root while the
+      container runs read_only as 1000:1000 — it fails under compose too, not just bare. Fixed by
+      creating and chown-ing /app/data before the USER directive.
+
+      Direction of the fix matters and is counter-intuitive: ort_sys (ONNX Runtime, via fastembed)
+      ships PREBUILT C++ objects built with GCC 13+, so a bookworm builder cannot link them at all
+      (`undefined reference to __cxa_call_terminate`). Trixie is therefore a hard floor — the
+      runtime had to move UP to match the builder, not the builder down to match the runtime.
     depends_on: []
     touches: [".github/workflows/docker.yml", ".github/workflows/release.yml", "backend/Dockerfile"]
     adrs: []
