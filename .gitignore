@@ -64,18 +64,25 @@ claude-credentials*
 anthropic-key*
 api-keys*
 
-# Claude Code internal state
+# --- Claude Code local state --------------------------------------------------
+# Ignore everything under .claude/ by default -- tooling (ruflo, agentic-qe,
+# superpowers, etc.) drops dozens of generic agent/command/skill/helper
+# directories here on init/plugin-install, plus a settings.json that gets
+# regenerated (with a fresh timestamp) by aqe/ruflo re-init. None of it is
+# emailibrium-specific; a repo-wide audit found zero references to this
+# project's own content anywhere under .claude/. The allowlist below is
+# per-path, not a blanket `!.claude/`, so a future tooling re-init can never
+# silently sweep its own boilerplate back into git. To share a genuinely new
+# project-specific command/skill/agent, add a matching `!` un-ignore line.
+.claude/*
+# (no un-ignores yet -- nothing project-specific has been added under .claude/)
+
+# Claude Code internal state (also reachable via the .claude/* rule above,
+# kept explicit since these tools can drop state outside .claude/ too)
 .claude-flow/
-.claude/worktrees/
 .swarm/
 .agentic-qe/
-
-# Claude Code session data (contains command history, metrics, local prefs)
-**/.claude/memory/working-state.jsonl
-**/.claude/memory/metrics.json
-**/.claude/memory.db
-**/.claude/settings.local.json
-**/.claude/*/.claude-flow/
+.agents/
 
 # Storybook
 storybook-static/
@@ -99,3 +106,16 @@ docker-compose.override.yml
 *.rej
 .git-rewrite/
 .gitnexus
+
+# Ruflo local secrets and runtime data
+.env.*.local
+.claude-flow/data/
+.claude-flow/logs/
+.claude-flow/sessions/
+
+# Codex local configuration
+.codex/
+
+# RuVector / ruflo local agent databases -- machine artifacts, not library content
+agentdb.rvf
+agentdb.rvf.lock
