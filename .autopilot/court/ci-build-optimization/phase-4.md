@@ -73,6 +73,7 @@ fix was incomplete. Single-lens review would have shipped this.
 
 Not run (no blind refuter seated). All charges above were instead **verified directly
 by reproduction or by reading the authoritative source** before being accepted:
+
 - Charge 3 (merge-gate) was *downgraded* by direct evidence (`gh api` → 404 "Branch not protected").
 - The bench-profile claim was confirmed by observing `cargo bench --no-run` build the optimized profile.
 
