@@ -87,3 +87,17 @@ healthy), the frontend image cannot serve standalone, and the Lighthouse budgets
 all `warn` so that job still cannot fail. None is a regression introduced here; all
 three are recorded as parking-lot items. A container-start/health smoke test is the
 single highest-value thing still missing.
+
+## Re-convening (protocol: REMAND -> fix -> re-convene once)
+
+Re-convened on the fix commit only. The jury ran clean this time (no plugin
+derailment) and checked the current files directly:
+
+> CHARGE 1: RESOLVED — All four Docker inputs are now included in the PR paths filter.
+> CHARGE 2: RESOLVED — All four live commands now use `just`; no reviewed files differ from the fix commit.
+> **FINAL: SHIP**
+
+Verdict stands as **SHIP**, from a jury of a different vendor than the author.
+The kill round and overturn round were still not run, so this remains short of
+the full ADR-124 protocol — but the seating invariant (`writerIsNeverJuror`) held
+and both upheld charges were reproduced, fixed, and independently re-verified.
