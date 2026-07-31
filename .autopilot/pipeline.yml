@@ -121,17 +121,32 @@ phases:
     goal: "Rust toolchain version and link step are single-sourced and faster, with an opt-in path to bigger/native runners."
     track: ""
     deliverables:
-      - "Make backend/rust-toolchain.toml (MSRV 1.96.0) the single source of truth: pin ci.yml/release.yml's `dtolnay/rust-toolchain` step to that version instead of bare `@stable`."
-      - "Install `lld` in the Rust CI jobs and set `-Clink-arg=-fuse-ld=lld` (via RUSTFLAGS or backend/.cargo/config.toml) to cut incremental link time."
+      - "Make backend/rust-toolchain.toml the single source of truth: ci.yml/release.yml must resolve the Rust version FROM that file instead of installing bare `@stable`."
+      - "Install `lld` and set `-Clink-arg=-fuse-ld=lld` in the CI job(s) that actually link, to cut link time."
       - "Point heavy jobs (rust-test, Docker builds) at `runs-on: \\${{ vars.HEAVY_RUNNER || 'ubuntu-latest' }}` so a runner upgrade is opt-in and safe by default."
     definition_of_done:
       - "grep:absent: dtolnay/rust-toolchain@stable in .github/workflows/**"
-      - "grep: '1.96' in .github/workflows/**"
+      - "grep: rust-toolchain.toml in .github/workflows/**"
+      - "cmd: test \"$(sed -n 's/^channel *= *\"\\(.*\\)\"/\\1/p' backend/rust-toolchain.toml)\" = \"1.97.0\""
       - "grep: rust-toolchain.toml in backend"
-      - "grep: fuse-ld=lld in .github/workflows/** backend/.cargo/config.toml"
+      - "grep: fuse-ld=lld in .github/workflows/**"
       - "grep: lld in .github/workflows/**"
       - "grep: vars.HEAVY_RUNNER in .github/workflows/**"
-    conventions: ""
+    conventions: |
+      DoD CORRECTED 2026-07-31 during phase-3 execution. The original line
+      `grep: '1.96' in .github/workflows/**` came from OPTIMIZATION_SPEC F-8's claim that the
+      MSRV is 1.96.0. That is stale: backend/rust-toolchain.toml pins 1.97.0 and
+      backend/Cargo.toml sets rust-version = "1.97". Hardcoding 1.96 into CI would BREAK the
+      build — phase 0 hit exactly that error locally ("rustc 1.96.0 is not supported by the
+      following packages: emailibrium@0.2.0 requires rustc 1.97").
+      The replacement DoD is strictly STRONGER, not weaker: instead of asserting a hardcoded
+      version string appears in the workflows (which would itself be a second source of truth
+      and could drift again), it asserts the workflows REFERENCE rust-toolchain.toml, and
+      separately pins the expected value in one place. This follows the deliverable's own
+      sanctioned alternative: "or have it read the toolchain file".
+      lld is deliberately NOT added to backend/.cargo/config.toml: that would make every local
+      build require lld to be installed. It is scoped to the rust-test job, the only job that
+      links (fmt/clippy emit metadata and never link).
     depends_on: []
     touches: [".github/workflows/ci.yml", ".github/workflows/release.yml", "backend/.cargo/config.toml"]
     adrs: []

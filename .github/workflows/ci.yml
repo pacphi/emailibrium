@@ -29,8 +29,16 @@ jobs:
       - uses: actions/checkout@v7
         with:
           submodules: true
-      - uses: dtolnay/rust-toolchain@stable
+      # backend/rust-toolchain.toml is the single source of truth for the Rust
+      # version. Installing bare @stable here drifts from it, and rustup would
+      # silently install the pinned toolchain a second time on first cargo use
+      # inside backend/ — so read the pin and install exactly it, once.
+      - name: Resolve pinned toolchain
+        id: rust
+        run: echo "channel=$(sed -n 's/^channel *= *"\(.*\)"/\1/p' backend/rust-toolchain.toml)" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: ${{ steps.rust.outputs.channel }}
           components: rustfmt
       - name: Check formatting
         working-directory: backend
@@ -43,8 +51,12 @@ jobs:
       - uses: actions/checkout@v7
         with:
           submodules: true
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Resolve pinned toolchain
+        id: rust
+        run: echo "channel=$(sed -n 's/^channel *= *"\(.*\)"/\1/p' backend/rust-toolchain.toml)" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: ${{ steps.rust.outputs.channel }}
           components: clippy
       - uses: Swatinem/rust-cache@v2
         with:
@@ -58,13 +70,32 @@ jobs:
 
   rust-test:
     name: Rust Tests
-    runs-on: ubuntu-latest
+    # Opt-in bigger/native runner. Unset (the default) resolves to ubuntu-latest,
+    # so this is safe everywhere; setting the repo variable to a label that does
+    # not exist would queue forever, which is why it is parameterized rather than
+    # hardcoded to a non-default runner.
+    runs-on: ${{ vars.HEAVY_RUNNER || 'ubuntu-latest' }}
     needs: [rust-format, rust-clippy]
+    # This is where the linking cost actually is: the test binaries and benches.
+    # (clippy does link build scripts and proc-macros, but not the test binaries,
+    # so it has little to gain.) RUSTFLAGS is scoped to this job so a missing
+    # linker can never break an unrelated one.
+    env:
+      RUSTFLAGS: -Clink-arg=-fuse-ld=lld
     steps:
       - uses: actions/checkout@v7
         with:
           submodules: true
-      - uses: dtolnay/rust-toolchain@stable
+      # Assumes an apt-based Ubuntu runner — true for ubuntu-latest and for the
+      # ubuntu-*-arm images HEAVY_RUNNER is expected to point at.
+      - name: Install lld
+        run: sudo apt-get update && sudo apt-get install -y lld
+      - name: Resolve pinned toolchain
+        id: rust
+        run: echo "channel=$(sed -n 's/^channel *= *"\(.*\)"/\1/p' backend/rust-toolchain.toml)" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.rust.outputs.channel }}
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: backend
