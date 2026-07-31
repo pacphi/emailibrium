@@ -9,7 +9,7 @@ Configure Gmail (Google) and Outlook (Microsoft) OAuth for Emailibrium.
 ## Prerequisites
 
 - A Google Cloud project and/or Microsoft Entra (Azure AD) app registration
-- `make setup` completed (writes credentials to `secrets/dev/`)
+- `just setup` completed (writes credentials to `secrets/dev/`)
 - Backend running on `http://localhost:8080` (default)
 
 ---
@@ -53,7 +53,7 @@ Configure Gmail (Google) and Outlook (Microsoft) OAuth for Emailibrium.
 
 ### 4. Store Credentials
 
-Run `make setup-secrets` or manually create the files:
+Run `just setup-secrets` or manually create the files:
 
 ```bash
 echo "YOUR_CLIENT_ID" > secrets/dev/google_client_id
@@ -61,11 +61,11 @@ echo "YOUR_CLIENT_SECRET" > secrets/dev/google_client_secret
 chmod 600 secrets/dev/google_client_id secrets/dev/google_client_secret
 ```
 
-The `make dev` target automatically exports these as `EMAILIBRIUM_GOOGLE_CLIENT_ID` and `EMAILIBRIUM_GOOGLE_CLIENT_SECRET` environment variables.
+The `just dev` target automatically exports these as `EMAILIBRIUM_GOOGLE_CLIENT_ID` and `EMAILIBRIUM_GOOGLE_CLIENT_SECRET` environment variables.
 
 ### 5. Test
 
-1. Start the app: `make dev`
+1. Start the app: `just dev`
 2. Navigate to `http://localhost:3000/onboarding`
 3. Click **Gmail** > authenticate with a test user account
 4. You should be redirected back to the app after consent
@@ -191,7 +191,7 @@ chmod 600 secrets/dev/microsoft_client_id secrets/dev/microsoft_client_secret
 
 ### 7. Test
 
-1. Start the app: `make dev`
+1. Start the app: `just dev`
 2. Navigate to `http://localhost:3000/onboarding`
 3. Click **Outlook** > authenticate with a Microsoft account
 4. Grant the requested permissions when prompted
@@ -237,7 +237,7 @@ oauth:
 | `EMAILIBRIUM_MICROSOFT_CLIENT_SECRET`    | `secrets/dev/microsoft_client_secret` | Microsoft Client Secret Value                |
 | `EMAILIBRIUM_ENCRYPTION_MASTER_PASSWORD` | `secrets/dev/oauth_encryption_key`    | AES-256-GCM key for token encryption at rest |
 
-These are loaded automatically by `make dev` from the `secrets/dev/` directory.
+These are loaded automatically by `just dev` from the `secrets/dev/` directory.
 
 ### API Endpoints
 
@@ -269,7 +269,7 @@ Your GCP project's OAuth consent screen is set to "Internal" (Workspace org only
 
 The backend can't find the OAuth credentials in environment variables.
 
-**Fix**: Either run `make setup-secrets` to store credentials, or ensure `make dev` is used to start the server (it exports secrets from `secrets/dev/`). Running `cargo run` directly won't load secrets.
+**Fix**: Either run `just setup-secrets` to store credentials, or ensure `just dev` is used to start the server (it exports secrets from `secrets/dev/`). Running `cargo run` directly won't load secrets.
 
 ### Token expired / refresh failed
 

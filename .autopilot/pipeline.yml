@@ -13,11 +13,11 @@ goal: "Fix the broken Docker publish (wrong build stage + missing submodule cont
 spec: "OPTIMIZATION_SPEC.md"
 
 references:
-  prd:     ""
-  plan:    ""
+  prd: ""
+  plan: ""
   adr_dir: "docs/ADRs"
   ddd_dir: "docs/DDDs"
-  extra:   []
+  extra: []
 
 # Branch model. trunk is NEVER merged autonomously — a human always merges the final PR.
 # Revised 2026-07-31 (user request): each phase branches off `develop`, PRs into `develop`, and
@@ -29,7 +29,7 @@ references:
 # same sitting (2026-07-31) so phase PRs into `develop` actually get CI-checked — without that, every
 # phase PR would show zero checks and orchestrate's anti-vacuous-green guard would refuse to merge.
 trunk: main
-base:  develop
+base: develop
 
 # Autonomy mode: pr_ci — branch -> PR -> CI -> bounded fix-loop -> squash-merge, no per-phase
 # human checkpoint. NOTE: OPTIMIZATION_SPEC.md's own preamble recommends `reviewed` for the first
@@ -62,7 +62,7 @@ phases:
     deliverables:
       - "Remove the unused `ruvector-collections` path dependency (0 source refs; a submodule path-crate compiled on every build for nothing)."
       - "Remove the unused `encoding_rs` optional dependency, including its `dep:encoding_rs` reference in the `builtin-llm` feature."
-      - "Add a `[package.metadata.cargo-machete]` `ignored = [\"apalis\", \"apalis-sql\"]` allowlist with a rationale comment for the planned-but-not-yet-wired job queue deps."
+      - 'Add a `[package.metadata.cargo-machete]` `ignored = ["apalis", "apalis-sql"]` allowlist with a rationale comment for the planned-but-not-yet-wired job queue deps.'
     definition_of_done:
       - "cmd: cargo machete backend"
       - "cmd: cargo build --manifest-path backend/Cargo.toml --features builtin-llm"
@@ -113,7 +113,8 @@ phases:
       - "cmd: test -f frontend/lighthouserc.json"
     conventions: "This also resolves the frontend half of F-5's redundant-build concern: removing both jobs drops 2 of the 3 full `pnpm install` + `pnpm turbo build` runs per PR (only frontend-quality's build remains)."
     depends_on: []
-    touches: [".github/workflows/ci.yml", ".github/workflows/lighthouse.yml", "frontend/lighthouserc.json"]
+    touches:
+      [".github/workflows/ci.yml", ".github/workflows/lighthouse.yml", "frontend/lighthouserc.json"]
     adrs: []
     ddd: []
 
@@ -148,7 +149,8 @@ phases:
       build require lld to be installed. It is scoped to the rust-test job, the only job that
       links (fmt/clippy emit metadata and never link).
     depends_on: []
-    touches: [".github/workflows/ci.yml", ".github/workflows/release.yml", "backend/.cargo/config.toml"]
+    touches:
+      [".github/workflows/ci.yml", ".github/workflows/release.yml", "backend/.cargo/config.toml"]
     adrs: []
     ddd: []
 
@@ -179,7 +181,7 @@ phases:
       - "grep: 'submodules: true' in .github/workflows/release.yml"
       - "grep: ruvector in backend/Dockerfile"
       - "cmd: docker buildx build --target runtime -f backend/Dockerfile --load -t emailibrium-backend:spec-check . (exits 0 from repo root with the reworked context)"
-      - "cmd: test \"$(docker run --rm --entrypoint sh emailibrium-backend:spec-check -c 'ldd /app/emailibrium 2>&1 | grep -c \"not found\"')\" = \"0\" (every shared lib resolves inside the image — a successful BUILD does not prove the binary can run)"
+      - 'cmd: test "$(docker run --rm --entrypoint sh emailibrium-backend:spec-check -c ''ldd /app/emailibrium 2>&1 | grep -c "not found"'')" = "0" (every shared lib resolves inside the image — a successful BUILD does not prove the binary can run)'
     conventions: |
       ruvector is a vendored third-party git submodule consumed via path deps — do not edit it,
       only fix how the build context references it (OPTIMIZATION_SPEC.md preamble).
@@ -224,7 +226,7 @@ phases:
       - "grep: 'target: runtime' in .github/workflows/release.yml"
       - "cmd: docker buildx build --target runtime -f backend/Dockerfile --load -t emailibrium-backend:spec-check . (exits 0 from the repo root)"
       - "cmd: docker run --rm --entrypoint sh emailibrium-backend:spec-check -c 'test -x /app/emailibrium && test -d /app/migrations && ! command -v cargo-watch' (the backend image is the runtime stage: compiled binary + migrations present, cargo-watch absent)"
-      - "cmd: docker run --rm --entrypoint sh emailibrium-backend:spec-check -c 'test -x /app/emailibrium && ldd /app/emailibrium 2>&1 | grep -q \"=> /\" && ! ldd /app/emailibrium 2>&1 | grep -q \"not found\"' (FAIL-CLOSED: binary must exist AND ldd must actually resolve libs AND report none missing)"
+      - 'cmd: docker run --rm --entrypoint sh emailibrium-backend:spec-check -c ''test -x /app/emailibrium && ldd /app/emailibrium 2>&1 | grep -q "=> /" && ! ldd /app/emailibrium 2>&1 | grep -q "not found"'' (FAIL-CLOSED: binary must exist AND ldd must actually resolve libs AND report none missing)'
       - "cmd: docker buildx build --target runtime -f frontend/Dockerfile --load -t emailibrium-frontend:spec-check frontend (exits 0)"
       - "cmd: docker run --rm --entrypoint sh emailibrium-frontend:spec-check -c 'command -v nginx && test -d /usr/share/nginx/html' (the frontend image is the nginx runtime stage, not the node dev server)"
     conventions: |
@@ -274,6 +276,25 @@ phases:
       - "prose: every recipe present in the three deleted Makefiles has a behaviorally equivalent `just` recipe — no silent drops. Cite the mapping for any renamed recipe."
     conventions: "This phase touches nearly every file the other six phases also touch, and profile.yml's commands.* are load-bearing for every future gate run — that's why it's last and depends on all of 0-6, not just file-level `touches` overlap. Preserve exact recipe names where sensible (`just build`, `just test`, `just lint`, `just format-check`, `just audit`, `just ci`) so muscle memory and any external scripts/docs need minimal changes. cargo-machete's `[package.metadata.cargo-machete]` block from phase 0 and the audit-ignore file are untouched by this phase — it's a task-runner swap, not a dependency change. Also a good moment to fix the discovered backend/Makefile audit-swallow bug (pl-mk-audit-swallow, .autopilot/discovered/ci-build-optimization.jsonl) — it disappears for free once backend/Makefile is deleted, but the just recipe must not reintroduce an equivalent swallow."
     depends_on: [0, 1, 2, 3, 4, 5, 6]
-    touches: ["Makefile", "justfile", "backend/Makefile", "backend/justfile", "frontend/Makefile", "frontend/justfile", ".autopilot/profile.yml", "README.md", "QUICKSTART.md", "CLAUDE.md", "docs/setup-guide.md", "docs/maintainer-guide.md", "docs/deployment-guide.md", "docs/releasing.md", "docs/user-guide.md", "docs/oauth-setup-guide.md", "docs/ADRs/**"]
+    touches:
+      [
+        "Makefile",
+        "justfile",
+        "backend/Makefile",
+        "backend/justfile",
+        "frontend/Makefile",
+        "frontend/justfile",
+        ".autopilot/profile.yml",
+        "README.md",
+        "QUICKSTART.md",
+        "CLAUDE.md",
+        "docs/setup-guide.md",
+        "docs/maintainer-guide.md",
+        "docs/deployment-guide.md",
+        "docs/releasing.md",
+        "docs/user-guide.md",
+        "docs/oauth-setup-guide.md",
+        "docs/ADRs/**",
+      ]
     adrs: []
     ddd: []

@@ -1,7 +1,7 @@
 # Emailibrium Setup Guide
 
 This guide walks through setting up Emailibrium for local development.
-Run `make setup` for an interactive wizard that automates these steps.
+Run `just setup` for an interactive wizard that automates these steps.
 
 ## Prerequisites
 
@@ -17,7 +17,7 @@ Run `make setup` for an interactive wizard that automates these steps.
 Check all prerequisites at once:
 
 ```bash
-make setup-prereqs
+just setup-prereqs
 ```
 
 ### Git Submodules
@@ -34,7 +34,7 @@ Secrets live in `secrets/dev/` (gitignored). The setup script auto-generates
 cryptographic secrets and prompts for OAuth credentials.
 
 ```bash
-make setup-secrets
+just setup-secrets
 ```
 
 ### Auto-generated secrets
@@ -89,7 +89,7 @@ No API keys, no external services, no data leaves your machine.
 To avoid the first-use download delay:
 
 ```bash
-make download-models
+just download-models
 ```
 
 Or download individually:
@@ -105,7 +105,7 @@ npx tsx scripts/models.ts download --default
 ### Check Your Configuration
 
 ```bash
-make diagnose
+just diagnose
 ```
 
 Shows embedding status, LLM model status, Ollama availability, and cloud API keys.
@@ -125,7 +125,7 @@ See [Configuration Reference](configuration-reference.md) for all options.
 Emailibrium supports a tiered AI architecture. Configure providers with:
 
 ```bash
-make setup-ai
+just setup-ai
 ```
 
 ### ONNX (default, local)
@@ -159,10 +159,10 @@ Choose between Docker and native development.
 ### Docker Development (recommended for first run)
 
 ```bash
-make setup-docker    # Build images, optionally start services
-make docker-up-dev   # Start with hot-reload
-make docker-logs     # Tail logs
-make docker-down     # Stop
+just setup-docker    # Build images, optionally start services
+just docker-up-dev   # Start with hot-reload
+just docker-logs     # Tail logs
+just docker-down     # Stop
 ```
 
 Docker Compose starts: PostgreSQL, Redis, backend (Rust), frontend (React).
@@ -170,8 +170,8 @@ Docker Compose starts: PostgreSQL, Redis, backend (Rust), frontend (React).
 ### Native Development
 
 ```bash
-make install         # Install all dependencies
-make dev             # Start backend + frontend dev servers
+just install         # Install all dependencies
+just dev             # Start backend + frontend dev servers
 ```
 
 Native dev uses SQLite by default (configured in `configs/config.development.yaml`).
@@ -181,7 +181,7 @@ Native dev uses SQLite by default (configured in `configs/config.development.yam
 Run all validation checks:
 
 ```bash
-make setup-validate
+just setup-validate
 ```
 
 This checks: secrets, backend compilation, frontend build, Docker health,
@@ -237,9 +237,9 @@ stderr and `data/logs/emailibrium.log`.
 
 The mode is an enum, `http` (default) or `stdio`, and can be set two ways:
 
-| Source  | Form                       |
-| ------- | -------------------------- |
-| CLI     | `--mcp-stdio`              |
+| Source  | Form                         |
+| ------- | ---------------------------- |
+| CLI     | `--mcp-stdio`                |
 | Env var | `EMAILIBRIUM_MCP_MODE=stdio` |
 
 The CLI flag wins if both are set. Note the two spellings are not symmetric: the flag is a
@@ -284,7 +284,7 @@ is not running; a 404 means it started without the MCP routes mounted.
 
 - Ensure Docker Desktop is running and has enough disk space
 - Try `docker system prune -f` to clean old images
-- Rebuild without cache: `make docker-build-no-cache`
+- Rebuild without cache: `just docker-build-no-cache`
 
 ### "cargo check failed"
 
@@ -299,8 +299,8 @@ is not running; a 404 means it started without the MCP routes mounted.
 ### "Backend not reachable on localhost:8080"
 
 - Check if port 8080 is already in use: `lsof -i :8080`
-- For Docker: check container logs with `make docker-logs-backend`
-- For native: check `make -C backend dev` output
+- For Docker: check container logs with `just docker-logs-backend`
+- For native: check `cd backend && just dev` output
 
 ### "ONNX model download slow"
 

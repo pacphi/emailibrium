@@ -40,7 +40,7 @@ check_tool() {
     node)     version=$(node --version 2>/dev/null | sed 's/^v//') ;;
     pnpm)     version=$(pnpm --version 2>/dev/null) ;;
     docker)   version=$(docker --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1) ;;
-    make)     version=$(make --version 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+(\.[0-9]+)?' | head -1) ;;
+    just)     version=$(just --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+(\.[0-9]+)?' | head -1) ;;
   esac
 
   if [[ -z "$version" ]]; then
@@ -100,7 +100,7 @@ check_tool "Node.js"        "node"   "22.12"  "brew install node@22  OR  https:/
 check_tool "pnpm"           "pnpm"   "10.32"  "corepack enable && corepack prepare pnpm@latest --activate"
 check_tool "Docker"         "docker" "24.0"   "https://docs.docker.com/get-docker/"
 check_docker_compose
-check_tool "Make"           "make"   "3.81"   "Xcode CLI: xcode-select --install  OR  brew install make"
+check_tool "just"           "just"   "1.14"   "brew install just  OR  cargo install just  OR  mise use -g just"
 
 echo ""
 echo "${BOLD}Submodules:${RESET}"

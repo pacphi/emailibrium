@@ -132,9 +132,9 @@ if [[ "$(echo "$start_choice" | tr '[:upper:]' '[:lower:]')" == "y" ]]; then
   echo "  Backend:  http://localhost:8080"
   echo "  Frontend: http://localhost:3000"
   echo ""
-  echo "  Logs:     make docker-logs"
-  echo "  Stop:     make docker-down"
+  echo "  Logs:     just docker-logs"
+  echo "  Stop:     just docker-down"
 else
   echo ""
-  echo "  ${YELLOW}Skipped.${RESET} Start later with: make docker-up"
+  echo "  ${YELLOW}Skipped.${RESET} Start later with: just docker-up"
 fi

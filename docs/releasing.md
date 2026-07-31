@@ -23,13 +23,13 @@ cargo install git-cliff   # provides changelog generation
 **Cut a release (single command):**
 
 ```bash
-make release VERSION=0.1.0
+just release VERSION=0.1.0
 
 # Or for pre-releases:
-make release VERSION=0.2.0-alpha.1
+just release VERSION=0.2.0-alpha.1
 ```
 
-`make release` handles all version bumping, changelog regeneration, git commit, tag, and push.
+`just release` handles all version bumping, changelog regeneration, git commit, tag, and push.
 
 ## Step-by-Step
 
@@ -44,7 +44,7 @@ cargo install git-cliff
 
 ### 2. Version Bumping (automated)
 
-`make release VERSION=x.y.z` automatically updates:
+`just release VERSION=x.y.z` automatically updates:
 
 | File                               | Field                |
 | ---------------------------------- | -------------------- |
@@ -140,19 +140,19 @@ docker compose pull  # pulls :latest
 
 # Or checkout a previous tag
 git checkout v0.1.0
-make install
-make dev
+just install
+just dev
 ```
 
 ## Useful Commands
 
 | Command                          | Description                                                   |
 | -------------------------------- | ------------------------------------------------------------- |
-| `make release-check`             | Run full CI pipeline                                          |
-| `make release-tag VERSION=x.y.z` | Create annotated tag                                          |
-| `make release-push`              | Push latest tag to origin                                     |
-| `make release VERSION=x.y.z`     | Full one-command release (bump, changelog, commit, tag, push) |
-| `make changelog`                 | Regenerate CHANGELOG.md via git-cliff                         |
-| `make release-check`             | Run full CI pipeline only                                     |
-| `make release-tag VERSION=x.y.z` | Create annotated tag only                                     |
-| `make release-push`              | Push latest tag to origin only                                |
+| `just release-check`             | Run full CI pipeline                                          |
+| `just release-tag VERSION=x.y.z` | Create annotated tag                                          |
+| `just release-push`              | Push latest tag to origin                                     |
+| `just release VERSION=x.y.z`     | Full one-command release (bump, changelog, commit, tag, push) |
+| `just changelog`                 | Regenerate CHANGELOG.md via git-cliff                         |
+| `just release-check`             | Run full CI pipeline only                                     |
+| `just release-tag VERSION=x.y.z` | Create annotated tag only                                     |
+| `just release-push`              | Push latest tag to origin only                                |

@@ -85,7 +85,7 @@ MCP and chat paths cannot disagree about which tools exist.
 
 #### Gotchas found in the source
 
-**`#[tool_handler]` defaults to a *static* router call.** Its default `router` expression is
+**`#[tool_handler]` defaults to a _static_ router call.** Its default `router` expression is
 `Self::tool_router()` (`rmcp-macros-1.7.0/src/tool_handler.rs:20-25`), and the macro expands
 to `#router.call(tcc)`, `#router.list_all()`, `#router.get(name)`. It therefore **rebuilds the
 router on every single request** and never reads the struct field. This explains the
@@ -196,10 +196,10 @@ today.
 >
 > They are genuinely different types serving different layers, not accidental duplicates:
 >
-> | | `api::ingestion` | `vectors::ingestion` |
-> | --- | --- | --- |
-> | `IngestionPhase` | 6 variants, `Serialize + Deserialize` | 7 variants (adds `Backfilling`), `Serialize` only |
-> | `IngestionProgress` | same 9 fields, but `phase: IngestionPhase` | `phase: String` |
+> |                     | `api::ingestion`                           | `vectors::ingestion`                              |
+> | ------------------- | ------------------------------------------ | ------------------------------------------------- |
+> | `IngestionPhase`    | 6 variants, `Serialize + Deserialize`      | 7 variants (adds `Backfilling`), `Serialize` only |
+> | `IngestionProgress` | same 9 fields, but `phase: IngestionPhase` | `phase: String`                                   |
 >
 > `vectors::IngestionProgress` is the pipeline's own already-stringified snapshot;
 > `api::IngestionProgress` is the typed SSE broadcast payload.
@@ -234,7 +234,7 @@ today.
 Three findings decide it:
 
 - **`vectors::ingestion` already exists** (`vectors/mod.rs:26`, `pub mod ingestion;`) and
-  already owns `IngestionPipeline` (`vectors/mod.rs:84`) — the component that *produces* these
+  already owns `IngestionPipeline` (`vectors/mod.rs:84`) — the component that _produces_ these
   progress events. Co-locating the progress types with their producer is the cohesive
   placement; `events` is the generic `EventBus`, and putting an ingestion-specific DTO there
   would mix a domain type into a general-purpose bus.
@@ -560,10 +560,10 @@ declared defaults**, which is the desired failure mode.
 
 For each spec in `all_specs()`, look up `cfg.tools.get(spec.name)`:
 
-| Field                   | Resolution                                                                             |
-| ----------------------- | -------------------------------------------------------------------------------------- |
-| `enabled`               | `override.enabled` ?? `true`                                                           |
-| `requires_confirmation` | `override.requires_confirmation` ?? `spec.default_requires_confirmation`               |
+| Field                   | Resolution                                                                              |
+| ----------------------- | --------------------------------------------------------------------------------------- |
+| `enabled`               | `override.enabled` ?? `true`                                                            |
+| `requires_confirmation` | `override.requires_confirmation` ?? `spec.default_requires_confirmation`                |
 | `rate_limit_per_minute` | `override.rate_limit_per_minute` ?? `spec.default_rate_limit_per_minute` ?? `defaults.` |
 
 Keys in `cfg.tools` with no matching spec are handled in two classes:
@@ -577,7 +577,7 @@ const DEFERRED_TOOLS: &[&str] = &["send_email", "delete_email", "create_rule"];
 - name in `DEFERRED_TOOLS` → `debug!` "deferred to A4"
 - otherwise → `warn!(tool = %name, "tools.yaml references unknown tool; ignoring")`
 
-Unknown *fields* inside an entry are ignored (no `deny_unknown_fields`) — a hard startup
+Unknown _fields_ inside an entry are ignored (no `deny_unknown_fields`) — a hard startup
 failure on a stray YAML key is too hostile for an operator-edited file.
 
 Startup emits one summary line: `N tools registered, M disabled by config`.
@@ -600,7 +600,7 @@ through `AppState` fields that are **already public**, so — with one exception
 changes are required.
 
 > **Visibility:** the private `api::{clustering, learning, vectors}` modules are deliberately
-> *not* opened up — the tools reach the services through `ToolContext` instead. The only
+> _not_ opened up — the tools reach the services through `ToolContext` instead. The only
 > module moves are the ones §1.5.1 requires (`cleanup::domain`, `cleanup::repository`, and the
 > ingestion-progress types).
 
@@ -659,6 +659,7 @@ lock: {...} | null }`
   > be called from a library-crate handler. The library-side twin above replaces it. This note
   > exists only because the superseded plan keeps resurfacing from stale handoff notes — if you
   > arrived here looking for the `pub(crate)` change, this is the answer.
+
 - **Read-only verification.** `build()` is pure. Its module doc states "Pure orchestrator:
   reads only injected ports, never touches a provider," and a search across `domain/builder.rs`,
   `domain/classifier.rs`, and `repository/adapters.rs` finds no `INSERT`/`UPDATE`/`DELETE` — the
@@ -733,13 +734,13 @@ model, whereas clamping is binding.
 
 #### 5.3 Rate-limit summary
 
-| Tool                                                                                                          | Limit/min | Rationale                            |
-| ------------------------------------------------------------------------------------------------------------- | --------- | ------------------------------------ |
-| `search_emails`                                                                                               | 30        | preserved from `tools.yaml`          |
-| `get_email`, `list_recent_emails`, `count_emails`, `get_email_thread`, `get_insights`, `list_rules`           | 20        | preserved (global default)           |
-| `find_similar_emails`, `list_attachments`, `get_sync_status`, `get_learning_metrics`                          | 30        | single indexed read or in-memory     |
-| `list_accounts`, `list_clusters`                                                                              | 20        | small fan-out                        |
-| `list_subscriptions`, `preview_cleanup_plan`                                                                  | 5         | multi-query fan-out over the corpus  |
+| Tool                                                                                                | Limit/min | Rationale                           |
+| --------------------------------------------------------------------------------------------------- | --------- | ----------------------------------- |
+| `search_emails`                                                                                     | 30        | preserved from `tools.yaml`         |
+| `get_email`, `list_recent_emails`, `count_emails`, `get_email_thread`, `get_insights`, `list_rules` | 20        | preserved (global default)          |
+| `find_similar_emails`, `list_attachments`, `get_sync_status`, `get_learning_metrics`                | 30        | single indexed read or in-memory    |
+| `list_accounts`, `list_clusters`                                                                    | 20        | small fan-out                       |
+| `list_subscriptions`, `preview_cleanup_plan`                                                        | 5         | multi-query fan-out over the corpus |
 
 #### 5.4 Preserving the seven existing tools
 
@@ -761,7 +762,7 @@ of all seven — making the change deliberate and visible rather than incidental
 Two deliberate behaviour changes, both minor:
 
 1. **Error results are flagged.** Today a failing MCP tool returns `{"error": "..."}` inside a
-   *successful* `CallToolResult`. The dispatch path will keep that same JSON body but also set
+   _successful_ `CallToolResult`. The dispatch path will keep that same JSON body but also set
    `is_error: true`, which is what the MCP spec intends. Clients that ignore the flag see
    identical text.
 2. **Chat calls are now rate-limited and audited.** That is the point of the change, but it is
@@ -772,14 +773,14 @@ Two deliberate behaviour changes, both minor:
 
 ### 6. What gets deleted
 
-| Location                                | Change                                                            |
-| --------------------------------------- | ----------------------------------------------------------------- |
-| `api/ai.rs:1199` `build_tool_definitions` | Deleted — replaced by `registry.chat_definitions()`               |
-| `api/ai.rs:1275` `build_tool_executor`    | Reduced to a ~5-line closure over `registry.dispatch()`           |
-| `mcp/server.rs` `#[tool_router]` + 7 `#[tool]` bodies | Moved to `tools/readonly/`                          |
-| `mcp/server.rs` `rate_limiter` field     | Moved to the registry                                             |
-| `mcp/server.rs` `audit()` method         | Moved into `ToolRegistry::dispatch`                               |
-| `mcp/tools/email.rs`                     | Params structs move to `tools/readonly/params.rs`; row structs to `tools/readonly/emails.rs`; `mcp/tools/` is removed |
+| Location                                              | Change                                                                                                                |
+| ----------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `api/ai.rs:1199` `build_tool_definitions`             | Deleted — replaced by `registry.chat_definitions()`                                                                   |
+| `api/ai.rs:1275` `build_tool_executor`                | Reduced to a ~5-line closure over `registry.dispatch()`                                                               |
+| `mcp/server.rs` `#[tool_router]` + 7 `#[tool]` bodies | Moved to `tools/readonly/`                                                                                            |
+| `mcp/server.rs` `rate_limiter` field                  | Moved to the registry                                                                                                 |
+| `mcp/server.rs` `audit()` method                      | Moved into `ToolRegistry::dispatch`                                                                                   |
+| `mcp/tools/email.rs`                                  | Params structs move to `tools/readonly/params.rs`; row structs to `tools/readonly/emails.rs`; `mcp/tools/` is removed |
 
 Net: roughly 215 duplicated lines in `ai.rs` and ~430 in `mcp/server.rs` collapse into one
 declaration table plus handler modules.
@@ -800,16 +801,16 @@ fn list_resource_templates(&self, ..) -> .. ListResourceTemplatesResult ..;
 fn read_resource(&self, params: ReadResourceRequestParams, ..) -> .. ReadResourceResult ..;
 ```
 
-| URI                | Kind     | Backing                                                                 |
-| ------------------ | -------- | ----------------------------------------------------------------------- |
-| `insights://summary` | concrete | reuses the `get_insights` handler                                       |
-| `email://{id}`     | template | reuses the `get_email` handler                                          |
-| `thread://{key}`   | template | `SELECT ... WHERE thread_key = ?` — takes the thread key **directly**   |
+| URI                  | Kind     | Backing                                                               |
+| -------------------- | -------- | --------------------------------------------------------------------- |
+| `insights://summary` | concrete | reuses the `get_insights` handler                                     |
+| `email://{id}`       | template | reuses the `get_email` handler                                        |
+| `thread://{key}`     | template | `SELECT ... WHERE thread_key = ?` — takes the thread key **directly** |
 
 `list_resources` returns only `insights://summary`; the two parameterized entries belong in
 `list_resource_templates` as `RawResourceTemplate::new(uri_template, name)`.
 
-Note the `thread://` asymmetry: the existing `get_email_thread` **tool** takes an *email id*
+Note the `thread://` asymmetry: the existing `get_email_thread` **tool** takes an _email id_
 and resolves its `thread_key` internally, whereas the `thread://{key}` **resource** is keyed
 by the thread key itself. Both are correct for their surface; the difference must be
 documented so the two are not confused.
@@ -838,10 +839,10 @@ path is the smallest correct implementation: `#[prompt_router]` on an inherent i
 `#[prompt]` per prompt, and `#[prompt_handler(router = self.prompt_router)]` on the
 `ServerHandler` impl.
 
-| Prompt          | Arguments                    | Content                                                                          |
-| --------------- | ---------------------------- | -------------------------------------------------------------------------------- |
-| `triage-inbox`  | `limit` (optional, default 20) | Instructs the model to call `list_recent_emails`, then categorize by urgency and propose actions. |
-| `weekly-report` | none                         | Instructs the model to call `get_insights` and `list_subscriptions`, then produce a written summary. |
+| Prompt          | Arguments                      | Content                                                                                              |
+| --------------- | ------------------------------ | ---------------------------------------------------------------------------------------------------- |
+| `triage-inbox`  | `limit` (optional, default 20) | Instructs the model to call `list_recent_emails`, then categorize by urgency and propose actions.    |
+| `weekly-report` | none                           | Instructs the model to call `get_insights` and `list_subscriptions`, then produce a written summary. |
 
 Both return a `GetPromptResult` holding a single user-role `PromptMessage::new_text`.
 Because our `get_info()` is hand-written, `.enable_prompts()` must be added to it manually —
@@ -971,12 +972,12 @@ HTTP, and cannot edit config files — they pass argv and environment.
 
 Mode is an enum resolved through the existing figment chain, **not** an ad-hoc argv check:
 
-| Precedence | Source                 | Status                                                                                                  |
-| ---------- | ---------------------- | ------------------------------------------------------------------------------------------------------- |
-| 1 highest  | CLI flag               | **Shipped this cycle** — e.g. `--mcp-stdio`                                                             |
-| 2          | `EMAILIBRIUM_MCP_MODE` | **Shipped this cycle**                                                                                  |
+| Precedence | Source                 | Status                                                                                                                                                             |
+| ---------- | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 1 highest  | CLI flag               | **Shipped this cycle** — e.g. `--mcp-stdio`                                                                                                                        |
+| 2          | `EMAILIBRIUM_MCP_MODE` | **Shipped this cycle**                                                                                                                                             |
 | 3          | config file            | ⚠️ **Designed, NOT implemented this cycle** — `config.yaml` does not exist; env + flag are the only shipped sources. Wiring a mode key here silently does nothing. |
-| 4 lowest   | default                | **Shipped this cycle** — `http`, zero change for existing users                                          |
+| 4 lowest   | default                | **Shipped this cycle** — `http`, zero change for existing users                                                                                                    |
 
 The table above is the full intended design; only rows 1, 2, and 4 exist in code. Row 3 carries
 its caveat inline deliberately, because the failure shape is the worst kind: a reader who wires
@@ -1013,15 +1014,15 @@ the protocol stream and surface as intermittent, hard-to-diagnose parse errors.
 The logging profile must therefore be derived from the **resolved mode, before tracing
 initialisation**:
 
-| Mode    | Console layer | ANSI | HTTP listener  |
-| ------- | ------------- | ---- | -------------- |
+| Mode    | Console layer | ANSI | HTTP listener     |
+| ------- | ------------- | ---- | ----------------- |
 | `http`  | stdout        | on   | binds (unchanged) |
 | `stdio` | **stderr**    | off  | **does not bind** |
 
 **`main()` must be reordered — the current structure makes this impossible as written.**
 Today tracing is initialised at `main.rs:89` (the console layer is
 `fmt::layer().with_ansi(true)` at `:82`, defaulting to stdout), and argv is not read until
-`main.rs:92`. Mode resolution therefore happens *after* the logging profile is already fixed.
+`main.rs:92`. Mode resolution therefore happens _after_ the logging profile is already fixed.
 Implementing stdio requires hoisting mode resolution above the `tracing_subscriber::registry()`
 block at `main.rs:80-89`, ahead of the existing `--download-model` / `--download-models` /
 `--verify-models` CLI branches. This is a small change but not an optional one: leave the order
@@ -1077,13 +1078,13 @@ state that must be squared away first; nothing after them compiles until they ar
 
 **Step 0 — reconcile the split contract. ✅ COMPLETE.** Verified against the tree:
 
-| Step | Work | State |
-| ---- | ---- | ----- |
-| 0.1 | `main.rs` re-exports the shared modules from the library instead of re-declaring them (§1.5) | ✅ `main.rs:21` — `pub use emailibrium::{…}`; only `mod api;` and `mod cleanup;` remain binary-side, which is correct |
-| 0.2 | Expose `tools`, `mcp`, and `mcp_service(ctx)` via `lib.rs` | ✅ `lib.rs` now exports `mcp`, `tools`, `sync_lock` and the split `cleanup` |
-| 0.3 | Widen `ToolContext` to the fields in §2.2 | ✅ all five present, including `sync_progress: Option<IngestionBroadcast>` |
-| 0.4 | Convert the A3 handlers to `ToolContext` + `Result<_, ToolError>` | ✅ done |
-| 0.5 | Hoist `cleanup::domain` + `repository`; library-side `PlanBuilder` wiring helper | ✅ both — `lib.rs` carries `pub mod cleanup { pub mod domain; pub mod repository; }`, `api` and `orchestrator` stay binary-side |
+| Step | Work                                                                                         | State                                                                                                                           |
+| ---- | -------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| 0.1  | `main.rs` re-exports the shared modules from the library instead of re-declaring them (§1.5) | ✅ `main.rs:21` — `pub use emailibrium::{…}`; only `mod api;` and `mod cleanup;` remain binary-side, which is correct           |
+| 0.2  | Expose `tools`, `mcp`, and `mcp_service(ctx)` via `lib.rs`                                   | ✅ `lib.rs` now exports `mcp`, `tools`, `sync_lock` and the split `cleanup`                                                     |
+| 0.3  | Widen `ToolContext` to the fields in §2.2                                                    | ✅ all five present, including `sync_progress: Option<IngestionBroadcast>`                                                      |
+| 0.4  | Convert the A3 handlers to `ToolContext` + `Result<_, ToolError>`                            | ✅ done                                                                                                                         |
+| 0.5  | Hoist `cleanup::domain` + `repository`; library-side `PlanBuilder` wiring helper             | ✅ both — `lib.rs` carries `pub mod cleanup { pub mod domain; pub mod repository; }`, `api` and `orchestrator` stay binary-side |
 
 The two type identities have collapsed, so `emailibrium::db::Database` and the binary's
 `crate::db::Database` are now one type, and `backend/tests/` can reach the shipping code. The
@@ -1092,20 +1093,20 @@ destination, re-exported from `api/ingestion.rs` under the old names, zero wire-
 
 **Then the original sequence** — status verified against the tree:
 
-| Step | Work | State |
-| ---- | ---- | ----- |
-| 1 | `tools/{mod.rs, config.rs}` — registry, dispatch, config types | ✅ **done** |
-| 2 | Move the seven existing handlers into `tools/readonly/` | ✅ **done** — all fifteen declared in `tools/mod.rs::declarations()`; `mcp/server.rs` has zero `#[tool(` macros left |
-| 3 | Rewrite `mcp/server.rs` onto `build_tool_router` + `#[tool_handler(router = self.tool_router)]` | ✅ **done** — `build_tool_router` at `mcp/server.rs:60`, `ToolRoute::new_dyn` at `:67`, explicit router attribute at `:126` |
-| 4 | Collapse `ai.rs` onto `registry.chat_definitions()` / `registry.dispatch()` | ✅ **done** — both builders deleted, `ai.rs` 1619 → 1355 lines |
-| 5 | Migration 029; `source` on the audit path; Tier 3 tests | ✅ **done** — `029_mcp_tool_audit_source.sql` exists; audit moved to `tools/audit.rs` and binds `source` (`:21`, `:37`, `:45`) |
-| 6 | Wire the eight A3 tools into the declaration table | ✅ **done** — all eight present in `declarations()` |
-| 7 | A5 resources and prompts | ✅ **done** — `mcp/resources.rs` routes reads through registry enforcement; `get_info` (`mcp/server.rs:182-184`) declares `.enable_tools().enable_prompts().enable_resources()` |
-| 8 | stdio mode (§10), including the `transport-io` Cargo feature | ✅ **done** — feature added (`Cargo.toml:103`); `resolve_mcp_mode()` runs at `main.rs:164`, ahead of `registry()` at `:188` and `.init()` at `:197`; stdio selects a stderr, ANSI-off console layer (`:180-184`) |
+| Step | Work                                                                                            | State                                                                                                                                                                                                            |
+| ---- | ----------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1    | `tools/{mod.rs, config.rs}` — registry, dispatch, config types                                  | ✅ **done**                                                                                                                                                                                                      |
+| 2    | Move the seven existing handlers into `tools/readonly/`                                         | ✅ **done** — all fifteen declared in `tools/mod.rs::declarations()`; `mcp/server.rs` has zero `#[tool(` macros left                                                                                             |
+| 3    | Rewrite `mcp/server.rs` onto `build_tool_router` + `#[tool_handler(router = self.tool_router)]` | ✅ **done** — `build_tool_router` at `mcp/server.rs:60`, `ToolRoute::new_dyn` at `:67`, explicit router attribute at `:126`                                                                                      |
+| 4    | Collapse `ai.rs` onto `registry.chat_definitions()` / `registry.dispatch()`                     | ✅ **done** — both builders deleted, `ai.rs` 1619 → 1355 lines                                                                                                                                                   |
+| 5    | Migration 029; `source` on the audit path; Tier 3 tests                                         | ✅ **done** — `029_mcp_tool_audit_source.sql` exists; audit moved to `tools/audit.rs` and binds `source` (`:21`, `:37`, `:45`)                                                                                   |
+| 6    | Wire the eight A3 tools into the declaration table                                              | ✅ **done** — all eight present in `declarations()`                                                                                                                                                              |
+| 7    | A5 resources and prompts                                                                        | ✅ **done** — `mcp/resources.rs` routes reads through registry enforcement; `get_info` (`mcp/server.rs:182-184`) declares `.enable_tools().enable_prompts().enable_resources()`                                  |
+| 8    | stdio mode (§10), including the `transport-io` Cargo feature                                    | ✅ **done** — feature added (`Cargo.toml:103`); `resolve_mcp_mode()` runs at `main.rs:164`, ahead of `registry()` at `:188` and `.init()` at `:197`; stdio selects a stderr, ANSI-off console layer (`:180-184`) |
 
 `config/tools.yaml` **is now loaded** — `main.rs:544` calls `tools::config::ToolsConfig::load("../config")`; the `TODO(A1)` is gone.
 
-> ### ✅ Resolved — and the fix eliminated the bug *class*, not just the instance.
+> ### ✅ Resolved — and the fix eliminated the bug _class_, not just the instance.
 >
 > `sync_progress` and `pipeline_locks` briefly shipped as permanently `None`: the builders
 > existed but `From<&AppState>` never called them. No compile error (the fields are `Option`),
@@ -1155,12 +1156,12 @@ destination, re-exported from `api/ingestion.rs` under the old names, zero wire-
 Every significant defect this branch produced is the same shape, and naming it is more useful
 than the individual fixes:
 
-| # | Instance | The two representations |
-| - | -------- | ----------------------- |
-| 1 | The original problem | `ai.rs` hand-written schemas vs the `#[tool]` macros |
-| 2 | Flattened `Denied`/`RateLimited` | one audit status covering two opposite caller actions |
-| 3 | `CallSource` on `thread://` | the enum's documented intent vs the value passed |
-| 4 | `thread://` limiter rejection | mapped to `Denied` where dispatch maps `RateLimited` |
+| #   | Instance                         | The two representations                               |
+| --- | -------------------------------- | ----------------------------------------------------- |
+| 1   | The original problem             | `ai.rs` hand-written schemas vs the `#[tool]` macros  |
+| 2   | Flattened `Denied`/`RateLimited` | one audit status covering two opposite caller actions |
+| 3   | `CallSource` on `thread://`      | the enum's documented intent vs the value passed      |
+| 4   | `thread://` limiter rejection    | mapped to `Denied` where dispatch maps `RateLimited`  |
 
 **Every one sits at a seam where a special case bypasses the shared path**, and **two of the
 four are `thread://` specifically** — because it is the only resource that cannot go through
@@ -1277,6 +1278,7 @@ Steps 1–4 are the consolidation and are independently shippable: a reviewer ca
   in by `resource_reads_are_distinguishable_from_tool_calls_in_the_audit_trail`
   (`mcp/resources.rs:553`), and the reasoning now lives in the code's own doc comment (`:189`)
   rather than only here.
+
 - **Pre-existing debt, surfaced but not fixed here: two parallel progress types.**
   `api::ingestion` and `vectors::ingestion` each define an `IngestionPhase` and an
   `IngestionProgress` with the same names, different variants, and different `phase` field
@@ -1343,7 +1345,7 @@ startup logs and ANSI escapes would corrupt the stream on first connect. At the 
 `emailibrium=info` filter this fails every time, not intermittently.
 
 The fix has an ordering constraint. The writer is chosen when the subscriber is constructed,
-so the mode must be read *before* `.init()` at `main.rs:89` — earlier than the existing CLI
+so the mode must be read _before_ `.init()` at `main.rs:89` — earlier than the existing CLI
 flags, which are all parsed from `std::env::args()` at `main.rs:92` and after. §10.2 records
 the same constraint from the design side. This also constrains any future config-file layer for
 the mode: the `figment` chain that would read it runs later in startup, so a file layer needs
@@ -1386,10 +1388,10 @@ topology in §1.5: `main.rs` re-declares modules that `lib.rs` also exports, so
 tests linking the library cannot reach binary-side handlers. That is a compile constraint, not
 a testing preference — which is why `ToolContext` exists. Until the registry lands:
 
-| Tier | Coverage                                             | State                                              |
-| ---- | ------------------------------------------------------ | ---------------------------------------------------- |
-| 1    | Per-handler unit tests                                | Present for the new handlers and the shared validators in `tools/readonly/mod.rs`. |
-| 2    | Registry dispatch, rate limiting, audit rows          | Blocked on step 1.                                 |
+| Tier | Coverage                                                  | State                                                                                                                 |
+| ---- | --------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| 1    | Per-handler unit tests                                    | Present for the new handlers and the shared validators in `tools/readonly/mod.rs`.                                    |
+| 2    | Registry dispatch, rate limiting, audit rows              | Blocked on step 1.                                                                                                    |
 | 3    | Parity — chat definitions equal the `tools/list` response | Blocked on step 4. This is the assertion that prevents the `ai.rs` drift from recurring, so it should not be dropped. |
 
 The regression gate from §12 has not run: it requires the seven existing tools to pass through
@@ -1401,10 +1403,10 @@ the registry unchanged, and the registry does not exist yet.
 
 MCP is served from the same Axum process as the REST API — no second port, no separate daemon.
 
-| Mode              | Selector                                        | Behaviour                                              |
-| ----------------- | ------------------------------------------------- | -------------------------------------------------------- |
-| `http` (default)  | —                                               | Streamable HTTP at `http://localhost:8080/api/v1/mcp`. |
-| `stdio`           | `--mcp-stdio` or `EMAILIBRIUM_MCP_MODE=stdio`   | JSON-RPC over stdin/stdout; the HTTP server does not start. |
+| Mode             | Selector                                      | Behaviour                                                   |
+| ---------------- | --------------------------------------------- | ----------------------------------------------------------- |
+| `http` (default) | —                                             | Streamable HTTP at `http://localhost:8080/api/v1/mcp`.      |
+| `stdio`          | `--mcp-stdio` or `EMAILIBRIUM_MCP_MODE=stdio` | JSON-RPC over stdin/stdout; the HTTP server does not start. |
 
 The CLI flag wins when both are set. The two spellings are deliberately asymmetric — the flag
 is a boolean shorthand, the environment variable takes the mode name — so there is no

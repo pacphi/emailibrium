@@ -101,16 +101,16 @@ git clone https://github.com/pacphi/emailibrium.git
 cd emailibrium
 
 # Guided setup (recommended for first time)
-make setup            # interactive wizard: prerequisites, secrets, AI, Docker
+just setup            # interactive wizard: prerequisites, secrets, AI, Docker
 
 # Option A: Native
-make install
-make dev
+just install
+just dev
 # → Backend: http://localhost:8080  Frontend: http://localhost:3000
 
 # Option B: Docker
-make setup-secrets    # generate dev secrets (first time only)
-make docker-up-dev    # start with hot-reload
+just setup-secrets    # generate dev secrets (first time only)
+just docker-up-dev    # start with hot-reload
 ```
 
 **Prerequisites:** Rust 1.97+, Node.js 26 (LTS)+, pnpm 11.5+ — or just Docker. See [Setup Guide](docs/setup-guide.md) for details.
@@ -158,13 +158,13 @@ Axum process; there is no second port and no separate daemon.
 
 15 read-only tools, grouped by what they touch:
 
-| Area      | Tools                                                                                                        |
-| --------- | ------------------------------------------------------------------------------------------------------------ |
-| Email     | `search_emails`, `get_email`, `list_recent_emails`, `count_emails`, `get_email_thread`, `find_similar_emails`, `list_attachments` |
-| Insights  | `get_insights`, `list_subscriptions`, `list_clusters`, `get_learning_metrics`                                |
-| Accounts  | `list_accounts`, `get_sync_status`                                                                           |
-| Rules     | `list_rules`                                                                                                 |
-| Cleanup   | `preview_cleanup_plan`                                                                                       |
+| Area     | Tools                                                                                                                             |
+| -------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| Email    | `search_emails`, `get_email`, `list_recent_emails`, `count_emails`, `get_email_thread`, `find_similar_emails`, `list_attachments` |
+| Insights | `get_insights`, `list_subscriptions`, `list_clusters`, `get_learning_metrics`                                                     |
+| Accounts | `list_accounts`, `get_sync_status`                                                                                                |
+| Rules    | `list_rules`                                                                                                                      |
+| Cleanup  | `preview_cleanup_plan`                                                                                                            |
 
 Alongside the tools, three resources (`email://{id}`, `thread://{key}`, `insights://summary`)
 expose stable read-only views, and two prompts (`triage-inbox`, `weekly-report`) package the
@@ -235,12 +235,12 @@ See all DDDs in [docs/DDDs](https://github.com/pacphi/emailibrium/tree/main/docs
 ## 🛠️ Development
 
 ```bash
-make help              # see all available targets
-make ci                # format-check + lint + typecheck + test
-make test              # backend (Rust) + frontend (Vitest)
-make docker-up-dev     # full stack with hot-reload
-make upgrade           # upgrade all dependencies
-make outdated          # check what's stale
+just --list              # see all available targets
+just ci                # format-check + lint + typecheck + test
+just test              # backend (Rust) + frontend (Vitest)
+just docker-up-dev     # full stack with hot-reload
+just upgrade           # upgrade all dependencies
+just outdated          # check what's stale
 ```
 
 See the [Maintainer Guide](docs/maintainer-guide.md) for the full developer experience.

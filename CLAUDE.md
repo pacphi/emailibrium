@@ -17,18 +17,18 @@ Vector-native, local-first email intelligence: semantic search, clustering, clas
 | `docs/`                | `architecture.md`, `ADRs/`, `DDDs/`, evaluation, setup/oauth guides                                                    | —                                                                  |
 | `config/`, `secrets/`  | Runtime config + dev secrets (never commit secrets)                                                                    | —                                                                  |
 
-## Build & Test — Makefile-driven, not npm
+## Build & Test — justfile-driven, not npm
 
-The root `package.json` only wires Husky; **do not run `npm build`/`npm test`**. Use `make`:
+The root `package.json` only wires Husky; **do not run `npm build`/`npm test`**. Use `just`:
 
 ```bash
-make ci          # format-check + lint + typecheck + test (run before committing)
-make test        # backend (cargo) + frontend (Vitest)
-make build       # build everything
-make dev         # full stack: backend :8080, frontend :3000
-make lint        # code + docs (markdownlint, yamllint)
-make audit       # cargo-audit + npm audit
-make help        # all targets
+just ci          # format-check + lint + typecheck + test (run before committing)
+just test        # backend (cargo) + frontend (Vitest)
+just build       # build everything
+just dev         # full stack: backend :8080, frontend :3000
+just lint        # code + docs (markdownlint, yamllint)
+just audit       # cargo-audit + npm audit
+just --list        # all targets
 ```
 
 Backend-only: `cd backend && cargo test` / `cargo clippy`. Frontend-only: `cd frontend && pnpm test` / `pnpm lint` / `pnpm typecheck`.

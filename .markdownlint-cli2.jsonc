@@ -5,9 +5,17 @@
     ".claude/**",
     ".claude-flow/**",
     ".agentic-qe/**",
+    // Same class as the three above: tool-generated, git-ignored agent scaffolding.
+    // Without these, `just lint` fails on a developer's machine purely because a
+    // local tool wrote docs there — files CI never sees, so the check was red
+    // locally and green in CI for the same commit.
+    ".agents/**",
+    ".codex/**",
+    ".swarm/**",
+    ".beads/**",
     "**/node_modules/**",
     "**/target/**",
     "ruvector/**",
-    ".claude/worktrees/**"
-  ]
+    ".claude/worktrees/**",
+  ],
 }
