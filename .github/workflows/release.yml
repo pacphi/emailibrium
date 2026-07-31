@@ -72,15 +72,8 @@ jobs:
         with:
           submodules: true
 
-      # Backend
-      # backend/rust-toolchain.toml is the single source of truth for the Rust
-      # version — read the pin rather than installing bare @stable, which drifts.
-      - name: Resolve pinned toolchain
-        id: rust
-        run: echo "channel=$(sed -n 's/^channel *= *"\(.*\)"/\1/p' backend/rust-toolchain.toml)" >> "$GITHUB_OUTPUT"
-      - uses: dtolnay/rust-toolchain@master
+      - uses: ./.github/actions/setup-rust
         with:
-          toolchain: ${{ steps.rust.outputs.channel }}
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
         with:

@@ -29,16 +29,8 @@ jobs:
       - uses: actions/checkout@v7
         with:
           submodules: true
-      # backend/rust-toolchain.toml is the single source of truth for the Rust
-      # version. Installing bare @stable here drifts from it, and rustup would
-      # silently install the pinned toolchain a second time on first cargo use
-      # inside backend/ — so read the pin and install exactly it, once.
-      - name: Resolve pinned toolchain
-        id: rust
-        run: echo "channel=$(sed -n 's/^channel *= *"\(.*\)"/\1/p' backend/rust-toolchain.toml)" >> "$GITHUB_OUTPUT"
-      - uses: dtolnay/rust-toolchain@master
+      - uses: ./.github/actions/setup-rust
         with:
-          toolchain: ${{ steps.rust.outputs.channel }}
           components: rustfmt
       - name: Check formatting
         working-directory: backend
@@ -51,12 +43,8 @@ jobs:
       - uses: actions/checkout@v7
         with:
           submodules: true
-      - name: Resolve pinned toolchain
-        id: rust
-        run: echo "channel=$(sed -n 's/^channel *= *"\(.*\)"/\1/p' backend/rust-toolchain.toml)" >> "$GITHUB_OUTPUT"
-      - uses: dtolnay/rust-toolchain@master
+      - uses: ./.github/actions/setup-rust
         with:
-          toolchain: ${{ steps.rust.outputs.channel }}
           components: clippy
       - uses: Swatinem/rust-cache@v2
         with:
@@ -90,12 +78,7 @@ jobs:
       # ubuntu-*-arm images HEAVY_RUNNER is expected to point at.
       - name: Install lld
         run: sudo apt-get update && sudo apt-get install -y lld
-      - name: Resolve pinned toolchain
-        id: rust
-        run: echo "channel=$(sed -n 's/^channel *= *"\(.*\)"/\1/p' backend/rust-toolchain.toml)" >> "$GITHUB_OUTPUT"
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ steps.rust.outputs.channel }}
+      - uses: ./.github/actions/setup-rust
       # Pin the version: the archive producer and consumer must be the same
       # nextest, and an unpinned install lets a release landing between the two
       # jobs mismatch them (nextest's own archiving docs call this out).
@@ -144,12 +127,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           submodules: true
-      - name: Resolve pinned toolchain
-        id: rust
-        run: echo "channel=$(sed -n 's/^channel *= *"\(.*\)"/\1/p' backend/rust-toolchain.toml)" >> "$GITHUB_OUTPUT"
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ steps.rust.outputs.channel }}
+      - uses: ./.github/actions/setup-rust
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: backend
@@ -177,12 +155,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           submodules: true
-      - name: Resolve pinned toolchain
-        id: rust
-        run: echo "channel=$(sed -n 's/^channel *= *"\(.*\)"/\1/p' backend/rust-toolchain.toml)" >> "$GITHUB_OUTPUT"
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ steps.rust.outputs.channel }}
+      - uses: ./.github/actions/setup-rust
       # Must match rust-build's pinned version exactly — the archive is produced
       # and consumed by nextest, and a version skew between the two jobs is a
       # confusing failure mode nextest's archiving docs warn about.
