@@ -18,11 +18,11 @@ git clone https://github.com/pacphi/emailibrium.git
 cd emailibrium
 
 # 2. Guided first-time setup (recommended)
-make setup              # interactive wizard: prereqs, secrets, AI providers, Docker
+just setup              # interactive wizard: prereqs, secrets, AI providers, Docker
 
 # 3. Or skip the wizard and go directly:
-make install            # install all dependencies
-make dev                # start backend + frontend dev servers
+just install            # install all dependencies
+just dev                # start backend + frontend dev servers
 
 # 4. Open the application
 open http://localhost:3000
@@ -30,7 +30,7 @@ open http://localhost:3000
 
 The backend runs on `http://localhost:8080` and the frontend on `http://localhost:3000`.
 
-> **First time?** Run `make setup` for a guided walkthrough that checks prerequisites, generates secrets, configures AI providers, and validates your environment. See [Setup Guide](setup-guide.md) for the full reference.
+> **First time?** Run `just setup` for a guided walkthrough that checks prerequisites, generates secrets, configures AI providers, and validates your environment. See [Setup Guide](setup-guide.md) for the full reference.
 
 ## Configuration
 
@@ -49,7 +49,7 @@ For production deployments, pre-download models during the build phase to avoid 
 
 ```bash
 # During Docker build or deployment setup:
-make download-models
+just download-models
 
 # Or in Dockerfile:
 RUN cargo run --release -- --download-models
@@ -379,15 +379,15 @@ Use this endpoint for load balancer health checks and uptime monitoring.
 
 | Command        | Description                                            |
 | -------------- | ------------------------------------------------------ |
-| `make install` | Install all dependencies                               |
-| `make build`   | Build backend and frontend                             |
-| `make test`    | Run all tests                                          |
-| `make lint`    | Lint all code                                          |
-| `make format`  | Format all code                                        |
-| `make ci`      | Full CI pipeline (format-check, lint, typecheck, test) |
-| `make dev`     | Start dev servers                                      |
-| `make clean`   | Clean build artifacts                                  |
-| `make audit`   | Security audit dependencies                            |
+| `just install` | Install all dependencies                               |
+| `just build`   | Build backend and frontend                             |
+| `just test`    | Run all tests                                          |
+| `just lint`    | Lint all code                                          |
+| `just format`  | Format all code                                        |
+| `just ci`      | Full CI pipeline (format-check, lint, typecheck, test) |
+| `just dev`     | Start dev servers                                      |
+| `just clean`   | Clean build artifacts                                  |
+| `just audit`   | Security audit dependencies                            |
 
 ## Troubleshooting
 

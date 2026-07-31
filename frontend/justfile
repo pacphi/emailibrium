@@ -1,0 +1,199 @@
+# ============================================================================
+# Emailibrium Frontend — React/TypeScript (pnpm + Turborepo)
+# ============================================================================
+#
+# Quick Start:
+#   just install   - Install dependencies
+#   just dev       - Start Vite dev server
+#   just build     - Build all packages
+#   just test      - Run tests
+#
+# Invoked from the repo root as:
+#   just --justfile frontend/justfile --working-directory frontend <recipe>
+#
+# `just --list` groups recipes by category (alphabetically); add --unsorted to
+# see them in the order they are defined below.
+# ============================================================================
+
+set shell := ["bash", "-cu"]
+
+PNPM := "pnpm"
+TURBO := "pnpm turbo"
+WEB := "apps/web"
+
+# Colours. The `|| echo ''` fallback keeps these harmless when tput or TERM is
+# unavailable (CI, non-tty) — same guard the Makefile used.
+BOLD := `tput bold 2>/dev/null || echo ''`
+GREEN := `tput setaf 2 2>/dev/null || echo ''`
+YELLOW := `tput setaf 3 2>/dev/null || echo ''`
+BLUE := `tput setaf 4 2>/dev/null || echo ''`
+RED := `tput setaf 1 2>/dev/null || echo ''`
+RESET := `tput sgr0 2>/dev/null || echo ''`
+
+# ============================================================================
+# Default Recipe
+# ============================================================================
+
+# Show the categorised command listing (default recipe)
+@help:
+    echo "{{ BOLD }}{{ BLUE }}═══ Emailibrium Frontend (TypeScript/React) ════════════════════════{{ RESET }}"
+    echo ""
+    echo "{{ BOLD }}Install & Build{{ RESET }}"
+    echo "  install            - Install pnpm dependencies"
+    echo "  build              - Build all packages (Turborepo)"
+    echo "  dev                - Start Vite dev server (port 3000)"
+    echo "  storybook          - Start Storybook component explorer"
+    echo "  clean              - Clean build artifacts"
+    echo ""
+    echo "{{ BOLD }}Test{{ RESET }}"
+    echo "  test               - Run unit tests (Vitest)"
+    echo "  test-e2e           - Run E2E tests (Playwright)"
+    echo ""
+    echo "{{ BOLD }}Lint & Format{{ RESET }}"
+    echo "  lint               - Lint TypeScript (ESLint)"
+    echo "  format             - Format code (Prettier)"
+    echo "  format-check       - Check formatting"
+    echo "  typecheck          - TypeScript type check"
+    echo "  deadcode           - Check for unused exports"
+    echo ""
+    echo "{{ BOLD }}Security{{ RESET }}"
+    echo "  audit              - Security audit (pnpm audit)"
+    echo ""
+    echo "{{ BOLD }}Dependencies{{ RESET }}"
+    echo "  upgrade            - Upgrade deps (within semver)"
+    echo "  upgrade-latest     - Upgrade to latest major versions"
+    echo "  outdated           - Show outdated packages"
+    echo ""
+    echo "{{ BOLD }}Documentation{{ RESET }}"
+    echo "  lint-docs          - Lint Markdown + YAML in frontend/"
+    echo "  format-docs        - Format Markdown + YAML in frontend/"
+
+# ============================================================================
+# Install & Build
+# ============================================================================
+
+# Install pnpm dependencies
+[group('Install & Build')]
+@install:
+    {{ PNPM }} install
+
+# Build all packages (Turborepo)
+[group('Install & Build')]
+@build:
+    {{ TURBO }} build
+
+# Start Vite dev server (port 3000)
+[group('Install & Build')]
+@dev:
+    cd {{ WEB }} && npx vite
+
+# Start Storybook component explorer (port 6006)
+[group('Install & Build')]
+@storybook:
+    cd {{ WEB }} && npx storybook dev -p 6006
+
+# Clean build artifacts
+[group('Install & Build')]
+@clean:
+    rm -rf {{ WEB }}/dist {{ WEB }}/storybook-static node_modules/.cache .turbo
+
+# ============================================================================
+# Test
+# ============================================================================
+
+# Run unit tests (Vitest via Turborepo) — fails the recipe when tests fail
+[group('Test')]
+@test:
+    {{ TURBO }} test
+
+# Run E2E tests (Playwright)
+[group('Test')]
+@test-e2e:
+    cd {{ WEB }} && npx playwright test
+
+# ============================================================================
+# Lint & Format
+# ============================================================================
+
+# Lint TypeScript (ESLint — strict)
+[group('Lint & Format')]
+@lint:
+    cd {{ WEB }} && npx --no-install eslint src/ --ext .ts,.tsx
+
+# Format code (Prettier)
+[group('Lint & Format')]
+@format:
+    cd {{ WEB }} && npx prettier --write 'src/**/*.{ts,tsx}'
+
+# Check formatting without writing
+[group('Lint & Format')]
+@format-check:
+    cd {{ WEB }} && npx prettier --check 'src/**/*.{ts,tsx}'
+
+# TypeScript type check
+[group('Lint & Format')]
+@typecheck:
+    cd {{ WEB }} && npx tsc --noEmit
+
+# The `|| echo` fallback is deliberate: ts-prune is an optional dev tool, so a
+# missing binary prints install instructions instead of failing the build.
+[doc('Check for unused exports (ts-prune)')]
+[group('Lint & Format')]
+@deadcode:
+    cd {{ WEB }} && npx ts-prune src/ 2>/dev/null || echo "{{ YELLOW }}ts-prune not installed. Run: pnpm add -Dw ts-prune{{ RESET }}"
+
+# ============================================================================
+# Security
+# ============================================================================
+
+# Security audit (pnpm audit) — fails the recipe when vulnerabilities are found
+[group('Security')]
+@audit:
+    {{ PNPM }} audit --prod
+
+# ============================================================================
+# Dependency Management
+# ============================================================================
+
+# Upgrade dependencies (within semver)
+[group('Dependencies')]
+@upgrade:
+    {{ PNPM }} update -r
+    echo "{{ GREEN }}Frontend packages upgraded.{{ RESET }}"
+
+# Upgrade to latest major versions
+[group('Dependencies')]
+@upgrade-latest:
+    {{ PNPM }} update -r --latest
+    echo "{{ GREEN }}Done. Run 'just typecheck' to verify.{{ RESET }}"
+
+# The `|| true` is deliberate: `pnpm outdated` exits non-zero merely because
+# updates exist, so this informational listing must not be treated as a gate.
+[doc('Show outdated packages')]
+[group('Dependencies')]
+@outdated:
+    {{ PNPM }} outdated -r 2>/dev/null || true
+
+# ============================================================================
+# Documentation
+# ============================================================================
+
+# Lint Markdown + YAML in frontend/ (strict)
+[group('Documentation')]
+lint-docs:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    command -v markdownlint-cli2 >/dev/null 2>&1 || { echo "{{ RED }}markdownlint-cli2 not installed. Run: npm i -g markdownlint-cli2{{ RESET }}"; exit 1; }
+    command -v yamllint >/dev/null 2>&1 || { echo "{{ RED }}yamllint not installed. Run: pip install yamllint{{ RESET }}"; exit 1; }
+    markdownlint-cli2 '**/*.md' '#node_modules'
+    yamllint -c ../.yamllint.yaml .
+
+# Format Markdown + YAML in frontend/
+[group('Documentation')]
+@format-docs:
+    npx --no-install prettier --write '**/*.md' '**/*.{yaml,yml}' --config ../.prettierrc --ignore-path .gitignore
+
+# Check Markdown + YAML formatting
+[group('Documentation')]
+@format-check-docs:
+    npx --no-install prettier --check '**/*.md' '**/*.{yaml,yml}' --config ../.prettierrc --ignore-path .gitignore

@@ -125,8 +125,8 @@
   `taiki-e/install-action`; add `.config/nextest.toml`. Each of clippy and test currently recompiles
   the full crate **and** the heavy ruvector path crates in a separate job/cache.
 - **definition_of_done:**
-  - grep: nextest archive in .github/workflows/**
-  - grep: archive-file in .github/workflows/**
+  - grep: nextest archive in .github/workflows/\*\*
+  - grep: archive-file in .github/workflows/\*\*
   - cmd: cargo test --manifest-path backend/Cargo.toml
 - **validation:** CI green; the test job no longer compiles the crate from scratch. **Removing the
   separate compile may expose a latent flaky test — frame as exposed, not caused**, and fix
@@ -157,7 +157,7 @@
 - **deliverable:** Replace with `taiki-e/install-action` (prebuilt `cargo-audit`).
 - **definition_of_done:**
   - grep: taiki-e/install-action in .github/workflows/ci.yml
-  - grep:absent: cargo install --locked cargo-audit in .github/workflows/**
+  - grep:absent: cargo install --locked cargo-audit in .github/workflows/\*\*
 - **validation:** `rust-audit` job still runs `cargo audit` and stays green; job wall-clock drops.
 - **est_impact:** deterministic: removes a from-source tool compile per audit run.
 - **risk:** low
@@ -171,8 +171,8 @@
   the action to that version (or have it read the toolchain file) instead of installing bare `@stable`,
   which silently drifts and is overridden by the file inside `backend/` anyway.
 - **definition_of_done:**
-  - grep:absent: dtolnay/rust-toolchain@stable in .github/workflows/**
-  - grep: 1.96 in .github/workflows/**
+  - grep:absent: dtolnay/rust-toolchain@stable in .github/workflows/\*\*
+  - grep: 1.96 in .github/workflows/\*\*
   - grep: rust-toolchain.toml in backend
 - **validation:** CI green; `rustc --version` in CI matches the pinned MSRV.
 - **est_impact:** correctness/maintenance — no fmt/clippy version drift between CI and local.
@@ -186,8 +186,8 @@
 - **deliverable:** Install `lld` in the Rust jobs and set `-Clink-arg=-fuse-ld=lld` (via `RUSTFLAGS`
   or `backend/.cargo/config.toml`) to cut link time on incremental rebuilds.
 - **definition_of_done:**
-  - grep: fuse-ld=lld in .github/workflows/** backend/.cargo/config.toml
-  - grep: lld in .github/workflows/**
+  - grep: fuse-ld=lld in .github/workflows/\*\* backend/.cargo/config.toml
+  - grep: lld in .github/workflows/\*\*
 - **validation:** CI green; link phase faster on warm runs.
 - **est_impact:** medium/low — link-time reduction on incremental builds.
 - **risk:** low
@@ -202,7 +202,7 @@
   to the free `ubuntu-24.04-arm`; the default keeps every other context safe. A nonexistent label
   queues forever, so this parameterization is what makes an upgrade safe.
 - **definition_of_done:**
-  - grep: vars.HEAVY_RUNNER in .github/workflows/**
+  - grep: vars.HEAVY_RUNNER in .github/workflows/\*\*
 - **validation:** CI green with the var unset (falls back to `ubuntu-latest`).
 - **est_impact:** low/medium — opt-in bigger/native runner with a safe default.
 - **risk:** low
@@ -225,7 +225,7 @@
 ## N/A — out of scope (do not plan)
 
 - **D1 native arm64 split — N/A:** no QEMU/multi-arch build exists; Docker is single-arch amd64.
-  (The PUBLIC repo *could* use the free `ubuntu-24.04-arm`, but there is no arm64 build to accelerate.
+  (The PUBLIC repo _could_ use the free `ubuntu-24.04-arm`, but there is no arm64 build to accelerate.
   Revisit only if multi-arch publishing is added — F-10 leaves the door open safely.)
 - **Larger x64 runners — N/A:** personal account; Team/Enterprise only.
 - **A2 (sccache+Swatinem), A5 (double test run), B1 (disk hacks), C1 (concurrency) — N/A:** not present

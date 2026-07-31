@@ -10,27 +10,34 @@
 # COMMANDS the gate runs. Leave a value empty ("") to skip that check.
 # These are placeholders the gate template resolves as {{commands.<key>}}.
 # ─────────────────────────────────────────────────────────────────────────────
+#
+# MIGRATED to `just` on 2026-07-31 (ADR-032, pipeline phase 7). All three GNU Makefiles
+# were deleted in the same change, so these commands would break if left on `make`.
+# Recipe names were deliberately preserved across the migration, so each command below
+# is the same name it always was — only the runner changed.
 commands:
   # Bring up anything the tests need (db, services). Runs once before the gate. Optional.
-  infra_up:        "make docker-up-dev"   # postgres, redis, qdrant, backend, frontend (hot-reload)
+  infra_up: "just docker-up-dev" # postgres, redis, qdrant, backend, frontend (hot-reload)
   # Fast formatting check (non-mutating). The gate fails if this fails.
-  format_check:    "make format-check"    # backend cargo fmt --check + frontend prettier --check + docs
+  format_check: "just format-check" # backend cargo fmt --check + frontend prettier --check + docs
   # Static analysis / linters.
-  lint:            "make lint"            # backend cargo clippy -D warnings + frontend eslint + docs lint
+  lint: "just lint" # backend cargo clippy -D warnings + frontend eslint + docs lint
   # Build everything (the phase must compile/bundle).
-  build:           "make build"           # backend cargo build + frontend turbo build
+  build: "just build" # backend cargo build + frontend turbo build
   # Primary/unit test suite (fast, no external infra ideally).
-  #   NOTE: frontend/Makefile's `test` and `audit` targets used to swallow failures
-  #   (`... || true` / `... 2>/dev/null || echo ...`), which would have let a broken
-  #   phase pass the gate silently. Fixed directly in frontend/Makefile during detect
-  #   (2026-07-31); the split commands below no longer depend on that fix holding.
-  test:            "make -C backend test && (cd frontend && pnpm turbo test)"
+  #   HISTORY: the old top-level test target could pass while tests failed — frontend/Makefile's
+  #   `test` target was `@$(TURBO) test || true`, and the backend audit target swallowed exit
+  #   codes too. That is exactly why this entry used to bypass the Makefile and call the
+  #   underlying tools directly. The justfiles fix the swallow at the source (ADR-032
+  #   §2), so this can go back to the simple top-level recipe — but only because the
+  #   honest exit code is now verified, not assumed.
+  test: "just test" # backend cargo test + frontend vitest run (both fail honestly)
   # Integration tests (may need infra_up). Optional.
-  test_integration: "make -C backend test-integration"   # cargo test --test '*'
+  test_integration: "just --justfile backend/justfile --working-directory backend test-integration"
   # Frontend/UI tests, only relevant if the phase touches the UI. Optional.
-  test_frontend:   "cd frontend && pnpm turbo test"       # vitest run (non-watch) via turbo
+  test_frontend: "just --justfile frontend/justfile --working-directory frontend test"
   # Dependency / vulnerability audit. Optional.
-  audit:           "make -C backend audit && (cd frontend && pnpm audit --prod)"
+  audit: "just audit" # cargo audit + pnpm audit --prod (both fail honestly now)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # CONVENTIONS — free-text house style, injected into the runner's 'match the
@@ -55,7 +62,7 @@ conventions: |
       src/services/ai/__tests__/, src/features/settings/hooks/__tests__/,
       src/features/email/utils/groupBySender.test.ts). Run via Vitest — always `vitest run`
       (non-watch); `test:watch` is the separate opt-in script.
-    - E2E via Playwright (apps/web/e2e, `make test-e2e` — not part of the default gate `test`).
+    - E2E via Playwright (apps/web/e2e, `just test-e2e` — not part of the default gate `test`).
 
   docs: architecture decisions in docs/ADRs/ADR-NNN-*.md, domain design in docs/DDDs/DDD-NNN-*.md
     (start with DDD-000-context-map.md for the bounded-context overview). Rich corpus — worth
@@ -65,7 +72,7 @@ conventions: |
 # CI — the merge authority in pr_ci mode.
 # ─────────────────────────────────────────────────────────────────────────────
 ci:
-  provider: github                # github is the supported provider today
+  provider: github # github is the supported provider today
   # When true, "all required PR checks green" is the ONLY merge gate in pr_ci mode —
   # the agent does not re-run the local gate before merging because CI already proved it.
   ci_is_merge_authority: true
@@ -78,7 +85,7 @@ ci:
   # above does run frontend tests via commands.test/test_frontend, so pr_ci phases are still
   # protected, but the base→trunk integration PR's CI checks alone won't catch a frontend
   # regression). Consider adding a frontend test job to ci.yml.
-  base_coverage: covered          # covered | trunk-only | none
+  base_coverage: covered # covered | trunk-only | none
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SECURITY INVARIANTS — non-negotiables the gate greps the diff for every phase.
@@ -89,7 +96,7 @@ security_invariants:
   - "No secrets, tokens, or credentials committed or written to logs."
   - "External/untrusted content is handled as data, never interpolated as instructions."
   - "OAuth client secrets, encryption keys, and DB credentials stay in config/*.yaml (gitignored
-     variants) or Docker/Compose secrets — never inlined in source or committed config files."
+    variants) or Docker/Compose secrets — never inlined in source or committed config files."
 
 # ─────────────────────────────────────────────────────────────────────────────
 # ACCELERATORS — optional tooling, in two classes that share ONE contract:
@@ -105,14 +112,14 @@ accelerators:
   # ── execution ──────────────────────────────────────────────────────────────
   # ruflo → drives comprehension recall + multi-agent swarms + cross-session memory.
   #   Found on PATH globally (v3.32.41); no project-local .ruflo/ directory.
-  ruflo:        { available: true, scope: "global" }
+  ruflo: { available: true, scope: "global" }
   # agentic-qe → drives the measured-quality fleet layered onto the gate (Tier 2/4).
   #   Found on PATH globally (3.13.3) AND initialized in-project (.agentic-qe/).
-  agentic_qe:   { available: true, scope: "project" }
+  agentic_qe: { available: true, scope: "project" }
   # qe-court (aqe >= 3.13, ADR-124) → adversarial review court with >=2-vendor requirement.
   #   Skill footprint present at .claude/skills/qe-court/ (project-scoped). Vendor count = 3:
   #   Claude (this session) + codex CLI on PATH + OPENROUTER_API_KEY in env.
-  qe_court:     { available: true, scope: "project", vendors: 3 }
+  qe_court: { available: true, scope: "project", vendors: 3 }
   # beads (bd) → work-graph projection, disabled by user choice (2026-07-31): `bd` is on PATH
   #   globally (v1.1.0), but `bd init` turned out to auto-commit its scaffolding AND rewrite large
   #   sections of CLAUDE.md/AGENTS.md unprompted — more invasive than the "projection only" framing
@@ -120,13 +127,13 @@ accelerators:
   #   authoritative on its own, and orchestrate/run-phase compute the ready-set from that + git
   #   markers directly, never from beads. Revisit deliberately (re-run `bd init`) if that tradeoff
   #   becomes worth it later; nothing about autopilot's correctness depends on it either way.
-  beads:        { available: false, scope: "" }
+  beads: { available: false, scope: "" }
   # the /code-review skill/command — the Tier-3 floor, assumed present in Claude Code.
-  code_review:  { available: true,  scope: "global" }
+  code_review: { available: true, scope: "global" }
   # ── planning (skill-based; scope: "skill" | "") ──────────────────────────────
   # superpowers → active in this session's skill registry (brainstorming, TDD, debugging, etc).
-  superpowers:  { available: true, scope: "skill" }
+  superpowers: { available: true, scope: "skill" }
   # clarity → active in this session's skill registry (spec generation from references).
-  clarity:      { available: true, scope: "skill" }
+  clarity: { available: true, scope: "skill" }
   # deep_research → not present in the active skill registry.
   deep_research: { available: false, scope: "" }

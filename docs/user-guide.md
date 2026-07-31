@@ -217,7 +217,7 @@ When you launch Emailibrium for the first time, a guided onboarding flow walks y
 
 You can return to onboarding settings at any time via Settings.
 
-> **Developer setup:** Run `make setup` on the command line for a guided wizard that configures prerequisites, secrets, OAuth apps, and AI providers before launching the app. See the [Setup Guide](setup-guide.md).
+> **Developer setup:** Run `just setup` on the command line for a guided wizard that configures prerequisites, secrets, OAuth apps, and AI providers before launching the app. See the [Setup Guide](setup-guide.md).
 
 ### Chat
 

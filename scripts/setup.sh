@@ -104,7 +104,7 @@ menu() {
       run_step "setup-docker.sh" "Step 4: Docker Environment"
       run_step "setup-validate.sh" "Step 5: Validation"
       echo ""
-      echo "${BOLD}${GREEN}Setup complete! Run 'make dev' to start developing.${RESET}"
+      echo "${BOLD}${GREEN}Setup complete! Run 'just dev' to start developing.${RESET}"
       ;;
     1) run_step "setup-prereqs.sh" "Prerequisites" ;;
     2) run_step "setup-secrets.sh" "Secrets" ;;

@@ -115,7 +115,7 @@ else
     write_secret "google_client_secret" "$google_secret"
     echo "  ${GREEN}[saved]${RESET}   Google OAuth credentials"
   else
-    echo "  ${YELLOW}[skipped]${RESET} Google OAuth (you can configure later with: make setup-secrets)"
+    echo "  ${YELLOW}[skipped]${RESET} Google OAuth (you can configure later with: just setup-secrets)"
     # Write placeholder so Docker Compose doesn't fail on missing files
     if [[ ! -f "$SECRETS_DIR/google_client_id" ]]; then
       write_secret "google_client_id" "placeholder-configure-later"
@@ -146,7 +146,7 @@ else
     write_secret "microsoft_client_secret" "$ms_secret"
     echo "  ${GREEN}[saved]${RESET}   Microsoft OAuth credentials"
   else
-    echo "  ${YELLOW}[skipped]${RESET} Microsoft OAuth (you can configure later with: make setup-secrets)"
+    echo "  ${YELLOW}[skipped]${RESET} Microsoft OAuth (you can configure later with: just setup-secrets)"
     if [[ ! -f "$SECRETS_DIR/microsoft_client_id" ]]; then
       write_secret "microsoft_client_id" "placeholder-configure-later"
     fi

@@ -10,9 +10,26 @@ ignore: |
   .claude/agents/
 
 rules:
+  # This repo runs BOTH prettier (`format-check-yaml`) and yamllint (`lint-yaml`)
+  # over the same files, and their defaults contradict each other on flow
+  # mappings: prettier emits `{ a: 1 }`, yamllint's default `max-spaces-inside: 0`
+  # rejects exactly that. With the defaults, any YAML containing an inline mapping
+  # fails one tool or the other no matter how it is written. Allow one space so
+  # the two agree; prettier remains the formatter of record.
+  braces:
+    max-spaces-inside: 1
   line-length:
     max: 200
     allow-non-breakable-inline-mappings: true
+    # PER-RULE ignore, deliberately NOT a directory-wide one. .autopilot/ manifests
+    # carry long prose fields by design (machine-checkable Definition-of-Done
+    # strings, decision rationale), so a column limit fights the format. But
+    # ignoring the whole directory would also disable `key-duplicates` on the
+    # TRACKED .autopilot/profile.yml — and a duplicate `commands:` key there would
+    # silently replace the quality gate's entire command set. Relax only the rule
+    # that actually conflicts.
+    ignore: |
+      .autopilot/
   document-start: disable
   truthy:
     check-keys: false

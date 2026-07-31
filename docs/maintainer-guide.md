@@ -33,7 +33,7 @@ emailibrium/
     tests/                   Integration tests (search, classification, clustering, security)
     benches/                 Criterion benchmarks (vector_benchmarks)
     Cargo.toml               Rust dependencies (edition 2021, MSRV 1.97)
-    Makefile                 Backend-specific make targets
+    justfile                 Backend-specific just recipes
     Dockerfile               Multi-stage Rust build
 
   frontend/                  React TypeScript monorepo (pnpm workspaces + Turborepo)
@@ -45,7 +45,7 @@ emailibrium/
       api/                   API client and hooks (@emailibrium/api)
       ui/                    Shared component library (@emailibrium/ui)
       core/                  Business logic utilities (@emailibrium/core)
-    Makefile                 Frontend-specific make targets
+    justfile                 Frontend-specific just recipes
     nginx.conf               Production reverse-proxy config
     Dockerfile               Multi-stage Node build
 
@@ -64,7 +64,7 @@ emailibrium/
 
   docker-compose.yml         Production container orchestration
   docker-compose.dev.yml     Dev overlay (hot-reload, debug ports)
-  Makefile                   Root Makefile (delegates to backend/ and frontend/)
+  justfile                   Root justfile (delegates to backend/ and frontend/)
   config.yaml                Base configuration defaults
   secrets/                   Generated development secrets (gitignored)
   CLAUDE.md                  AI assistant configuration
@@ -90,13 +90,13 @@ emailibrium/
 
 ```bash
 # Clone and install all dependencies
-make install
+just install
 
 # Generate development secrets
-make docker-secrets
+just docker-secrets
 
 # Start both servers in dev mode
-make dev
+just dev
 # Backend: http://localhost:8080
 # Frontend: http://localhost:3000
 ```
@@ -106,19 +106,19 @@ make dev
 **Native development** (recommended for fast iteration):
 
 ```bash
-make dev                  # Start backend + frontend with hot-reload
-make test                 # Run all tests (backend + frontend)
-make lint                 # Lint everything (Rust + TypeScript + Markdown + YAML)
-make ci                   # Full CI pipeline: format-check, lint, typecheck, test
+just dev                  # Start backend + frontend with hot-reload
+just test                 # Run all tests (backend + frontend)
+just lint                 # Lint everything (Rust + TypeScript + Markdown + YAML)
+just ci                   # Full CI pipeline: format-check, lint, typecheck, test
 ```
 
 **Docker development** (matches production environment):
 
 ```bash
-make docker-up-dev        # Start with hot-reload via docker-compose.dev.yml
-make docker-logs          # Tail all container logs
-make docker-health        # Check container status
-make docker-down          # Stop everything
+just docker-up-dev        # Start with hot-reload via docker-compose.dev.yml
+just docker-logs          # Tail all container logs
+just docker-health        # Check container status
+just docker-down          # Stop everything
 ```
 
 ### Backend Development
@@ -138,7 +138,7 @@ The backend is organized into four module groups under `backend/src/`:
 2. Register the route in `api/mod.rs`.
 3. If it needs new vector operations, add them to `vectors/mod.rs` (the `VectorService` facade).
 4. Write an integration test in `backend/tests/`.
-5. Run `make -C backend test` to verify.
+5. Run `cd backend && just test` to verify.
 
 **Adding a new vector module:**
 
@@ -176,7 +176,7 @@ Two invariants worth stating explicitly, because both are easy to violate by acc
   them as missing fields:
   - `list_subscriptions` and `preview_cleanup_plan` never return raw `List-Unsubscribe` /
     `List-Unsubscribe-Post` header values — one-click URLs embed per-recipient tokens and act
-    as capability URLs. Callers get `has_unsubscribe` and the unsubscribe *method* instead.
+    as capability URLs. Callers get `has_unsubscribe` and the unsubscribe _method_ instead.
   - `list_attachments` returns metadata only, never `storage_path` (a filesystem path) or
     `provider_attachment_id`.
   - `get_sync_status` omits the `history_id` and `next_page_token` sync cursors — opaque
@@ -188,7 +188,7 @@ belong to the shared dispatch path, not to individual handlers.
 **Running benchmarks:**
 
 ```bash
-make -C backend bench     # Run Criterion benchmarks
+cd backend && just bench     # Run Criterion benchmarks
 ```
 
 ### Frontend Development
@@ -225,26 +225,26 @@ The frontend follows a **feature-sliced design** pattern. Features are self-cont
 
 | Layer               | Tool                     | Location                          | Run Command                             |
 | ------------------- | ------------------------ | --------------------------------- | --------------------------------------- |
-| Backend unit        | `#[cfg(test)]` modules   | In each `.rs` file                | `make -C backend test`                  |
-| Backend integration | `#[test]` functions      | `backend/tests/*.rs`              | `make -C backend test`                  |
-| Backend benchmarks  | Criterion                | `backend/benches/`                | `make -C backend bench`                 |
-| Frontend unit       | Vitest + Testing Library | Co-located with source            | `make -C frontend test`                 |
+| Backend unit        | `#[cfg(test)]` modules   | In each `.rs` file                | `cd backend && just test`               |
+| Backend integration | `#[test]` functions      | `backend/tests/*.rs`              | `cd backend && just test`               |
+| Backend benchmarks  | Criterion                | `backend/benches/`                | `cd backend && just bench`              |
+| Frontend unit       | Vitest + Testing Library | Co-located with source            | `cd frontend && just test`              |
 | Frontend E2E        | Playwright               | `frontend/apps/web/e2e/`          | `cd frontend/apps/web && pnpm test:e2e` |
-| Security audit      | Custom test suite        | `backend/tests/security_audit.rs` | `make -C backend test`                  |
+| Security audit      | Custom test suite        | `backend/tests/security_audit.rs` | `cd backend && just test`               |
 
 ### Code Style
 
 - **Rust:** `cargo fmt` for formatting, `cargo clippy` for lints. Both run in CI.
 - **TypeScript:** Prettier for formatting, ESLint for lints. Config lives in the frontend workspace root.
-- **Markdown and YAML:** Prettier + markdownlint-cli2 + yamllint. Run `make lint-docs`.
+- **Markdown and YAML:** Prettier + markdownlint-cli2 + yamllint. Run `just lint-docs`.
 - **Commits:** Use conventional commit messages (`feat:`, `fix:`, `docs:`, `refactor:`, `test:`, `chore:`).
 
 ### Dependency Management
 
 ```bash
-make outdated             # Show outdated deps across both stacks (no changes)
-make upgrade              # Upgrade within semver ranges
-make audit                # Run cargo audit + pnpm audit
+just outdated             # Show outdated deps across both stacks (no changes)
+just upgrade              # Upgrade within semver ranges
+just audit                # Run cargo audit + pnpm audit
 ```
 
 Pin exact versions for security-critical crates (`aes-gcm`, `argon2`, `zeroize`). Use semver ranges for everything else.
@@ -312,12 +312,12 @@ Target: **WCAG 2.1 AA** compliance.
 ### Docker Deployment
 
 ```bash
-make docker-build         # Build all images
-make docker-up            # Start production stack
-make docker-health        # Check container health
-make docker-logs          # Tail all logs
-make docker-down          # Stop everything
-make docker-down-volumes  # Stop and destroy data (CAUTION)
+just docker-build         # Build all images
+just docker-up            # Start production stack
+just docker-health        # Check container health
+just docker-logs          # Tail all logs
+just docker-down          # Stop everything
+just docker-down-volumes  # Stop and destroy data (CAUTION)
 ```
 
 ### Configuration
@@ -331,7 +331,7 @@ Emailibrium uses a **layered configuration** system via figment. Later layers ov
 > Neither YAML file exists in a fresh checkout. `figment`'s `Yaml::file` is a no-op on a
 > missing path, so today configuration resolves from compile-time defaults, `EMAILIBRIUM_*`
 > env vars, and the `config/app.yaml` path-override pass in `apply_yaml_path_defaults`.
-> Note that `config/app.yaml` is a *different* file from the `config.yaml` above and is read
+> Note that `config/app.yaml` is a _different_ file from the `config.yaml` above and is read
 > by a different code path -- a key placed in the wrong one is silently read by nobody.
 >
 > Env vars map onto nested keys by splitting on `_`: `EMAILIBRIUM_MCP_MODE` sets `mcp.mode`.
@@ -347,7 +347,7 @@ For the complete key reference, see [configuration-reference.md](./configuration
 ### Secrets Management
 
 - Use **file-based secrets** via Docker secrets in production. Never use environment variables for sensitive values in production.
-- Generate development secrets: `make docker-secrets` (creates `secrets/dev/`).
+- Generate development secrets: `just docker-secrets` (creates `secrets/dev/`).
 - Sensitive keys that must never appear in config files: `encryption.master_password`, `database_url` (production).
 
 ### Health Checks
@@ -438,7 +438,7 @@ Vector embeddings are derived data, but partial text recovery is theoretically p
 ### Audit and Testing
 
 ```bash
-make audit                # cargo audit + pnpm audit
+just audit                # cargo audit + pnpm audit
 ```
 
 The security test suite at `backend/tests/security_audit.rs` validates:
@@ -449,7 +449,7 @@ The security test suite at `backend/tests/security_audit.rs` validates:
 - Embedding invertibility resistance
 - CSP and CORS header correctness
 
-**Dependency auditing:** Run `make audit` regularly. Enable GitHub Dependabot for automated vulnerability alerts.
+**Dependency auditing:** Run `just audit` regularly. Enable GitHub Dependabot for automated vulnerability alerts.
 
 ### ADR References
 
@@ -538,11 +538,11 @@ Located in `docs/evaluation/`. Metrics include:
 
 Before requesting review, verify:
 
-- [ ] `make ci` passes (format-check, lint, typecheck, test)
+- [ ] `just ci` passes (format-check, lint, typecheck, test)
 - [ ] No new `cargo clippy` warnings
-- [ ] TypeScript compiles cleanly (`make typecheck`)
+- [ ] TypeScript compiles cleanly (`just typecheck`)
 - [ ] New features include tests
-- [ ] Security-sensitive changes include `make audit`
+- [ ] Security-sensitive changes include `just audit`
 
 ### ADR Process
 
@@ -576,7 +576,7 @@ cargo install git-cliff    # provides changelog generation
 ### Happy Path
 
 ```bash
-make release VERSION=0.1.0
+just release VERSION=0.1.0
 ```
 
 This runs `scripts/release.sh`, which:
@@ -622,73 +622,73 @@ git push origin main
 
 | Command        | Description                                                 |
 | -------------- | ----------------------------------------------------------- |
-| `make install` | Install all dependencies (backend build + frontend install) |
-| `make build`   | Build everything (backend release + frontend production)    |
-| `make clean`   | Remove all build artifacts                                  |
+| `just install` | Install all dependencies (backend build + frontend install) |
+| `just build`   | Build everything (backend release + frontend production)    |
+| `just clean`   | Remove all build artifacts                                  |
 
 ### Development
 
 | Command              | Description                                            |
 | -------------------- | ------------------------------------------------------ |
-| `make dev`           | Start backend and frontend dev servers with hot-reload |
-| `make docker-up-dev` | Start dev stack in Docker with hot-reload              |
+| `just dev`           | Start backend and frontend dev servers with hot-reload |
+| `just docker-up-dev` | Start dev stack in Docker with hot-reload              |
 
 ### Testing
 
-| Command                 | Description                                           |
-| ----------------------- | ----------------------------------------------------- |
-| `make test`             | Run all tests (backend + frontend)                    |
-| `make ci`               | Full CI pipeline: format-check, lint, typecheck, test |
-| `make ci-full`          | CI + link checking                                    |
-| `make -C backend bench` | Run Criterion benchmarks                              |
+| Command                    | Description                                           |
+| -------------------------- | ----------------------------------------------------- |
+| `just test`                | Run all tests (backend + frontend)                    |
+| `just ci`                  | Full CI pipeline: format-check, lint, typecheck, test |
+| `just ci-full`             | CI + link checking                                    |
+| `cd backend && just bench` | Run Criterion benchmarks                              |
 
 ### Code Quality
 
 | Command             | Description                      |
 | ------------------- | -------------------------------- |
-| `make lint`         | Lint all code and docs           |
-| `make format`       | Auto-format all code and docs    |
-| `make format-check` | Check formatting without changes |
-| `make typecheck`    | TypeScript type checking         |
-| `make deadcode`     | Detect unused code               |
-| `make audit`        | Security audit all dependencies  |
+| `just lint`         | Lint all code and docs           |
+| `just format`       | Auto-format all code and docs    |
+| `just format-check` | Check formatting without changes |
+| `just typecheck`    | TypeScript type checking         |
+| `just deadcode`     | Detect unused code               |
+| `just audit`        | Security audit all dependencies  |
 
 ### Docker
 
 | Command                      | Description                                   |
 | ---------------------------- | --------------------------------------------- |
-| `make docker-build`          | Build all Docker images                       |
-| `make docker-build-no-cache` | Build images without cache                    |
-| `make docker-up`             | Start production stack                        |
-| `make docker-up-dev`         | Start dev stack with hot-reload               |
-| `make docker-down`           | Stop all containers                           |
-| `make docker-down-volumes`   | Stop and remove volumes (destroys data)       |
-| `make docker-restart`        | Restart all containers                        |
-| `make docker-health`         | Show container health status                  |
-| `make docker-logs`           | Tail logs from all containers                 |
-| `make docker-logs-backend`   | Tail backend logs only                        |
-| `make docker-logs-frontend`  | Tail frontend logs only                       |
-| `make docker-ps`             | Show running containers                       |
-| `make docker-exec-backend`   | Shell into backend container                  |
-| `make docker-exec-frontend`  | Shell into frontend container                 |
-| `make docker-secrets`        | Generate development secrets                  |
-| `make docker-clean`          | Remove stopped containers and dangling images |
+| `just docker-build`          | Build all Docker images                       |
+| `just docker-build-no-cache` | Build images without cache                    |
+| `just docker-up`             | Start production stack                        |
+| `just docker-up-dev`         | Start dev stack with hot-reload               |
+| `just docker-down`           | Stop all containers                           |
+| `just docker-down-volumes`   | Stop and remove volumes (destroys data)       |
+| `just docker-restart`        | Restart all containers                        |
+| `just docker-health`         | Show container health status                  |
+| `just docker-logs`           | Tail logs from all containers                 |
+| `just docker-logs-backend`   | Tail backend logs only                        |
+| `just docker-logs-frontend`  | Tail frontend logs only                       |
+| `just docker-ps`             | Show running containers                       |
+| `just docker-exec-backend`   | Shell into backend container                  |
+| `just docker-exec-frontend`  | Shell into frontend container                 |
+| `just docker-secrets`        | Generate development secrets                  |
+| `just docker-clean`          | Remove stopped containers and dangling images |
 
 ### Dependencies
 
 | Command         | Description                             |
 | --------------- | --------------------------------------- |
-| `make outdated` | Show outdated dependencies (no changes) |
-| `make upgrade`  | Upgrade within semver ranges            |
+| `just outdated` | Show outdated dependencies (no changes) |
+| `just upgrade`  | Upgrade within semver ranges            |
 
 ### Documentation
 
 | Command                     | Description                   |
 | --------------------------- | ----------------------------- |
-| `make lint-md`              | Lint Markdown files           |
-| `make lint-yaml`            | Lint YAML files               |
-| `make format-md`            | Format Markdown with Prettier |
-| `make format-yaml`          | Format YAML with Prettier     |
-| `make links-check`          | Check internal file links     |
-| `make links-check-external` | Check external HTTP links     |
-| `make links-check-all`      | Check all links               |
+| `just lint-md`              | Lint Markdown files           |
+| `just lint-yaml`            | Lint YAML files               |
+| `just format-md`            | Format Markdown with Prettier |
+| `just format-yaml`          | Format YAML with Prettier     |
+| `just links-check`          | Check internal file links     |
+| `just links-check-external` | Check external HTTP links     |
+| `just links-check-all`      | Check all links               |
