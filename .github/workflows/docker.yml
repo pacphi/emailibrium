@@ -3,7 +3,23 @@ name: Docker
 on:
   push:
     branches: [main]
-    tags: ["v*"]
+  # Build the images on PRs that touch how they are built. Without this, the
+  # packaging was only ever exercised AFTER merge to main — which is how the
+  # published image stayed broken (it shipped the `development` stage) without
+  # any PR ever going red. Scoped by paths so an ordinary source change does not
+  # pay for a cold release build; regular Rust/frontend CI already covers compilation.
+  pull_request:
+    paths:
+      - "backend/Dockerfile"
+      - "frontend/Dockerfile"
+      - "backend/Cargo.toml"
+      - "backend/Cargo.lock"
+      - ".dockerignore"
+      - "docker-compose*.yml"
+      - ".github/workflows/docker.yml"
+  # NOTE: deliberately NOT triggered on tags. release.yml already builds and
+  # pushes both images on a tag; duplicating it here ran two concurrent cold
+  # Rust release builds writing to the same gha cache scope.
   workflow_dispatch:
 
 jobs:
@@ -23,6 +39,10 @@ jobs:
           # Repo root, so ruvector/ is inside the context. See backend/Dockerfile.
           context: .
           file: backend/Dockerfile
+          # Without an explicit target, buildx builds the LAST stage, which is
+          # `development` — a cargo-watch image with no compiled binary. That is
+          # why this job was a no-op that never caught a broken release build.
+          target: runtime
           push: false
           tags: emailibrium-backend:${{ github.sha }}
           # Scope the cache per image. Unscoped, the backend and frontend jobs
@@ -41,6 +61,9 @@ jobs:
       - uses: docker/build-push-action@v7
         with:
           context: ./frontend
+          # Same defect on the frontend: the last stage is `development` (a node
+          # dev server), not the nginx:alpine runtime image we mean to ship.
+          target: runtime
           push: false
           tags: emailibrium-frontend:${{ github.sha }}
           cache-from: type=gha,scope=frontend

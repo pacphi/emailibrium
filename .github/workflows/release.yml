@@ -196,6 +196,11 @@ jobs:
         with:
           context: ${{ matrix.context }}
           file: ${{ matrix.file }}
+          # THE published-artifact fix. Without this, buildx builds each
+          # Dockerfile's LAST stage — `development` — so every release published
+          # a cargo-watch / node-dev-server image to ghcr as :latest, with no
+          # compiled binary, no migrations and no entrypoint. It could not run.
+          target: runtime
           push: true
           tags: ${{ steps.tags.outputs.tags }}
           # Pin the published architecture. Without this, buildx targets the
