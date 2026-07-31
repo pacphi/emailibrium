@@ -1,0 +1,32 @@
+# cargo-nextest configuration — https://nexte.st/docs/configuration/
+#
+# Lives at backend/.config/nextest.toml because nextest resolves this file
+# relative to the CARGO WORKSPACE root, which is backend/, not the repo root.
+#
+# Note on doctests: nextest does not run them. That costs nothing here — this
+# crate has exactly 2 doctests and both are `ignored`, so `cargo test --doc`
+# executes 0 of them (verified 2026-07-31). If a real doctest is ever added,
+# CI needs a separate `cargo test --doc` step.
+
+[profile.default]
+# Surface every failure in one run rather than stopping at the first, so a
+# broken PR reports its full blast radius instead of one symptom at a time.
+fail-fast = false
+
+# Deliberately NO retries. Retrying would paper over exactly the flakiness this
+# phase might expose: dropping the separate recompile can surface a latent
+# order- or timing-dependent test. OPTIMIZATION_SPEC F-5 calls for such a test
+# to be treated as EXPOSED (and fixed deterministically), not silently retried.
+retries = 0
+
+# Flag pathologically slow tests instead of letting them quietly dominate CI.
+# `terminate-after` bounds a genuinely hung test rather than burning the job.
+slow-timeout = { period = "60s", terminate-after = 5 }
+
+[profile.ci]
+# Inherits the above; CI wants failure detail inline and a quieter pass path.
+fail-fast = false
+retries = 0
+failure-output = "immediate-final"
+status-level = "fail"
+final-status-level = "slow"
