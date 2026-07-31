@@ -20,7 +20,7 @@
 
 ---
 
-### F-1 — Docker build/push must target the `runtime` stage, not `development`
+## F-1 — Docker build/push must target the `runtime` stage, not `development`
 
 - **severity:** critical
 - **evidence:** .github/workflows/docker.yml:16-22, .github/workflows/docker.yml:30-36, .github/workflows/release.yml:169-175, backend/Dockerfile:21-25, frontend/Dockerfile:18
@@ -41,7 +41,7 @@
 - **risk:** high
 - **depends_on:** [F-2]
 
-### F-2 — Make the runtime image buildable (ruvector context + submodules)
+## F-2 — Make the runtime image buildable (ruvector context + submodules)
 
 - **severity:** critical
 - **evidence:** backend/Cargo.toml:104-106 (path deps into `../ruvector/...`), backend/Dockerfile:1-7 (context assumes `./backend` only), .github/workflows/docker.yml:14 (checkout without `submodules: true`)
@@ -62,7 +62,7 @@
 - **risk:** high
 - **depends_on:** []
 
-### F-3 — Move Lighthouse to a manual workflow; delete bundlewatch theater
+## F-3 — Move Lighthouse to a manual workflow; delete bundlewatch theater
 
 - **severity:** medium
 - **evidence:** .github/workflows/ci.yml:156 (stale `(ADR-005)` comment), .github/workflows/ci.yml:157-182 (lighthouse job, `continue-on-error: true`), .github/workflows/ci.yml:184-222 (bundlewatch job, oversized check only `echo`s a warning)
@@ -93,7 +93,7 @@
 - **risk:** low
 - **depends_on:** []
 
-### F-4 — Dependency hygiene: remove 2 unused, document-ignore 2 planned
+## F-4 — Dependency hygiene: remove 2 unused, document-ignore 2 planned
 
 - **severity:** medium
 - **evidence:** backend/Cargo.toml:105 (`ruvector-collections`, 0 source refs), backend/Cargo.toml:13 & :111 (`encoding_rs` — dead `builtin-llm` feature stub, 0 refs), backend/Cargo.toml:79-80 (`apalis` / `apalis-sql`), backend/src/content/jobs.rs:15,176 (apalis referenced in comments only)
@@ -116,7 +116,7 @@
 - **risk:** low
 - **depends_on:** []
 
-### F-5 — Build the Rust crate once, share via nextest archive
+## F-5 — Build the Rust crate once, share via nextest archive
 
 - **severity:** medium
 - **evidence:** .github/workflows/ci.yml:47-52 (`cargo clippy --workspace --all-targets` — full compile), .github/workflows/ci.yml:66-71 (`cargo test --workspace` + `cargo bench --no-run` — second full compile)
@@ -136,7 +136,7 @@
 - **risk:** medium
 - **depends_on:** []
 
-### F-6 — Set `CARGO_INCREMENTAL=0` and `CARGO_PROFILE_TEST_DEBUG=0`
+## F-6 — Set `CARGO_INCREMENTAL=0` and `CARGO_PROFILE_TEST_DEBUG=0`
 
 - **severity:** medium
 - **evidence:** .github/workflows/ci.yml:14-16 (env block sets neither)
@@ -150,7 +150,7 @@
 - **risk:** low
 - **depends_on:** []
 
-### F-7 — Install `cargo-audit` from a prebuilt binary
+## F-7 — Install `cargo-audit` from a prebuilt binary
 
 - **severity:** medium
 - **evidence:** .github/workflows/ci.yml:82-83 (`cargo install --locked cargo-audit` — compiles from source each run)
@@ -163,7 +163,7 @@
 - **risk:** low
 - **depends_on:** []
 
-### F-8 — Single Rust-toolchain source of truth
+## F-8 — Single Rust-toolchain source of truth
 
 - **severity:** low
 - **evidence:** backend/rust-toolchain.toml (pins `1.96.0`), .github/workflows/ci.yml:27,41,62 & .github/workflows/release.yml:76 (`dtolnay/rust-toolchain@stable`)
@@ -179,7 +179,7 @@
 - **risk:** low
 - **depends_on:** []
 
-### F-9 — Add a fast linker (lld)
+## F-9 — Add a fast linker (lld)
 
 - **severity:** low
 - **evidence:** no `fuse-ld=lld` present in workflows or `backend/.cargo/config.toml`
@@ -193,7 +193,7 @@
 - **risk:** low
 - **depends_on:** []
 
-### F-10 — Parameterize heavy runners
+## F-10 — Parameterize heavy runners
 
 - **severity:** low
 - **evidence:** .github/workflows/ci.yml:22,36,55 (heavy jobs hardcode `runs-on: ubuntu-latest`)
@@ -208,7 +208,7 @@
 - **risk:** low
 - **depends_on:** []
 
-### F-11 — `upload-artifact` with `if-no-files-found: ignore`
+## F-11 — `upload-artifact` with `if-no-files-found: ignore`
 
 - **severity:** low
 - **evidence:** .github/workflows/release.yml:128 (changelog `upload-artifact` without the guard)
