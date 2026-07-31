@@ -6,8 +6,10 @@ services:
   # ─── Backend API (Rust) ───────────────────────────────────
   backend:
     build:
-      context: ./backend
-      dockerfile: Dockerfile
+      # Repo root: backend/Cargo.toml path-depends on the vendored ruvector
+      # submodule, which is outside backend/. See backend/Dockerfile.
+      context: .
+      dockerfile: backend/Dockerfile
       target: runtime
       args:
         RUST_VERSION: "1.97"

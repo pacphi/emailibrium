@@ -11,20 +11,31 @@ jobs:
     name: Build Backend Image
     runs-on: ubuntu-latest
     steps:
+      # submodules are REQUIRED: backend/Cargo.toml has path deps on the vendored
+      # ruvector crates, and the image build COPYs ruvector/ from the context.
+      # Without this the directory is empty and the release compile fails.
       - uses: actions/checkout@v7
+        with:
+          submodules: true
       - uses: docker/setup-buildx-action@v4
       - uses: docker/build-push-action@v7
         with:
-          context: ./backend
+          # Repo root, so ruvector/ is inside the context. See backend/Dockerfile.
+          context: .
+          file: backend/Dockerfile
           push: false
           tags: emailibrium-backend:${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # Scope the cache per image. Unscoped, the backend and frontend jobs
+          # share one gha cache entry and evict each other's layers.
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,mode=max,scope=backend
 
   build-frontend:
     name: Build Frontend Image
     runs-on: ubuntu-latest
     steps:
+      # The frontend image is self-contained, so it keeps a frontend/ context and
+      # needs no submodules.
       - uses: actions/checkout@v7
       - uses: docker/setup-buildx-action@v4
       - uses: docker/build-push-action@v7
@@ -32,5 +43,5 @@ jobs:
           context: ./frontend
           push: false
           tags: emailibrium-frontend:${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,mode=max,scope=frontend

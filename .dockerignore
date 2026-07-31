@@ -1,0 +1,57 @@
+# Docker build context excludes — REPO ROOT context.
+#
+# backend/Dockerfile builds from the repo root (it needs both backend/ and the
+# vendored ruvector/ submodule, because backend/Cargo.toml has path deps on
+# ../ruvector/crates/*). Without this file the daemon would be sent the whole
+# tree — backend/target alone is tens of GB locally — and the build would crawl
+# or die before the first instruction ran.
+#
+# Keep this list conservative: excluding something the build genuinely needs
+# fails loudly at COPY time, which is the safe direction.
+
+# Rust build output — by far the largest offender.
+**/target/
+
+# Node
+**/node_modules/
+**/dist/
+**/.turbo/
+**/storybook-static/
+
+# VCS + local state
+.git/
+.gitignore
+**/.DS_Store
+
+# Local databases and caches (never belong in an image)
+**/*.db
+**/*.db-shm
+**/*.db-wal
+**/*.rvf
+**/*.rvf.lock
+.lycheecache
+
+# Agent/tooling scratch — irrelevant to the image, and some is machine-local
+.claude/
+.claude-flow/
+.agentic-qe/
+.swarm/
+.beads/
+.autopilot/
+.optimizer/
+.agents/
+.codex/
+.husky/
+
+# Secrets must never enter a build context.
+secrets/
+**/*.pem
+**/*.key
+.env
+.env.*
+
+# Docs and CI config are not needed to compile or run the service.
+docs/
+images/
+.github/
+*.md

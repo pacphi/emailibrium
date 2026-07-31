@@ -159,10 +159,15 @@ jobs:
     strategy:
       matrix:
         include:
+          # The backend image builds from the REPO ROOT so the vendored ruvector
+          # submodule (a path dependency of backend/Cargo.toml) is in the context.
           - app: backend
-            context: ./backend
+            context: .
+            file: backend/Dockerfile
+          # The frontend image is self-contained.
           - app: frontend
             context: ./frontend
+            file: frontend/Dockerfile
     steps:
       - uses: actions/checkout@v7
         with:
@@ -190,6 +195,7 @@ jobs:
       - uses: docker/build-push-action@v7
         with:
           context: ${{ matrix.context }}
+          file: ${{ matrix.file }}
           push: true
           tags: ${{ steps.tags.outputs.tags }}
           # Pin the published architecture. Without this, buildx targets the
