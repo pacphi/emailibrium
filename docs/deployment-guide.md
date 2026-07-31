@@ -4,7 +4,7 @@
 
 | Tool             | Version | Install                                               |
 | ---------------- | ------- | ----------------------------------------------------- |
-| Rust             | 1.96+   | `rustup default stable`                               |
+| Rust             | 1.97+   | `rustup default stable`                               |
 | Node.js          | 26+     | [nodejs.org](https://nodejs.org/) or `nvm install 26` |
 | pnpm             | 11.5+   | `corepack enable` (ships with Node.js 26+)            |
 | Docker + Compose | Latest  | [docker.com](https://www.docker.com/) (optional)      |
@@ -194,7 +194,7 @@ docker compose down
 
 | Service    | Port     | Description                               |
 | ---------- | -------- | ----------------------------------------- |
-| `backend`  | 8080     | Axum API server (Rust 1.96+)              |
+| `backend`  | 8080     | Axum API server (Rust 1.97+)              |
 | `frontend` | 3000     | Vite dev server (or Nginx for production) |
 | `postgres` | internal | PostgreSQL 16 (no external port)          |
 | `redis`    | internal | Redis 7 cache (no external port)          |
@@ -221,7 +221,7 @@ APP_ENV=production docker compose up -d
 
 ### Docker Build Notes
 
-- The backend uses a multi-stage Rust 1.96 build to minimize image size
+- The backend uses a multi-stage Rust 1.97 build to minimize image size
 - PostgreSQL and Redis data are persisted via named volumes
 - The frontend is built as static assets and served via Nginx in production
 - Secrets are mounted via Docker secrets from `secrets/{env}/` (see `secrets/dev.example/`)

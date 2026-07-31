@@ -40,3 +40,9 @@ RUSTSEC-2024-0436
 # Transitive dep via ruvector's old reqwest 0.11 chain.
 # Remove once ruvector bumps reqwest to 0.12.
 RUSTSEC-2025-0134
+
+# RUSTSEC-2026-0192: ttf-parser unmaintained (informational, no CVE)
+# Pulled in by lopdf (via our direct pdf-extract dependency). 0.25.1 is the
+# newest version ttf-parser has ever published (confirmed via `cargo info`),
+# and lopdf 0.42.0 has no newer release that drops or replaces it.
+RUSTSEC-2026-0192
