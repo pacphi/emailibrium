@@ -31,7 +31,7 @@ use crate::vectors::generative_router::{GenerativeRouterService, ProviderStatus}
 use crate::vectors::model_registry::ProviderType;
 use crate::vectors::models::{self, ModelStatus};
 use crate::vectors::reindex::ReindexStatus;
-use crate::vectors::tool_calling::{ToolDefinition, ToolMessage, ToolMessageRole};
+use crate::vectors::tool_calling::{ToolMessage, ToolMessageRole};
 use crate::AppState;
 
 /// Build AI management routes.
@@ -390,10 +390,14 @@ async fn chat_message_sse(
             tool_call_id: None,
         });
 
-        // Build orchestrator with tools and executor.
-        let orchestrator = ChatOrchestrator::new(OrchestratorConfig::default())
-            .with_tools(build_tool_definitions())
-            .with_executor(build_tool_executor(&state));
+        // Build orchestrator over the shared registry: same tools, same
+        // schemas, same rate limits and audit trail the MCP transport uses.
+        let orchestrator = ChatOrchestrator::new(OrchestratorConfig {
+            require_confirmation: state.tools.confirmation_required(),
+            ..OrchestratorConfig::default()
+        })
+        .with_tools(state.tools.chat_definitions())
+        .with_executor(registry_executor(&state));
 
         let max_tokens = state.yaml_config.tuning.llm.chat_max_tokens as u32;
         let result = orchestrator
@@ -1195,294 +1199,30 @@ async fn confirm_tool_call(
     }
 }
 
-/// Build the canonical tool definitions matching the 7 MCP server tools.
-fn build_tool_definitions() -> Vec<ToolDefinition> {
-    vec![
-        ToolDefinition {
-            name: "search_emails".into(),
-            description: "Search the user's emails by query text. Returns matching emails with sender, subject, date, and relevance score.".into(),
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "query": { "type": "string", "description": "Search query text" },
-                    "limit": { "type": "integer", "description": "Maximum results (default: 20)", "default": 20 }
-                },
-                "required": ["query"]
-            }),
-        },
-        ToolDefinition {
-            name: "get_email".into(),
-            description: "Get full email content including headers, body, and metadata by email ID.".into(),
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "email_id": { "type": "string", "description": "Unique email identifier" }
-                },
-                "required": ["email_id"]
-            }),
-        },
-        ToolDefinition {
-            name: "list_recent_emails".into(),
-            description: "List the most recent emails across all connected accounts.".into(),
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "limit": { "type": "integer", "description": "Maximum emails (default: 20, max: 100)" }
-                }
-            }),
-        },
-        ToolDefinition {
-            name: "count_emails".into(),
-            description: "Count emails matching optional filters. Supports filtering by sender, category, and date range.".into(),
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "from_filter": { "type": "string", "description": "Filter by sender (partial match)" },
-                    "category": { "type": "string", "description": "Filter by category" },
-                    "after": { "type": "string", "description": "Only count emails after this ISO 8601 date" },
-                    "before": { "type": "string", "description": "Only count emails before this ISO 8601 date" }
-                }
-            }),
-        },
-        ToolDefinition {
-            name: "get_insights".into(),
-            description: "Get email analytics: counts by category, top senders, and daily volume for the last 7 days.".into(),
-            input_schema: serde_json::json!({ "type": "object", "properties": {} }),
-        },
-        ToolDefinition {
-            name: "list_rules".into(),
-            description: "List all email rules including their conditions, actions, and status.".into(),
-            input_schema: serde_json::json!({ "type": "object", "properties": {} }),
-        },
-        ToolDefinition {
-            name: "get_email_thread".into(),
-            description: "Get all emails in the same conversation thread as the specified email.".into(),
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "email_id": { "type": "string", "description": "Email ID whose thread to retrieve" }
-                },
-                "required": ["email_id"]
-            }),
-        },
-    ]
-}
-
-/// Build a `ToolExecutor` that dispatches tool calls to in-process service functions.
+/// Adapt the shared tool registry to the orchestrator's executor interface.
 ///
-/// This bridges the orchestrator's tool executor interface to the same database
-/// and search services used by the MCP server, without going over the network.
-fn build_tool_executor(state: &AppState) -> crate::vectors::chat_orchestrator::ToolExecutor {
-    use crate::vectors::search::{HybridSearchQuery, SearchMode};
-
-    let db = state.db.clone();
-    let hybrid_search = state.vector_service.hybrid_search.clone();
+/// This used to be ~215 lines re-implementing every tool against the same
+/// services the MCP server used, which is how the two paths drifted: the chat
+/// copy had no rate limiting and no audit trail at all.
+fn registry_executor(state: &AppState) -> crate::vectors::chat_orchestrator::ToolExecutor {
+    let registry = state.tools.clone();
+    let ctx = std::sync::Arc::new(crate::tools::ToolContext::from(state));
 
     std::sync::Arc::new(move |name: &str, args: serde_json::Value| {
-        let db = db.clone();
-        let hybrid_search = hybrid_search.clone();
+        let registry = registry.clone();
+        let ctx = ctx.clone();
         let name = name.to_string();
 
         Box::pin(async move {
-            match name.as_str() {
-                "search_emails" => {
-                    let query_text = args.get("query").and_then(|v| v.as_str()).unwrap_or("");
-                    let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(20) as usize;
-
-                    let query = HybridSearchQuery {
-                        text: query_text.to_string(),
-                        mode: SearchMode::Hybrid,
-                        filters: None,
-                        limit: Some(limit),
-                        vector_weight: 1.0,
-                        fts_weight: 1.0,
-                    };
-
-                    match hybrid_search.search(&query).await {
-                        Ok(result) => {
-                            let items: Vec<serde_json::Value> = result.results.iter().map(|r| {
-                                serde_json::json!({
-                                    "email_id": r.email_id,
-                                    "score": r.score,
-                                    "match_type": r.match_type,
-                                    "subject": r.metadata.get("subject").unwrap_or(&String::new()),
-                                    "from": r.metadata.get("from_addr").unwrap_or(&String::new()),
-                                    "date": r.metadata.get("received_at").unwrap_or(&String::new()),
-                                })
-                            }).collect();
-                            Ok(
-                                serde_json::json!({ "total": result.total, "results": items })
-                                    .to_string(),
-                            )
-                        }
-                        Err(e) => Err(format!("Search failed: {e}")),
-                    }
-                }
-                "get_email" => {
-                    let email_id = args.get("email_id").and_then(|v| v.as_str()).unwrap_or("");
-                    let row = sqlx::query_as::<_, (String, String, Option<String>, String, String, Option<String>, Option<String>)>(
-                        "SELECT id, subject, from_name, from_addr, received_at, body_text, category FROM emails WHERE id = ?1"
-                    )
-                    .bind(email_id)
-                    .fetch_optional(&db.pool)
-                    .await;
-
-                    match row {
-                        Ok(Some((
-                            id,
-                            subject,
-                            from_name,
-                            from_addr,
-                            received_at,
-                            body_text,
-                            category,
-                        ))) => {
-                            let sender = match &from_name {
-                                Some(name) if !name.is_empty() => format!("{name} <{from_addr}>"),
-                                _ => from_addr,
-                            };
-                            Ok(serde_json::json!({
-                                "id": id, "subject": subject, "from": sender,
-                                "date": received_at, "category": category,
-                                "body": body_text.unwrap_or_default(),
-                            })
-                            .to_string())
-                        }
-                        Ok(None) => {
-                            Ok(serde_json::json!({ "error": "Email not found" }).to_string())
-                        }
-                        Err(e) => Err(format!("Database error: {e}")),
-                    }
-                }
-                "list_recent_emails" => {
-                    let limit = args
-                        .get("limit")
-                        .and_then(|v| v.as_i64())
-                        .unwrap_or(20)
-                        .min(100);
-                    let rows = sqlx::query_as::<_, (String, String, Option<String>, String, String, Option<String>)>(
-                        "SELECT id, subject, from_name, from_addr, received_at, category FROM emails ORDER BY received_at DESC LIMIT ?1"
-                    )
-                    .bind(limit)
-                    .fetch_all(&db.pool)
-                    .await;
-
-                    match rows {
-                        Ok(rows) => {
-                            let items: Vec<serde_json::Value> = rows.iter().map(|(id, subject, from_name, from_addr, date, category)| {
-                                let sender = match from_name {
-                                    Some(name) if !name.is_empty() => format!("{name} <{from_addr}>"),
-                                    _ => from_addr.clone(),
-                                };
-                                serde_json::json!({ "id": id, "subject": subject, "from": sender, "date": date, "category": category })
-                            }).collect();
-                            Ok(serde_json::json!({ "count": items.len(), "emails": items })
-                                .to_string())
-                        }
-                        Err(e) => Err(format!("Database error: {e}")),
-                    }
-                }
-                "count_emails" => {
-                    let mut sql = String::from("SELECT COUNT(*) FROM emails WHERE 1=1");
-                    let mut binds: Vec<String> = Vec::new();
-
-                    if let Some(from) = args.get("from_filter").and_then(|v| v.as_str()) {
-                        sql.push_str(&format!(" AND from_addr LIKE ?{}", binds.len() + 1));
-                        binds.push(format!("%{from}%"));
-                    }
-                    if let Some(cat) = args.get("category").and_then(|v| v.as_str()) {
-                        sql.push_str(&format!(" AND category = ?{}", binds.len() + 1));
-                        binds.push(cat.to_string());
-                    }
-                    if let Some(after) = args.get("after").and_then(|v| v.as_str()) {
-                        sql.push_str(&format!(" AND received_at >= ?{}", binds.len() + 1));
-                        binds.push(after.to_string());
-                    }
-                    if let Some(before) = args.get("before").and_then(|v| v.as_str()) {
-                        sql.push_str(&format!(" AND received_at <= ?{}", binds.len() + 1));
-                        binds.push(before.to_string());
-                    }
-
-                    let mut query = sqlx::query_scalar::<_, i64>(crate::db::audited_sql(&sql));
-                    for b in &binds {
-                        query = query.bind(b);
-                    }
-
-                    match query.fetch_one(&db.pool).await {
-                        Ok(count) => Ok(serde_json::json!({ "count": count }).to_string()),
-                        Err(e) => Err(format!("Database error: {e}")),
-                    }
-                }
-                "get_insights" => {
-                    let pool = &db.pool;
-                    let categories: Vec<(String, i64)> = sqlx::query_as(
-                        "SELECT category, COUNT(*) FROM emails GROUP BY category ORDER BY COUNT(*) DESC"
-                    ).fetch_all(pool).await.unwrap_or_default();
-
-                    let senders: Vec<(String, i64)> = sqlx::query_as(
-                        "SELECT COALESCE(from_name, from_addr), COUNT(*) FROM emails GROUP BY 1 ORDER BY 2 DESC LIMIT 10"
-                    ).fetch_all(pool).await.unwrap_or_default();
-
-                    let daily: Vec<(String, i64)> = sqlx::query_as(
-                        "SELECT DATE(received_at), COUNT(*) FROM emails WHERE received_at >= datetime('now', '-7 days') GROUP BY 1 ORDER BY 1 DESC"
-                    ).fetch_all(pool).await.unwrap_or_default();
-
-                    Ok(serde_json::json!({
-                        "categories": categories.iter().map(|(c, n)| serde_json::json!({"category": c, "count": n})).collect::<Vec<_>>(),
-                        "top_senders": senders.iter().map(|(s, n)| serde_json::json!({"sender": s, "count": n})).collect::<Vec<_>>(),
-                        "daily_volume": daily.iter().map(|(d, n)| serde_json::json!({"date": d, "count": n})).collect::<Vec<_>>(),
-                    }).to_string())
-                }
-                "list_rules" => {
-                    let rows: Vec<(String, String, String, String, i64)> = sqlx::query_as(
-                        "SELECT id, name, conditions_json, actions_json, enabled FROM rules ORDER BY name"
-                    ).fetch_all(&db.pool).await.unwrap_or_default();
-
-                    let items: Vec<serde_json::Value> = rows.iter().map(|(id, name, conds, acts, enabled)| {
-                        serde_json::json!({ "id": id, "name": name, "conditions": conds, "actions": acts, "is_active": *enabled != 0 })
-                    }).collect();
-
-                    Ok(serde_json::json!({ "count": items.len(), "rules": items }).to_string())
-                }
-                "get_email_thread" => {
-                    let email_id = args.get("email_id").and_then(|v| v.as_str()).unwrap_or("");
-                    let thread_key: Option<String> =
-                        sqlx::query_scalar("SELECT thread_key FROM emails WHERE id = ?1")
-                            .bind(email_id)
-                            .fetch_optional(&db.pool)
-                            .await
-                            .unwrap_or(None);
-
-                    match thread_key {
-                        Some(key) => {
-                            #[derive(sqlx::FromRow)]
-                            struct ThreadRow {
-                                id: String,
-                                subject: String,
-                                from_name: Option<String>,
-                                from_addr: String,
-                                received_at: String,
-                                category: Option<String>,
-                            }
-                            let rows: Vec<ThreadRow> = sqlx::query_as(
-                                "SELECT id, subject, from_name, from_addr, received_at, category FROM emails WHERE thread_key = ?1 ORDER BY received_at ASC"
-                            ).bind(&key).fetch_all(&db.pool).await.unwrap_or_default();
-
-                            let items: Vec<serde_json::Value> = rows.iter().map(|r| {
-                                let sender = match &r.from_name {
-                                    Some(name) if !name.is_empty() => format!("{name} <{}>", r.from_addr),
-                                    _ => r.from_addr.clone(),
-                                };
-                                serde_json::json!({ "id": r.id, "subject": r.subject, "from": sender, "date": r.received_at, "category": r.category })
-                            }).collect();
-
-                            Ok(serde_json::json!({ "thread_key": key, "count": items.len(), "emails": items }).to_string())
-                        }
-                        None => Ok(serde_json::json!({ "error": "Email not found" }).to_string()),
-                    }
-                }
-                other => Err(format!("Unknown tool: {other}")),
-            }
+            registry
+                .dispatch(ctx, &name, args, crate::tools::CallSource::Chat)
+                .await
+                .map(|value| value.to_string())
+                // The orchestrator's executor interface is stringly-typed, so
+                // the variant is prefixed rather than lost: a model that sees
+                // "rate_limited" can wait, where a bare message reads as a
+                // permanent failure.
+                .map_err(|e| format!("{}: {e}", e.kind()))
         })
     })
 }

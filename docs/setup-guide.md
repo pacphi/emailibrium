@@ -187,6 +187,97 @@ make setup-validate
 This checks: secrets, backend compilation, frontend build, Docker health,
 API reachability, and AI model availability.
 
+## Connecting an MCP client
+
+The backend embeds an MCP server exposing 15 read-only tools over your mailbox. It runs in
+two modes.
+
+### HTTP mode (default)
+
+The backend serves MCP at `http://localhost:8080/api/v1/mcp` whenever it is running. Nothing
+extra to start. For Claude Code, add an entry to `.mcp.json` at the repo root:
+
+```json
+{
+  "mcpServers": {
+    "emailibrium": {
+      "type": "http",
+      "url": "http://localhost:8080/api/v1/mcp"
+    }
+  }
+}
+```
+
+This repo already ships that entry, so Claude Code picks it up once the backend is running.
+Because the backend is a long-running server, an HTTP entry references it by URL — the client
+does not spawn it.
+
+### stdio mode
+
+For clients that launch a subprocess and speak JSON-RPC over stdin/stdout — Claude Desktop
+being the common one — start the backend in stdio mode instead:
+
+```json
+{
+  "mcpServers": {
+    "emailibrium": {
+      "command": "/absolute/path/to/emailibrium",
+      "args": ["--mcp-stdio"]
+    }
+  }
+}
+```
+
+In stdio mode the backend serves the same tools over stdin/stdout and **does not start the
+HTTP server**. Logs go to **stderr**, not stdout — stdout carries only JSON-RPC frames, so
+anything written there would corrupt the protocol stream. Your logs have not vanished; check
+stderr and `data/logs/emailibrium.log`.
+
+### Selecting the mode
+
+The mode is an enum, `http` (default) or `stdio`, and can be set two ways:
+
+| Source  | Form                       |
+| ------- | -------------------------- |
+| CLI     | `--mcp-stdio`              |
+| Env var | `EMAILIBRIUM_MCP_MODE=stdio` |
+
+The CLI flag wins if both are set. Note the two spellings are not symmetric: the flag is a
+boolean shorthand, the environment variable takes the mode name. There is no `--mcp-mode`
+flag and no `EMAILIBRIUM_MCP_STDIO` variable.
+
+The env form suits client configs that set environment rather than arguments:
+
+```json
+{
+  "mcpServers": {
+    "emailibrium": {
+      "command": "/absolute/path/to/emailibrium",
+      "env": { "EMAILIBRIUM_MCP_MODE": "stdio" }
+    }
+  }
+}
+```
+
+### Smoke test
+
+With the backend running in HTTP mode, confirm the endpoint is mounted:
+
+```bash
+curl -sS http://localhost:8080/api/v1/mcp \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json, text/event-stream' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+```
+
+A JSON-RPC response means the server is reachable. A connection refused means the backend
+is not running; a 404 means it started without the MCP routes mounted.
+
+> **Localhost only.** `/api/v1` is unauthenticated by design — emailibrium is a local-first
+> single-user app, and MCP inherits that stance. Anyone who can reach port 8080 can read your
+> mail. Keep the port bound to localhost, and treat bearer auth as a prerequisite for any
+> non-localhost deployment rather than an optional hardening step.
+
 ## Troubleshooting
 
 ### "Docker build failed"

@@ -1,505 +1,171 @@
 //! MCP server handler for emailibrium (ADR-028).
 //!
-//! Implements the `ServerHandler` trait from `rmcp` so the emailibrium
-//! backend can serve MCP tool calls over Streamable HTTP, sharing the
-//! same Axum process and `AppState`.
+//! Implements the `ServerHandler` trait from `rmcp` so the emailibrium backend
+//! can serve MCP tool calls over Streamable HTTP, sharing the same Axum
+//! process and services as the REST API.
+//!
+//! The server holds no tool definitions of its own. Every tool comes from
+//! [`ToolRegistry`], which the chat orchestrator and the integration tests
+//! drive through the same [`ToolRegistry::dispatch`] path, so the two callers
+//! cannot drift apart on which tools exist or what limits apply.
 
 use std::sync::Arc;
-use std::time::Instant;
 
-use rmcp::handler::server::router::tool::ToolRouter;
-use rmcp::handler::server::wrapper::Parameters;
-use rmcp::model::{ServerCapabilities, ServerInfo};
-use rmcp::{tool, tool_handler, tool_router, ServerHandler};
-
-use crate::AppState;
-
-use super::audit;
-use super::rate_limit;
-use super::tools::email::{
-    validate_date, validate_email_id, validate_limit, validate_query, CountEmailsRequest, EmailRow,
-    GetEmailRequest, GetEmailThreadRequest, InsightsRow, ListRecentEmailsRequest, RuleRow,
-    SearchEmailsRequest, SenderRow, ThreadEmailRow,
+use futures::future::BoxFuture;
+use rmcp::handler::server::router::prompt::PromptRouter;
+use rmcp::handler::server::router::tool::{ToolRoute, ToolRouter};
+use rmcp::handler::server::tool::ToolCallContext;
+use rmcp::model::{
+    CallToolResult, Content, GetPromptRequestParams, GetPromptResult, JsonObject,
+    ListPromptsResult, ListResourceTemplatesResult, ListResourcesResult, PaginatedRequestParams,
+    ReadResourceRequestParams, ReadResourceResult, ServerCapabilities, ServerInfo, Tool,
 };
-use crate::vectors::search::{HybridSearchQuery, SearchMode};
+use rmcp::service::RequestContext;
+use rmcp::{prompt_handler, tool_handler, RoleServer, ServerHandler};
+
+use super::resources;
+use crate::tools::{CallSource, ToolContext, ToolError, ToolRegistry};
 
 // ---------------------------------------------------------------------------
 // MCP Server
 // ---------------------------------------------------------------------------
 
 /// The MCP server that exposes emailibrium capabilities as tools.
-///
-/// Holds an `Arc<AppState>` so tool methods can access the same services
-/// (database, vector search, etc.) used by the REST API.
 #[derive(Clone)]
 pub struct EmailibriumMcpServer {
-    #[allow(dead_code)]
     tool_router: ToolRouter<Self>,
-    state: Arc<AppState>,
-    rate_limiter: Arc<rate_limit::ToolRateLimiter>,
+    /// Prompt templates, built once from the `#[prompt_router]` block in
+    /// [`super::resources`]. Read by `#[prompt_handler(router =
+    /// self.prompt_router)]` below — the argument matters for the same reason
+    /// it does on `tool_handler`.
+    prompt_router: PromptRouter<Self>,
+    /// Services the tool handlers run against.
+    pub ctx: Arc<ToolContext>,
+    /// Shared with the chat path, so rate limits and audit apply once and to
+    /// both. Constructed by the caller, not here — see [`Self::new`].
+    pub registry: Arc<ToolRegistry>,
 }
 
 impl EmailibriumMcpServer {
-    pub fn new(state: Arc<AppState>) -> Self {
-        let tool_router = Self::tool_router();
+    /// Build a server over an already-constructed context and registry.
+    ///
+    /// Both arguments are `Arc`s the caller owns: the transport builds a fresh
+    /// `EmailibriumMcpServer` per session, so anything constructed *here*
+    /// would reset on every reconnect. That is exactly how the rate limiter
+    /// used to be defeated.
+    pub fn new(ctx: Arc<ToolContext>, registry: Arc<ToolRegistry>) -> Self {
         Self {
-            tool_router,
-            state,
-            rate_limiter: Arc::new(rate_limit::ToolRateLimiter::new(20)),
+            tool_router: build_tool_router(&registry),
+            prompt_router: Self::prompt_router(),
+            ctx,
+            registry,
         }
-    }
-
-    /// Log a tool invocation to the audit trail (best-effort, never fails the call).
-    async fn audit(
-        &self,
-        tool: &str,
-        args: &impl serde::Serialize,
-        status: &'static str,
-        start: Instant,
-    ) {
-        let entry = audit::ToolCallAuditEntry {
-            timestamp: chrono::Utc::now(),
-            tool_name: tool.to_string(),
-            arguments_hash: audit::hash_arguments(&serde_json::to_value(args).unwrap_or_default()),
-            result_status: status,
-            latency_ms: start.elapsed().as_millis() as u64,
-        };
-        audit::log_tool_call(&self.state.db.pool, &entry).await;
     }
 }
 
-// ---------------------------------------------------------------------------
-// Tool definitions (ADR-028 Phase 5: async implementations)
-// ---------------------------------------------------------------------------
+/// Build a router with one dynamic route per enabled tool.
+///
+/// Routes are built from the registry rather than from `#[tool]` methods, so
+/// `config/tools.yaml` decides what is served.
+///
+/// The `#[tool_handler(router = self.tool_router)]` attribute below must keep
+/// its argument. The default form expands to `Self::tool_router()`, which no
+/// longer exists here — so dropping the argument today is a compile error, not
+/// a silent failure. That backstop is incidental: reintroducing a
+/// `#[tool_router]` block would make `Self::tool_router()` resolve again, and
+/// the default would then quietly serve `#[tool]` methods instead of the
+/// registry. `Self::prompt_router()` does still exist, so the prompt attribute
+/// has no equivalent protection.
+fn build_tool_router(registry: &Arc<ToolRegistry>) -> ToolRouter<EmailibriumMcpServer> {
+    let mut router = ToolRouter::new();
 
-#[tool_router]
-impl EmailibriumMcpServer {
-    /// Search emails using hybrid vector + full-text search.
-    #[tool(
-        description = "Search the user's emails by query text. Returns matching emails with sender, subject, date, and relevance score."
-    )]
-    async fn search_emails(&self, Parameters(req): Parameters<SearchEmailsRequest>) -> String {
-        let start = Instant::now();
+    for decl in registry.enabled() {
+        let name = decl.name;
+        let tool = Tool::new(name, decl.description, input_schema(&decl.input_schema));
 
-        // Rate limiting (ADR-028 Phase 6)
-        if let Err(e) = self.rate_limiter.check("search_emails", None) {
-            self.audit("search_emails", &req, "denied", start).await;
-            return serde_json::json!({"error": e}).to_string();
-        }
-
-        // Input validation (ADR-028 Phase 6)
-        if let Err(e) = validate_query(&req.query) {
-            self.audit("search_emails", &req, "error", start).await;
-            return serde_json::json!({ "error": e }).to_string();
-        }
-        let limit = validate_limit(req.limit, 100);
-
-        let query = HybridSearchQuery {
-            text: req.query.clone(),
-            mode: SearchMode::Hybrid,
-            filters: None,
-            limit: Some(limit as usize),
-            vector_weight: 1.0,
-            fts_weight: 1.0,
-        };
-
-        match self.state.vector_service.hybrid_search.search(&query).await {
-            Ok(result) => {
-                let items: Vec<serde_json::Value> = result
-                    .results
-                    .iter()
-                    .map(|r| {
-                        serde_json::json!({
-                            "email_id": r.email_id,
-                            "score": r.score,
-                            "match_type": r.match_type,
-                            "subject": r.metadata.get("subject").unwrap_or(&String::new()),
-                            "from": r.metadata.get("from_addr").unwrap_or(&String::new()),
-                            "date": r.metadata.get("received_at").unwrap_or(&String::new()),
-                        })
-                    })
-                    .collect();
-
-                self.audit("search_emails", &req, "success", start).await;
-                serde_json::json!({
-                    "total": result.total,
-                    "results": items,
-                    "latency_ms": result.latency_ms,
-                })
-                .to_string()
-            }
-            Err(e) => {
-                self.audit("search_emails", &req, "error", start).await;
-                serde_json::json!({
-                    "error": format!("Search failed: {e}"),
-                })
-                .to_string()
-            }
-        }
+        router.add_route(ToolRoute::new_dyn(tool, move |tcc| {
+            // Boxed through a named helper: a closure cannot infer a return
+            // type whose lifetime is tied to its argument, which is what
+            // `new_dyn`'s higher-ranked bound asks for.
+            boxed(dispatch_call(tcc, name))
+        }));
     }
 
-    /// Retrieve a single email by its unique identifier, including full body and metadata.
-    #[tool(
-        description = "Get full email content including headers, body, and metadata by email ID."
-    )]
-    async fn get_email(&self, Parameters(req): Parameters<GetEmailRequest>) -> String {
-        let start = Instant::now();
+    router
+}
 
-        if let Err(e) = self.rate_limiter.check("get_email", None) {
-            self.audit("get_email", &req, "denied", start).await;
-            return serde_json::json!({"error": e}).to_string();
-        }
+/// Run one tool call through the shared dispatch path.
+async fn dispatch_call(
+    tcc: ToolCallContext<'_, EmailibriumMcpServer>,
+    name: &'static str,
+) -> Result<CallToolResult, rmcp::ErrorData> {
+    let server = tcc.service;
+    let args = tcc
+        .arguments
+        .map_or(serde_json::Value::Null, serde_json::Value::Object);
 
-        // Input validation (ADR-028 Phase 6)
-        if let Err(e) = validate_email_id(&req.email_id) {
-            self.audit("get_email", &req, "error", start).await;
-            return serde_json::json!({ "error": e }).to_string();
-        }
+    match server
+        .registry
+        .dispatch(server.ctx.clone(), name, args, CallSource::Mcp)
+        .await
+    {
+        Ok(value) => Ok(CallToolResult::success(vec![Content::text(
+            value.to_string(),
+        )])),
+        Err(e) => Err(failure(e)),
+    }
+}
 
-        let result = sqlx::query_as::<_, EmailRow>(
-            "SELECT id, subject, from_name, from_addr, received_at, body_text, category \
-             FROM emails WHERE id = ?1",
-        )
-        .bind(&req.email_id)
-        .fetch_optional(&self.state.db.pool)
-        .await;
+/// Rate-limit rejection.
+///
+/// JSON-RPC reserves -32000..=-32099 for implementation-defined server errors
+/// and MCP defines nothing for this case, so a client that needs to tell "back
+/// off and retry" from "your request was wrong" needs a code of our own.
+pub(crate) const RATE_LIMITED: rmcp::model::ErrorCode = rmcp::model::ErrorCode(-32001);
 
-        match result {
-            Ok(Some(row)) => {
-                let sender = match &row.from_name {
-                    Some(name) if !name.is_empty() => format!("{name} <{}>", row.from_addr),
-                    _ => row.from_addr.clone(),
-                };
-                self.audit("get_email", &req, "success", start).await;
-                serde_json::json!({
-                    "id": row.id,
-                    "subject": row.subject,
-                    "from": sender,
-                    "date": row.received_at,
-                    "category": row.category,
-                    "body": row.body_text.unwrap_or_default(),
-                })
-                .to_string()
-            }
-            Ok(None) => {
-                self.audit("get_email", &req, "error", start).await;
-                serde_json::json!({ "error": "Email not found" }).to_string()
-            }
-            Err(e) => {
-                self.audit("get_email", &req, "error", start).await;
-                serde_json::json!({ "error": format!("Database error: {e}") }).to_string()
-            }
+/// Map a failed tool call onto a JSON-RPC error.
+///
+/// Every variant becomes a protocol error rather than a success-shaped result.
+/// The earlier version of this function returned
+/// `CallToolResult::success(json!({"error": ...}))` for every failure, which
+/// meant a client saw `isError: false` on a failed call and the audit trail
+/// recorded a served call — including rate-limit rejections, which are exactly
+/// the ones a caller most needs to notice.
+///
+/// The code carries the variant, since `Display` prints only the message.
+fn failure(error: ToolError) -> rmcp::ErrorData {
+    let data = Some(serde_json::json!({ "kind": error.kind() }));
+    let message = error.to_string();
+
+    match error {
+        ToolError::Invalid(_) => rmcp::ErrorData::invalid_params(message, data),
+        ToolError::NotFound(_) => rmcp::ErrorData::resource_not_found(message, data),
+        ToolError::Denied(_) => rmcp::ErrorData::invalid_request(message, data),
+        ToolError::RateLimited(_) => rmcp::ErrorData::new(RATE_LIMITED, message, data),
+        // The caller-facing message is already generic — `db_error` logs the
+        // underlying failure and returns "{operation} failed" — so nothing
+        // here leaks backing-store detail.
+        ToolError::Database(_) | ToolError::NotConfigured(_) => {
+            rmcp::ErrorData::internal_error(message, data)
         }
     }
+}
 
-    /// List the most recent emails across all connected accounts.
-    #[tool(description = "List the most recent emails across all connected accounts.")]
-    async fn list_recent_emails(
-        &self,
-        Parameters(req): Parameters<ListRecentEmailsRequest>,
-    ) -> String {
-        let start = Instant::now();
+fn boxed<'a>(
+    fut: impl std::future::Future<Output = Result<CallToolResult, rmcp::ErrorData>> + Send + 'a,
+) -> BoxFuture<'a, Result<CallToolResult, rmcp::ErrorData>> {
+    Box::pin(fut)
+}
 
-        if let Err(e) = self.rate_limiter.check("list_recent_emails", None) {
-            self.audit("list_recent_emails", &req, "denied", start)
-                .await;
-            return serde_json::json!({"error": e}).to_string();
-        }
-
-        let limit = req.limit.unwrap_or(20).min(100) as i64;
-
-        let result = sqlx::query_as::<_, EmailRow>(
-            "SELECT id, subject, from_name, from_addr, received_at, body_text, category \
-             FROM emails ORDER BY received_at DESC LIMIT ?1",
-        )
-        .bind(limit)
-        .fetch_all(&self.state.db.pool)
-        .await;
-
-        match result {
-            Ok(rows) => {
-                let items: Vec<serde_json::Value> = rows
-                    .iter()
-                    .map(|row| {
-                        let sender = match &row.from_name {
-                            Some(name) if !name.is_empty() => {
-                                format!("{name} <{}>", row.from_addr)
-                            }
-                            _ => row.from_addr.clone(),
-                        };
-                        serde_json::json!({
-                            "id": row.id,
-                            "subject": row.subject,
-                            "from": sender,
-                            "date": row.received_at,
-                            "category": row.category,
-                        })
-                    })
-                    .collect();
-
-                self.audit("list_recent_emails", &req, "success", start)
-                    .await;
-                serde_json::json!({ "count": items.len(), "emails": items }).to_string()
-            }
-            Err(e) => {
-                self.audit("list_recent_emails", &req, "error", start).await;
-                serde_json::json!({ "error": format!("Database error: {e}") }).to_string()
-            }
-        }
-    }
-
-    /// Count emails matching optional filters (sender, category, date range).
-    #[tool(
-        description = "Count emails matching optional filters. Supports filtering by sender, category, and date range (ISO 8601)."
-    )]
-    async fn count_emails(&self, Parameters(req): Parameters<CountEmailsRequest>) -> String {
-        let start = Instant::now();
-
-        if let Err(e) = self.rate_limiter.check("count_emails", None) {
-            self.audit("count_emails", &req, "denied", start).await;
-            return serde_json::json!({"error": e}).to_string();
-        }
-
-        // Input validation (ADR-028 Phase 6)
-        if let Some(ref after) = req.after {
-            if let Err(e) = validate_date(after) {
-                self.audit("count_emails", &req, "error", start).await;
-                return serde_json::json!({ "error": e }).to_string();
-            }
-        }
-        if let Some(ref before) = req.before {
-            if let Err(e) = validate_date(before) {
-                self.audit("count_emails", &req, "error", start).await;
-                return serde_json::json!({ "error": e }).to_string();
-            }
-        }
-
-        let mut sql = String::from("SELECT COUNT(*) as cnt FROM emails WHERE 1=1");
-        let mut binds: Vec<String> = Vec::new();
-
-        if let Some(ref from) = req.from_filter {
-            sql.push_str(&format!(" AND from_addr LIKE ?{}", binds.len() + 1));
-            binds.push(format!("%{from}%"));
-        }
-        if let Some(ref category) = req.category {
-            sql.push_str(&format!(" AND category = ?{}", binds.len() + 1));
-            binds.push(category.clone());
-        }
-        if let Some(ref after) = req.after {
-            sql.push_str(&format!(" AND received_at >= ?{}", binds.len() + 1));
-            binds.push(after.clone());
-        }
-        if let Some(ref before) = req.before {
-            sql.push_str(&format!(" AND received_at <= ?{}", binds.len() + 1));
-            binds.push(before.clone());
-        }
-
-        let mut query = sqlx::query_scalar::<_, i64>(crate::db::audited_sql(&sql));
-        for b in &binds {
-            query = query.bind(b);
-        }
-
-        match query.fetch_one(&self.state.db.pool).await {
-            Ok(count) => {
-                self.audit("count_emails", &req, "success", start).await;
-                serde_json::json!({ "count": count }).to_string()
-            }
-            Err(e) => {
-                self.audit("count_emails", &req, "error", start).await;
-                serde_json::json!({ "error": format!("Database error: {e}") }).to_string()
-            }
-        }
-    }
-
-    /// Get email analytics: counts by category, top senders, and daily volume for the last 7 days.
-    #[tool(
-        description = "Get email analytics: counts by category, top senders, and daily volume for the last 7 days."
-    )]
-    async fn get_insights(&self) -> String {
-        let start = Instant::now();
-        let empty = serde_json::json!({});
-
-        if let Err(e) = self.rate_limiter.check("get_insights", None) {
-            self.audit("get_insights", &empty, "denied", start).await;
-            return serde_json::json!({"error": e}).to_string();
-        }
-
-        let pool = &self.state.db.pool;
-
-        // Counts by category.
-        let categories = sqlx::query_as::<_, InsightsRow>(
-            "SELECT category as label, COUNT(*) as count FROM emails GROUP BY category ORDER BY count DESC",
-        )
-        .fetch_all(pool)
-        .await;
-
-        // Top 10 senders.
-        let senders = sqlx::query_as::<_, SenderRow>(
-            "SELECT COALESCE(from_name, from_addr) as sender, COUNT(*) as count \
-             FROM emails GROUP BY sender ORDER BY count DESC LIMIT 10",
-        )
-        .fetch_all(pool)
-        .await;
-
-        // Daily volume for last 7 days.
-        let daily = sqlx::query_as::<_, InsightsRow>(
-            "SELECT DATE(received_at) as label, COUNT(*) as count FROM emails \
-             WHERE received_at >= datetime('now', '-7 days') \
-             GROUP BY DATE(received_at) ORDER BY label DESC",
-        )
-        .fetch_all(pool)
-        .await;
-
-        let cat_json: Vec<serde_json::Value> = categories
-            .unwrap_or_default()
-            .iter()
-            .map(|r| serde_json::json!({ "category": r.label, "count": r.count }))
-            .collect();
-
-        let sender_json: Vec<serde_json::Value> = senders
-            .unwrap_or_default()
-            .iter()
-            .map(|r| serde_json::json!({ "sender": r.sender, "count": r.count }))
-            .collect();
-
-        let daily_json: Vec<serde_json::Value> = daily
-            .unwrap_or_default()
-            .iter()
-            .map(|r| serde_json::json!({ "date": r.label, "count": r.count }))
-            .collect();
-
-        self.audit("get_insights", &empty, "success", start).await;
-        serde_json::json!({
-            "categories": cat_json,
-            "top_senders": sender_json,
-            "daily_volume": daily_json,
-        })
-        .to_string()
-    }
-
-    /// List all email rules (filters/automation) configured by the user.
-    #[tool(description = "List all email rules including their conditions, actions, and status.")]
-    async fn list_rules(&self) -> String {
-        let start = Instant::now();
-        let empty = serde_json::json!({});
-
-        if let Err(e) = self.rate_limiter.check("list_rules", None) {
-            self.audit("list_rules", &empty, "denied", start).await;
-            return serde_json::json!({"error": e}).to_string();
-        }
-
-        let result = sqlx::query_as::<_, RuleRow>(
-            "SELECT id, name, conditions_json, actions_json, enabled FROM rules ORDER BY name",
-        )
-        .fetch_all(&self.state.db.pool)
-        .await;
-
-        match result {
-            Ok(rows) => {
-                let items: Vec<serde_json::Value> = rows
-                    .iter()
-                    .map(|r| {
-                        serde_json::json!({
-                            "id": r.id,
-                            "name": r.name,
-                            "conditions": r.conditions_json,
-                            "actions": r.actions_json,
-                            "is_active": r.enabled != 0,
-                        })
-                    })
-                    .collect();
-                self.audit("list_rules", &empty, "success", start).await;
-                serde_json::json!({ "count": items.len(), "rules": items }).to_string()
-            }
-            Err(e) => {
-                self.audit("list_rules", &empty, "error", start).await;
-                serde_json::json!({ "error": format!("Database error: {e}") }).to_string()
-            }
-        }
-    }
-
-    /// Get all emails in the same thread as a given email, ordered by date.
-    #[tool(
-        description = "Get all emails in the same conversation thread as the specified email, ordered by date."
-    )]
-    async fn get_email_thread(&self, Parameters(req): Parameters<GetEmailThreadRequest>) -> String {
-        let start = Instant::now();
-
-        if let Err(e) = self.rate_limiter.check("get_email_thread", None) {
-            self.audit("get_email_thread", &req, "denied", start).await;
-            return serde_json::json!({"error": e}).to_string();
-        }
-
-        // Input validation (ADR-028 Phase 6)
-        if let Err(e) = validate_email_id(&req.email_id) {
-            self.audit("get_email_thread", &req, "error", start).await;
-            return serde_json::json!({ "error": e }).to_string();
-        }
-
-        let pool = &self.state.db.pool;
-
-        // First, find the thread_key for the given email.
-        let thread_key_result =
-            sqlx::query_scalar::<_, String>("SELECT thread_key FROM emails WHERE id = ?1")
-                .bind(&req.email_id)
-                .fetch_optional(pool)
-                .await;
-
-        let thread_key = match thread_key_result {
-            Ok(Some(key)) => key,
-            Ok(None) => {
-                self.audit("get_email_thread", &req, "error", start).await;
-                return serde_json::json!({ "error": "Email not found" }).to_string();
-            }
-            Err(e) => {
-                self.audit("get_email_thread", &req, "error", start).await;
-                return serde_json::json!({ "error": format!("Database error: {e}") }).to_string();
-            }
-        };
-
-        // Fetch all emails in that thread.
-        let result = sqlx::query_as::<_, ThreadEmailRow>(
-            "SELECT id, subject, from_name, from_addr, received_at, category \
-             FROM emails WHERE thread_key = ?1 ORDER BY received_at ASC",
-        )
-        .bind(&thread_key)
-        .fetch_all(pool)
-        .await;
-
-        match result {
-            Ok(rows) => {
-                let items: Vec<serde_json::Value> = rows
-                    .iter()
-                    .map(|r| {
-                        let sender = match &r.from_name {
-                            Some(name) if !name.is_empty() => {
-                                format!("{name} <{}>", r.from_addr)
-                            }
-                            _ => r.from_addr.clone(),
-                        };
-                        serde_json::json!({
-                            "id": r.id,
-                            "subject": r.subject,
-                            "from": sender,
-                            "date": r.received_at,
-                            "category": r.category,
-                        })
-                    })
-                    .collect();
-
-                self.audit("get_email_thread", &req, "success", start).await;
-                serde_json::json!({
-                    "thread_key": thread_key,
-                    "count": items.len(),
-                    "emails": items,
-                })
-                .to_string()
-            }
-            Err(e) => {
-                self.audit("get_email_thread", &req, "error", start).await;
-                serde_json::json!({ "error": format!("Database error: {e}") }).to_string()
-            }
-        }
+/// Adapt a declaration's schema to the shape `Tool::new` wants.
+///
+/// Declarations carry a `Value` because the chat orchestrator needs one; rmcp
+/// wants the object itself. A non-object schema is a declaration bug, and an
+/// empty object is the closest safe reading of "takes no arguments".
+fn input_schema(schema: &serde_json::Value) -> Arc<JsonObject> {
+    match schema {
+        serde_json::Value::Object(map) => Arc::new(map.clone()),
+        _ => Arc::new(JsonObject::new()),
     }
 }
 
@@ -507,12 +173,123 @@ impl EmailibriumMcpServer {
 // ServerHandler implementation
 // ---------------------------------------------------------------------------
 
-#[tool_handler]
+#[tool_handler(router = self.tool_router)]
+#[prompt_handler(router = self.prompt_router)]
 impl ServerHandler for EmailibriumMcpServer {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build()).with_instructions(
-            "Emailibrium MCP server. Provides email search, retrieval, \
-                 and management tools for AI-assisted email workflows.",
+        ServerInfo::new(
+            ServerCapabilities::builder()
+                .enable_tools()
+                .enable_prompts()
+                .enable_resources()
+                .build(),
         )
+        .with_instructions(
+            "Emailibrium MCP server. Provides email search, retrieval, and management \
+             tools for AI-assisted email workflows. Read-only views are also exposed as \
+             resources: insights://summary for mailbox statistics, and the email://{id} \
+             and thread://{key} templates for a single message or a whole conversation. \
+             The triage-inbox and weekly-report prompts package the common workflows.",
+        )
+    }
+
+    async fn list_resources(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListResourcesResult, rmcp::ErrorData> {
+        Ok(resources::resources())
+    }
+
+    async fn list_resource_templates(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListResourceTemplatesResult, rmcp::ErrorData> {
+        Ok(resources::resource_templates())
+    }
+
+    async fn read_resource(
+        &self,
+        request: ReadResourceRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ReadResourceResult, rmcp::ErrorData> {
+        resources::read_resource(&self.ctx, &self.registry, &request.uri).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rmcp::model::ErrorCode;
+
+    fn code_for(error: ToolError) -> ErrorCode {
+        failure(error).code
+    }
+
+    #[test]
+    fn a_failed_call_never_reports_as_a_success() {
+        // The regression this guards: every variant used to come back as
+        // `CallToolResult::success` with an error blob in the text, so a
+        // client saw `isError: false` on a call that did not happen.
+        for error in [
+            ToolError::Invalid("bad".into()),
+            ToolError::NotFound("gone".into()),
+            ToolError::Denied("off".into()),
+            ToolError::RateLimited("slow down".into()),
+            ToolError::Database("boom".into()),
+            ToolError::NotConfigured("absent".into()),
+        ] {
+            let kind = error.kind();
+            let mapped = failure(error);
+            assert_ne!(
+                mapped.code,
+                ErrorCode(0),
+                "{kind} must map to a real JSON-RPC error code"
+            );
+        }
+    }
+
+    #[test]
+    fn a_throttled_call_is_distinguishable_from_a_refused_one() {
+        // A rate limit clears on its own and a denial does not, so a client
+        // that cannot tell them apart either retries forever or gives up on a
+        // tool it was allowed to call.
+        assert_ne!(
+            code_for(ToolError::RateLimited("slow down".into())),
+            code_for(ToolError::Denied("off".into()))
+        );
+        assert_eq!(
+            code_for(ToolError::RateLimited("slow down".into())),
+            RATE_LIMITED
+        );
+    }
+
+    #[test]
+    fn client_errors_and_server_errors_get_different_codes() {
+        assert_eq!(
+            code_for(ToolError::Invalid("bad".into())),
+            ErrorCode::INVALID_PARAMS
+        );
+        assert_eq!(
+            code_for(ToolError::NotFound("gone".into())),
+            ErrorCode::RESOURCE_NOT_FOUND
+        );
+        assert_eq!(
+            code_for(ToolError::Database("boom".into())),
+            ErrorCode::INTERNAL_ERROR
+        );
+    }
+
+    #[test]
+    fn the_variant_survives_the_mapping() {
+        // `Display` prints only the message, so without `kind` in the data the
+        // caller cannot tell a missing email from a failed query.
+        let mapped = failure(ToolError::NotConfigured("no vectors".into()));
+        assert_eq!(
+            mapped.data.as_ref().and_then(|d| d.get("kind")),
+            Some(&serde_json::json!("not_configured"))
+        );
+        assert_eq!(mapped.message, "no vectors");
     }
 }

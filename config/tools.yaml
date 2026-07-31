@@ -1,15 +1,21 @@
-# MCP tool configuration for emailibrium (ADR-028).
+# Tool exposure, rate limits, and confirmation policy (ADR-028).
 #
-# Controls which tools are exposed, rate limits, and whether
-# destructive actions require user confirmation before execution.
+# One file, both callers: the MCP transport and the in-process chat assistant
+# resolve policy from here through the same registry, so a tool cannot be
+# reachable from one with different limits than the other.
+#
+# A tool omitted from this file is enabled at `defaults.rate_limit_per_minute`
+# and needs no confirmation. A name listed here with no implementation is
+# reported at startup and ignored, unless it is marked `deferred: true`.
 
 version: "1.0"
 
 defaults:
   rate_limit_per_minute: 20
-  timeout_ms: 10000
+  timeout_ms: 10000 # parsed and exposed, not yet enforced in dispatch
 
 tools:
+  # --- Email retrieval -------------------------------------------------
   search_emails:
     enabled: true
     requires_confirmation: false
@@ -23,17 +29,89 @@ tools:
     enabled: true
     requires_confirmation: false
 
+  count_emails:
+    enabled: true
+    requires_confirmation: false
+
+  get_email_thread:
+    enabled: true
+    requires_confirmation: false
+
+  find_similar_emails:
+    enabled: true
+    requires_confirmation: false
+    rate_limit_per_minute: 30
+
+  list_attachments:
+    enabled: true
+    requires_confirmation: false
+    rate_limit_per_minute: 30
+
+  # --- Accounts and sync -----------------------------------------------
+  list_accounts:
+    enabled: true
+    requires_confirmation: false
+    rate_limit_per_minute: 20
+
+  get_sync_status:
+    enabled: true
+    requires_confirmation: false
+    rate_limit_per_minute: 30
+
+  # --- Analytics -------------------------------------------------------
+  get_insights:
+    enabled: true
+    requires_confirmation: false
+
+  list_rules:
+    enabled: true
+    requires_confirmation: false
+
+  list_clusters:
+    enabled: true
+    requires_confirmation: false
+    rate_limit_per_minute: 20
+
+  get_learning_metrics:
+    enabled: true
+    requires_confirmation: false
+    rate_limit_per_minute: 30
+
+  # Deliberately low: detect_subscriptions pulls full body_text for every
+  # sender, so this is far more expensive than its siblings. Do not raise it
+  # to match the other read-only tools without changing that query first.
+  list_subscriptions:
+    enabled: true
+    requires_confirmation: false
+    rate_limit_per_minute: 5
+
+  # --- Cleanup preview -------------------------------------------------
+  # Also deliberately low: previewing a plan runs subscription detection, which
+  # carries the same full-body scan as list_subscriptions above.
+  preview_cleanup_plan:
+    enabled: true
+    requires_confirmation: false
+    rate_limit_per_minute: 5
+
+  # --- A4 action tools — not implemented yet ---------------------------
+  # `deferred: true` records the intended policy without the registry
+  # reporting these as unknown names. They are inert until the handlers land;
+  # the confirmation round trip through the orchestrator is unimplemented, so
+  # nothing here is enforced today.
   send_email:
+    deferred: true
     enabled: true
     requires_confirmation: true
     rate_limit_per_minute: 5
 
   delete_email:
+    deferred: true
     enabled: true
     requires_confirmation: true
     rate_limit_per_minute: 10
 
   create_rule:
+    deferred: true
     enabled: true
     requires_confirmation: true
     rate_limit_per_minute: 10

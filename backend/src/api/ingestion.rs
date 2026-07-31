@@ -17,7 +17,6 @@ use axum::{
 };
 use futures::stream::Stream;
 use serde::{Deserialize, Serialize};
-use tokio::sync::broadcast;
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::StreamExt;
 use tracing::{debug, info, warn};
@@ -30,104 +29,13 @@ use crate::AppState;
 // Types
 // ---------------------------------------------------------------------------
 
-/// Phase of the ingestion pipeline.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum IngestionPhase {
-    Syncing,
-    Embedding,
-    Categorizing,
-    Clustering,
-    Analyzing,
-    Complete,
-}
-
-impl std::fmt::Display for IngestionPhase {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            IngestionPhase::Syncing => write!(f, "syncing"),
-            IngestionPhase::Embedding => write!(f, "embedding"),
-            IngestionPhase::Categorizing => write!(f, "categorizing"),
-            IngestionPhase::Clustering => write!(f, "clustering"),
-            IngestionPhase::Analyzing => write!(f, "analyzing"),
-            IngestionPhase::Complete => write!(f, "complete"),
-        }
-    }
-}
-
-/// Real-time progress update for an ingestion job.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct IngestionProgress {
-    pub job_id: String,
-    pub total: u64,
-    pub processed: u64,
-    pub embedded: u64,
-    pub categorized: u64,
-    pub failed: u64,
-    pub phase: IngestionPhase,
-    pub eta_seconds: Option<u64>,
-    pub emails_per_second: f64,
-}
-
-/// Holds the broadcast sender for SSE progress events.
-///
-/// Shared in `AppState` so ingestion workers can publish updates and
-/// SSE endpoints can subscribe.
-#[derive(Clone)]
-pub struct IngestionBroadcast {
-    sender: broadcast::Sender<IngestionProgress>,
-    /// Cache of the most recent progress snapshot so that polling endpoints
-    /// (e.g. `/api/v1/ingestion/progress`) can return sync-phase progress
-    /// even when the pipeline has not yet started a job.
-    last_progress: std::sync::Arc<tokio::sync::RwLock<Option<IngestionProgress>>>,
-}
-
-impl IngestionBroadcast {
-    /// Create a new broadcast channel with the given capacity.
-    pub fn new(capacity: usize) -> Self {
-        let (sender, _) = broadcast::channel(capacity);
-        Self {
-            sender,
-            last_progress: std::sync::Arc::new(tokio::sync::RwLock::new(None)),
-        }
-    }
-
-    /// Publish a progress event. Returns the number of active receivers.
-    ///
-    /// Also caches the progress so polling endpoints can retrieve it.
-    pub fn send(
-        &self,
-        progress: IngestionProgress,
-    ) -> Result<usize, broadcast::error::SendError<IngestionProgress>> {
-        // Cache the latest snapshot for polling.
-        let cached = self.last_progress.clone();
-        let snapshot = progress.clone();
-        tokio::spawn(async move {
-            *cached.write().await = Some(snapshot);
-        });
-        self.sender.send(progress)
-    }
-
-    /// Subscribe to progress events.
-    pub fn subscribe(&self) -> broadcast::Receiver<IngestionProgress> {
-        self.sender.subscribe()
-    }
-
-    /// Get the most recently broadcast progress snapshot.
-    pub async fn last_progress(&self) -> Option<IngestionProgress> {
-        self.last_progress.read().await.clone()
-    }
-
-    /// Clear the cached progress (e.g. when a pipeline run completes).
-    pub async fn clear_last_progress(&self) {
-        *self.last_progress.write().await = None;
-    }
-}
-
-impl Default for IngestionBroadcast {
-    fn default() -> Self {
-        Self::new(256)
-    }
-}
+// These types now live in `vectors::ingestion` so library-side consumers (the
+// MCP tool registry among them) can read sync progress without depending on the
+// binary crate. Re-exported under their original names so every call site here
+// — and `AppState` — is unaffected.
+pub use crate::vectors::ingestion::{
+    IngestionBroadcast, SyncPhase as IngestionPhase, SyncProgress as IngestionProgress,
+};
 
 // ---------------------------------------------------------------------------
 // Request / Response types

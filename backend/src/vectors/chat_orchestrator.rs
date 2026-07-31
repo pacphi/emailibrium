@@ -54,11 +54,12 @@ impl Default for OrchestratorConfig {
             tool_timeout_ms: default_tool_timeout(),
             parallel_tool_calls: default_parallel(),
             tool_result_max_chars: default_result_max(),
-            require_confirmation: vec![
-                "send_email".into(),
-                "delete_email".into(),
-                "create_rule".into(),
-            ],
+            // Empty by default: confirmation policy comes from
+            // `config/tools.yaml` via `ToolRegistry::confirmation_required`.
+            // This list used to name send_email, delete_email and create_rule,
+            // none of which exist — so it gated nothing while reading as if it
+            // did.
+            require_confirmation: Vec::new(),
         }
     }
 }
@@ -238,10 +239,7 @@ mod tests {
         assert_eq!(cfg.tool_timeout_ms, 10_000);
         assert!(cfg.parallel_tool_calls);
         assert_eq!(cfg.tool_result_max_chars, 4_000);
-        assert_eq!(
-            cfg.require_confirmation,
-            vec!["send_email", "delete_email", "create_rule"]
-        );
+        assert!(cfg.require_confirmation.is_empty());
     }
 
     #[test]
@@ -283,16 +281,24 @@ mod tests {
     }
 
     #[test]
-    fn confirmation_required_tools_detected() {
-        let cfg = OrchestratorConfig::default();
-        assert!(cfg.require_confirmation.contains(&"send_email".to_string()));
+    fn no_tool_requires_confirmation_until_policy_says_so() {
+        // The default carries no names: `config/tools.yaml` decides, and the
+        // caller passes the resolved list in. A hardcoded default here would
+        // silently outrank the config file.
+        assert!(OrchestratorConfig::default()
+            .require_confirmation
+            .is_empty());
+    }
+
+    #[test]
+    fn configured_tools_are_detected_as_requiring_confirmation() {
+        let cfg = OrchestratorConfig {
+            require_confirmation: vec!["archive_emails".into()],
+            ..OrchestratorConfig::default()
+        };
         assert!(cfg
             .require_confirmation
-            .contains(&"delete_email".to_string()));
-        assert!(cfg
-            .require_confirmation
-            .contains(&"create_rule".to_string()));
-        // Arbitrary tool should not require confirmation.
+            .contains(&"archive_emails".to_string()));
         assert!(!cfg
             .require_confirmation
             .contains(&"search_emails".to_string()));

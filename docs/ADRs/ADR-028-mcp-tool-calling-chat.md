@@ -1,7 +1,8 @@
 # ADR-028: MCP-Powered Tool-Calling Chat
 
-- **Status:** Proposed
-- **Date:** 2026-04-04
+- **Status:** **Accepted — Phase 1 implemented (read-only tools).** Tool-layer consolidation in progress; see `docs/plan/mcp-maturation.md` for the lived state.
+- **Date:** 2026-04-04 (proposed) · 2026-07-31 (delivery notes)
+- **Implementation plan**: `docs/plan/mcp-maturation.md`
 - **Deciders:** Chris Phillipson
 - **Context:** The chat is currently prompt-only with RAG context injection. Users cannot perform actions (send email, create rules, search, manage accounts) via natural language. This ADR proposes integrating the Model Context Protocol (MCP) to expose all REST API and UI capabilities as tool calls, making the chat a universal natural-language interface to every emailibrium feature.
 
@@ -800,3 +801,86 @@ All configuration follows the existing pattern: YAML files loaded at startup, wi
 - ADR-012: Generative AI Provider Architecture
 - ADR-013: AI API Endpoints
 - ADR-022: RAG Pipeline
+
+---
+
+## Delivery notes (2026-07)
+
+The design text above is preserved as the historical record. This section describes what was
+actually built, where it diverged, and what remains open. Where the two disagree, this section
+is current.
+
+**Phase 1 shipped as designed.** The MCP server is embedded in the existing Axum process and
+mounted at `/api/v1/mcp` over Streamable HTTP, sharing `AppState` — no separate process or
+port, as §3 intended. Seven read-only tools landed: `search_emails`, `get_email`,
+`list_recent_emails`, `count_emails`, `get_insights`, `list_rules`, `get_email_thread`.
+
+**Tool-layer consolidation — in progress, not complete.** The design did not anticipate that
+tool definitions would end up written twice. In practice they were: once as `#[tool]` methods on
+the MCP server, and again as hand-maintained `ToolDefinition` values in `build_tool_definitions`
+/ `build_tool_executor` in `api/ai.rs` for the chat orchestrator. The two copies had already
+drifted in description text before anyone noticed, which is the failure mode duplication
+predicts. A related gap: rate limiting and audit logging live on the MCP server type, so
+in-process tool calls from the chat orchestrator bypass both entirely.
+
+The registry that resolves this now exists at `backend/src/tools/` — declaration types,
+`config/tools.yaml` parsing, and a `ToolContext` that deliberately replaces the binary's
+`AppState` so handlers stay reachable from the library crate that integration tests link.
+
+**The MCP half is delivered.** All fifteen tools are declared once in
+`tools/mod.rs::declarations()`, `mcp/server.rs` carries zero `#[tool]` macros, and its router is
+built at runtime from `registry.enabled()` via `build_tool_router`. The seven original tools
+kept their names, argument shapes, and result payloads, as §2's non-goal required.
+
+**The chat half is not.** `build_tool_definitions` / `build_tool_executor` remain in
+`api/ai.rs`, so the chat orchestrator still runs off a hand-maintained second copy — the exact
+duplication this work exists to remove, and the reason the description drift above happened.
+Until that collapses onto the registry, the consolidation is half-delivered: one declaration
+serves MCP, a stale second one still serves chat.
+
+**`config/tools.yaml` parsing exists; it is not yet on the production path.** The file
+previously existed but was read by nothing. It had also gone stale in both directions: it
+declared `send_email`, `delete_email`, and `create_rule`, none of which were implemented, while
+omitting four tools that were. The same three phantom names are hardcoded in
+`OrchestratorConfig::default().require_confirmation`, so the confirmation gate matches nothing
+real. A schema, a loader, and an overlay-resolution path now live in `tools/config.rs` and
+`tools/registry.rs`, and unknown tool names are warned about rather than silently ignored. **The
+file itself is still not read from disk**, though — nothing hands the loader a path, so the
+policy applied at runtime is the built-in defaults rather than anything an operator edits.
+Reconciling the file's contents and wiring the read are both outstanding.
+
+**The read-only tool set expanded from seven to fifteen** — `list_accounts`, `get_sync_status`,
+`find_similar_emails`, `list_attachments`, `list_subscriptions`, `list_clusters`,
+`get_learning_metrics`, and `preview_cleanup_plan` — under `tools/readonly/`, unit-tested,
+declared in the registry, and reachable over MCP. Two redaction
+rules apply throughout: `List-Unsubscribe` header values are withheld because their one-click
+URLs embed per-recipient tokens and function as capability URLs (callers get `has_unsubscribe`
+instead), and attachment tools return metadata only, never `storage_path` or
+`provider_attachment_id`.
+
+**Resources and prompts are written, not yet exposed.** `rmcp` 1.7 ships no resource router and
+no `#[resource]` macro, so resources are plain `ServerHandler` trait methods rather than the
+macro-driven approach the design assumed. Three resources (`email://{id}`, `thread://{key}`,
+`insights://summary`) and two prompts (`triage-inbox`, `weekly-report`) are implemented in
+`mcp/resources.rs`. `mcp/server.rs` does not yet reference them, and because `#[tool_handler]`
+only generates `get_info()` when one is absent, the `.enable_resources()` /`.enable_prompts()`
+capability flags must be added to the hand-written `get_info()` explicitly.
+
+> **Status of this section.** Claims above are stated as of 2026-07-31 and were verified
+> against the worktree, not against status reports. `docs/plan/mcp-maturation.md` carries the
+> per-step delivery table and is the more current record; where it and this section disagree,
+> it wins.
+
+### Deferred
+
+**A4 action tools remain deferred** pending an explicit user decision. Everything shipped is
+read-only; `preview_cleanup_plan` is the boundary case, building a `CleanupPlan` in memory and
+never persisting it. The tri-mode chat degradation strategy in §5 is unaffected — it concerns
+how models call tools, not which tools exist.
+
+**Authentication is deliberately absent.** The whole `/api/v1` surface, MCP included, is
+unauthenticated: emailibrium is a local-first single-user application and the server is
+intended to be reachable only from localhost. This is a deployment constraint, not an
+oversight — anyone who can reach port 8080 can read the user's mail. **Bearer auth is a
+prerequisite for any non-localhost bind**, and should be treated as blocking rather than as
+optional hardening.

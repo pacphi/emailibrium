@@ -147,6 +147,50 @@ React TypeScript SPA ──REST + SSE──→ Axum API Gateway
 - 🤖 **Rules Studio** — AI-suggested rules with semantic conditions
 - ⚙️ **Settings** — per-account config, encryption, appearance
 
+## 🔌 MCP Server
+
+Emailibrium embeds a [Model Context Protocol](https://modelcontextprotocol.io) server in the
+backend, so any MCP-capable client — Claude Code, Claude Desktop, or the built-in chat — can
+read your mailbox through the same services the REST API uses. It runs inside the existing
+Axum process; there is no second port and no separate daemon.
+
+**Endpoint:** `http://localhost:8080/api/v1/mcp` (Streamable HTTP)
+
+15 read-only tools, grouped by what they touch:
+
+| Area      | Tools                                                                                                        |
+| --------- | ------------------------------------------------------------------------------------------------------------ |
+| Email     | `search_emails`, `get_email`, `list_recent_emails`, `count_emails`, `get_email_thread`, `find_similar_emails`, `list_attachments` |
+| Insights  | `get_insights`, `list_subscriptions`, `list_clusters`, `get_learning_metrics`                                |
+| Accounts  | `list_accounts`, `get_sync_status`                                                                           |
+| Rules     | `list_rules`                                                                                                 |
+| Cleanup   | `preview_cleanup_plan`                                                                                       |
+
+Alongside the tools, three resources (`email://{id}`, `thread://{key}`, `insights://summary`)
+expose stable read-only views, and two prompts (`triage-inbox`, `weekly-report`) package the
+common multi-step workflows.
+
+Every tool is read-only — nothing sends, deletes, or modifies mail. Action tools are
+deliberately deferred (see [ADR-028](docs/ADRs/ADR-028-mcp-tool-calling-chat.md)).
+
+Three behaviours are worth knowing before you rely on a result:
+
+- **`preview_cleanup_plan` is strictly a dry run.** It builds a plan in memory, marks the
+  payload `"dry_run": true` / `"persisted": false`, and saves nothing. The plan id it returns
+  is **ephemeral** and will not resolve via `GET /api/v1/cleanup/plan/:id`. To get a plan you
+  can actually apply, create one through the REST endpoint.
+- **`get_learning_metrics` counters are process-local and reset when the backend restarts.**
+  They are not lifetime totals, so don't read them as historical figures.
+- **`list_accounts` applies no status filter.** Disconnected, errored, and suspended accounts
+  all appear; check the `status` and `is_active` fields rather than treating presence in the
+  list as a working account.
+
+> **Localhost only.** The whole `/api/v1` surface, MCP included, is unauthenticated by design —
+> emailibrium is a local-first single-user app. Do not expose port 8080 beyond localhost.
+> Bearer auth is a prerequisite for any non-localhost deployment.
+
+See [Connecting an MCP client](docs/setup-guide.md#connecting-an-mcp-client) for client setup.
+
 ## 📚 Documentation
 
 ### 👥 For Everyone
