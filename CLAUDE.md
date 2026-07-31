@@ -1,72 +1,46 @@
-<!-- Full ruflo reference: machine-wide ~/.claude/CLAUDE.md (managed by agentic-kit) -->
+<!-- Operating rules, ruflo CLI, swarm defaults (hierarchical-mesh / 15 / hybrid), and AQE guidance live in ~/.claude/CLAUDE.md — not repeated here. -->
 
 # emailibrium
 
-## Swarm Config
+Vector-native, local-first email intelligence: semantic search, clustering, classification, and inbox cleanup over 10k+ emails with no cloud processing. Rust backend + React SPA.
 
-- **Topology**: hierarchical-mesh (anti-drift)
-- **Max Agents**: 15
-- **Memory**: hybrid
+## Layout
 
-```bash
-ruflo swarm init --topology hierarchical --max-agents 15 --strategy specialized
-```
+| Path                   | What                                                                                                                   | Stack                                                              |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| `backend/`             | Axum REST + SSE API and the intelligence layer                                                                         | Rust 1.96 (edition 2021), SQLx/SQLite, Moka, Redis                 |
+| `backend/src/vectors/` | 22+ vector intelligence modules: embedding, HNSW search, SONA learning, clustering, RAG, encryption                    | —                                                                  |
+| `backend/src/mcp/`     | MCP server exposing email tools                                                                                        | —                                                                  |
+| `backend/migrations/`  | Numbered SQLite migrations — **append the next number, never edit an applied one**                                     | —                                                                  |
+| `frontend/`            | pnpm + Turborepo monorepo (app in `apps/web/`)                                                                         | React 19, TS 5.9, Vite 8, TanStack Router/Query, Zustand, Tailwind |
+| `ruvector/`            | **Git submodule** (ruvnet/ruvector) — the vector engine. Treat as vendored: don't edit; backend depends on it via path | Rust workspace                                                     |
+| `docs/`                | `architecture.md`, `ADRs/`, `DDDs/`, evaluation, setup/oauth guides                                                    | —                                                                  |
+| `config/`, `secrets/`  | Runtime config + dev secrets (never commit secrets)                                                                    | —                                                                  |
 
-## Agentic QE v3
-<!-- managed by agentic-kit — aqe init skips regeneration when this sentinel is present -->
+## Build & Test — Makefile-driven, not npm
 
-
-<!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:6cd5cc61 -->
-## Beads Issue Tracker
-
-This project uses **bd (beads)** for issue tracking. Run `bd prime` to see full workflow context and commands.
-
-### Quick Reference
+The root `package.json` only wires Husky; **do not run `npm build`/`npm test`**. Use `make`:
 
 ```bash
-bd ready              # Find available work
-bd show <id>          # View issue details
-bd update <id> --claim  # Claim work
-bd close <id>         # Complete work
+make ci          # format-check + lint + typecheck + test (run before committing)
+make test        # backend (cargo) + frontend (Vitest)
+make build       # build everything
+make dev         # full stack: backend :8080, frontend :3000
+make lint        # code + docs (markdownlint, yamllint)
+make audit       # cargo-audit + npm audit
+make help        # all targets
 ```
 
-### Rules
+Backend-only: `cd backend && cargo test` / `cargo clippy`. Frontend-only: `cd frontend && pnpm test` / `pnpm lint` / `pnpm typecheck`.
 
-- Use `bd` for ALL task tracking — do NOT use TodoWrite, TaskCreate, or markdown TODO lists
-- Run `bd prime` for detailed command reference and session close protocol
-- Use `bd remember` for persistent knowledge — do NOT use MEMORY.md files
+Backend Cargo features: `vectors` (default), `builtin-llm` (llama-cpp, opt-in), `proptest`.
 
-**Architecture in one line:** issues live in a local Dolt DB; sync uses `refs/dolt/data` on your git remote; `.beads/issues.jsonl` is a passive export. See https://github.com/gastownhall/beads/blob/main/docs/SYNC_CONCEPTS.md for details and anti-patterns.
+## Conventions
 
-## Agent Context Profiles
+- **Decisions are ADR/DDD-gated.** Before changing architecture, vector storage, learning, or AI providers, check `docs/ADRs/` and `docs/DDDs/` — e.g. ADR-003 fixes RuVector as the primary vector store. Record new decisions as an ADR.
+- **Privacy is a hard guarantee, not a setting.** Embeddings/models run and stay local; cloud AI is strictly opt-in. Don't add code paths that send email content off-machine by default.
+- Encryption at rest is AES-256-GCM + Argon2id — keep crypto changes within `backend/src/vectors/encryption.rs` and consent-gated.
+- For code navigation, impact analysis, and safe refactors, use the GitNexus MCP tools per `AGENTS.md`.
 
-The managed Beads block is task-tracking guidance, not permission to override repository, user, or orchestrator instructions.
-
-- **Conservative (default)**: Use `bd` for task tracking. Do not run git commits, git pushes, or Dolt remote sync unless explicitly asked. At handoff, report changed files, validation, and suggested next commands.
-- **Minimal**: Keep tool instruction files as pointers to `bd prime`; use the same conservative git policy unless active instructions say otherwise.
-- **Team-maintainer**: Only when the repository explicitly opts in, agents may close beads, run quality gates, commit, and push as part of session close. A current "do not commit" or "do not push" instruction still wins.
-
-## Session Completion
-
-This protocol applies when ending a Beads implementation workflow. It is subordinate to explicit user, repository, and orchestrator instructions.
-
-1. **File issues for remaining work** - Create beads for anything that needs follow-up
-2. **Run quality gates** (if code changed) - Tests, linters, builds
-3. **Update issue status** - Close finished work, update in-progress items
-4. **Handle git/sync by active profile**:
-   ```bash
-   # Conservative/minimal/default: report status and proposed commands; wait for approval.
-   git status
-
-   # Team-maintainer opt-in only, unless current instructions forbid it:
-   git pull --rebase
-   git push
-   git status
-   ```
-5. **Hand off** - Summarize changes, validation, issue status, and any blocked sync/commit/push step
-
-**Critical rules:**
-- Explicit user or orchestrator instructions override this Beads block.
-- Do not commit or push without clear authority from the active profile or the current user request.
-- If a required sync or push is blocked, stop and report the exact command and error.
-<!-- END BEADS INTEGRATION -->
+<!-- managed by ruflo-setup-aqe — aqe init skips regeneration when this sentinel is present -->
+<!-- Agentic QE v3: see ~/.claude/CLAUDE.md for full AQE operating guidance -->
