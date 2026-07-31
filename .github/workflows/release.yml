@@ -73,8 +73,14 @@ jobs:
           submodules: true
 
       # Backend
-      - uses: dtolnay/rust-toolchain@stable
+      # backend/rust-toolchain.toml is the single source of truth for the Rust
+      # version — read the pin rather than installing bare @stable, which drifts.
+      - name: Resolve pinned toolchain
+        id: rust
+        run: echo "channel=$(sed -n 's/^channel *= *"\(.*\)"/\1/p' backend/rust-toolchain.toml)" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: ${{ steps.rust.outputs.channel }}
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
         with:
@@ -148,7 +154,8 @@ jobs:
   docker-images:
     name: Docker ${{ matrix.app }}
     needs: [validate-tag, ci-gate]
-    runs-on: ubuntu-latest
+    # Opt-in bigger/native runner; unset resolves to ubuntu-latest.
+    runs-on: ${{ vars.HEAVY_RUNNER || 'ubuntu-latest' }}
     strategy:
       matrix:
         include:
@@ -185,6 +192,12 @@ jobs:
           context: ${{ matrix.context }}
           push: true
           tags: ${{ steps.tags.outputs.tags }}
+          # Pin the published architecture. Without this, buildx targets the
+          # RUNNER's arch — so pointing HEAVY_RUNNER at an arm64 runner to speed
+          # up the Rust jobs would silently republish :latest as arm64-only.
+          # These images have always been single-arch amd64; make that explicit
+          # rather than an accident of runner selection.
+          platforms: linux/amd64
           cache-from: type=gha,scope=${{ matrix.app }}
           cache-to: type=gha,mode=max,scope=${{ matrix.app }}
 
