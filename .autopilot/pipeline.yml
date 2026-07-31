@@ -222,9 +222,27 @@ phases:
     definition_of_done:
       - "grep: 'target: runtime' in .github/workflows/docker.yml"
       - "grep: 'target: runtime' in .github/workflows/release.yml"
-      - "cmd: docker buildx build --target runtime -f backend/Dockerfile --load -t emailibrium-backend:spec-check . && docker run --rm emailibrium-backend:spec-check /app/emailibrium --help (exits 0 — confirms the runtime stage ships the compiled binary, not the cargo-watch dev stage)"
-      - "cmd: docker buildx build --target runtime -f frontend/Dockerfile --load -t emailibrium-frontend:spec-check frontend (exits 0 — confirms the frontend image builds from the nginx runtime stage, not the node dev stage)"
-    conventions: "`cmd:` lines that invoke cargo must use `--manifest-path backend/Cargo.toml` (or an equivalent path arg) so they run correctly from the repo root (OPTIMIZATION_SPEC.md preamble)."
+      - "cmd: docker buildx build --target runtime -f backend/Dockerfile --load -t emailibrium-backend:spec-check . (exits 0 from the repo root)"
+      - "cmd: docker run --rm --entrypoint sh emailibrium-backend:spec-check -c 'test -x /app/emailibrium && test -d /app/migrations && ! command -v cargo-watch' (the backend image is the runtime stage: compiled binary + migrations present, cargo-watch absent)"
+      - "cmd: docker run --rm --entrypoint sh emailibrium-backend:spec-check -c 'test -x /app/emailibrium && ldd /app/emailibrium 2>&1 | grep -q \"=> /\" && ! ldd /app/emailibrium 2>&1 | grep -q \"not found\"' (FAIL-CLOSED: binary must exist AND ldd must actually resolve libs AND report none missing)"
+      - "cmd: docker buildx build --target runtime -f frontend/Dockerfile --load -t emailibrium-frontend:spec-check frontend (exits 0)"
+      - "cmd: docker run --rm --entrypoint sh emailibrium-frontend:spec-check -c 'command -v nginx && test -d /usr/share/nginx/html' (the frontend image is the nginx runtime stage, not the node dev server)"
+    conventions: |
+      `cmd:` lines that invoke cargo must use `--manifest-path backend/Cargo.toml` (or an
+      equivalent path arg) so they run correctly from the repo root (OPTIMIZATION_SPEC.md preamble).
+
+      DoD CORRECTED 2026-07-31, same defect as phase 5's: the original line ended in
+      `/app/emailibrium --help`, but this binary parses std::env::args() directly with no clap and
+      no --help handler — it ignores the flag and proceeds to real startup, which then fails for
+      reasons unrelated to image correctness. Replaced with checks that actually discriminate the
+      runtime stage from the development stage (binary + migrations present, cargo-watch absent;
+      nginx present on the frontend) plus the `ldd` runnability check.
+
+      This phase is also the FIRST time CI compiles the release image at all. Until `target:
+      runtime` lands here, both docker.yml and release.yml built the last stage (`development`),
+      so phase 5's entire Docker fix was verified only locally (pl-phase5-not-ci-verified). Expect
+      this phase's CI to be the real proving run for phases 5 AND 6 together — and to be much
+      slower than previous phases, because it is a genuine cold release build.
     depends_on: [5]
     touches: [".github/workflows/docker.yml", ".github/workflows/release.yml"]
     adrs: []
