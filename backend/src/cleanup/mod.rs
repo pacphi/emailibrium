@@ -6,15 +6,19 @@
 //! adds the frontend Review screen; Phase C adds Apply with SSE; Phase D
 //! adds risk + telemetry; Phase E ships Undo via reverse_op.
 //!
+//! `domain` and `repository` are declared by `lib.rs`, not here, and
+//! re-exported below. They are reachable from `backend/tests/` and from tool
+//! handlers; `api` and `orchestrator` take `AppState` and cannot be.
+//!
 //! See:
 //! - `docs/ADRs/ADR-030-cleanup-dry-run.md`
 //! - `docs/DDDs/DDD-008-addendum-cleanup-planning.md`
 //! - `docs/plan/cleanup-dry-run-implementation.md`
 
+pub use emailibrium::cleanup::{domain, repository};
+
 pub mod audit;
-pub mod domain;
 pub mod orchestrator;
-pub mod repository;
 pub mod telemetry;
 
 pub mod api;

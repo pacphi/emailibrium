@@ -148,6 +148,43 @@ The backend is organized into four module groups under `backend/src/`:
 4. Add unit tests in-module with `#[cfg(test)]`.
 5. Add integration tests in `backend/tests/`.
 
+**Adding an MCP tool:**
+
+Tools live in `backend/src/tools/`, which is the single registry shared by the MCP server and
+the chat orchestrator. Adding a tool in one place exposes it to both — do not hand-write a
+second definition for the chat side.
+
+1. Write the handler in the right `backend/src/tools/readonly/` module (`emails.rs`,
+   `insights.rs`, `accounts.rs`, `cleanup_preview.rs`), or add a module if none fits. A
+   handler takes `&AppState` plus its request struct and returns `serde_json::Value`.
+2. Validate every caller-supplied identifier using the helpers in `tools::readonly` --
+   `validate_id`, `validate_uuid`, `validate_user_id`, `validate_limit`. Unvalidated ids reach
+   a query as a silent no-match, which reads as "no results" rather than as an error.
+3. Register the tool in `backend/src/tools/mod.rs` so it appears in `tools/list`.
+4. Add its rate limit to `config/tools.yaml`. Omitting it means the tool inherits
+   `defaults.rate_limit_per_minute`, which is usually what you want -- add an explicit entry
+   only when the tool is materially cheaper or more expensive than average.
+5. Add an integration test in `backend/tests/mcp_integration.rs`.
+6. Document it in the tool table in `README.md`.
+
+Two invariants worth stating explicitly, because both are easy to violate by accident:
+
+- **Read-only means read-only.** Every tool shipped so far is non-mutating; action tools are
+  deferred pending a user decision (ADR-028). `preview_cleanup_plan` is the boundary case --
+  it builds a `CleanupPlan` in memory and never persists it.
+- **Do not echo capability-bearing values.** Three redactions are deliberate, so don't "fix"
+  them as missing fields:
+  - `list_subscriptions` and `preview_cleanup_plan` never return raw `List-Unsubscribe` /
+    `List-Unsubscribe-Post` header values — one-click URLs embed per-recipient tokens and act
+    as capability URLs. Callers get `has_unsubscribe` and the unsubscribe *method* instead.
+  - `list_attachments` returns metadata only, never `storage_path` (a filesystem path) or
+    `provider_attachment_id`.
+  - `get_sync_status` omits the `history_id` and `next_page_token` sync cursors — opaque
+    provider state with no value to a model.
+
+Cross-cutting concerns -- rate limiting, audit logging, and the MCP `CallToolResult` wrapper --
+belong to the shared dispatch path, not to individual handlers.
+
 **Running benchmarks:**
 
 ```bash
@@ -287,10 +324,21 @@ make docker-down-volumes  # Stop and destroy data (CAUTION)
 
 Emailibrium uses a **layered configuration** system via figment. Later layers override earlier ones:
 
-1. `config.yaml` -- base defaults (committed)
+1. `config.yaml` -- base defaults (not committed; create it if you want a file layer)
 2. `config.local.yaml` -- local overrides (gitignored)
 3. `EMAILIBRIUM_*` environment variables -- runtime overrides
 
+> Neither YAML file exists in a fresh checkout. `figment`'s `Yaml::file` is a no-op on a
+> missing path, so today configuration resolves from compile-time defaults, `EMAILIBRIUM_*`
+> env vars, and the `config/app.yaml` path-override pass in `apply_yaml_path_defaults`.
+> Note that `config/app.yaml` is a *different* file from the `config.yaml` above and is read
+> by a different code path -- a key placed in the wrong one is silently read by nobody.
+>
+> Env vars map onto nested keys by splitting on `_`: `EMAILIBRIUM_MCP_MODE` sets `mcp.mode`.
+> A consequence worth knowing is that a config field whose own name contains an underscore is
+> not addressable from the environment at all, and the override fails silently rather than
+> erroring. Prefer single-word field names for anything meant to be set via env.
+>
 > Environment-specific files (`config.{APP_ENV}.yaml`) and Docker secrets
 > (`/run/secrets/*`) are planned but not yet wired into the figment chain.
 

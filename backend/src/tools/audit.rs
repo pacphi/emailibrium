@@ -1,4 +1,8 @@
-//! Audit logging for MCP tool calls (ADR-028 Phase 6).
+//! Audit logging for tool calls (ADR-028 Phase 6).
+//!
+//! Applied by [`super::registry::ToolRegistry::dispatch`], so every call is
+//! recorded once regardless of which caller made it — MCP transport, chat
+//! orchestrator, or test.
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
@@ -11,8 +15,10 @@ pub struct ToolCallAuditEntry {
     pub timestamp: DateTime<Utc>,
     pub tool_name: String,
     pub arguments_hash: String, // SHA-256 of arguments (not raw args, for privacy)
-    pub result_status: &'static str, // "success", "error", "denied"
+    pub result_status: &'static str, // "success", "error", "denied", "rate_limited"
     pub latency_ms: u64,
+    /// "mcp" or "chat" — see [`super::registry::CallSource`].
+    pub source: &'static str,
 }
 
 /// Log a tool call to both tracing and the database.
@@ -20,20 +26,23 @@ pub async fn log_tool_call(pool: &SqlitePool, entry: &ToolCallAuditEntry) {
     info!(
         tool = %entry.tool_name,
         status = %entry.result_status,
+        source = %entry.source,
         latency_ms = entry.latency_ms,
-        "MCP tool call"
+        "tool call"
     );
 
     // Best-effort database logging (don't fail the tool call if audit insert fails)
     let _ = sqlx::query(
-        "INSERT INTO mcp_tool_audit (timestamp, tool_name, arguments_hash, result_status, latency_ms) \
-         VALUES (?1, ?2, ?3, ?4, ?5)",
+        "INSERT INTO mcp_tool_audit \
+         (timestamp, tool_name, arguments_hash, result_status, latency_ms, source) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
     )
     .bind(entry.timestamp.to_rfc3339())
     .bind(&entry.tool_name)
     .bind(&entry.arguments_hash)
     .bind(entry.result_status)
     .bind(entry.latency_ms as i64)
+    .bind(entry.source)
     .execute(pool)
     .await;
 }

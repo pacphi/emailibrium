@@ -10,21 +10,21 @@ use axum::{
 use tokio::net::TcpListener;
 use tokio::sync::Mutex;
 use tower_http::cors::CorsLayer;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Layer};
 
+// Shared modules are imported from the library rather than re-declared with
+// `mod`. Re-declaring them compiled each one into both crates as a separate
+// type identity, so a library-side tool handler could not accept anything
+// taken from `AppState` — and `backend/tests/` could not reach the MCP server
+// at all (design §1.5). These re-exports keep `crate::db::X` resolving inside
+// the binary's own modules.
+pub use emailibrium::{
+    cache, config, content, db, email, events, mcp, middleware, rules, sync_lock, tools, vectors,
+};
+
+// Binary-only: everything below depends on `AppState`.
 mod api;
-mod cache;
 mod cleanup;
-pub mod config;
-pub mod content;
-mod db;
-pub mod email;
-pub mod events;
-mod mcp;
-mod middleware;
-mod rules;
-pub mod sync_lock;
-mod vectors;
 
 pub use vectors::config::VectorConfig;
 
@@ -62,10 +62,107 @@ pub struct AppState {
     pub cleanup_audit_writer: Arc<dyn cleanup::audit::CleanupAuditWriter>,
     /// Cleanup telemetry emitter (Phase D, ADR-030 §Security).
     pub cleanup_telemetry: Arc<cleanup::telemetry::TelemetryEmitter>,
+    /// The one tool registry, shared by the MCP transport and the chat
+    /// orchestrator (ADR-028 follow-on, task A1). It owns the rate limiter, so
+    /// both paths draw on the same budget.
+    pub tools: Arc<tools::ToolRegistry>,
+}
+
+/// Narrow `AppState` down to what tool handlers are allowed to see.
+///
+/// This impl is the only place the two worlds meet, and it stays binary-side on
+/// purpose: `tools` is reachable from `backend/tests/`, `AppState` is not, so a
+/// handler that took `AppState` would be untestable (design §1.5).
+impl From<&AppState> for tools::ToolContext {
+    fn from(state: &AppState) -> Self {
+        // Deliberately `wired` rather than the builders: every always-available
+        // service is a required argument, so one cannot be forgotten. The
+        // builder form let `sync_progress` and `pipeline_locks` ship as `None`,
+        // which was neither a compile error nor a test failure — just two tools
+        // reporting "not configured" in production forever.
+        tools::ToolContext::wired(
+            state.db.clone(),
+            state.vector_service.clone(),
+            state.oauth_manager.clone(),
+            state.ingestion_broadcast.clone(),
+            state.pipeline_locks.clone(),
+            state.poll_scheduler.clone(),
+        )
+    }
+}
+
+/// Which transport the MCP server is served over.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum McpMode {
+    /// Streamable HTTP at `/api/v1/mcp`, alongside the REST API.
+    Http,
+    /// JSON-RPC over stdin/stdout, for spawn-based clients. No HTTP listener.
+    Stdio,
+}
+
+/// Resolve the MCP transport mode: `--mcp-stdio` flag, then
+/// `EMAILIBRIUM_MCP_MODE`, then HTTP.
+///
+/// Read directly from the process environment rather than through the figment
+/// config chain, and deliberately so. That chain reads `config.yaml` and
+/// `config.local.yaml` at the repo root and NEITHER FILE EXISTS — figment
+/// treats a missing `Yaml::file` as a no-op, so a config-file tier would be
+/// documentation for something that cannot work. (`config/app.yaml` is a
+/// different file, consumed by a separate pass, and a mode key placed there is
+/// silently ignored.) Figment's `.split("_")` would also make any multi-word
+/// key under `mcp` unreachable from the environment.
+///
+/// Spawn-based MCP clients pass argv and environment and cannot edit config
+/// files, so those are exactly the two tiers that matter.
+///
+/// Called before tracing is initialised: the console layer's destination
+/// depends on the answer.
+fn resolve_mcp_mode() -> McpMode {
+    mcp_mode_from(
+        std::env::args(),
+        std::env::var("EMAILIBRIUM_MCP_MODE").ok().as_deref(),
+    )
+}
+
+/// The precedence rule itself, separated from the process it reads.
+///
+/// Worth isolating because getting this wrong is silent: a client that asked
+/// for stdio and got HTTP simply waits forever on a stream nobody writes.
+fn mcp_mode_from(mut args: impl Iterator<Item = String>, env: Option<&str>) -> McpMode {
+    if args.any(|a| a == "--mcp-stdio") {
+        return McpMode::Stdio;
+    }
+    match env {
+        Some("stdio") => McpMode::Stdio,
+        _ => McpMode::Http,
+    }
+}
+
+/// Serve MCP over stdin/stdout until the client disconnects.
+///
+/// Same server, same registry, same tools as the HTTP transport — only the
+/// bytes travel differently.
+async fn serve_mcp_stdio(
+    ctx: Arc<tools::ToolContext>,
+    registry: Arc<tools::ToolRegistry>,
+) -> anyhow::Result<()> {
+    use rmcp::ServiceExt;
+
+    tracing::info!("MCP server serving over stdio");
+
+    let server = mcp::server::EmailibriumMcpServer::new(ctx, registry);
+    let running = server.serve(rmcp::transport::io::stdio()).await?;
+    running.waiting().await?;
+
+    Ok(())
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Resolved first: in stdio mode stdout carries JSON-RPC, so the console
+    // log layer below must be redirected before it can write a single line.
+    let mcp_mode = resolve_mcp_mode();
+
     // Initialize tracing: console + daily rotating file log (R-05).
     let log_dir = std::path::Path::new("data/logs");
     std::fs::create_dir_all(log_dir)?;
@@ -76,9 +173,21 @@ async fn main() -> anyhow::Result<()> {
     let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| "emailibrium=info,tower_http=info".into());
 
+    // In stdio mode the console layer goes to stderr with ANSI off. Left on
+    // stdout it would interleave log lines and escape codes into the protocol
+    // stream, surfacing as intermittent parse errors that look like anything
+    // but a logging problem.
+    let console_layer = match mcp_mode {
+        McpMode::Http => tracing_subscriber::fmt::layer().with_ansi(true).boxed(),
+        McpMode::Stdio => tracing_subscriber::fmt::layer()
+            .with_ansi(false)
+            .with_writer(std::io::stderr)
+            .boxed(),
+    };
+
     tracing_subscriber::registry()
         .with(env_filter)
-        .with(tracing_subscriber::fmt::layer().with_ansi(true))
+        .with(console_layer)
         .with(
             tracing_subscriber::fmt::layer()
                 .with_ansi(false)
@@ -432,7 +541,16 @@ async fn main() -> anyhow::Result<()> {
         .with_telemetry(cleanup_telemetry.clone())
         .with_db(db.pool.clone()),
     );
+    // One registry for the whole process. It owns the rate limiter, so building
+    // it here rather than per MCP session is what stops a client from resetting
+    // its own limit by reconnecting (design §2.3), and what lets the chat path
+    // draw on the same budget.
+    let tool_registry = Arc::new(tools::ToolRegistry::from_config(
+        tools::config::ToolsConfig::load("../config"),
+    ));
+
     let state = AppState {
+        tools: tool_registry.clone(),
         vector_service,
         db,
         redis,
@@ -703,17 +821,16 @@ async fn main() -> anyhow::Result<()> {
     // ── MCP server (ADR-028) ────────────────────────────────────────────
     // Mount the MCP Streamable HTTP transport at /api/v1/mcp so tool-calling
     // LLMs can access email operations via the Model Context Protocol.
-    let mcp_state = Arc::new(state.clone());
-    let mcp_service = {
-        use rmcp::transport::streamable_http_server::{
-            session::local::LocalSessionManager, StreamableHttpService,
-        };
-        StreamableHttpService::new(
-            move || Ok(mcp::server::EmailibriumMcpServer::new(mcp_state.clone())),
-            Arc::new(LocalSessionManager::default()),
-            Default::default(),
-        )
-    };
+    let tool_ctx = Arc::new(tools::ToolContext::from(&state));
+
+    // In stdio mode the process is a pure MCP server over stdin/stdout: it
+    // serves the same tools from the same registry, then returns without ever
+    // binding a port or building the REST router.
+    if mcp_mode == McpMode::Stdio {
+        return serve_mcp_stdio(tool_ctx, state.tools.clone()).await;
+    }
+
+    let mcp_service = mcp::mcp_service(tool_ctx, state.tools.clone());
     tracing::info!("MCP server mounted at /api/v1/mcp");
 
     // Build router
@@ -1031,4 +1148,42 @@ async fn build_label_map(
 
     let pairs = provider.list_labels(&token).await?;
     Ok(pairs.into_iter().collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(extra: &[&str]) -> std::vec::IntoIter<String> {
+        let mut v = vec!["emailibrium".to_string()];
+        v.extend(extra.iter().map(|s| s.to_string()));
+        v.into_iter()
+    }
+
+    #[test]
+    fn http_is_the_default() {
+        assert_eq!(mcp_mode_from(args(&[]), None), McpMode::Http);
+    }
+
+    #[test]
+    fn env_selects_stdio() {
+        assert_eq!(mcp_mode_from(args(&[]), Some("stdio")), McpMode::Stdio);
+        assert_eq!(mcp_mode_from(args(&[]), Some("http")), McpMode::Http);
+    }
+
+    #[test]
+    fn the_flag_outranks_the_environment() {
+        // A spawn-based client passes argv; an inherited EMAILIBRIUM_MCP_MODE
+        // from the parent shell must not override it.
+        assert_eq!(
+            mcp_mode_from(args(&["--mcp-stdio"]), Some("http")),
+            McpMode::Stdio
+        );
+    }
+
+    #[test]
+    fn an_unrecognized_mode_falls_back_to_http_rather_than_failing() {
+        assert_eq!(mcp_mode_from(args(&[]), Some("grpc")), McpMode::Http);
+        assert_eq!(mcp_mode_from(args(&[]), Some("")), McpMode::Http);
+    }
 }

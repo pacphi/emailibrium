@@ -97,7 +97,10 @@ serde_yaml = "0.9"
 fastembed = "5.16.0"
 
 # MCP (Model Context Protocol) server (ADR-028)
-rmcp = { version = "1.7.0", features = ["server", "macros", "transport-streamable-http-server"] }
+# `transport-io` gates `rmcp::transport::io::stdio()`, which the stdio mode
+# needs. Without it the failure reads as a missing module rather than a missing
+# feature.
+rmcp = { version = "1.7.0", features = ["server", "macros", "transport-io", "transport-streamable-http-server"] }
 schemars = "1.2"
 
 # Vector database (ADR-003: RuVector as primary)

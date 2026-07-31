@@ -1,4 +1,8 @@
-//! Simple sliding-window rate limiter for MCP tools (ADR-028 Phase 6).
+//! Sliding-window rate limiter for tool calls (ADR-028 Phase 6).
+//!
+//! One limiter is shared by every caller. The limit protects a backing
+//! resource rather than a transport, so a chat-driven tool storm and an
+//! MCP-driven one draw on the same budget.
 
 use std::collections::HashMap;
 use std::sync::Mutex;

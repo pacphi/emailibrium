@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use futures::stream::{self, StreamExt};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, mpsc, Notify, RwLock};
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
@@ -131,6 +131,120 @@ pub struct EmailEmbeddingRecord {
     pub status: EmbeddingStatus,
     pub error_message: Option<String>,
     pub embedded_at: Option<DateTime<Utc>>,
+}
+
+// ---------------------------------------------------------------------------
+// Sync-phase progress broadcast (moved from `api::ingestion`)
+// ---------------------------------------------------------------------------
+//
+// These live here rather than in the API layer so library-side consumers — the
+// MCP tool registry among them — can read sync progress without depending on
+// the binary crate. `api::ingestion` re-exports them under their original
+// names, so existing call sites are unaffected.
+//
+// Deliberately distinct from `IngestionPhase` / `IngestionProgress` above:
+// those describe a *pipeline job* and carry an already-stringified phase, while
+// these describe the *sync broadcast* and keep the phase typed. Collapsing the
+// two would change the wire format, since the JSON phase strings come from
+// `Display` (lowercase), not from `Serialize`.
+
+/// Phase of the ingestion pipeline, as broadcast to SSE subscribers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SyncPhase {
+    Syncing,
+    Embedding,
+    Categorizing,
+    Clustering,
+    Analyzing,
+    Complete,
+}
+
+impl std::fmt::Display for SyncPhase {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SyncPhase::Syncing => write!(f, "syncing"),
+            SyncPhase::Embedding => write!(f, "embedding"),
+            SyncPhase::Categorizing => write!(f, "categorizing"),
+            SyncPhase::Clustering => write!(f, "clustering"),
+            SyncPhase::Analyzing => write!(f, "analyzing"),
+            SyncPhase::Complete => write!(f, "complete"),
+        }
+    }
+}
+
+/// Real-time progress update for an ingestion job.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SyncProgress {
+    pub job_id: String,
+    pub total: u64,
+    pub processed: u64,
+    pub embedded: u64,
+    pub categorized: u64,
+    pub failed: u64,
+    pub phase: SyncPhase,
+    pub eta_seconds: Option<u64>,
+    pub emails_per_second: f64,
+}
+
+/// Holds the broadcast sender for SSE progress events.
+///
+/// Shared in `AppState` so ingestion workers can publish updates and
+/// SSE endpoints can subscribe.
+#[derive(Clone)]
+pub struct IngestionBroadcast {
+    sender: broadcast::Sender<SyncProgress>,
+    /// Cache of the most recent progress snapshot so that polling endpoints
+    /// (e.g. `/api/v1/ingestion/progress`) can return sync-phase progress
+    /// even when the pipeline has not yet started a job.
+    last_progress: std::sync::Arc<tokio::sync::RwLock<Option<SyncProgress>>>,
+}
+
+impl IngestionBroadcast {
+    /// Create a new broadcast channel with the given capacity.
+    pub fn new(capacity: usize) -> Self {
+        let (sender, _) = broadcast::channel(capacity);
+        Self {
+            sender,
+            last_progress: std::sync::Arc::new(tokio::sync::RwLock::new(None)),
+        }
+    }
+
+    /// Publish a progress event. Returns the number of active receivers.
+    ///
+    /// Also caches the progress so polling endpoints can retrieve it.
+    pub fn send(
+        &self,
+        progress: SyncProgress,
+    ) -> Result<usize, broadcast::error::SendError<SyncProgress>> {
+        // Cache the latest snapshot for polling.
+        let cached = self.last_progress.clone();
+        let snapshot = progress.clone();
+        tokio::spawn(async move {
+            *cached.write().await = Some(snapshot);
+        });
+        self.sender.send(progress)
+    }
+
+    /// Subscribe to progress events.
+    pub fn subscribe(&self) -> broadcast::Receiver<SyncProgress> {
+        self.sender.subscribe()
+    }
+
+    /// Get the most recently broadcast progress snapshot.
+    pub async fn last_progress(&self) -> Option<SyncProgress> {
+        self.last_progress.read().await.clone()
+    }
+
+    /// Clear the cached progress (e.g. when a pipeline run completes).
+    pub async fn clear_last_progress(&self) {
+        *self.last_progress.write().await = None;
+    }
+}
+
+impl Default for IngestionBroadcast {
+    fn default() -> Self {
+        Self::new(256)
+    }
 }
 
 #[allow(dead_code)]
