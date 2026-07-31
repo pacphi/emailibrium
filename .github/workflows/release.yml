@@ -125,10 +125,24 @@ jobs:
         with:
           config: cliff.toml
           args: --latest --output RELEASE_NOTES.md
+      # create-release consumes RELEASE_NOTES.md unconditionally (download-artifact,
+      # body_path, and the CHANGELOG.md update all assume it). So `if-no-files-found:
+      # ignore` alone would not make a missing file harmless — it would just move the
+      # failure downstream. Guarantee the file exists, then the guard is meaningful.
+      - name: Ensure release notes exist
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          if [ ! -s RELEASE_NOTES.md ]; then
+            echo "No changelog entries were generated for $TAG." > RELEASE_NOTES.md
+          fi
       - uses: actions/upload-artifact@v7
         with:
           name: changelog
           path: RELEASE_NOTES.md
+          # Belt-and-braces: the step above guarantees the file, so this only
+          # matters if that step is ever removed.
+          if-no-files-found: ignore
 
   # ── Job 4: Build Docker images ──────────────────────────────────────
   docker-images:
