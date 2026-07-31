@@ -68,18 +68,18 @@ jobs:
             -D warnings \
             -A dead_code -A unused_variables -A unused_imports -A unused_mut
 
-  rust-test:
-    name: Rust Tests
-    # Opt-in bigger/native runner. Unset (the default) resolves to ubuntu-latest,
-    # so this is safe everywhere; setting the repo variable to a label that does
-    # not exist would queue forever, which is why it is parameterized rather than
-    # hardcoded to a non-default runner.
+  # Compile the test binaries ONCE, here, and hand them to rust-test as a nextest
+  # archive. The win is scheduling, not fewer compiles: this job has no `needs:`,
+  # so it compiles CONCURRENTLY with rust-format/rust-clippy, whereas the old
+  # rust-test waited for clippy and only then started its own full compile of the
+  # workspace plus the heavy vendored ruvector crates. Wall-clock goes from
+  # (clippy THEN compile+run) to (max(clippy, compile) THEN run).
+  rust-build:
+    name: Rust Build (test archive)
+    # Opt-in bigger/native runner. Unset (the default) resolves to ubuntu-latest.
+    # This moved here from rust-test along with lld: after this change rust-test
+    # only executes prebuilt binaries, so the compile/link cost lives in THIS job.
     runs-on: ${{ vars.HEAVY_RUNNER || 'ubuntu-latest' }}
-    needs: [rust-format, rust-clippy]
-    # This is where the linking cost actually is: the test binaries and benches.
-    # (clippy does link build scripts and proc-macros, but not the test binaries,
-    # so it has little to gain.) RUSTFLAGS is scoped to this job so a missing
-    # linker can never break an unrelated one.
     env:
       RUSTFLAGS: -Clink-arg=-fuse-ld=lld
     steps:
@@ -96,15 +96,113 @@ jobs:
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ steps.rust.outputs.channel }}
+      # Pin the version: the archive producer and consumer must be the same
+      # nextest, and an unpinned install lets a release landing between the two
+      # jobs mismatch them (nextest's own archiving docs call this out).
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest@0.9.140
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: backend
-      - name: Run tests
+      - name: Build test archive
         working-directory: backend
-        run: cargo test --workspace
+        run: cargo nextest archive --workspace --archive-file nextest.tar.zst
+      # Upload IMMEDIATELY after archiving, before any other check. Anything that
+      # runs between the archive and the upload can abort the job and skip
+      # rust-test entirely, costing the signal from all ~1177 tests to diagnose
+      # an unrelated failure.
+      - uses: actions/upload-artifact@v7
+        with:
+          name: nextest-archive
+          path: backend/nextest.tar.zst
+          # A missing archive MUST fail loudly — rust-test cannot run without it.
+          if-no-files-found: error
+          # ~125MB; it is only needed for the life of this run.
+          retention-days: 1
+      # NOTE: nothing else may run in this job after the upload. Uploading first
+      # guarantees the ARTIFACT exists, but a later failing step still fails the
+      # JOB — and rust-test `needs:` this one, so GitHub would skip it and all
+      # ~1177 tests' signal would vanish while diagnosing something unrelated.
+      # That is why doctests live in rust-extra-checks, not here.
+
+  # Compile-only checks that are NOT the primary test signal. They live in their
+  # own job for one specific reason: rust-test `needs: rust-build`, so ANY failing
+  # step in rust-build makes GitHub skip rust-test and destroy the signal from all
+  # ~1177 tests while you debug something unrelated. Uploading the artifact early
+  # does not help — the artifact exists, but the job still fails and the dependent
+  # job is still skipped. Keeping these here means a broken bench or doctest
+  # reports itself and nothing else goes dark.
+  #
+  # `cargo bench --no-run` also builds the OPTIMIZED bench profile into
+  # target/release — a separate build from the archive's target/debug, so putting
+  # it in rust-build would have cost real time on the critical path too.
+  rust-extra-checks:
+    name: Rust Extra Checks (benches, doctests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: true
+      - name: Resolve pinned toolchain
+        id: rust
+        run: echo "channel=$(sed -n 's/^channel *= *"\(.*\)"/\1/p' backend/rust-toolchain.toml)" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.rust.outputs.channel }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: backend
       - name: Verify benchmarks compile
         working-directory: backend
         run: cargo bench --no-run
+      # nextest cannot run doctests. Today that costs nothing (both doctests in
+      # this crate are `ignored`, so `cargo test --doc` executes 0), but without
+      # this a future REAL doctest would be silently never run.
+      - name: Doctests (nextest cannot run these)
+        working-directory: backend
+        run: cargo test --doc
+
+  rust-test:
+    # MUST match rust-build's runner. A nextest archive is host-bound: it pins the
+    # host target triple and ships the host libstd, so binaries built on an arm64
+    # HEAVY_RUNNER cannot execute on an amd64 runner. Before the archive split,
+    # build and run shared one machine and this could not happen.
+    name: Rust Tests
+    runs-on: ${{ vars.HEAVY_RUNNER || 'ubuntu-latest' }}
+    needs: [rust-format, rust-clippy, rust-build]
+    steps:
+      # submodules are load-bearing here even though nothing compiles: nextest
+      # resolves the archived workspace manifest, so the checkout must match.
+      - uses: actions/checkout@v7
+        with:
+          submodules: true
+      - name: Resolve pinned toolchain
+        id: rust
+        run: echo "channel=$(sed -n 's/^channel *= *"\(.*\)"/\1/p' backend/rust-toolchain.toml)" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.rust.outputs.channel }}
+      # Must match rust-build's pinned version exactly — the archive is produced
+      # and consumed by nextest, and a version skew between the two jobs is a
+      # confusing failure mode nextest's archiving docs warn about.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest@0.9.140
+      - uses: actions/download-artifact@v8
+        with:
+          name: nextest-archive
+          path: backend
+      # No rust-cache and no lld here on purpose: nothing is compiled or linked,
+      # so a cache restore would cost time and buy nothing.
+      # --workspace-remap is not strictly required while the build and test jobs
+      # happen to check out to the same $GITHUB_WORKSPACE path, but relying on
+      # that coincidence hard-errors ("workspace root manifest does not exist")
+      # on any runner that lays out paths differently. Passing it removes the
+      # whole failure class for free.
+      - name: Run tests from archive
+        working-directory: backend
+        run: cargo nextest run --profile ci --archive-file nextest.tar.zst --workspace-remap .
 
   rust-audit:
     name: Rust Security Audit
