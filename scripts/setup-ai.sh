@@ -89,7 +89,7 @@ if [[ "$(echo "$onnx_choice" | tr '[:upper:]' '[:lower:]')" == "y" ]]; then
       echo "  ${YELLOW}Download failed. Models will download on first run.${RESET}"
     }
   else
-    echo "  ${YELLOW}Backend not built yet. Run 'make -C backend build' first, then re-run this step.${RESET}"
+    echo "  ${YELLOW}Backend not built yet. Run 'cd backend && just build' first, then re-run this step.${RESET}"
   fi
 fi
 

@@ -204,7 +204,7 @@ async fn main() -> anyhow::Result<()> {
                 .map_err(|e| anyhow::anyhow!("{e}"));
         } else {
             eprintln!("Usage: emailibrium --download-model <model-id>");
-            eprintln!("Run 'make models' to see available models.");
+            eprintln!("Run 'just models' to see available models.");
             std::process::exit(1);
         }
     }

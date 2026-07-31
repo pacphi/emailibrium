@@ -105,7 +105,7 @@ if command -v pnpm &>/dev/null; then
   if [[ -d "$PROJECT_ROOT/frontend/node_modules" ]]; then
     check "node_modules" "pass" ""
   else
-    check "node_modules" "warn" "run 'make -C frontend install' first"
+    check "node_modules" "warn" "run 'cd frontend && just install' first"
   fi
 
   echo "  Checking frontend build (pnpm build)..."

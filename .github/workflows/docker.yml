@@ -10,13 +10,25 @@ on:
   # pay for a cold release build; regular Rust/frontend CI already covers compilation.
   pull_request:
     paths:
+      # Every input the image actually consumes. Cross-check against the COPY
+      # lines in backend/Dockerfile when either changes — an input that is COPYed
+      # but NOT listed here can regress packaging and still merge green, which
+      # would defeat the whole point of this pre-merge trigger.
       - "backend/Dockerfile"
       - "frontend/Dockerfile"
       - "backend/Cargo.toml"
       - "backend/Cargo.lock"
+      - "backend/rust-toolchain.toml" # selects the builder toolchain
+      - "backend/entrypoint.sh" # COPYed into the runtime stage
+      - "backend/migrations/**" # COPYed into the runtime stage
+      - "ruvector" # submodule gitlink; the build resolves path deps into it
       - ".dockerignore"
       - "docker-compose*.yml"
       - ".github/workflows/docker.yml"
+      # Deliberately NOT backend/src/**: it is COPYed, but a cold release build on
+      # every backend source change is expensive and the regular rust-build /
+      # rust-test jobs already compile that code. This trigger exists to prove
+      # PACKAGING, which the paths above govern.
   # NOTE: deliberately NOT triggered on tags. release.yml already builds and
   # pushes both images on a tag; duplicating it here ran two concurrent cold
   # Rust release builds writing to the same gha cache scope.
