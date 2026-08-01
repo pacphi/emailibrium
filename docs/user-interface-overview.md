@@ -55,7 +55,7 @@ The search-first home screen. A unified semantic search bar finds "that budget s
 
 [![Email reader](../images/03-email-reader.png)](../images/03-email-reader.png)
 
-The full email client: threaded conversations, a clean reading pane, reply and compose, and fast navigation across accounts. Messages appear in a unified inbox spanning Gmail, Outlook, and IMAP; topic and cluster filters live in the sidebar so you can jump straight to the project a thread belongs to.
+The full email client: threaded conversations, a clean reading pane, reply and compose, and fast navigation across accounts. Messages appear in a unified inbox spanning Gmail, Outlook, and IMAP, organized in the sidebar by category, subscription, and label.
 
 ## Inbox Cleaner wizard
 

@@ -152,11 +152,12 @@ Create automation rules that run on incoming emails.
 
 Rules are evaluated during ingestion and can also be applied retroactively to existing emails.
 
-> **Known issue:** Saving a rule can currently fail silently for freshly-added conditions because
-> the editor doesn't always send the condition's type discriminant the backend requires, and a
-> few operator names (e.g. "not contains") don't have a backend equivalent yet. If **Save** doesn't
-> seem to take effect, try editing an existing rule (which already has a valid condition shape)
-> rather than adding a brand-new condition row.
+> **Known issue:** Saving a rule can currently fail silently, for two independent reasons: (1) a
+> freshly-added condition row doesn't send the `type` discriminant the backend requires, and (2)
+> four of the six operator choices — Starts with, Ends with, Matches regex, Not contains — use a
+> naming format the backend doesn't recognize (Not contains has no backend equivalent at all).
+> Only **Contains** and **Equals** are safe to select on any condition, new or existing, until
+> this is fixed.
 
 ### Settings
 
@@ -196,12 +197,14 @@ Rules are evaluated during ingestion and can also be applied retroactively to ex
 
 ## Keyboard Shortcuts
 
-| Shortcut    | Action                                    |
-| ----------- | ------------------------------------------ |
-| `Cmd+K`     | Open command palette                       |
-| `Escape`    | Close modal / palette / panel              |
-| `↓` / `↑`   | Navigate the email list                    |
-| `Cmd+Enter` | Send reply (in the reply box)              |
+| Shortcut      | Action                         |
+| ------------- | ------------------------------ |
+| `Cmd+K`       | Open command palette           |
+| `Escape`      | Close modal / palette / panel  |
+| `↓` / `↑`     | Navigate the email list        |
+| `Cmd+Enter`   | Send reply (in the reply box)  |
+| `Enter`       | Send message (in the Chat box) |
+| `Shift+Enter` | New line (in the Chat box)     |
 
 Other actions (compose, reply, forward, archive, delete, search focus, select-all,
 open settings) are click/tap-only today — there is no keyboard shortcut for them yet.
