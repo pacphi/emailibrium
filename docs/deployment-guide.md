@@ -2,13 +2,13 @@
 
 ## Prerequisites
 
-| Tool             | Version | Install                                               |
-| ---------------- | ------- | ----------------------------------------------------- |
-| Rust             | 1.97+   | `rustup default stable`                               |
-| Node.js          | 26+     | [nodejs.org](https://nodejs.org/) or `nvm install 26` |
-| pnpm             | 11.5+   | `corepack enable` (ships with Node.js 26+)            |
-| Docker + Compose | Latest  | [docker.com](https://www.docker.com/) (optional)      |
-| Make             | Any     | Pre-installed on macOS/Linux                          |
+| Tool             | Version | Install                                                                          |
+| ---------------- | ------- | -------------------------------------------------------------------------------- |
+| Rust             | 1.97+   | `rustup default stable`                                                          |
+| Node.js          | 26+     | [nodejs.org](https://nodejs.org/) or `nvm install 26`                            |
+| pnpm             | 11.5+   | `corepack enable` (ships with Node.js 26+)                                       |
+| Docker + Compose | Latest  | [docker.com](https://www.docker.com/) (optional)                                 |
+| just             | 1.x     | `brew install just` or [just.systems](https://just.systems/man/en/packages.html) |
 
 ## Quick Start
 
@@ -55,7 +55,7 @@ just download-models
 RUN cargo run --release -- --download-models
 ```
 
-The built-in LLM model (~350 MB) is cached in `~/.emailibrium/models/llm/`. Include this directory in your persistent volume.
+The default built-in LLM model (`qwen3-1.7b-q4km`, ~1.1 GB) is cached in `~/.emailibrium/models/llm/`. Include this directory in your persistent volume. Larger models (see the [Configuration Reference](configuration-reference.md#available-built-in-models)) run up to ~20 GB.
 
 ### Key Configuration Options
 
@@ -90,15 +90,19 @@ search:
   max_limit: 100
   similarity_threshold: 0.5
 
-# Generative AI (ADR-012) -- classification fallback and chat
+# Generative AI (ADR-012, ADR-021) -- classification fallback and chat
 generative:
-  provider: 'none' # "none" | "ollama" | "cloud"
+  provider: 'builtin' # "builtin" | "none" | "ollama" | "cloud"
+  builtin:
+    model_id: 'qwen3-1.7b-q4km'
+    context_size: 2048
+    gpu_layers: 99 # 0 = CPU only, 99 = all layers on GPU
   ollama:
     base_url: 'http://localhost:11434'
-    classification_model: 'llama3.2'
-    chat_model: 'llama3.2'
+    classification_model: 'llama3.2:1b'
+    chat_model: 'llama3.2:3b'
   cloud:
-    provider: 'openai' # "openai" | "anthropic"
+    provider: 'openai' # "openai" | "anthropic" | "gemini"
     api_key_env: 'EMAILIBRIUM_CLOUD_API_KEY'
     model: 'gpt-4o-mini'
     base_url: 'https://api.openai.com'
@@ -138,7 +142,7 @@ Emailibrium connects to Gmail and Outlook via OAuth2. You must register your app
 3. Enable the **Gmail API**: APIs & Services > Library > search "Gmail API" > Enable
 4. Create OAuth credentials: APIs & Services > Credentials > Create Credentials > OAuth client ID
    - Application type: **Web application**
-   - Authorized redirect URI: `http://localhost:8080/api/v1/auth/gmail/callback` (development) or `https://your-domain.com/api/v1/auth/gmail/callback` (production)
+   - Authorized redirect URI: `http://localhost:8080/api/v1/auth/callback` (development) or `https://your-domain.com/api/v1/auth/callback` (production) — the same callback route is shared by Gmail and Outlook
 5. Copy the **Client ID** and **Client Secret**
 6. Set them as environment variables:
 
@@ -148,11 +152,15 @@ Emailibrium connects to Gmail and Outlook via OAuth2. You must register your app
    ```
 
    Or place them in `secrets/dev/google_client_id` and `secrets/dev/google_client_secret` for Docker.
+   **Known issue:** the container entrypoint currently exports these as `GOOGLE_CLIENT_ID` /
+   `GOOGLE_CLIENT_SECRET` (no `EMAILIBRIUM_` prefix), which the backend doesn't read — Docker
+   secrets for OAuth don't reach the backend as documented yet. Until this is fixed, set the
+   `EMAILIBRIUM_`-prefixed environment variables directly on the `backend` service instead.
 
 #### Outlook (Microsoft Entra / Azure AD)
 
 1. Go to [Microsoft Entra Admin Center](https://entra.microsoft.com/) > App registrations > New registration
-2. Set the **Redirect URI**: `http://localhost:8080/api/v1/auth/outlook/callback` (Web platform)
+2. Set the **Redirect URI**: `http://localhost:8080/api/v1/auth/callback` (Web platform) — shared with Gmail
 3. Under **API permissions**, add:
    - `Mail.ReadWrite` (Delegated)
    - `Mail.Send` (Delegated)
@@ -167,7 +175,9 @@ Emailibrium connects to Gmail and Outlook via OAuth2. You must register your app
    export EMAILIBRIUM_MICROSOFT_CLIENT_SECRET="your-client-secret-value"
    ```
 
-   Or place them in `secrets/dev/microsoft_client_id` and `secrets/dev/microsoft_client_secret` for Docker.
+   Or place them in `secrets/dev/microsoft_client_id` and `secrets/dev/microsoft_client_secret` for
+   Docker (same known issue as Google above — the entrypoint doesn't add the `EMAILIBRIUM_` prefix
+   these need).
 
 #### IMAP (No OAuth Required)
 
@@ -192,21 +202,22 @@ docker compose down
 
 ### Compose Services
 
-| Service    | Port     | Description                               |
-| ---------- | -------- | ----------------------------------------- |
-| `backend`  | 8080     | Axum API server (Rust 1.97+)              |
-| `frontend` | 3000     | Vite dev server (or Nginx for production) |
-| `postgres` | internal | PostgreSQL 16 (no external port)          |
-| `redis`    | internal | Redis 7 cache (no external port)          |
+| Service    | Port     | Description                                                                                             |
+| ---------- | -------- | ------------------------------------------------------------------------------------------------------- |
+| `backend`  | 8080     | Axum API server (Rust 1.97+)                                                                            |
+| `frontend` | 3000     | Vite dev server (or Nginx for production)                                                               |
+| `postgres` | internal | PostgreSQL 16 (no external port)                                                                        |
+| `redis`    | internal | Redis 7 cache (no external port)                                                                        |
+| `qdrant`   | internal | Optional vector store backend (profile-gated — see [Vector Store Backend](#vector-store-backend) below) |
 
 ### Docker Configuration Files
 
-Docker Compose mounts environment-specific config from the `configs/` directory:
+Docker Compose mounts environment-specific config from the `config/environments/` directory:
 
 ```text
-configs/
+config/environments/
   config.development.yaml   # SQLite, ONNX embeddings, debug logging
-  config.production.yaml    # PostgreSQL, Ollama embeddings, info logging
+  config.production.yaml    # Ollama embeddings, encryption + backup enabled, info logging
 ```
 
 The active config is selected via the `APP_ENV` variable (defaults to `development`):
@@ -230,20 +241,18 @@ APP_ENV=production docker compose up -d
 
 SQLite is the primary database for development and single-node deployment. It requires no external process, supports the full feature set, and is the default (`database_url: "sqlite:emailibrium.db?mode=rwc"`).
 
-PostgreSQL 16 is available via Docker Compose for scale-out scenarios and production deployments requiring concurrent write access. The backend uses SQLx with compile-time-checked queries that work against both SQLite and PostgreSQL -- switching is a matter of changing the `database_url` connection string.
+SQLite is currently the **only** database the backend can actually connect to: `backend/Cargo.toml`
+enables SQLx's `sqlite` feature but not `postgres`, and `backend/src/db/mod.rs` is built directly
+against `SqlitePool`. The `postgres` service in Docker Compose starts alongside the backend today,
+but the backend does not yet use it — PostgreSQL support is planned, not implemented. Do not set
+`EMAILIBRIUM_DATABASE_URL` to a `postgres://` URL; the backend will fail to connect.
 
-| Scenario                     | Recommended Database | Rationale                                         |
-| ---------------------------- | -------------------- | ------------------------------------------------- |
-| Local development            | SQLite               | Zero setup, fast iteration                        |
-| Single-user deployment       | SQLite               | No external dependencies, simpler operations      |
-| Multi-user / team deployment | PostgreSQL 16        | Concurrent write safety, connection pooling       |
-| High-availability production | PostgreSQL 16        | Replication, backup tooling, monitoring ecosystem |
-
-To switch to PostgreSQL, set the database URL:
-
-```bash
-export EMAILIBRIUM_DATABASE_URL="postgres://user:password@localhost:5432/emailibrium"
-```
+| Scenario                     | Database | Notes                                                      |
+| ---------------------------- | -------- | ---------------------------------------------------------- |
+| Local development            | SQLite   | Zero setup, fast iteration                                 |
+| Single-user deployment       | SQLite   | No external dependencies, simpler operations               |
+| Multi-user / team deployment | SQLite   | Works today (single-writer); PostgreSQL support is planned |
+| High-availability production | SQLite   | Works today (single-writer); PostgreSQL support is planned |
 
 ## Vector Store Backend
 

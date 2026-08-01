@@ -5,14 +5,14 @@ Run `just setup` for an interactive wizard that automates these steps.
 
 ## Prerequisites
 
-| Tool           | Minimum Version | Install Command                                                   |
-| -------------- | --------------- | ----------------------------------------------------------------- |
-| Rust           | 1.97            | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \| sh` |
-| Node.js        | 26 (LTS)        | `brew install node@26` or [nodejs.org](https://nodejs.org/)       |
-| pnpm           | 11.5            | `npm install -g pnpm@11`                                          |
-| Docker         | 24.0+           | [docs.docker.com/get-docker](https://docs.docker.com/get-docker/) |
-| Docker Compose | v2              | Included with Docker Desktop                                      |
-| Make           | 3.81+           | `xcode-select --install` (macOS) or `apt install build-essential` |
+| Tool           | Minimum Version | Install Command                                                                  |
+| -------------- | --------------- | -------------------------------------------------------------------------------- |
+| Rust           | 1.97            | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \| sh`                |
+| Node.js        | 26 (LTS)        | `brew install node@26` or [nodejs.org](https://nodejs.org/)                      |
+| pnpm           | 11.5            | `npm install -g pnpm@11`                                                         |
+| Docker         | 24.0+           | [docs.docker.com/get-docker](https://docs.docker.com/get-docker/)                |
+| Docker Compose | v2              | Included with Docker Desktop                                                     |
+| just           | 1.x             | `brew install just` or [just.systems](https://just.systems/man/en/packages.html) |
 
 Check all prerequisites at once:
 
@@ -56,7 +56,7 @@ OAuth requires registering apps with Google and Microsoft.
 2. Create a project (or select an existing one)
 3. Click **Create Credentials > OAuth client ID**
 4. Application type: **Web application**
-5. Add authorized redirect URI: `http://localhost:8080/api/auth/google/callback`
+5. Add authorized redirect URI: `http://localhost:8080/api/v1/auth/callback`
 6. Copy the **Client ID** and **Client Secret**
 
 #### Microsoft (Azure AD) OAuth
@@ -65,7 +65,7 @@ OAuth requires registering apps with Google and Microsoft.
 2. Click **New registration**
 3. Name: `Emailibrium Dev`
 4. Supported account types: **Accounts in any organizational directory and personal Microsoft accounts**
-5. Redirect URI: **Web** > `http://localhost:8080/api/auth/microsoft/callback`
+5. Redirect URI: **Web** > `http://localhost:8080/api/v1/auth/callback`
 6. Under **Certificates & secrets**, create a new **Client secret**
 7. Copy the **Application (client) ID** from the Overview page and the **secret value**
 
@@ -79,8 +79,8 @@ Emailibrium uses AI for email classification and smart features. It works out of
 
 The default configuration uses:
 
-- **Embedding**: ONNX Runtime (`all-MiniLM-L6-v2`) — runs locally, downloads ~23 MB on first use
-- **Classification**: Built-in LLM (`qwen2.5-0.5b-q4km`) — runs locally, downloads ~350 MB on first use
+- **Embedding**: ONNX Runtime (`all-MiniLM-L6-v2`) — runs locally, downloads ~90 MB on first use
+- **Classification**: Built-in LLM (`qwen3-1.7b-q4km`) — runs locally, downloads ~1.1 GB on first use
 
 No API keys, no external services, no data leaves your machine.
 
@@ -95,10 +95,10 @@ just download-models
 Or download individually:
 
 ```bash
-# ONNX embedding model (23 MB)
+# ONNX embedding model (~90 MB)
 cd backend && cargo run -- --download-models
 
-# GGUF LLM model (350 MB)
+# GGUF LLM model (~1.1 GB)
 npx tsx scripts/models.ts download --default
 ```
 
@@ -143,14 +143,20 @@ just setup-ai
 
 ### Cloud Providers
 
-API keys are stored in `.env.local` (gitignored). Set any combination:
+API keys are stored in `.env.local` (gitignored). What each variable actually feeds:
 
-| Provider  | Environment Variable            | Get a Key                                                            |
-| --------- | ------------------------------- | -------------------------------------------------------------------- |
-| OpenAI    | `EMAILIBRIUM_OPENAI_API_KEY`    | [platform.openai.com](https://platform.openai.com/api-keys)          |
-| Anthropic | `EMAILIBRIUM_ANTHROPIC_API_KEY` | [console.anthropic.com](https://console.anthropic.com/settings/keys) |
-| Gemini    | `EMAILIBRIUM_GEMINI_API_KEY`    | [aistudio.google.com](https://aistudio.google.com/apikey)            |
-| Cohere    | `EMAILIBRIUM_COHERE_API_KEY`    | [dashboard.cohere.com](https://dashboard.cohere.com/api-keys)        |
+| Provider | Environment Variable         | Used for                                                            | Get a Key                                                     |
+| -------- | ---------------------------- | ------------------------------------------------------------------- | ------------------------------------------------------------- |
+| OpenAI   | `EMAILIBRIUM_OPENAI_API_KEY` | Cloud **embeddings** (`embedding.provider: cloud`)                  | [platform.openai.com](https://platform.openai.com/api-keys)   |
+| Cohere   | `EMAILIBRIUM_COHERE_API_KEY` | Cloud **embeddings** (`embedding.provider: cohere`)                 | [dashboard.cohere.com](https://dashboard.cohere.com/api-keys) |
+| Gemini   | `EMAILIBRIUM_GEMINI_API_KEY` | Cloud **chat/classification** (`generative.cloud.provider: gemini`) | [aistudio.google.com](https://aistudio.google.com/apikey)     |
+
+For chat/classification with **OpenAI or Anthropic**, the key variable is
+`EMAILIBRIUM_CLOUD_API_KEY` (set `generative.cloud.provider` to `openai` or `anthropic`) —
+there is no dedicated `EMAILIBRIUM_ANTHROPIC_API_KEY`; Gemini is the only cloud generative
+provider with its own variable. See the
+[Configuration Reference](configuration-reference.md#generative-ai-adr-012-adr-021) for the
+full `generative.cloud.*` settings.
 
 ## Step 3: Development Environment
 
@@ -174,7 +180,7 @@ just install         # Install all dependencies
 just dev             # Start backend + frontend dev servers
 ```
 
-Native dev uses SQLite by default (configured in `configs/config.development.yaml`).
+Native dev uses SQLite by default (configured in `config/environments/config.development.yaml`).
 
 ## Step 4: Validate
 
@@ -304,31 +310,35 @@ is not running; a 404 means it started without the MCP routes mounted.
 
 ### "ONNX model download slow"
 
-- Models download from Hugging Face (~30 MB for all-MiniLM-L6-v2)
+- Models download from Hugging Face (~90 MB for all-MiniLM-L6-v2)
 - If behind a proxy, set `HTTPS_PROXY` environment variable
 - Models are cached in `backend/.fastembed_cache/`
 
 ### "OAuth callback error"
 
 - Verify redirect URIs match exactly (including trailing slash)
-- Google: `http://localhost:8080/api/auth/google/callback`
-- Microsoft: `http://localhost:8080/api/auth/microsoft/callback`
+- Both Google and Microsoft share the same callback route: `http://localhost:8080/api/v1/auth/callback`
 - Check that client ID and secret are correct in `secrets/dev/`
 
 ## Environment Variables Reference
 
-| Variable                         | Default                  | Description                                |
-| -------------------------------- | ------------------------ | ------------------------------------------ |
-| `APP_ENV`                        | `development`            | Environment name (development, production) |
-| `BACKEND_PORT`                   | `8080`                   | Backend API port                           |
-| `FRONTEND_PORT`                  | `3000`                   | Frontend web port                          |
-| `RUST_LOG`                       | `emailibrium=info`       | Rust log filter                            |
-| `VITE_API_URL`                   | `http://localhost:8080`  | Frontend API URL                           |
-| `EMAILIBRIUM_OPENAI_API_KEY`     | --                       | OpenAI API key                             |
-| `EMAILIBRIUM_ANTHROPIC_API_KEY`  | --                       | Anthropic API key                          |
-| `EMAILIBRIUM_GEMINI_API_KEY`     | --                       | Gemini API key                             |
-| `EMAILIBRIUM_COHERE_API_KEY`     | --                       | Cohere embedding API key                   |
-| `EMAILIBRIUM_EMBEDDING_PROVIDER` | `onnx`                   | Override embedding provider                |
-| `EMAILIBRIUM_OLLAMA_URL`         | `http://localhost:11434` | Ollama server URL                          |
-| `EMAILIBRIUM_OLLAMA_MODEL`       | `llama3.2`               | Ollama model name                          |
-| `REDIS_URL`                      | `redis://redis:6379`     | Redis connection (Docker)                  |
+| Variable                                 | Default                  | Description                                          |
+| ---------------------------------------- | ------------------------ | ---------------------------------------------------- |
+| `APP_ENV`                                | `development`            | Environment name (development, production)           |
+| `BACKEND_PORT`                           | `8080`                   | Backend API port                                     |
+| `FRONTEND_PORT`                          | `3000`                   | Frontend web port                                    |
+| `RUST_LOG`                               | `emailibrium=info`       | Rust log filter                                      |
+| `VITE_API_URL`                           | `http://localhost:8080`  | Frontend API URL                                     |
+| `EMAILIBRIUM_OPENAI_API_KEY`             | --                       | OpenAI API key (cloud embeddings)                    |
+| `EMAILIBRIUM_CLOUD_API_KEY`              | --                       | OpenAI/Anthropic API key (cloud chat/classification) |
+| `EMAILIBRIUM_GEMINI_API_KEY`             | --                       | Gemini API key (cloud chat/classification)           |
+| `EMAILIBRIUM_COHERE_API_KEY`             | --                       | Cohere embedding API key                             |
+| `EMAILIBRIUM_EMBEDDING_PROVIDER`         | `onnx`                   | Override embedding provider                          |
+| `EMAILIBRIUM_EMBEDDING_OLLAMA_URL`       | `http://localhost:11434` | Ollama server URL (embedding fallback)               |
+| `EMAILIBRIUM_GENERATIVE_OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama server URL (chat/classification)              |
+| `EMAILIBRIUM_REDIS_ENABLED`              | `false`                  | Whether Redis caching is used                        |
+| `EMAILIBRIUM_REDIS_URL`                  | `redis://127.0.0.1:6379` | Redis connection URL                                 |
+
+The plain `REDIS_URL` set on the backend container in `docker-compose.yml` is **not** read by the
+backend — only the `EMAILIBRIUM_`-prefixed variables above are. See the
+[Configuration Reference](configuration-reference.md#redis-redis) for the full `redis.*` settings.
