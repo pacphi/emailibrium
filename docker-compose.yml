@@ -104,7 +104,19 @@ services:
   postgres:
     image: postgres:16-alpine
     container_name: emailibrium-postgres
-    user: "999:999"
+    # 70, not 999. postgres:16-alpine runs postgres as uid 70 and owns
+    # /var/lib/postgresql as 70:70; 999 is the DEBIAN postgres uid, so this was
+    # presumably written for postgres:16 and later switched to -alpine.
+    #
+    # The mismatch meant the container owned nothing it had to write. cap_add
+    # could not rescue it either: Docker's added capabilities are inert for a
+    # non-root user (Linux clears effective caps on the transition and Docker
+    # sets no ambient caps), so the FOWNER below never applied and initdb died
+    # with "could not change permissions of directory /var/lib/postgresql/data".
+    # The stack could therefore never start — caught by .github/workflows/smoke.yml.
+    #
+    # NOTE redis below legitimately uses 999: redis:7-alpine really does use that uid.
+    user: "70:70"
     read_only: true
     security_opt:
       - no-new-privileges:true
