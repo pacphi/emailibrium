@@ -114,7 +114,14 @@ phases:
       - "prose: every end-user-tagged item in docs/audit/drift-report.md is either fixed here or explicitly deferred with a written reason."
     conventions: "Match the existing voice of each doc. QUICKSTART is deliberately terse (87 lines) — keep it that way; depth belongs in user-guide.md. Do not add aspirational features: if the code cannot do it, the doc must not claim it."
     depends_on: [0]
-    touches: ["README.md", "QUICKSTART.md", "docs/user-guide.md", "docs/user-interface-overview.md", "images/**"]
+    touches:
+      [
+        "README.md",
+        "QUICKSTART.md",
+        "docs/user-guide.md",
+        "docs/user-interface-overview.md",
+        "images/**",
+      ]
     adrs: []
     ddd: []
 
@@ -126,7 +133,7 @@ phases:
       - "docs/configuration-reference.md reconciled against the real config surface via scripts/audit/extract-config-keys.sh — every documented key exists, every existing key is documented (or explicitly marked internal)."
       - "Compose services, ports, volumes, and required secrets in the docs verified against docker-compose.yml and docker-compose.dev.yml."
     definition_of_done:
-      - "cmd: bash scripts/audit/extract-config-keys.sh > /tmp/keys.txt && while read -r k; do grep -q \"$k\" docs/configuration-reference.md || { echo \"UNDOCUMENTED: $k\"; exit 1; }; done < /tmp/keys.txt"
+      - 'cmd: bash scripts/audit/extract-config-keys.sh > /tmp/keys.txt && while read -r k; do grep -q "$k" docs/configuration-reference.md || { echo "UNDOCUMENTED: $k"; exit 1; }; done < /tmp/keys.txt'
       - "cmd: markdownlint-cli2 --config .markdownlint.yaml docs/setup-guide.md docs/deployment-guide.md docs/oauth-setup-guide.md docs/configuration-reference.md"
       - "cmd: lychee --scheme file --include-fragments --config .lychee.toml docs/setup-guide.md docs/deployment-guide.md docs/oauth-setup-guide.md docs/configuration-reference.md"
       - "cmd: docker compose -f docker-compose.yml config -q"
@@ -134,7 +141,13 @@ phases:
       - "prose: every service name, published port, and required secret named in the operator docs was cross-checked against the compose files — cite the compose line for each."
     conventions: "Never put real secret values in docs, only placeholder names — see the security_invariants in .autopilot/profile.yml. The repo keeps a secrets/ dir and Docker secrets; document the mechanism, never the material."
     depends_on: [0]
-    touches: ["docs/setup-guide.md", "docs/deployment-guide.md", "docs/oauth-setup-guide.md", "docs/configuration-reference.md"]
+    touches:
+      [
+        "docs/setup-guide.md",
+        "docs/deployment-guide.md",
+        "docs/oauth-setup-guide.md",
+        "docs/configuration-reference.md",
+      ]
     adrs: []
     ddd: []
 
@@ -146,7 +159,7 @@ phases:
       - "MCP tool surface documented from the unified tool registry (PR #203): tool names, arguments, and transports (stdio + streamable-http), for consumers wiring emailibrium into an MCP client."
       - "Documented request/response shapes spot-verified against the handlers, not invented from the route name."
     definition_of_done:
-      - "cmd: python3 -c \"import yaml,sys; d=yaml.safe_load(open('docs/api/openapi.yaml')); sys.exit(0 if d.get('paths') else 1)\""
+      - 'cmd: python3 -c "import yaml,sys; d=yaml.safe_load(open(''docs/api/openapi.yaml'')); sys.exit(0 if d.get(''paths'') else 1)"'
       - "cmd: bash scripts/audit/extract-routes.sh | wc -l"
       - "cmd: test -f docs/audit/api-coverage.md"
       - "prose: docs/audit/api-coverage.md reports documented-vs-actual route coverage as a number, and every undocumented route is either now documented or listed in the deliberate-exclusion allowlist with a reason."
@@ -191,7 +204,8 @@ phases:
       - "prose: no ADR's original Decision or Context text was rewritten; corrections are additive notes only. Show the diff shape for each ADR touched."
     conventions: "ADRs and DDDs are historical records — an ADR that was correct when written and is now superseded gets a dated 'Superseded by / Amended' note, never a quiet edit to make history look right. That distinction is the whole value of an ADR log. docs/plan and docs/research are likewise point-in-time; date them rather than update them."
     depends_on: [0]
-    touches: ["CLAUDE.md", "AGENTS.md", "docs/ADRs/**", "docs/DDDs/**", "docs/plan/**", "docs/research/**"]
+    touches:
+      ["CLAUDE.md", "AGENTS.md", "docs/ADRs/**", "docs/DDDs/**", "docs/plan/**", "docs/research/**"]
     adrs: []
     ddd: []
 
