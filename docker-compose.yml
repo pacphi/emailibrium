@@ -78,10 +78,23 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    # uid/gid are load-bearing, not decoration. A tmpfs mount defaults to
+    # root-owned mode 755, and this container runs as 1000 — so nginx died with
+    # `mkdir() "/var/cache/nginx/client_temp" failed (13: Permission denied)`.
+    # Same shape as the postgres uid mismatch and the backend's read-only model
+    # cache: hardening was applied without giving the process a writable path it
+    # owns. Caught by .github/workflows/smoke.yml.
     tmpfs:
-      - /tmp:size=50M
-      - /var/cache/nginx:size=50M
-      - /var/run:size=10M
+      - /tmp:size=50M,uid=1000,gid=1000
+      - /var/cache/nginx:size=50M,uid=1000,gid=1000
+      - /var/run:size=10M,uid=1000,gid=1000
+    # nginx resolves `proxy_pass http://backend:8080` at CONFIG LOAD, not per
+    # request, so it aborts with `host not found in upstream "backend"` if it
+    # starts before the backend is resolvable. There was no depends_on at all,
+    # so the two started in parallel and this was a race the frontend usually lost.
+    depends_on:
+      backend:
+        condition: service_healthy
     ports:
       - "${FRONTEND_PORT:-3000}:80"
     environment:
