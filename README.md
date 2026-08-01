@@ -251,7 +251,7 @@ See the [Maintainer Guide](docs/maintainer-guide.md) for the full developer expe
 | ------------------- | ----------------------------------------------------------------------------------------------------- |
 | Backend             | Rust, Axum 0.8, SQLite (SQLx), Moka cache                                                             |
 | Vector Intelligence | HNSW indexing, SONA learning, GraphSAGE-inspired clustering, adaptive quantization (scalar/PQ/binary) |
-| Frontend            | React 19, TypeScript 5.9, Vite 8, TanStack Router + Query, Zustand, Tailwind CSS                      |
+| Frontend            | React 19, TypeScript 6.0, Vite 8, TanStack Router + Query, Zustand, Tailwind CSS                      |
 | UI Components       | shadcn/ui pattern, Radix primitives, cmdk, Recharts, Framer Motion                                    |
 | Infrastructure      | Docker Compose, GitHub Actions CI, Dependabot, Husky + lint-staged                                    |
 | Security            | AES-256-GCM encryption at rest, Argon2id KDF, Web Crypto API, CSP headers                             |
