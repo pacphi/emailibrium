@@ -133,11 +133,11 @@ phases:
       - "docs/configuration-reference.md reconciled against the real config surface via scripts/audit/extract-config-keys.sh — every documented key exists, every existing key is documented (or explicitly marked internal)."
       - "Compose services, ports, volumes, and required secrets in the docs verified against docker-compose.yml and docker-compose.dev.yml."
     definition_of_done:
-      - 'cmd: bash scripts/audit/extract-config-keys.sh > /tmp/keys.txt && while read -r k; do grep -q "$k" docs/configuration-reference.md || { echo "UNDOCUMENTED: $k"; exit 1; }; done < /tmp/keys.txt'
+      - 'cmd: bash scripts/audit/extract-config-keys.sh | sed -E "s/^(yaml|app-yaml|env)://" > /tmp/keys.txt && while read -r k; do grep -q -- "$k" docs/configuration-reference.md || { echo "UNDOCUMENTED: $k"; exit 1; }; done < /tmp/keys.txt'
       - "cmd: markdownlint-cli2 --config .markdownlint.yaml docs/setup-guide.md docs/deployment-guide.md docs/oauth-setup-guide.md docs/configuration-reference.md"
       - "cmd: lychee --scheme file --include-fragments --config .lychee.toml docs/setup-guide.md docs/deployment-guide.md docs/oauth-setup-guide.md docs/configuration-reference.md"
       - "cmd: docker compose -f docker-compose.yml config -q"
-      - "cmd: docker compose -f docker-compose.dev.yml config -q"
+      - "cmd: docker compose -f docker-compose.yml -f docker-compose.dev.yml config -q"
       - "prose: every service name, published port, and required secret named in the operator docs was cross-checked against the compose files — cite the compose line for each."
     conventions: "Never put real secret values in docs, only placeholder names — see the security_invariants in .autopilot/profile.yml. The repo keeps a secrets/ dir and Docker secrets; document the mechanism, never the material."
     depends_on: [0]

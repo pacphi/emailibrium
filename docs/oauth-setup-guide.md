@@ -241,13 +241,13 @@ These are loaded automatically by `just dev` from the `secrets/dev/` directory.
 
 ### API Endpoints
 
-| Endpoint                       | Method | Description                             |
-| ------------------------------ | ------ | --------------------------------------- |
-| `/api/v1/auth/gmail/connect`   | GET    | Redirects to Google OAuth consent       |
-| `/api/v1/auth/outlook/connect` | GET    | Redirects to Microsoft OAuth consent    |
-| `/api/v1/auth/callback`        | GET    | OAuth callback (handles both providers) |
-| `/api/v1/auth/accounts`        | GET    | List connected accounts                 |
-| `/api/v1/auth/accounts/:id`    | DELETE | Disconnect an account                   |
+| Endpoint                       | Method       | Description                                      |
+| ------------------------------ | ------------ | ------------------------------------------------ |
+| `/api/v1/auth/gmail/connect`   | GET, POST    | Redirects to Google OAuth consent                |
+| `/api/v1/auth/outlook/connect` | GET, POST    | Redirects to Microsoft OAuth consent             |
+| `/api/v1/auth/callback`        | GET          | OAuth callback (handles both providers)          |
+| `/api/v1/auth/accounts`        | GET          | List connected accounts                          |
+| `/api/v1/auth/accounts/{id}`   | DELETE/PATCH | Disconnect (DELETE) or update (PATCH) an account |
 
 ---
 
