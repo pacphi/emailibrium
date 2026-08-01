@@ -100,7 +100,14 @@ services:
     environment:
       VITE_API_URL: ${VITE_API_URL:-http://localhost:8080}
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:80/"]
+      # 127.0.0.1, NOT localhost. nginx.conf declares `listen 80;` only (IPv4),
+      # and the image's 10-listen-on-ipv6-by-default.sh entrypoint script cannot
+      # add the IPv6 listener here because read_only: true makes
+      # /etc/nginx/conf.d/default.conf unwritable — it logs "can not modify ...
+      # (read-only file system?)" and gives up. `localhost` may then resolve to
+      # ::1 first and the probe hits a port nginx never bound, so the container
+      # served traffic fine while reporting unhealthy forever.
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:80/"]
       interval: 30s
       timeout: 5s
       retries: 3
