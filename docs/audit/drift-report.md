@@ -17,13 +17,18 @@ one; no fabricated citations were found.
 
 | Persona         |                   Findings | breaks-a-user | misleading | cosmetic |
 | --------------- | -------------------------: | ------------: | ---------: | -------: |
-| End user        |                         15 |             2 |         11 |        2 |
-| Operator        |                         16 |             6 |          8 |        2 |
-| API             | 23 (+2 confirmed-accurate) |             9 |         12 |        2 |
-| Contributor     |                         13 |             3 |          8 |        2 |
+| End user        |                         15 |             2 |         10 |        3 |
+| Operator        |                         16 |             7 |          7 |        2 |
+| API             | 19 (+2 confirmed-accurate) |             8 |          9 |        2 |
+| Contributor     |                         13 |             2 |          9 |        2 |
 | AI coding agent |                          5 |             1 |          4 |        0 |
 | Decision reader |                          6 |             0 |          4 |        2 |
-| **Total**       |                     **78** |        **21** |     **47** |   **10** |
+| **Total**       |                     **74** |        **20** |     **43** |   **11** |
+
+_(Counted directly from every `- severity:` tag in this document's own body, not tallied by
+hand — the phase-0 gate's Tier-3 review caught an earlier, manually-tallied version of this
+table disagreeing with the findings below it. Re-derive per persona with
+`grep -c '^- severity: breaks-a-user'` etc. inside each `## <persona>` section.)_
 
 The single largest finding: **openapi.yaml documents 11 of the backend's 137 real routes (8%)** —
 worse than the plan's original ~124-vs-12 estimate once nesting is fully resolved. See the API

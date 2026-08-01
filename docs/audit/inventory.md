@@ -6,13 +6,20 @@ only deliverable alongside `drift-report.md`: it records **what exists**, not wh
 accurate — that's `drift-report.md` and phases 1–5.
 
 **Method:** `git ls-files -- '*.md' '*.yaml' '*.yml' 'images/*'`, filtered to drop vendored
-trees (`backend/`, `frontend/`, `ruvector/`) and tooling artifacts that aren't documentation
-prose (`.autopilot/**`, lint configs, `pnpm-lock.yaml`, and the `config/*.yaml` runtime data
-files already covered as ground truth by `scripts/audit/extract-config-keys.sh`). "Last
+trees (`backend/`, `frontend/`, `ruvector/` — 118 files remain) and tooling artifacts that
+aren't documentation prose: `.github/**` (8 — CI workflow definitions, not docs), `.autopilot/**`
+(4), `.markdownlint.yaml`/`.yamllint.yaml` (2 lint configs), `pnpm-lock.yaml` (1), the
+`config/*.yaml` runtime data files already covered as ground truth by
+`scripts/audit/extract-config-keys.sh` (7 direct children of `config/`, plus 2 more nested under
+`config/environments/` that the same rule intends but a literal `config/*.yaml` glob doesn't
+reach), and this inventory's own 2 files (`docs/audit/inventory.md`,
+`docs/audit/drift-report.md` — the catalog can't list itself mid-build). 118 − 8 − 4 − 2 − 1 − 7 −
+2 − 2 = **92 tracked docs, zero unclassified** — every remaining file matched one of the plan's
+six personas or a documented catch-all rule (below); verified by diffing the full 92-file list
+against every path named in the six persona tables below (no file present in neither). "Last
 meaningful update" is `git log -1 --format=%cs -- <file>` (commit date, not "content actually
 changed" — a doc bumped only by a repo-wide reformat still shows that commit). Images use file
-size in place of a line count. **92 tracked docs, zero unclassified** — every file matched one of
-the plan's six personas or a documented catch-all rule (below).
+size in place of a line count.
 
 ## Persona definitions (from `.autopilot/pipeline.yml`)
 
