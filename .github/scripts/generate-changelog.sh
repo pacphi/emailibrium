@@ -85,8 +85,8 @@ CATEGORIES=(
   echo ""
   echo "# From source"
   echo "git checkout v${VERSION}"
-  echo "make install"
-  echo "make dev"
+  echo "just install"
+  echo "just dev"
   echo '```'
   echo ""
   echo "**Full Changelog**: https://github.com/${REPO}/compare/${PREVIOUS_TAG}...${CURRENT_TAG}"

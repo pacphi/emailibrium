@@ -47,13 +47,13 @@ account's security settings. The onboarding screen includes presets for their se
 git clone https://github.com/pacphi/emailibrium.git
 cd emailibrium
 
-make setup            # interactive wizard — SKIP the OAuth credential prompts (press Enter)
-make install
-make dev              # → Backend: http://localhost:8080  Frontend: http://localhost:3000
+just setup            # interactive wizard — SKIP the OAuth credential prompts (press Enter)
+just install
+just dev              # → Backend: http://localhost:8080  Frontend: http://localhost:3000
 ```
 
 OAuth is optional — pressing Enter at the Google/Microsoft prompts writes placeholders and the
-backend still boots normally. (Docker alternative: `make setup-secrets` then `make docker-up-dev`.)
+backend still boots normally. (Docker alternative: `just setup-secrets` then `just docker-up-dev`.)
 
 ### 3. Connect your mailbox (≈2 min)
 

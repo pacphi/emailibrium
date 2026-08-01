@@ -10,8 +10,13 @@ services:
       APP_ENV: development
       RUST_LOG: emailibrium=debug,tower_http=debug
     volumes:
-      - ./backend:/app
+      # Mount the REPO ROOT, not just backend/. The dev stage runs cargo watch in
+      # /app/backend, whose Cargo.toml path-depends on ../ruvector/crates/* — with
+      # only ./backend mounted those resolve to a nonexistent /ruvector and the
+      # dev container cannot build at all.
+      - .:/app
       - cargo_cache:/usr/local/cargo/registry
+    working_dir: /app/backend
     command: cargo watch -x run
 
   frontend:

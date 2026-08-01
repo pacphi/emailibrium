@@ -119,7 +119,7 @@ function ServerHealthBadge({ status }: { status: BackendStatus }) {
         <span className="w-1.5 h-1.5 rounded-full bg-red-500" aria-hidden="true" />
         Backend offline — start the server first
       </div>
-      <code className="text-[10px] text-gray-500 dark:text-gray-400 font-mono">make dev</code>
+      <code className="text-[10px] text-gray-500 dark:text-gray-400 font-mono">just dev</code>
     </div>
   );
 }

@@ -105,7 +105,7 @@ if command -v pnpm &>/dev/null; then
   if [[ -d "$PROJECT_ROOT/frontend/node_modules" ]]; then
     check "node_modules" "pass" ""
   else
-    check "node_modules" "warn" "run 'make -C frontend install' first"
+    check "node_modules" "warn" "run 'cd frontend && just install' first"
   fi
 
   echo "  Checking frontend build (pnpm build)..."
@@ -137,7 +137,7 @@ if command -v docker &>/dev/null && docker info &>/dev/null 2>&1; then
     echo "  Container status:"
     (cd "$PROJECT_ROOT" && docker compose ps --format "table {{.Name}}\t{{.Status}}" 2>/dev/null) | sed 's/^/    /'
   else
-    check "Docker containers" "warn" "no containers running (start with: make docker-up)"
+    check "Docker containers" "warn" "no containers running (start with: just docker-up)"
   fi
 else
   check "Docker" "warn" "Docker not available"
@@ -182,11 +182,11 @@ echo "${BOLD}Summary: $PASS passed, $WARN warnings, $FAIL failed (of $TOTAL chec
 echo ""
 
 if [[ $FAIL -eq 0 && $WARN -eq 0 ]]; then
-  echo "${GREEN}${BOLD}Everything looks good! Run 'make dev' or 'make docker-up' to start.${RESET}"
+  echo "${GREEN}${BOLD}Everything looks good! Run 'just dev' or 'just docker-up' to start.${RESET}"
 elif [[ $FAIL -eq 0 ]]; then
   echo "${GREEN}${BOLD}Core setup is complete.${RESET} Warnings above are optional features."
-  echo "Run 'make dev' or 'make docker-up' to start."
+  echo "Run 'just dev' or 'just docker-up' to start."
 else
   echo "${RED}${BOLD}Some checks failed.${RESET} Address the failures above before running."
-  echo "Re-run: make setup-validate"
+  echo "Re-run: just setup-validate"
 fi

@@ -1,0 +1,92 @@
+name: Smoke
+
+# Does the SYSTEM run — not just "do the images build".
+#
+# The ci-build-optimization pipeline's integration court made exactly this
+# objection: CI proved the images build, while two shipped defects were only
+# observable at runtime (a binary that died on a glibc mismatch despite a clean
+# build, and a container that could never report healthy). docker.yml answers
+# "does it build"; this workflow answers "does it come up and serve".
+#
+# Deliberately NOT on every PR — it builds the release image. Same paths as
+# docker.yml plus the runtime surfaces a smoke test can actually catch.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - "backend/Dockerfile"
+      - "frontend/Dockerfile"
+      - "backend/entrypoint.sh"
+      - "backend/migrations/**"
+      - "backend/src/main.rs" # owns --healthcheck, which compose depends on
+      - "docker-compose*.yml"
+      - "frontend/nginx.conf"
+      - ".github/workflows/smoke.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  compose-smoke:
+    name: Compose Smoke Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: true
+
+      # The stack reads secrets from files via compose `secrets:`. Generate
+      # throwaway values — never reuse anything real, and nothing here is a
+      # credential for any live system.
+      - name: Generate ephemeral dev secrets
+        run: |
+          mkdir -p secrets/dev
+          printf '%s' "$(openssl rand -hex 32)" > secrets/dev/jwt_secret
+          printf '%s' "$(openssl rand -hex 32)" > secrets/dev/oauth_encryption_key
+          printf '%s' "smoke-test-db-password"  > secrets/dev/db_password
+          printf '%s' "postgres://emailibrium:smoke-test-db-password@postgres:5432/emailibrium" > secrets/dev/database_url
+          for f in google_client_id google_client_secret microsoft_client_id microsoft_client_secret; do
+            printf '%s' "placeholder" > "secrets/dev/$f"
+          done
+
+      - name: Build images
+        run: docker compose build backend frontend
+
+      - name: Bring the stack up
+        run: docker compose up -d
+
+      # THE point of this workflow. `docker compose up --wait` blocks until every
+      # service with a healthcheck reports healthy, and fails if one does not.
+      # Before --healthcheck was implemented in main.rs, the backend probe launched
+      # a second server every 30s and the container never became healthy — this
+      # step is what would have caught that.
+      - name: Wait for healthy
+        run: docker compose up -d --wait --wait-timeout 300
+
+      - name: Backend answers its health endpoint
+        run: |
+          curl --fail --silent --show-error --retry 10 --retry-delay 3 --retry-all-errors \
+            http://localhost:8080/api/v1/vectors/health
+
+      # The frontend image cannot serve standalone — nginx proxies to the
+      # compose-only `backend` upstream — so this is the only place it can be
+      # proven to actually serve rather than merely contain nginx.
+      - name: Frontend serves the SPA
+        run: |
+          curl --fail --silent --show-error --retry 10 --retry-delay 3 --retry-all-errors \
+            http://localhost:3000/ | grep -qi "<!doctype html" \
+            || { echo "::error::frontend did not return an HTML document"; exit 1; }
+
+      - name: Diagnostics on failure
+        if: failure()
+        run: |
+          docker compose ps
+          docker compose logs --tail 200
+
+      - name: Tear down
+        if: always()
+        run: docker compose down -v

@@ -1,0 +1,29 @@
+name: Setup Rust
+description: >-
+  Install the exact Rust toolchain pinned in backend/rust-toolchain.toml.
+  Extracted during the ci-build-optimization pipeline's cross-phase optimization
+  pass: the resolve-then-install pair was duplicated in six places (five jobs in
+  ci.yml, one in release.yml), so bumping the MSRV meant editing six blocks and
+  any one of them could silently drift.
+
+inputs:
+  components:
+    description: Comma-separated rustup components (e.g. "rustfmt" or "rustfmt, clippy").
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    # backend/rust-toolchain.toml is the single source of truth for the Rust
+    # version. Installing a bare @stable drifts from it, and rustup would then
+    # silently install the pinned toolchain a SECOND time on first cargo use
+    # inside backend/ — so read the pin and install exactly it, once.
+    - name: Resolve pinned toolchain
+      id: rust
+      shell: bash
+      run: echo "channel=$(sed -n 's/^channel *= *"\(.*\)"/\1/p' backend/rust-toolchain.toml)" >> "$GITHUB_OUTPUT"
+    - uses: dtolnay/rust-toolchain@master
+      with:
+        toolchain: ${{ steps.rust.outputs.channel }}
+        components: ${{ inputs.components }}

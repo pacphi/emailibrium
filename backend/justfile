@@ -1,0 +1,353 @@
+# ============================================================================
+# Emailibrium Backend — Rust (Cargo)
+# ============================================================================
+#
+# Quick Start:
+#   just build     - Build the backend
+#   just test      - Run all tests
+#   just dev       - Start dev server
+#   just bench     - Run benchmarks
+#
+#   just --list    - Show every recipe, grouped by category
+# ============================================================================
+
+set shell := ["bash", "-cu"]
+
+CARGO := "cargo"
+export CARGO_INCREMENTAL := "1"
+
+# Model id for `download-model`. Also settable as `just MODEL=<id> download-model`.
+MODEL := ""
+
+BOLD   := `tput bold 2>/dev/null || echo ''`
+GREEN  := `tput setaf 2 2>/dev/null || echo ''`
+YELLOW := `tput setaf 3 2>/dev/null || echo ''`
+BLUE   := `tput setaf 4 2>/dev/null || echo ''`
+RED    := `tput setaf 1 2>/dev/null || echo ''`
+RESET  := `tput sgr0 2>/dev/null || echo ''`
+
+# ============================================================================
+# Default Recipe (just runs the first recipe when given no arguments)
+# ============================================================================
+
+# Show this help
+[group('Help')]
+@help:
+    echo "{{BOLD}}{{BLUE}}═══ Emailibrium Backend (Rust) ═════════════════════════════════════{{RESET}}"
+    echo ""
+    echo "{{BOLD}}Build & Run{{RESET}}"
+    echo "  build              - Build backend (debug)"
+    echo "  build-release      - Build backend (release, optimized)"
+    echo "  dev                - Start dev server"
+    echo "  clean              - Clean build artifacts"
+    echo ""
+    echo "{{BOLD}}Models{{RESET}}"
+    echo "  models             - Show available LLM models"
+    echo "  embedding-models   - Show available embedding models"
+    echo "  download-model     - Download a model (MODEL=<id>)"
+    echo ""
+    echo "{{BOLD}}Test{{RESET}}"
+    echo "  test               - Run all tests"
+    echo "  test-lib           - Run library tests only"
+    echo "  test-integration   - Run integration tests only"
+    echo "  bench              - Run benchmarks"
+    echo ""
+    echo "{{BOLD}}Lint & Format{{RESET}}"
+    echo "  lint               - Run clippy"
+    echo "  format             - Format code (cargo fmt)"
+    echo "  format-check       - Check formatting"
+    echo "  deadcode           - Check for dead code"
+    echo ""
+    echo "{{BOLD}}Security{{RESET}}"
+    echo "  audit              - Security audit (cargo-audit)"
+    echo ""
+    echo "{{BOLD}}Dependencies{{RESET}}"
+    echo "  upgrade            - Upgrade deps (within semver)"
+    echo "  outdated           - Show outdated crates"
+    echo ""
+    echo "{{BOLD}}Documentation{{RESET}}"
+    echo "  lint-docs          - Lint Markdown + YAML in backend/"
+    echo "  format-docs        - Format Markdown + YAML in backend/"
+
+# ============================================================================
+# Build & Run
+# ============================================================================
+
+# Build backend (debug)
+[group('Build & Run')]
+@build:
+    {{CARGO}} build -p emailibrium
+
+# Build backend (release, optimized)
+[group('Build & Run')]
+@build-release:
+    {{CARGO}} build --release -p emailibrium
+
+# Start dev server
+[group('Build & Run')]
+@dev:
+    RATE_LIMIT_PRESET=development {{CARGO}} run
+
+# Check that cmake is installed (required for llama.cpp compilation)
+[group('Build & Run')]
+check-llm-deps:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if ! command -v cmake >/dev/null 2>&1; then
+      echo "{{YELLOW}}ERROR: cmake is required to build the built-in LLM.{{RESET}}" >&2
+      echo "  Install with: brew install cmake" >&2
+      exit 1
+    fi
+    echo "{{GREEN}}cmake found: $(cmake --version | head -1){{RESET}}"
+
+# Start dev server with built-in LLM (downloads model on first run)
+[group('Build & Run')]
+@dev-llm: check-llm-deps
+    {{CARGO}} run --features builtin-llm
+
+# Build backend with built-in LLM support
+[group('Build & Run')]
+@build-llm: check-llm-deps
+    {{CARGO}} build --features builtin-llm
+
+# Clean build artifacts
+[group('Build & Run')]
+@clean:
+    {{CARGO}} clean
+
+# Remove all local data (DB, vectors, sidecars) — fresh start
+[group('Build & Run')]
+@clean-data:
+    echo "{{YELLOW}}Removing local data...{{RESET}}"
+    rm -f emailibrium.db emailibrium.db-wal emailibrium.db-shm
+    rm -f emailibrium-dev.db "emailibrium 2.db"
+    rm -f data/emailibrium.db
+    rm -rf data/vectors/*/vectors.db data/vectors/*/documents.json
+    echo "{{GREEN}}Local data removed. Next 'just dev' will start fresh.{{RESET}}"
+    echo "  {{YELLOW}}Note: .fastembed_cache/ (ONNX models) preserved to avoid re-download.{{RESET}}"
+    echo "  To also remove cached models: rm -rf .fastembed_cache/"
+
+# Clean build artifacts + all local data
+[group('Build & Run')]
+@clean-all: clean clean-data
+    echo "{{GREEN}}Full clean complete.{{RESET}}"
+
+# ============================================================================
+# Models
+# ============================================================================
+
+# Show available LLM models (reads from config/models-llm.yaml)
+[group('Models')]
+models:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "{{BOLD}}{{BLUE}}═══ Available LLM Models ════════════════════════════════════════{{RESET}}"
+    echo ""
+    RAM="$(sysctl -n hw.memsize 2>/dev/null || echo "$(grep MemTotal /proc/meminfo 2>/dev/null | awk '{print $2 * 1024}')" || echo 8589934592)"
+    case "$RAM" in ''|*[!0-9]*) RAM=8589934592 ;; esac
+    RAM_GB=$(( RAM / 1073741824 ))
+    AVAIL_MB=$(( RAM / 1048576 - 4096 ))
+    echo "  {{BOLD}}System:{{RESET}} ${RAM_GB}GB RAM ($(( AVAIL_MB / 1024 ))GB available for models)"
+    echo ""
+    awk -v avail="$AVAIL_MB" -v G='{{GREEN}}' -v Y='{{YELLOW}}' -v B='{{BOLD}}' -v R='{{RESET}}' '
+    /^  [a-z][a-z_]*:$/ {
+      prov=$1; gsub(/:/, "", prov);
+      label = (prov == "builtin") ? "builtin (onnx)" : prov;
+      if (n++) printf "\n";
+      printf "  %s%s%s\n", B, label, R;
+      printf "  ───────────────────────────────────────────────────────────────────────────\n";
+      printf "  %s%-30s %-10s %-8s %-8s %7s   %s%s\n", B, "MODEL ID", "PARAMS", "DISK", "RAM", "CTX", "QUALITY", R;
+      printf "  ───────────────────────────────────────────────────────────────────────────\n";
+    }
+    /^      - id:/ { id=$3 }
+    /^        name:/ { $1=""; name=$0; gsub(/^ *"?|"? *$/,"",name) }
+    /^        params:/ { params=$2; gsub(/"/,"",params) }
+    /^        context_size:/ { ctx=$2 }
+    /^        disk_mb:/ { disk=$2 }
+    /^        min_ram_mb:/ { ram=$2 }
+    /^        quality:/ { q=$2;
+      if (ram+0 <= avail+0 || ram+0 == 0) c=G; else c=Y;
+      ds = (disk+0 >= 1000) ? sprintf("%.1fGB", disk/1000) : sprintf("%dMB", disk);
+      rs = (ram+0 >= 1000) ? sprintf("%.1fGB", ram/1000) : sprintf("%dMB", ram);
+      printf "  %s%-30s %-10s %-8s %-8s %7d   %s%s\n", c, id, params, ds, rs, ctx, q, R;
+      id=""; name=""; params=""; ctx=0; disk=0; ram=0; q=""
+    }' ../config/models-llm.yaml 2>/dev/null || echo "  {{YELLOW}}Cannot read config/models-llm.yaml{{RESET}}"
+    echo ""
+    echo "  {{GREEN}}Green{{RESET}} = fits your hardware   {{YELLOW}}Yellow{{RESET}} = may not fit"
+    echo ""
+    echo "  {{BOLD}}Usage:{{RESET}}"
+    echo "    just download-model MODEL=<id>   Pre-download a model"
+    echo "    Edit config/models-llm.yaml      Add or modify models"
+    echo ""
+
+# Show available embedding models (reads from config/models-embedding.yaml)
+[group('Models')]
+embedding-models:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "{{BOLD}}{{BLUE}}═══ Available Embedding Models ══════════════════════════════════{{RESET}}"
+    echo ""
+    awk -v G='{{GREEN}}' -v B='{{BOLD}}' -v R='{{RESET}}' '
+    /^  [a-z][a-z_]*:$/ {
+      prov=$1; gsub(/:/, "", prov);
+      label = (prov == "onnx") ? "builtin (onnx)" : prov;
+      if (n++) printf "\n";
+      printf "  %s%s%s\n", B, label, R;
+      printf "  ───────────────────────────────────────────────────────────────────────────\n";
+      printf "  %s%-30s %-6s %-10s %-8s %-8s %s%s\n", B, "MODEL ID", "DIMS", "MAX TOKENS", "DISK", "RAM", "QUALITY", R;
+      printf "  ───────────────────────────────────────────────────────────────────────────\n";
+    }
+    /^      - id:/ { id=$3 }
+    /^        dimensions:/ { dims=$2 }
+    /^        max_tokens:/ { maxtok=$2 }
+    /^        disk_mb:/ { disk=$2 }
+    /^        min_ram_mb:/ { ram=$2 }
+    /^        quality:/ { q=$2;
+      ds = (disk+0 >= 1000) ? sprintf("%.1fGB", disk/1000) : sprintf("%dMB", disk);
+      rs = (ram+0 >= 1000) ? sprintf("%.1fGB", ram/1000) : sprintf("%dMB", ram);
+      printf "  %s%-30s %-6d %-10d %-8s %-8s %s%s\n", G, id, dims, maxtok, ds, rs, q, R;
+      id=""; dims=0; maxtok=0; disk=0; ram=0; q=""
+    }' ../config/models-embedding.yaml 2>/dev/null || echo "  {{YELLOW}}Cannot read config/models-embedding.yaml{{RESET}}"
+    echo ""
+    echo "  {{BOLD}}Usage:{{RESET}}"
+    echo "    Edit config/models-embedding.yaml   Add or modify embedding models"
+    echo ""
+
+# Download a model by ID (e.g. `just download-model MODEL=qwen3-8b-q4km`)
+[group('Models')]
+download-model model=MODEL:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # Accepts a bare id (`just download-model qwen3-8b-q4km`), the Makefile-style
+    # `MODEL=<id>` form, and the just-native `just MODEL=<id> download-model`.
+    model="{{model}}"
+    model="${model#MODEL=}"
+    if [ -z "$model" ]; then
+      echo "{{BOLD}}Usage:{{RESET}} just download-model MODEL=<model-id>" >&2
+      echo "" >&2
+      echo "{{BOLD}}Examples:{{RESET}}" >&2
+      echo "  just download-model MODEL=qwen3-8b-q4km    # GGUF via Hugging Face" >&2
+      echo "  just download-model MODEL=qwen3:8b          # via Ollama" >&2
+      echo "" >&2
+      echo "Run '{{BOLD}}just models{{RESET}}' to see available models." >&2
+      exit 1
+    fi
+    {{CARGO}} run --features builtin-llm -- --download-model "$model"
+
+# ============================================================================
+# Test
+# ============================================================================
+
+# Run all tests (emailibrium only)
+[group('Test')]
+@test:
+    {{CARGO}} test -p emailibrium
+
+# Run library tests only
+[group('Test')]
+@test-lib:
+    {{CARGO}} test --lib
+
+# Run integration tests only
+[group('Test')]
+@test-integration:
+    {{CARGO}} test --test '*'
+
+# Run benchmarks
+[group('Test')]
+@bench:
+    {{CARGO}} bench
+
+# ============================================================================
+# Lint & Format
+# ============================================================================
+
+# Run clippy (strict — fails on warnings; dead-code allowed)
+[group('Lint & Format')]
+@lint:
+    {{CARGO}} clippy -p emailibrium --all-targets -- \
+        -D warnings \
+        -A dead_code -A unused_variables -A unused_imports -A unused_mut
+
+# Format code
+[group('Lint & Format')]
+@format:
+    {{CARGO}} fmt
+
+# Check formatting
+[group('Lint & Format')]
+@format-check:
+    {{CARGO}} fmt -- --check
+
+# NOTE: deliberately linewise (no `pipefail`) so an empty grep result — i.e. no
+# dead code found — exits 0, exactly as the Makefile did.
+# Check for dead code
+[group('Lint & Format')]
+@deadcode:
+    {{CARGO}} clippy -- -W dead_code 2>&1 | grep "warning.*never" | sort | uniq -c | sort -rn
+
+# ============================================================================
+# Security
+# ============================================================================
+
+# Security audit dependencies (fails on findings)
+[group('Security')]
+audit:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if ! command -v cargo-audit >/dev/null 2>&1; then
+      echo "{{RED}}cargo-audit not installed. Run: cargo install cargo-audit{{RESET}}" >&2
+      exit 1
+    fi
+    {{CARGO}} audit
+
+# ============================================================================
+# Dependency Management
+# ============================================================================
+
+# Upgrade dependencies (within semver)
+[group('Dependencies')]
+@upgrade:
+    {{CARGO}} update
+    echo "{{GREEN}}Cargo.lock updated.{{RESET}}"
+
+# Show outdated crates
+[group('Dependencies')]
+outdated:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if ! command -v cargo-outdated >/dev/null 2>&1; then
+      echo "{{RED}}cargo-outdated not installed. Run: cargo install cargo-outdated{{RESET}}" >&2
+      exit 1
+    fi
+    {{CARGO}} outdated --root-deps-only
+
+# ============================================================================
+# Documentation
+# ============================================================================
+
+# Lint Markdown + YAML in backend/ (strict)
+[group('Documentation')]
+lint-docs:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if ! command -v markdownlint-cli2 >/dev/null 2>&1; then
+      echo "{{RED}}markdownlint-cli2 not installed. Run: npm i -g markdownlint-cli2{{RESET}}" >&2
+      exit 1
+    fi
+    if ! command -v yamllint >/dev/null 2>&1; then
+      echo "{{RED}}yamllint not installed. Run: pip install yamllint{{RESET}}" >&2
+      exit 1
+    fi
+    markdownlint-cli2 '**/*.md' '#target'
+    yamllint -c ../.yamllint.yaml .
+
+# Format Markdown + YAML in backend/
+[group('Documentation')]
+@format-docs:
+    npx --no-install prettier --write '**/*.md' '**/*.{yaml,yml}' --config ../.prettierrc
+
+# Check Markdown + YAML formatting
+[group('Documentation')]
+@format-check-docs:
+    npx --no-install prettier --check '**/*.md' '**/*.{yaml,yml}' --config ../.prettierrc

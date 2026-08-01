@@ -1,0 +1,43 @@
+name: Lighthouse
+
+# Manual only. This used to run on every PR in a non-blocking mode, so it could
+# never fail anything — it just spent a full `pnpm install` + `pnpm turbo build`
+# per PR to produce a report nobody was gated on. Now it runs on demand.
+#
+# NOTE: this job still cannot fail on a budget miss. Every assertion in
+# frontend/lighthouserc.json is severity "warn", and lhci exits 0 when only
+# warn-level assertions trip. Flip those to "error" to make a manual run
+# actually gate on the budgets — a deliberate quality-bar call, so it is left
+# to a human rather than changed here.
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: lighthouse-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lighthouse:
+    name: Lighthouse CI
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 11
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - name: Install
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile
+      - name: Build
+        working-directory: frontend
+        run: pnpm turbo build
+      - name: Lighthouse CI
+        uses: treosh/lighthouse-ci-action@v12
+        with:
+          configPath: frontend/lighthouserc.json
+          uploadArtifacts: true

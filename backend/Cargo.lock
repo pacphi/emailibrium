@@ -1738,7 +1738,6 @@ dependencies = [
  "criterion",
  "dirs",
  "emailibrium",
- "encoding_rs",
  "fastembed",
  "figment",
  "futures",
@@ -1755,7 +1754,6 @@ dependencies = [
  "regex",
  "reqwest",
  "rmcp",
- "ruvector-collections",
  "ruvector-core",
  "ruvector-gnn",
  "schemars",
@@ -4656,7 +4654,6 @@ dependencies = [
  "base64 0.22.1",
  "bytes",
  "encoding_rs",
- "futures-channel",
  "futures-core",
  "futures-util",
  "h2",
@@ -4896,21 +4893,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ruvector-collections"
-version = "2.2.2"
-dependencies = [
- "bincode 2.0.1",
- "chrono",
- "dashmap",
- "parking_lot",
- "ruvector-core",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "uuid",
-]
-
-[[package]]
 name = "ruvector-core"
 version = "2.2.2"
 dependencies = [
@@ -4928,7 +4910,6 @@ dependencies = [
  "rand_distr",
  "rayon",
  "redb",
- "reqwest",
  "rkyv",
  "serde",
  "serde_json",

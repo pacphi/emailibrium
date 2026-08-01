@@ -19,6 +19,12 @@ embedding:
   batch_size: 64
   cache_size: 10000
   onnx:
+    # fastembed defaults to `.fastembed_cache` RELATIVE TO CWD (/app), which is on
+    # the read-only rootfs in docker-compose.yml — the model download then fails with
+    # "Failed to retrieve model.onnx" and the backend exits, because ONNX has no
+    # fallback provider. Point it at /app/data, the writable named volume, so the
+    # model also persists across restarts instead of re-downloading.
+    cache_dir: "/app/data/models"
     model: "all-MiniLM-L6-v2"
     show_download_progress: true
     dimensions: 384

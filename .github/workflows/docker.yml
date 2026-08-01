@@ -3,7 +3,35 @@ name: Docker
 on:
   push:
     branches: [main]
-    tags: ["v*"]
+  # Build the images on PRs that touch how they are built. Without this, the
+  # packaging was only ever exercised AFTER merge to main — which is how the
+  # published image stayed broken (it shipped the `development` stage) without
+  # any PR ever going red. Scoped by paths so an ordinary source change does not
+  # pay for a cold release build; regular Rust/frontend CI already covers compilation.
+  pull_request:
+    paths:
+      # Every input the image actually consumes. Cross-check against the COPY
+      # lines in backend/Dockerfile when either changes — an input that is COPYed
+      # but NOT listed here can regress packaging and still merge green, which
+      # would defeat the whole point of this pre-merge trigger.
+      - "backend/Dockerfile"
+      - "frontend/Dockerfile"
+      - "backend/Cargo.toml"
+      - "backend/Cargo.lock"
+      - "backend/rust-toolchain.toml" # selects the builder toolchain
+      - "backend/entrypoint.sh" # COPYed into the runtime stage
+      - "backend/migrations/**" # COPYed into the runtime stage
+      - "ruvector" # submodule gitlink; the build resolves path deps into it
+      - ".dockerignore"
+      - "docker-compose*.yml"
+      - ".github/workflows/docker.yml"
+      # Deliberately NOT backend/src/**: it is COPYed, but a cold release build on
+      # every backend source change is expensive and the regular rust-build /
+      # rust-test jobs already compile that code. This trigger exists to prove
+      # PACKAGING, which the paths above govern.
+  # NOTE: deliberately NOT triggered on tags. release.yml already builds and
+  # pushes both images on a tag; duplicating it here ran two concurrent cold
+  # Rust release builds writing to the same gha cache scope.
   workflow_dispatch:
 
 jobs:
@@ -11,26 +39,44 @@ jobs:
     name: Build Backend Image
     runs-on: ubuntu-latest
     steps:
+      # submodules are REQUIRED: backend/Cargo.toml has path deps on the vendored
+      # ruvector crates, and the image build COPYs ruvector/ from the context.
+      # Without this the directory is empty and the release compile fails.
       - uses: actions/checkout@v7
+        with:
+          submodules: true
       - uses: docker/setup-buildx-action@v4
       - uses: docker/build-push-action@v7
         with:
-          context: ./backend
+          # Repo root, so ruvector/ is inside the context. See backend/Dockerfile.
+          context: .
+          file: backend/Dockerfile
+          # Without an explicit target, buildx builds the LAST stage, which is
+          # `development` — a cargo-watch image with no compiled binary. That is
+          # why this job was a no-op that never caught a broken release build.
+          target: runtime
           push: false
           tags: emailibrium-backend:${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # Scope the cache per image. Unscoped, the backend and frontend jobs
+          # share one gha cache entry and evict each other's layers.
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,mode=max,scope=backend
 
   build-frontend:
     name: Build Frontend Image
     runs-on: ubuntu-latest
     steps:
+      # The frontend image is self-contained, so it keeps a frontend/ context and
+      # needs no submodules.
       - uses: actions/checkout@v7
       - uses: docker/setup-buildx-action@v4
       - uses: docker/build-push-action@v7
         with:
           context: ./frontend
+          # Same defect on the frontend: the last stage is `development` (a node
+          # dev server), not the nginx:alpine runtime image we mean to ship.
+          target: runtime
           push: false
           tags: emailibrium-frontend:${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,mode=max,scope=frontend

@@ -4,7 +4,7 @@ on:
   push:
     branches: [main, develop]
   pull_request:
-    branches: [main]
+    branches: [main, develop]
   workflow_dispatch:
 
 concurrency:
@@ -14,6 +14,16 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  # Incremental compilation only pays off across repeated local builds; in CI
+  # every job starts from a restored cache, so it just bloats target/ and slows
+  # the cache save/restore steps. Same for test-profile debuginfo.
+  CARGO_INCREMENTAL: 0
+  # 1 = line-tables-only, NOT 0. This was 0, which stripped every `at file:line`
+  # frame from RUST_BACKTRACE output above — leaving bare symbol names and making
+  # a CI test failure materially harder to diagnose, which defeats RUST_BACKTRACE: 1
+  # two lines up. Line tables restore file:line at a small fraction of the size of
+  # full debuginfo (debug = 2), so target/ stays lean and the cache stays fast.
+  CARGO_PROFILE_TEST_DEBUG: 1
 
 jobs:
   # Backend jobs (separate for clear failure attribution)
@@ -24,7 +34,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           submodules: true
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/setup-rust
         with:
           components: rustfmt
       - name: Check formatting
@@ -38,7 +48,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           submodules: true
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/setup-rust
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
@@ -51,24 +61,126 @@ jobs:
             -D warnings \
             -A dead_code -A unused_variables -A unused_imports -A unused_mut
 
-  rust-test:
-    name: Rust Tests
-    runs-on: ubuntu-latest
-    needs: [rust-format, rust-clippy]
+  # Compile the test binaries ONCE, here, and hand them to rust-test as a nextest
+  # archive. The win is scheduling, not fewer compiles: this job has no `needs:`,
+  # so it compiles CONCURRENTLY with rust-format/rust-clippy, whereas the old
+  # rust-test waited for clippy and only then started its own full compile of the
+  # workspace plus the heavy vendored ruvector crates. Wall-clock goes from
+  # (clippy THEN compile+run) to (max(clippy, compile) THEN run).
+  rust-build:
+    name: Rust Build (test archive)
+    # Opt-in bigger/native runner. Unset (the default) resolves to ubuntu-latest.
+    # This moved here from rust-test along with lld: after this change rust-test
+    # only executes prebuilt binaries, so the compile/link cost lives in THIS job.
+    runs-on: ${{ vars.HEAVY_RUNNER || 'ubuntu-latest' }}
+    env:
+      RUSTFLAGS: -Clink-arg=-fuse-ld=lld
     steps:
       - uses: actions/checkout@v7
         with:
           submodules: true
-      - uses: dtolnay/rust-toolchain@stable
+      # Assumes an apt-based Ubuntu runner — true for ubuntu-latest and for the
+      # ubuntu-*-arm images HEAVY_RUNNER is expected to point at.
+      - name: Install lld
+        run: sudo apt-get update && sudo apt-get install -y lld
+      - uses: ./.github/actions/setup-rust
+      # Pin the version: the archive producer and consumer must be the same
+      # nextest, and an unpinned install lets a release landing between the two
+      # jobs mismatch them (nextest's own archiving docs call this out).
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest@0.9.140
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: backend
-      - name: Run tests
+      - name: Build test archive
         working-directory: backend
-        run: cargo test --workspace
+        run: cargo nextest archive --workspace --archive-file nextest.tar.zst
+      # Upload IMMEDIATELY after archiving, before any other check. Anything that
+      # runs between the archive and the upload can abort the job and skip
+      # rust-test entirely, costing the signal from all ~1177 tests to diagnose
+      # an unrelated failure.
+      - uses: actions/upload-artifact@v7
+        with:
+          name: nextest-archive
+          path: backend/nextest.tar.zst
+          # A missing archive MUST fail loudly — rust-test cannot run without it.
+          if-no-files-found: error
+          # ~125MB; it is only needed for the life of this run.
+          retention-days: 1
+      # NOTE: nothing else may run in this job after the upload. Uploading first
+      # guarantees the ARTIFACT exists, but a later failing step still fails the
+      # JOB — and rust-test `needs:` this one, so GitHub would skip it and all
+      # ~1177 tests' signal would vanish while diagnosing something unrelated.
+      # That is why doctests live in rust-extra-checks, not here.
+
+  # Compile-only checks that are NOT the primary test signal. They live in their
+  # own job for one specific reason: rust-test `needs: rust-build`, so ANY failing
+  # step in rust-build makes GitHub skip rust-test and destroy the signal from all
+  # ~1177 tests while you debug something unrelated. Uploading the artifact early
+  # does not help — the artifact exists, but the job still fails and the dependent
+  # job is still skipped. Keeping these here means a broken bench or doctest
+  # reports itself and nothing else goes dark.
+  #
+  # `cargo bench --no-run` also builds the OPTIMIZED bench profile into
+  # target/release — a separate build from the archive's target/debug, so putting
+  # it in rust-build would have cost real time on the critical path too.
+  rust-extra-checks:
+    name: Rust Extra Checks (benches, doctests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: true
+      - uses: ./.github/actions/setup-rust
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: backend
       - name: Verify benchmarks compile
         working-directory: backend
         run: cargo bench --no-run
+      # nextest cannot run doctests. Today that costs nothing (both doctests in
+      # this crate are `ignored`, so `cargo test --doc` executes 0), but without
+      # this a future REAL doctest would be silently never run.
+      - name: Doctests (nextest cannot run these)
+        working-directory: backend
+        run: cargo test --doc
+
+  rust-test:
+    # MUST match rust-build's runner. A nextest archive is host-bound: it pins the
+    # host target triple and ships the host libstd, so binaries built on an arm64
+    # HEAVY_RUNNER cannot execute on an amd64 runner. Before the archive split,
+    # build and run shared one machine and this could not happen.
+    name: Rust Tests
+    runs-on: ${{ vars.HEAVY_RUNNER || 'ubuntu-latest' }}
+    needs: [rust-format, rust-clippy, rust-build]
+    steps:
+      # submodules are load-bearing here even though nothing compiles: nextest
+      # resolves the archived workspace manifest, so the checkout must match.
+      - uses: actions/checkout@v7
+        with:
+          submodules: true
+      - uses: ./.github/actions/setup-rust
+      # Must match rust-build's pinned version exactly — the archive is produced
+      # and consumed by nextest, and a version skew between the two jobs is a
+      # confusing failure mode nextest's archiving docs warn about.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest@0.9.140
+      - uses: actions/download-artifact@v8
+        with:
+          name: nextest-archive
+          path: backend
+      # No rust-cache and no lld here on purpose: nothing is compiled or linked,
+      # so a cache restore would cost time and buy nothing.
+      # --workspace-remap is not strictly required while the build and test jobs
+      # happen to check out to the same $GITHUB_WORKSPACE path, but relying on
+      # that coincidence hard-errors ("workspace root manifest does not exist")
+      # on any runner that lays out paths differently. Passing it removes the
+      # whole failure class for free.
+      - name: Run tests from archive
+        working-directory: backend
+        run: cargo nextest run --profile ci --archive-file nextest.tar.zst --workspace-remap .
 
   rust-audit:
     name: Rust Security Audit
@@ -79,8 +191,12 @@ jobs:
       # availability we cannot control, and its HTTP 500s from GitHub cause
       # spurious job failures unrelated to our security posture.
       - uses: actions/checkout@v7
+      # Prebuilt binary. This previously used a from-source `cargo install`,
+      # which recompiled the tool on every run.
       - name: Install cargo-audit
-        run: cargo install --locked cargo-audit
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
       # Fetch the RUSTSEC advisory DB with retry so a transient GitHub 500
       # does not fail the job. The audit step uses --no-fetch after this.
       - name: Fetch advisory database
@@ -152,74 +268,6 @@ jobs:
       - name: Build
         working-directory: frontend
         run: pnpm turbo build
-
-  # Performance gates (ADR-005)
-  lighthouse:
-    name: Lighthouse CI
-    runs-on: ubuntu-latest
-    needs: frontend-quality
-    steps:
-      - uses: actions/checkout@v7
-      - uses: pnpm/action-setup@v6
-        with:
-          version: 11
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 26
-          cache: pnpm
-          cache-dependency-path: frontend/pnpm-lock.yaml
-      - name: Install
-        working-directory: frontend
-        run: pnpm install --frozen-lockfile
-      - name: Build
-        working-directory: frontend
-        run: pnpm turbo build
-      - name: Lighthouse CI
-        uses: treosh/lighthouse-ci-action@v12
-        with:
-          configPath: frontend/lighthouserc.json
-          uploadArtifacts: true
-        continue-on-error: true
-
-  bundlewatch:
-    name: Bundle Size Check
-    runs-on: ubuntu-latest
-    needs: frontend-quality
-    steps:
-      - uses: actions/checkout@v7
-      - uses: pnpm/action-setup@v6
-        with:
-          version: 11
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 26
-          cache: pnpm
-          cache-dependency-path: frontend/pnpm-lock.yaml
-      - name: Install
-        working-directory: frontend
-        run: pnpm install --frozen-lockfile
-      - name: Build
-        working-directory: frontend
-        run: pnpm turbo build
-      - name: Check bundle size
-        working-directory: frontend
-        run: |
-          echo "=== Bundle Size Report ==="
-          du -sh apps/web/dist/ 2>/dev/null || echo "No dist directory"
-          echo ""
-          echo "=== JS Bundle Sizes ==="
-          find apps/web/dist -name "*.js" -exec du -h {} + 2>/dev/null | sort -rh | head -20
-          echo ""
-          echo "=== CSS Bundle Sizes ==="
-          find apps/web/dist -name "*.css" -exec du -h {} + 2>/dev/null | sort -rh | head -10
-          echo ""
-          # Fail if any single JS chunk exceeds 500KB
-          OVERSIZED=$(find apps/web/dist -name "*.js" -size +500k 2>/dev/null)
-          if [ -n "$OVERSIZED" ]; then
-            echo "WARNING: The following JS bundles exceed 500KB:"
-            echo "$OVERSIZED" | xargs du -h
-            echo "Consider code-splitting or lazy loading to reduce bundle size."
-          fi
 
   # Documentation validation
   validate-markdown:
