@@ -50,8 +50,8 @@ emailibrium/
     Dockerfile               Multi-stage Node build
 
   docs/
-    ADRs/                    Architecture Decision Records (ADR-001 through ADR-010)
-    DDDs/                    Domain-Driven Design documents (DDD-000 through DDD-005)
+    ADRs/                    Architecture Decision Records (29 files, numbered through ADR-032)
+    DDDs/                    Domain-Driven Design documents (DDD-000 through DDD-010)
     plan/                    implementation.md (78 features, 7 sprints)
     evaluation/              Evaluation framework and metrics
     api/                     API documentation
@@ -78,13 +78,13 @@ emailibrium/
 
 **Prerequisites:**
 
-| Tool    | Version | Purpose                                         |
-| ------- | ------- | ----------------------------------------------- |
-| Rust    | 1.97+   | Backend compilation                             |
-| Node.js | 26+     | Frontend toolchain                              |
-| pnpm    | 11.5+   | Frontend package management                     |
-| Docker  | 24+     | Containerized deployment                        |
-| SQLite  | 3.35+   | Database (usually pre-installed on macOS/Linux) |
+| Tool    | Version | Purpose                                                                                                                                                      |
+| ------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Rust    | 1.97+   | Backend compilation                                                                                                                                          |
+| Node.js | 24+     | Frontend toolchain (`.nvmrc` pins 24; CI installs Node 26, which stays forward-compatible with the `>=24` engines range but is not the local-setup baseline) |
+| pnpm    | 11.5+   | Frontend package management                                                                                                                                  |
+| Docker  | 24+     | Containerized deployment                                                                                                                                     |
+| SQLite  | 3.35+   | Database (usually pre-installed on macOS/Linux)                                                                                                              |
 
 **First-time setup:**
 
@@ -123,14 +123,18 @@ just docker-down          # Stop everything
 
 ### Backend Development
 
-The backend is organized into four module groups under `backend/src/`:
+The backend is organized under `backend/src/`. The four groups below carry the most
+day-to-day development traffic; see `docs/architecture.md`'s Module Structure section for
+the remaining modules (`cache/`, `cleanup/`, `config/`, `email/`, `events/`, `mcp/`,
+`middleware/`, `rules/`, `tools/`, `sync_lock.rs`):
 
-| Module     | Files                                                                                                                                                                                 | Responsibility                                                                                                                                                                                                    |
-| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `api/`     | 11 handler files (`vectors.rs`, `ingestion.rs`, `insights.rs`, `accounts.rs`, `ai.rs`, `backup.rs`, `clustering.rs`, `consent.rs`, `evaluation.rs`, `interactions.rs`, `learning.rs`) | HTTP handlers, request validation, response serialization                                                                                                                                                         |
-| `db/`      | `mod.rs`                                                                                                                                                                              | SQLite connection pool via sqlx                                                                                                                                                                                   |
-| `content/` | `html_extractor.rs`, `image_analyzer.rs`, `link_analyzer.rs`, `attachment_extractor.rs`, `tracking_detector.rs`                                                                       | Multi-asset extraction pipeline (ADR-006)                                                                                                                                                                         |
-| `vectors/` | 22 files                                                                                                                                                                              | Core engine: embeddings (ONNX/Ollama/cloud/Cohere), store (RuVector/memory), search, categorizer, clustering, encryption, quantization, SONA learning, backup, insights, generative AI, consent, reindex, metrics |
+| Module                                                                                          | Files                                                                                                                                                                                                                                                                                | Responsibility                                                                                                                                                                                                                                                                                                     |
+| ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `api/`                                                                                          | 17 handler files (`vectors.rs`, `ingestion.rs`, `insights.rs`, `accounts.rs`, `ai.rs`, `attachments.rs`, `backup.rs`, `clustering.rs`, `consent.rs`, `emails.rs`, `evaluation.rs`, `interactions.rs`, `learning.rs`, `provider_helpers.rs`, `rules.rs`, `unsubscribe.rs`, `wipe.rs`) | HTTP handlers, request validation, response serialization                                                                                                                                                                                                                                                          |
+| `db/`                                                                                           | `mod.rs`                                                                                                                                                                                                                                                                             | SQLite connection pool via sqlx                                                                                                                                                                                                                                                                                    |
+| `content/`                                                                                      | `html_extractor.rs`, `image_analyzer.rs`, `link_analyzer.rs`, `attachment_extractor.rs`, `tracking_detector.rs`                                                                                                                                                                      | Multi-asset extraction pipeline (ADR-006)                                                                                                                                                                                                                                                                          |
+| `vectors/`                                                                                      | 48 files                                                                                                                                                                                                                                                                             | Core engine: embeddings (ONNX/Ollama/cloud/Cohere), store (RuVector primary / Qdrant / SQLite fallback), search, categorizer, clustering, encryption, quantization, SONA learning, backup, insights, generative AI + RAG + tool-calling chat, model catalog/registry/download/integrity, consent, reindex, metrics |
+| `cache/`, `cleanup/`, `config/`, `email/`, `events/`, `mcp/`, `middleware/`, `rules/`, `tools/` | see `docs/architecture.md`'s Module Structure section                                                                                                                                                                                                                                | Caching, inbox cleanup wizard, config hot-reload, provider adapters, event bus, MCP server, security middleware, rules engine, unified tool registry                                                                                                                                                               |
 
 **Adding a new API endpoint:**
 
@@ -291,7 +295,7 @@ cd frontend/apps/web && npx storybook dev
 
 Target: **WCAG 2.1 AA** compliance.
 
-- `axe-core` accessibility checks run in CI
+- No automated `axe-core` (or equivalent) accessibility scan runs in CI today -- WCAG 2.1 AA compliance above is a design target verified manually, not gated by a check
 - Focus trapping via `useFocusTrap` hook for modals and dialogs
 - Screen reader announcements via `useAnnounce` hook
 - Skip-to-content link on every page
@@ -376,7 +380,11 @@ Emailibrium is a **single-node, local-first** application by design. Scaling is 
 
 Quantization auto-scales when `quantization.mode: auto` (default). See ADR-007 for the tier thresholds and hysteresis logic.
 
-If you need multi-user or multi-node deployment, consider replacing SQLite with PostgreSQL (`database_url` already supports connection URLs).
+`docker-compose.yml` already runs PostgreSQL as a required service today (the backend
+won't start until it reports healthy), but the backend does not yet connect to or store
+data in it -- SQLite remains the only database actually in use. See
+[deployment-guide.md](./deployment-guide.md)'s Database Strategy section for the current
+state.
 
 ### Troubleshooting
 
@@ -466,7 +474,9 @@ The implementation plan defines **78 features across 7 sprints**. See [implement
 
 ### Architecture Decisions
 
-10 Architecture Decision Records document every major technical trade-off:
+29 Architecture Decision Records (numbered through ADR-032) document technical trade-offs.
+The ten below cover the foundational decisions; see `docs/ADRs/` for the complete,
+current list:
 
 | ADR     | Decision                          | Key Trade-off                                                      |
 | ------- | --------------------------------- | ------------------------------------------------------------------ |
@@ -485,7 +495,10 @@ All ADRs live in `docs/ADRs/` and follow a consistent format (Context, Decision,
 
 ### Domain Model
 
-Five bounded contexts defined in `docs/DDDs/`:
+`docs/DDDs/` holds 13 files: DDD-000 (context map) through DDD-010, plus one addendum
+each for DDD-006 and DDD-008. `DDD-000`'s own table and integration-pattern diagram cover
+six of the contexts below (DDD-001 through DDD-006); the seventh, **Rules (DDD-007)**, is
+an established, accepted context not yet reflected in `DDD-000`'s own diagram either:
 
 | Context            | Type       | Document |
 | ------------------ | ---------- | -------- |
@@ -494,6 +507,12 @@ Five bounded contexts defined in `docs/DDDs/`:
 | Ingestion          | Supporting | DDD-003  |
 | Learning           | Supporting | DDD-004  |
 | Account Management | Supporting | DDD-005  |
+| AI Providers       | Supporting | DDD-006  |
+| Rules              | Core       | DDD-007  |
+
+Three further domain documents (DDD-008 Email Operations, DDD-009 Email Content &
+Attachments -- proposed, not yet accepted, DDD-010 RAG) exist but aren't yet folded into
+this table or `DDD-000`'s diagram; see `docs/architecture.md`'s Bounded Contexts section.
 
 See [DDD-000-context-map.md](./DDDs/DDD-000-context-map.md) for integration patterns between contexts.
 
@@ -549,7 +568,7 @@ Before requesting review, verify:
 For architectural decisions that affect multiple modules or introduce new dependencies:
 
 1. Create a new ADR in `docs/ADRs/` following the existing format (Context, Decision, Consequences).
-2. Number it sequentially (next: ADR-011).
+2. Number it sequentially -- check `ls docs/ADRs/` for the highest existing number and use the next one (29 ADRs exist as of this writing, numbered through ADR-032; do not hardcode a specific "next" number here, it goes stale immediately).
 3. Reference it in your PR description.
 
 ### Issue Labels

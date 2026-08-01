@@ -37,7 +37,14 @@ Emailibrium is a **vector-native email intelligence platform** organized as a fo
 +-------------------------------+----------------------------------+
 |                    DATA TIER                                       |
 |  SQLite (structured data, FTS5 search, email metadata, config)   |
-|  Vector Store (embeddings, HNSW index, clusters)                 |
+|  Vector Store (embeddings, HNSW index, clusters) --               |
+|    RuVector (primary, ADR-003) / Qdrant / SQLite fallback backends|
+|  PostgreSQL: docker-compose gates backend startup on it being     |
+|    healthy, but the backend never connects to it -- SQLite        |
+|    remains the only database actually in use today                |
+|  Redis: docker-compose gates backend startup on it too, but the   |
+|    application layer treats it as optional -- a missing Redis is  |
+|    a permanent cache miss, not an error. Used for pub/sub + cache.|
 |  Moka Cache (embedding cache, LLM response cache)                |
 |  Sync Queue + Checkpoints (ADR-015): offline ops, crash recovery |
 +------------------------------------------------------------------+
@@ -45,7 +52,12 @@ Emailibrium is a **vector-native email intelligence platform** organized as a fo
 
 ## Bounded Contexts
 
-Emailibrium follows Domain-Driven Design with seven bounded contexts (DDD-000 through DDD-007):
+Emailibrium follows Domain-Driven Design. `docs/DDDs/` holds 13 files: DDD-000 (the
+context map, below) through DDD-010, plus one addendum each for DDD-006 and DDD-008 --
+not a contiguous one-context-per-number run. `DDD-000-context-map.md`'s own table and
+integration-pattern diagram cover six of these contexts (DDD-001 through DDD-006); the
+seventh below, **Rules (DDD-007)**, is an established, accepted context that predates
+this doc's last full pass but is not yet reflected in `DDD-000`'s own diagram either:
 
 | Context                | Type       | Document | Responsibility                                                            |
 | ---------------------- | ---------- | -------- | ------------------------------------------------------------------------- |
@@ -56,6 +68,13 @@ Emailibrium follows Domain-Driven Design with seven bounded contexts (DDD-000 th
 | **Account Management** | Supporting | DDD-005  | Provider connections (OAuth), sync state, archive strategy                |
 | **AI Providers**       | Supporting | DDD-006  | Model registry, provider routing, consent enforcement, inference sessions |
 | **Rules**              | Core       | DDD-007  | Rule lifecycle, hybrid condition evaluation, NL parsing, validation       |
+
+Three further domain documents exist but are not yet folded into this table or into
+`DDD-000-context-map.md`'s diagram: **DDD-008 Email Operations** (Core, Accepted),
+**DDD-009 Email Content & Attachments** (Core, **Proposed** -- not yet accepted), and
+**DDD-010 RAG** (extends the Email Intelligence context above rather than introducing a
+new one). Reconciling the context map itself is a `docs/DDDs/**` concern, out of this
+document's scope.
 
 ### Context Map
 
@@ -153,14 +172,50 @@ src/
     insights.rs        # Subscription, recurring sender, report endpoints
     accounts.rs        # OAuth account management (DDD-005)
     ai.rs              # Chat and generative AI endpoints (ADR-012)
+    attachments.rs     # Attachment listing/download endpoints
     backup.rs          # Backup management endpoints
     clustering.rs      # Cluster discovery endpoints
     consent.rs         # Privacy consent management
+    emails.rs          # Email listing, detail, and action endpoints
     evaluation.rs      # Search quality evaluation endpoints
     interactions.rs    # Search interaction tracking (SONA)
     learning.rs        # SONA learning engine endpoints
+    provider_helpers.rs  # Shared provider/token resolution helper (not a route file)
+    rules.rs           # Rules engine endpoints (DDD-007)
+    unsubscribe.rs      # Bulk unsubscribe endpoints (R-04)
+    wipe.rs             # Remote wipe endpoints (ADR-008)
+    # 17 handler files total (16 route files + provider_helpers.rs) -- see
+    # backend/src/api/ for the current list.
   db/
     mod.rs             # SQLite connection pool (sqlx)
+  cache/
+    mod.rs             # Optional Redis cache layer -- a missing Redis is a permanent
+                        # cache miss, never an error
+  cleanup/
+    api/, domain/, orchestrator/, repository/  # Inbox cleanup wizard (ADR-030):
+                        # plan build/review, apply execution, review telemetry
+  config/
+    mod.rs, hot_reload.rs  # Layered config (figment) + runtime hot-reload
+  email/
+    gmail.rs, outlook.rs, imap.rs  # Provider adapters (OAuth, sync, offline queue,
+                        # conflict resolution, delta sync, unsubscribe)
+  events/
+    mod.rs             # Internal event bus
+  mcp/
+    mod.rs, resources.rs, server.rs  # MCP server (ADR-028): Streamable HTTP +
+                        # stdio transports over the shared tools/ registry
+  middleware/
+    hsts.rs, log_scrub.rs, log_scrubbing.rs, rate_limit.rs, security_headers.rs  # CORS,
+                        # CSP/HSTS, token-bucket rate limiting, two log-scrubbing
+                        # mechanisms (tracing-layer + HTTP middleware) (ADR-016)
+  rules/
+    rule_engine.rs, rule_processor.rs, rule_validator.rs, json_parser.rs  # Rules
+                        # engine (ADR-014, DDD-007): hybrid conditions, NL parsing
+  tools/
+    registry.rs, readonly/  # Unified MCP-tool + chat-tool registry (ADR-028) --
+                        # one dispatch path for both callers
+  sync_lock.rs          # Per-account pipeline locking to prevent concurrent
+                        # sync/ingestion runs
   content/
     mod.rs             # ContentPipeline facade (ADR-006)
     html_extractor.rs  # HTML -> clean text
@@ -173,7 +228,9 @@ src/
     mod.rs             # VectorService facade
     embedding.rs       # EmbeddingPipeline with provider fallback (ADR-002)
     store.rs           # VectorStoreBackend trait + InMemoryVectorStore
-    ruvector_store.rs  # RuVector HNSW backend (ADR-003)
+    ruvector_store.rs  # RuVector HNSW backend, primary store (ADR-003)
+    qdrant_store.rs    # Qdrant REST-API backend, ADR-003 fallback option
+    sqlite_store.rs    # SQLite-backed emergency fallback store (ADR-003)
     encryption.rs      # AES-256-GCM encryption at rest (ADR-008)
     config.rs          # Layered configuration (figment)
     types.rs           # Core value objects (VectorDocument, etc.)
@@ -189,9 +246,19 @@ src/
     learning.rs        # SONA adaptive learning engine (ADR-004)
     quantization.rs    # Scalar quantization (ADR-007)
     generative.rs      # Generative AI integration (ADR-012)
+    generative_router.rs  # Tiered provider routing (mock -> local -> cloud)
+    chat.rs / chat_orchestrator.rs  # Chat service + tool-calling loop (ADR-028)
+    rag.rs             # RAG pipeline bridging HybridSearch + email DB (ADR-022, DDD-010)
+    tool_calling.rs    # Tool-calling provider trait abstraction (ADR-028)
+    reranker.rs        # Cross-encoder re-ranking after RRF fusion (ADR-029)
+    model_catalog.rs / model_registry.rs  # Hardware-aware model catalog + lifecycle
+    model_download.rs / model_integrity.rs  # CLI model download + SHA-256 verification
+    ewc.rs             # Elastic Weight Consolidation, catastrophic-forgetting guard (ADR-004)
     consent.rs         # Privacy consent management
     metrics.rs         # Vector service metrics and telemetry
     reindex.rs         # Reindex operations
+    # 48 files total in backend/src/vectors/ -- the above is a representative
+    # subset, not exhaustive; see backend/src/vectors/mod.rs for the full list.
 ```
 
 ### Frontend (`frontend/`)
@@ -214,7 +281,7 @@ The frontend is organized as a **Turborepo monorepo** (`frontend/turbo.json`) us
 
 #### Storybook
 
-Component development and visual testing use **Storybook 8** (`frontend/apps/web/.storybook/`). There are currently **9 stories** covering shared components (`ErrorFallback`, `OfflineIndicator`, `SkipToContent`, `Toast`) and feature components (`ProgressBar`, `PhaseIndicator`, `SubscriptionRow`, `HealthScoreGauge`, `FrequencyBadge`). Run via `pnpm storybook` in the web app.
+Component development and visual testing use **Storybook 10** (`^10.4.6`, `frontend/apps/web/.storybook/`). There are currently **11 stories** covering shared components (`ErrorFallback`, `OfflineIndicator`, `SkipToContent`, `Toast`) and feature components (`ProgressBar`, `PhaseIndicator`, `SubscriptionRow`, `HealthScoreGauge`, `FrequencyBadge`, `CleanupReview`, `CleanupHistory`). Run via `npx storybook dev` in the web app (there is no `pnpm storybook` script -- `storybook` appears only in `devDependencies`; see `just storybook` for the wrapped command).
 
 #### E2E Testing (Playwright)
 
