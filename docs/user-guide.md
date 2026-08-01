@@ -5,7 +5,7 @@
 ### Connecting Your Email
 
 1. Open Emailibrium at `http://localhost:3000`
-2. Navigate to **Settings** (gear icon in the sidebar or `Cmd+,`)
+2. Navigate to **Settings** (gear icon in the sidebar)
 3. Click **Add Email Account**
 4. Select your provider:
    - **Gmail**: Authenticate via Google OAuth. Emailibrium requests read-only access to your mailbox.
@@ -52,7 +52,7 @@ The Command Center is the home screen and primary dashboard.
 - **Quick stats**: Total emails, unread count, categories breakdown
 - **Ingestion progress**: Real-time status of email processing
 - **Recent activity**: Latest actions taken
-- **Quick actions**: Start ingestion, open search, view insights
+- **Quick actions**: Clean Inbox, View Insights, Chat with AI, Manage Rules, Add Account, Sync Now
 
 Press `Cmd+K` to open the command palette from anywhere in the application.
 
@@ -120,10 +120,10 @@ Emailibrium includes a built-in email client for viewing, replying, and composin
 
 **Composing and replying:**
 
-- Click **Compose** or press `C` to start a new email
-- Click **Reply** or press `R` to reply to the current email
-- Click **Forward** or press `F` to forward
-- Rich text editor with formatting toolbar
+- Click **Compose** to start a new email
+- Click **Reply** to reply to the current email
+- Click **Forward** to forward
+- Markdown-aware compose box with a Write/Preview toggle (no rich-text formatting toolbar)
 
 ### Rules Studio
 
@@ -134,9 +134,12 @@ Create automation rules that run on incoming emails.
 1. Open **Rules Studio** from the sidebar
 2. Click **New Rule**
 3. Define conditions:
-   - Sender matches (exact or pattern)
+   - Sender (From) matches
+   - Recipient (To) matches
    - Subject contains
-   - Category equals
+   - Body contains
+   - Label equals
+   - Date compares
    - Semantic similarity to a reference email
 4. Define actions:
    - Apply label
@@ -149,6 +152,12 @@ Create automation rules that run on incoming emails.
 
 Rules are evaluated during ingestion and can also be applied retroactively to existing emails.
 
+> **Known issue:** Saving a rule can currently fail silently for freshly-added conditions because
+> the editor doesn't always send the condition's type discriminant the backend requires, and a
+> few operator names (e.g. "not contains") don't have a backend equivalent yet. If **Save** doesn't
+> seem to take effect, try editing an existing rule (which already has a valid condition shape)
+> rather than adding a brand-new condition row.
+
 ### Settings
 
 **Account settings:**
@@ -159,10 +168,13 @@ Rules are evaluated during ingestion and can also be applied retroactively to ex
 
 **Privacy settings:**
 
-- Enable/disable encryption at rest
-- Set master password for vector encryption
-- Configure embedding noise level (differential privacy)
-- View audit log of vector store access
+- Encryption-at-rest toggle and master-password field (UI only today — see the note below)
+- Audit log of vector store access (currently a static example, not live data)
+
+> **Note:** Real encryption at rest (AES-256-GCM, Argon2id) is configured through
+> `backend/config.yaml`'s `encryption.enabled` / `master_password` keys, not through this screen —
+> the Settings toggle and master-password field don't yet drive the backend encryption path. See
+> the [Configuration Reference](configuration-reference.md) for the real settings.
 
 **Appearance:**
 
@@ -172,8 +184,8 @@ Rules are evaluated during ingestion and can also be applied retroactively to ex
 
 **AI Settings:**
 
-- Embedding provider selection: ONNX (default, runs locally with no external service), Ollama, cloud (OpenAI, Cohere)
-- Generative AI provider: none (default), Ollama, or cloud (OpenAI, Anthropic, Gemini)
+- Embedding provider selection: Built-in ONNX (default, runs locally with no external service), Ollama, cloud (OpenAI, Cohere)
+- Generative AI provider: Built-in local LLM (default, no setup needed), Local (Ollama), or cloud (OpenAI, Anthropic) — set to **None (Rule-based)** for keyword/heuristic classification with no AI model
 - Provider-aware model selection with per-provider API key configuration
 
 **Advanced:**
@@ -184,23 +196,15 @@ Rules are evaluated during ingestion and can also be applied retroactively to ex
 
 ## Keyboard Shortcuts
 
-| Shortcut      | Action                        |
-| ------------- | ----------------------------- |
-| `Cmd+K`       | Open command palette          |
-| `Escape`      | Close modal / palette / panel |
-| `/`           | Focus search                  |
-| `C`           | Compose new email             |
-| `R`           | Reply to current email        |
-| `F`           | Forward current email         |
-| `E`           | Archive current email         |
-| `#`           | Delete current email          |
-| `J`           | Next email in list            |
-| `K`           | Previous email in list        |
-| `Enter`       | Open selected email           |
-| `Cmd+Enter`   | Send email (in compose)       |
-| `Cmd+Shift+A` | Select all in current view    |
-| `Cmd+,`       | Open settings                 |
-| `?`           | Show keyboard shortcut help   |
+| Shortcut    | Action                                    |
+| ----------- | ------------------------------------------ |
+| `Cmd+K`     | Open command palette                       |
+| `Escape`    | Close modal / palette / panel              |
+| `↓` / `↑`   | Navigate the email list                    |
+| `Cmd+Enter` | Send reply (in the reply box)              |
+
+Other actions (compose, reply, forward, archive, delete, search focus, select-all,
+open settings) are click/tap-only today — there is no keyboard shortcut for them yet.
 
 ## Tips and Best Practices
 
@@ -247,6 +251,7 @@ Chat requires a generative AI provider (Ollama or cloud). Without one, the chat 
 ### Privacy Considerations
 
 - All processing happens locally by default
-- Enable encryption at rest if your device may be accessed by others
-- Set a strong master password -- if lost, encrypted data cannot be recovered
-- Review the audit log periodically in Settings > Privacy
+- Enable AES-256-GCM encryption at rest via `backend/config.yaml`'s `encryption.enabled` /
+  `master_password` keys if your device may be accessed by others -- this isn't yet configurable
+  from the Settings UI (see the note under Settings > Privacy above)
+- The Settings > Privacy audit log is currently a static example, not live activity data

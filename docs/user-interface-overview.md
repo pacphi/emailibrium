@@ -55,7 +55,7 @@ The search-first home screen. A unified semantic search bar finds "that budget s
 
 [![Email reader](../images/03-email-reader.png)](../images/03-email-reader.png)
 
-The full email client: threaded conversations, a clean reading pane, reply and compose, and fast navigation across accounts. Messages appear in a unified inbox spanning Gmail, Outlook, and IMAP, with cluster and topic context shown inline so you always know which project a thread belongs to.
+The full email client: threaded conversations, a clean reading pane, reply and compose, and fast navigation across accounts. Messages appear in a unified inbox spanning Gmail, Outlook, and IMAP; topic and cluster filters live in the sidebar so you can jump straight to the project a thread belongs to.
 
 ## Inbox Cleaner wizard
 
@@ -79,7 +79,7 @@ Build filter rules with semantic conditions — "looks like a receipt", "is a ne
 
 [![Chat](../images/07-chat.png)](../images/07-chat.png)
 
-A conversational interface over your inbox. Ask natural-language questions like "summarize this week's project threads" or "what's outstanding from my accountant?" and get answers grounded in your actual messages. Backed by the tiered AI architecture — ONNX on-device by default, Ollama or cloud models opt-in.
+A conversational interface over your inbox. Ask natural-language questions like "summarize this week's project threads" or "what's outstanding from my accountant?" and get answers grounded in your actual messages. Backed by the tiered AI architecture — a built-in local LLM by default (no external service), Ollama or cloud models opt-in for more capability.
 
 ## Settings
 
