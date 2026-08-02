@@ -18,13 +18,54 @@ servers:
   - url: http://localhost:8080/api/v1
     description: Local development server
 
+# ---------------------------------------------------------------------------
+# MCP (Model Context Protocol)
+# ---------------------------------------------------------------------------
+# /api/v1/mcp is a Streamable HTTP MCP transport (nest_service), not a REST
+# resource -- it has no `paths:` entry below by design. It exposes 15
+# read-only tools, 3 resources, and 2 prompts from the tool registry
+# (backend/src/tools/mod.rs:49, `declarations()`); the tool list with names
+# and grouping is documented in README.md's "MCP Server" section (kept in
+# sync with the registry as of this writing). Per-tool input schemas are not
+# duplicated here -- they're self-describing via the MCP `tools/list` method
+# (see the curl smoke test in docs/setup-guide.md#connecting-an-mcp-client),
+# which is the authoritative source since MCP JSON-schemas don't map onto
+# OpenAPI path items. stdio transport (for clients that spawn a subprocess,
+# e.g. Claude Desktop) is documented in the same setup-guide.md section.
+
 tags:
+  - name: ai
+    description: AI model management, chat, and provider control
+  - name: emails
+    description: Email listing, actions (archive/star/move/spam/trash), and send/reply/forward
+  - name: auth
+    description: OAuth connect flows (Gmail/Outlook/IMAP) and account management
+  - name: cleanup
+    description: Inbox cleanup wizard -- plan build/review, apply execution, review telemetry (ADR-030)
+  - name: consent
+    description: AI provider consent and GDPR data rights (ADR-017)
+  - name: evaluation
+    description: Search/clustering quality metrics, A/B testing, IR metric computation
   - name: vectors
     description: Vector search, classification, and store operations
   - name: ingestion
     description: Email ingestion pipeline control and SSE progress streaming
   - name: insights
     description: Inbox intelligence -- subscriptions, recurring senders, reports
+  - name: clustering
+    description: Topic cluster listing, detail, pin/unpin, and full recluster (S3-01, S3-02)
+  - name: rules
+    description: Rules engine -- CRUD, suggestions, validate, test, run (R-03)
+  - name: interactions
+    description: Search/click/feedback interaction tracking for relevance learning (S3-08)
+  - name: learning
+    description: Relevance learning feedback, metrics, consolidation, and SONA session state (S3-03..S3-06)
+  - name: wipe
+    description: Remote wipe -- per-user, vectors-only, and full-platform data destruction (ADR-008)
+  - name: backup
+    description: Vector store backup trigger, stats, and restore (ADR-003, S1-04)
+  - name: unsubscribe
+    description: Bulk unsubscribe, undo, and preview (R-04)
 
 paths:
   # ---------------------------------------------------------------------------
@@ -59,18 +100,19 @@ paths:
                 $ref: "#/components/schemas/SearchResponse"
               example:
                 results:
-                  - email_id: "abc-123"
+                  - emailId: "abc-123"
                     score: 0.94
                     collection: "email_text"
                     metadata:
                       category: "Finance"
-                  - email_id: "def-456"
+                  - emailId: "def-456"
                     score: 0.87
                     collection: "email_text"
                     metadata:
                       category: "Work"
                 total: 2
-                latency_ms: 12
+                latencyMs: 12
+                mode: "semantic"
         "500":
           description: Internal server error (embedding or store failure)
           content:
@@ -181,16 +223,16 @@ paths:
                 $ref: "#/components/schemas/HealthStatus"
               example:
                 status: "healthy"
-                store_healthy: true
-                embedding_available: true
-                store_stats:
-                  total_vectors: 10523
+                storeHealthy: true
+                embeddingAvailable: true
+                storeStats:
+                  totalVectors: 10523
                   collections:
                     email_text: 10000
                     image_text: 523
                   dimensions: 384
-                  memory_bytes: 16834560
-                  index_type: "in_memory_brute_force"
+                  memoryBytes: 16834560
+                  indexType: "in_memory_brute_force"
         "503":
           description: Service is degraded
           content:
@@ -215,19 +257,2709 @@ paths:
               schema:
                 $ref: "#/components/schemas/VectorStats"
               example:
-                total_vectors: 10523
+                totalVectors: 10523
                 collections:
                   email_text: 10000
                   image_text: 523
                 dimensions: 384
-                memory_bytes: 16834560
-                index_type: "in_memory_brute_force"
+                memoryBytes: 16834560
+                indexType: "in_memory_brute_force"
         "500":
           description: Failed to retrieve statistics
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+
+  # ---------------------------------------------------------------------------
+  # Emails
+  # ---------------------------------------------------------------------------
+  /emails:
+    get:
+      tags: [emails]
+      summary: List emails
+      description: Paginated, filterable list of locally-synced emails. By default excludes spam/trash/archived.
+      operationId: listEmails
+      parameters:
+        - { name: accountId, in: query, schema: { type: string } }
+        - { name: category, in: query, schema: { type: string } }
+        - { name: label, in: query, schema: { type: string } }
+        - { name: isRead, in: query, schema: { type: boolean } }
+        - { name: isStarred, in: query, schema: { type: boolean } }
+        - {
+            name: isSpam,
+            in: query,
+            schema: { type: boolean },
+            description: "Omitted = excluded; true = only spam",
+          }
+        - {
+            name: isTrash,
+            in: query,
+            schema: { type: boolean },
+            description: "Omitted = excluded; true = only trash",
+          }
+        - {
+            name: isArchived,
+            in: query,
+            schema: { type: boolean },
+            description: "Omitted = excluded; true = only archived",
+          }
+        - { name: folder, in: query, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, default: 50, maximum: 200 } }
+        - { name: offset, in: query, schema: { type: integer, default: 0 } }
+      responses:
+        "200":
+          description: Paginated email list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  emails:
+                    type: array
+                    items: { $ref: "#/components/schemas/EmailResponse" }
+                  total: { type: integer, format: int64 }
+        "500": { $ref: "#/components/responses/ServerError" }
+
+  /emails/labels/all:
+    get:
+      tags: [emails]
+      summary: Aggregate labels across all accounts
+      description: Aggregates label usage across every connected account, with per-label email/unread counts, marking known system labels (INBOX, SENT, TRASH, ...).
+      operationId: listAllLabels
+      responses:
+        "200":
+          description: Aggregated labels, sorted by email count descending
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/AggregatedLabel" }
+        "500": { $ref: "#/components/responses/ServerError" }
+
+  /emails/labels:
+    get:
+      tags: [emails]
+      summary: List folders/labels for one account
+      description: Fetches the live folder/label list directly from the provider (Gmail/Outlook/IMAP).
+      operationId: listAccountLabels
+      parameters:
+        - name: accountId
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Folders and labels
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/FolderOrLabel" }
+        "400": { $ref: "#/components/responses/ServerError" }
+        "502":
+          description: Provider request failed
+          content:
+            application/json:
+              schema: { type: string }
+
+  /emails/categories/enriched:
+    get:
+      tags: [emails]
+      summary: Categories with group and counts
+      operationId: listEnrichedCategories
+      responses:
+        "200":
+          description: Enriched category list
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/EnrichedCategory" }
+        "500": { $ref: "#/components/responses/ServerError" }
+
+  /emails/categories:
+    get:
+      tags: [emails]
+      summary: List distinct categories
+      operationId: listCategories
+      responses:
+        "200":
+          description: Distinct category names present in the corpus
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  categories:
+                    type: array
+                    items: { type: string }
+        "500": { $ref: "#/components/responses/ServerError" }
+
+  /emails/counts:
+    get:
+      tags: [emails]
+      summary: Accurate email counts
+      description: Total, unread, archived, spam, trash, sent, and per-category counts. `total`/`unread` include archived emails so clients can derive active counts.
+      operationId: getEmailCounts
+      responses:
+        "200":
+          description: Email counts
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EmailCounts" }
+        "500": { $ref: "#/components/responses/ServerError" }
+
+  /emails/trash:
+    delete:
+      tags: [emails]
+      summary: Empty trash
+      description: Permanently deletes all trashed emails (optionally scoped to one account) and their attachment files. Irreversible.
+      operationId: emptyTrash
+      parameters:
+        - name: accountId
+          in: query
+          required: false
+          schema: { type: string }
+      responses:
+        "200":
+          description: Deletion result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  deleted_count: { type: integer, format: int64 }
+        "500": { $ref: "#/components/responses/ServerError" }
+
+  /emails/send:
+    post:
+      tags: [emails]
+      summary: Compose and send a new email
+      operationId: sendEmail
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SendEmailRequest" }
+      responses:
+        "200":
+          description: Sent
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SendEmailResponse" }
+        "502":
+          description: Provider send failed
+          content:
+            application/json:
+              schema: { type: string }
+
+  /emails/thread/{thread_id}:
+    get:
+      tags: [emails]
+      summary: Get a full thread
+      description: Returns all emails in a thread, ordered oldest-first. Falls back to treating thread_id as a single message id if no thread match is found.
+      operationId: getThread
+      parameters:
+        - { name: thread_id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Thread
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ThreadResponse" }
+        "404":
+          description: Thread/message not found
+          content:
+            application/json:
+              schema: { type: string }
+        "500": { $ref: "#/components/responses/ServerError" }
+
+  /emails/{id}/attachments:
+    get:
+      tags: [emails]
+      summary: List an email's attachments
+      operationId: listAttachments
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - name: includeInline
+          in: query
+          required: false
+          schema: { type: boolean, default: false }
+          description: Include inline (CID-referenced) attachments
+      responses:
+        "200":
+          description: Attachment metadata
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/AttachmentResponse" }
+        "500": { $ref: "#/components/responses/ServerError" }
+
+  /emails/{id}/attachments/zip:
+    get:
+      tags: [emails]
+      summary: Download all non-inline attachments as a ZIP
+      description: Lazy-fetches any not-yet-cached attachments from the provider first, then streams a ZIP archive.
+      operationId: downloadAllAttachmentsZip
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: ZIP archive stream
+          content:
+            application/zip:
+              schema: { type: string, format: binary }
+        "404":
+          description: No attachments found
+          content:
+            application/json:
+              schema: { type: string }
+
+  /emails/{id}/attachments/{att_id}:
+    get:
+      tags: [emails]
+      summary: Download a single attachment
+      description: Lazy-fetches from the provider (Gmail/Outlook) if not already cached on disk, then streams the file.
+      operationId: downloadAttachment
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: att_id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: File stream
+          content:
+            "*/*":
+              schema: { type: string, format: binary }
+        "404":
+          description: Attachment not found
+          content:
+            application/json:
+              schema: { type: string }
+        "400":
+          description: Provider does not support attachment download (e.g. IMAP)
+          content:
+            application/json:
+              schema: { type: string }
+
+  /emails/{id}:
+    get:
+      tags: [emails]
+      summary: Get a single email
+      operationId: getEmail
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Email
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EmailResponse" }
+        "404":
+          description: Email not found
+          content:
+            application/json:
+              schema: { type: string }
+        "500": { $ref: "#/components/responses/ServerError" }
+    delete:
+      tags: [emails]
+      summary: Delete an email
+      description: Soft-deletes to trash by default (`?permanent=true` for immediate, irreversible permanent deletion including attachment files).
+      operationId: deleteEmail
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - name: permanent
+          in: query
+          required: false
+          schema: { type: boolean, default: false }
+      responses:
+        "200":
+          description: Deletion result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, enum: [trashed, permanently_deleted] }
+        "500": { $ref: "#/components/responses/ServerError" }
+
+  /emails/{id}/archive:
+    post:
+      tags: [emails]
+      summary: Archive an email
+      operationId: archiveEmail
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "204": { description: Archived }
+        "404":
+          description: Email not found
+          content:
+            application/json:
+              schema: { type: string }
+
+  /emails/{id}/star:
+    post:
+      tags: [emails]
+      summary: Toggle starred state
+      description: Flips the current starred state (no request body -- reads current state from the DB first).
+      operationId: toggleStarEmail
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "204": { description: Toggled }
+        "404":
+          description: Email not found
+          content:
+            application/json:
+              schema: { type: string }
+
+  /emails/{id}/read:
+    post:
+      tags: [emails]
+      summary: Mark read/unread
+      operationId: markEmailRead
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [read]
+              properties:
+                read: { type: boolean }
+      responses:
+        "204": { description: Updated }
+        "500": { $ref: "#/components/responses/ServerError" }
+
+  /emails/{id}/move:
+    post:
+      tags: [emails]
+      summary: Move to a folder or apply a label
+      operationId: moveEmail
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MoveEmailRequest" }
+      responses:
+        "204": { description: Moved }
+        "502":
+          description: Provider move failed
+          content:
+            application/json:
+              schema: { type: string }
+
+  /emails/{id}/spam:
+    post:
+      tags: [emails]
+      summary: Mark as spam
+      operationId: spamEmail
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Marked
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { status: { type: string, enum: [marked_as_spam] } }
+        "404":
+          description: Email not found
+          content:
+            application/json:
+              schema: { type: string }
+
+  /emails/{id}/unspam:
+    post:
+      tags: [emails]
+      summary: Remove from spam
+      operationId: unspamEmail
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Removed from spam
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { status: { type: string, enum: [removed_from_spam] } }
+        "404":
+          description: Email not found
+          content:
+            application/json:
+              schema: { type: string }
+
+  /emails/{id}/restore:
+    post:
+      tags: [emails]
+      summary: Restore from trash
+      operationId: restoreEmail
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Restored
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { status: { type: string, enum: [restored] } }
+        "404":
+          description: Email not found
+          content:
+            application/json:
+              schema: { type: string }
+
+  /emails/{id}/reply:
+    post:
+      tags: [emails]
+      summary: Reply to an email
+      operationId: replyToEmail
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                bodyText: { type: string, nullable: true }
+                bodyHtml: { type: string, nullable: true }
+      responses:
+        "200":
+          description: Sent
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SendEmailResponse" }
+        "502":
+          description: Provider reply failed
+          content:
+            application/json:
+              schema: { type: string }
+
+  /emails/{id}/forward:
+    post:
+      tags: [emails]
+      summary: Forward an email
+      operationId: forwardEmail
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [to]
+              properties:
+                to: { type: string, format: email }
+      responses:
+        "200":
+          description: Forwarded
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SendEmailResponse" }
+        "502":
+          description: Provider forward failed
+          content:
+            application/json:
+              schema: { type: string }
+
+  # ---------------------------------------------------------------------------
+  # Auth / Accounts
+  # ---------------------------------------------------------------------------
+  /auth/gmail/connect:
+    get:
+      tags: [auth]
+      summary: Start Gmail OAuth flow
+      description: Generates a Gmail OAuth authorization URL and redirects the browser to Google's consent screen.
+      operationId: connectGmailGet
+      responses:
+        "307":
+          description: Redirect to Google's OAuth consent screen
+          headers:
+            Location: { schema: { type: string } }
+        "500":
+          description: Gmail OAuth not configured (missing client id/secret env vars)
+          content:
+            application/json:
+              schema: { type: string }
+    post:
+      tags: [auth]
+      summary: Start Gmail OAuth flow (POST form)
+      description: Identical behavior to the GET variant.
+      operationId: connectGmailPost
+      responses:
+        "307":
+          description: Redirect to Google's OAuth consent screen
+        "500":
+          description: Gmail OAuth not configured
+          content:
+            application/json:
+              schema: { type: string }
+
+  /auth/outlook/connect:
+    get:
+      tags: [auth]
+      summary: Start Outlook OAuth flow
+      operationId: connectOutlookGet
+      responses:
+        "307":
+          description: Redirect to Microsoft's OAuth consent screen
+        "500":
+          description: Outlook OAuth not configured
+          content:
+            application/json:
+              schema: { type: string }
+    post:
+      tags: [auth]
+      summary: Start Outlook OAuth flow (POST form)
+      operationId: connectOutlookPost
+      responses:
+        "307":
+          description: Redirect to Microsoft's OAuth consent screen
+        "500":
+          description: Outlook OAuth not configured
+          content:
+            application/json:
+              schema: { type: string }
+
+  /auth/imap/test:
+    post:
+      tags: [auth]
+      summary: Validate IMAP/SMTP credentials without persisting
+      description: SSRF-guards both hosts, then performs a real TLS login + logout against the IMAP server. Nothing is saved.
+      operationId: testImapConnection
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ImapConnectRequest" }
+      responses:
+        "200": { description: Credentials valid }
+        "400":
+          description: Authentication or SSRF-guard failed
+          content:
+            application/json:
+              schema: { type: string }
+
+  /auth/imap/connect:
+    post:
+      tags: [auth]
+      summary: Connect an account via IMAP + app password
+      description: |
+        Validates credentials (see /auth/imap/test), then persists the account with
+        the app password encrypted at rest. Reconnecting the same email address
+        reuses the existing account id. Works for providers that still accept IMAP
+        basic auth (personal Gmail, Yahoo, iCloud, Fastmail, Zoho) -- Outlook.com
+        and Google Workspace require the OAuth flow instead.
+      operationId: connectImap
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ImapConnectRequest" }
+      responses:
+        "200":
+          description: Account connected
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AccountResponse" }
+        "400":
+          description: Credential validation or SSRF-guard failed
+          content:
+            application/json:
+              schema: { type: string }
+
+  /auth/callback:
+    get:
+      tags: [auth]
+      summary: OAuth callback (shared by Gmail and Outlook)
+      description: |
+        Exchanges the authorization code for tokens, fetches the user's email
+        address, persists (or updates) the account, and redirects back to the
+        frontend with `?provider=...&status=connected` (or `?error=oauth_denied`
+        on provider-reported errors).
+      operationId: oauthCallback
+      parameters:
+        - { name: code, in: query, required: false, schema: { type: string } }
+        - {
+            name: state,
+            in: query,
+            required: false,
+            schema: { type: string },
+            description: 'Format: "{provider}:{nonce}"',
+          }
+        - { name: error, in: query, required: false, schema: { type: string } }
+        - { name: error_description, in: query, required: false, schema: { type: string } }
+      responses:
+        "307":
+          description: Redirect to the frontend (with success or error params)
+        "400":
+          description: Missing authorization code or unknown provider
+          content:
+            application/json:
+              schema: { type: string }
+        "502":
+          description: Token exchange or user-info fetch failed
+          content:
+            application/json:
+              schema: { type: string }
+
+  /auth/accounts:
+    get:
+      tags: [auth]
+      summary: List connected accounts
+      operationId: listAccounts
+      responses:
+        "200":
+          description: Connected accounts
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/AccountResponse" }
+        "500": { $ref: "#/components/responses/ServerError" }
+
+  /auth/accounts/{id}:
+    delete:
+      tags: [auth]
+      summary: Disconnect an account
+      description: Deletes the account's local emails, vector embeddings, and sync state, then clears its OAuth tokens. Irreversible.
+      operationId: disconnectAccount
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "204": { description: Disconnected }
+        "400":
+          description: Invalid account id format
+          content:
+            application/json:
+              schema: { type: string }
+        "404":
+          description: Account not found
+          content:
+            application/json:
+              schema: { type: string }
+    patch:
+      tags: [auth]
+      summary: Update account settings
+      operationId: patchAccount
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateAccountRequest" }
+      responses:
+        "204": { description: Updated }
+        "404":
+          description: Account not found
+          content:
+            application/json:
+              schema: { type: string }
+        "422":
+          description: Validation error
+          content:
+            application/json:
+              schema: { type: string }
+
+  /auth/accounts/{id}/status:
+    get:
+      tags: [auth]
+      summary: Account sync status
+      operationId: getAccountStatus
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Sync status
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AccountStatusResponse" }
+        "404":
+          description: Account not found
+          content:
+            application/json:
+              schema: { type: string }
+
+  /auth/accounts/{id}/remove-labels:
+    post:
+      tags: [auth]
+      summary: Remove all Emailibrium-created labels
+      description: Deletes every provider label whose name starts with the account's configured label prefix. Irreversible on the provider side.
+      operationId: removeAccountLabels
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Labels removed
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DangerZoneResponse" }
+        "404":
+          description: Account not found
+          content:
+            application/json:
+              schema: { type: string }
+
+  /auth/accounts/{id}/unarchive:
+    post:
+      tags: [auth]
+      summary: Move all archived messages back to inbox
+      operationId: unarchiveAccount
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Unarchive result
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DangerZoneResponse" }
+        "404":
+          description: Account not found
+          content:
+            application/json:
+              schema: { type: string }
+
+  # ---------------------------------------------------------------------------
+  # Cleanup (inbox cleanup wizard -- ADR-030)
+  # ---------------------------------------------------------------------------
+  /cleanup/plan:
+    post:
+      tags: [cleanup]
+      summary: Build and persist a cleanup plan
+      description: |
+        Builds a cleanup plan from the wizard's selections and saves it via the
+        plan repository with a 30-minute validity window (`valid_until`) --
+        this is a persisted plan, not a dry run. Use GET /cleanup/plan/{id} to
+        retrieve it and POST /cleanup/apply/{id} to execute it.
+      operationId: createCleanupPlan
+      parameters:
+        - name: userId
+          in: query
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: WizardSelections -- account ids and cleanup criteria chosen in the wizard UI
+              additionalProperties: true
+      responses:
+        "201":
+          description: Plan created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CreatePlanResponse" }
+        "400":
+          description: Missing/invalid userId
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CleanupErrorBody" }
+        "500":
+          description: Plan build or save failed
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CleanupErrorBody" }
+
+  /cleanup/plan/{id}:
+    get:
+      tags: [cleanup]
+      summary: Get a cleanup plan
+      operationId: getCleanupPlan
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: userId, in: query, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: The full CleanupPlan (totals, risk rollup, status, warnings)
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        "404":
+          description: Plan not found
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CleanupErrorBody" }
+        "500":
+          description: Load failed
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CleanupErrorBody" }
+    delete:
+      tags: [cleanup]
+      summary: Cancel a cleanup plan
+      operationId: cancelCleanupPlan
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: userId, in: query, required: true, schema: { type: string } }
+      responses:
+        "204": { description: Cancelled }
+        "500":
+          description: Cancel failed
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CleanupErrorBody" }
+
+  /cleanup/plan/{id}/operations:
+    get:
+      tags: [cleanup]
+      summary: List a plan's operations (paginated)
+      operationId: listCleanupOperations
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: cursor, in: query, required: false, schema: { type: integer, format: int64 } }
+        - {
+            name: limit,
+            in: query,
+            required: false,
+            schema: { type: integer, default: 100, maximum: 1000 },
+          }
+        - {
+            name: risk,
+            in: query,
+            required: false,
+            schema: { type: string, enum: [low, medium, high] },
+          }
+        - { name: action, in: query, required: false, schema: { type: string } }
+        - { name: accountId, in: query, required: false, schema: { type: string } }
+      responses:
+        "200":
+          description: Page of planned operations
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      { type: object, additionalProperties: true, description: PlannedOperation }
+                  nextCursor: { type: integer, format: int64, nullable: true }
+        "500":
+          description: List failed
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CleanupErrorBody" }
+
+  /cleanup/plan/{id}/sample:
+    get:
+      tags: [cleanup]
+      summary: Sample email ids from an operation group
+      description: Returns up to `n` (max 20) example email ids for a given operation source, for the review UI to preview before applying.
+      operationId: sampleCleanupOperations
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: source, in: query, required: true, schema: { type: string } }
+        - {
+            name: n,
+            in: query,
+            required: false,
+            schema: { type: integer, default: 5, maximum: 20 },
+          }
+      responses:
+        "200":
+          description: Sample email ids
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  emailIds:
+                    type: array
+                    items: { type: string }
+        "500":
+          description: Sample failed
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CleanupErrorBody" }
+
+  /cleanup/plan/{id}/refresh:
+    post:
+      tags: [cleanup]
+      summary: Refresh one account's rows in a plan
+      description: |
+        Rejected with 409 if an apply job is currently running for this plan
+        (refreshing mid-apply would corrupt the audit trail, per the DDD-008
+        addendum's race guard).
+      operationId: refreshCleanupPlanAccount
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: userId, in: query, required: true, schema: { type: string } }
+        - { name: accountId, in: query, required: true, schema: { type: string } }
+      responses:
+        "202": { description: Refresh accepted }
+        "409":
+          description: An apply job is already running for this plan
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CleanupErrorBody" }
+        "500":
+          description: Refresh failed
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CleanupErrorBody" }
+
+  /cleanup/plans:
+    get:
+      tags: [cleanup]
+      summary: List a user's cleanup plans
+      operationId: listCleanupPlans
+      parameters:
+        - { name: userId, in: query, required: true, schema: { type: string } }
+        - { name: status, in: query, required: false, schema: { type: string } }
+        - {
+            name: limit,
+            in: query,
+            required: false,
+            schema: { type: integer, default: 20, maximum: 100 },
+          }
+      responses:
+        "200":
+          description: Plan summaries
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      { type: object, additionalProperties: true, description: CleanupPlanSummary }
+        "500":
+          description: List failed
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CleanupErrorBody" }
+
+  /cleanup/apply/{id}:
+    post:
+      tags: [cleanup]
+      summary: Begin applying a cleanup plan
+      description: |
+        Starts an async apply job for the given plan, bounded by `riskMax`
+        (only operations at or below that risk level are applied). High/medium
+        risk operations must be explicitly acknowledged in the request body.
+        Returns a job id immediately; track progress via GET .../stream or
+        GET /cleanup/apply/{jobId}.
+      operationId: beginApplyCleanupPlan
+      parameters:
+        - {
+            name: id,
+            in: path,
+            required: true,
+            schema: { type: string, format: uuid },
+            description: The plan id,
+          }
+        - name: userId
+          in: query
+          required: true
+          schema: { type: string }
+        - name: riskMax
+          in: query
+          required: false
+          schema: { type: string, enum: [low, medium, high], default: low }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/BeginApplyRequest" }
+      responses:
+        "202":
+          description: Apply job started
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  jobId: { type: string, format: uuid }
+        "400":
+          description: Invalid riskMax value
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CleanupErrorBody" }
+        "404":
+          description: Plan not found
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CleanupErrorBody" }
+        "409":
+          description: Plan not in an applyable state (expired, wrong status, or drifted since it was built)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CleanupErrorBody" }
+    get:
+      tags: [cleanup]
+      summary: Get an apply job
+      operationId: getApplyJob
+      parameters:
+        - {
+            name: id,
+            in: path,
+            required: true,
+            schema: { type: string, format: uuid },
+            description: The job id,
+          }
+      responses:
+        "200":
+          description: CleanupApplyJob (state, counts, timestamps)
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        "404":
+          description: Job not found
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CleanupErrorBody" }
+
+  /cleanup/apply/{id}/stream:
+    get:
+      tags: [cleanup]
+      summary: SSE stream of apply job progress
+      description: |
+        Emits a snapshot of already-completed operations first, then live
+        events as the job progresses, and a terminal "Finished" event
+        (synthesized from the persisted job row if the job already finished
+        before this connection opened, so late subscribers still see the
+        outcome).
+      operationId: streamApplyJob
+      parameters:
+        - {
+            name: id,
+            in: path,
+            required: true,
+            schema: { type: string, format: uuid },
+            description: The job id,
+          }
+      responses:
+        "200":
+          description: SSE event stream
+          content:
+            text/event-stream:
+              schema: { type: string }
+
+  /cleanup/apply/{id}/cancel:
+    post:
+      tags: [cleanup]
+      summary: Cancel a running apply job
+      operationId: cancelApplyJob
+      parameters:
+        - {
+            name: id,
+            in: path,
+            required: true,
+            schema: { type: string, format: uuid },
+            description: The job id,
+          }
+      responses:
+        "204": { description: Cancelled }
+        "404":
+          description: Job not found
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CleanupErrorBody" }
+
+  /cleanup/telemetry:
+    post:
+      tags: [cleanup]
+      summary: Report review-screen telemetry
+      description: |
+        Accepts only the client-emitted "cleanup_plan_reviewed" event (counts
+        and timing only, no plan content); other event types return 400. The
+        raw `userId` in the request body is hashed server-side before any
+        logging or emission -- never persisted or logged in plaintext.
+      operationId: postCleanupTelemetry
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ReviewedTelemetryRequest" }
+      responses:
+        "202":
+          description: Accepted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { accepted: { type: boolean } }
+        "400":
+          description: Wrong event type or missing userId
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CleanupErrorBody" }
+
+  # ---------------------------------------------------------------------------
+  # Consent (AI consent + GDPR, ADR-017)
+  # ---------------------------------------------------------------------------
+  /consent:
+    get:
+      tags: [consent]
+      summary: List AI consent records
+      operationId: getConsent
+      responses:
+        "200":
+          description: Consent records
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  records:
+                    type: array
+                    items: { type: object, additionalProperties: true, description: ConsentRecord }
+        "500": { $ref: "#/components/responses/ServerError" }
+    post:
+      tags: [consent]
+      summary: Grant AI consent for a provider
+      description: Re-enables the corresponding generative provider in the router if the name maps to a known ProviderType.
+      operationId: grantConsent
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [provider, acknowledgment]
+              properties:
+                provider: { type: string }
+                acknowledgment: { type: string }
+      responses:
+        "200":
+          description: Granted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  provider: { type: string }
+                  status: { type: string, enum: [granted] }
+        "500": { $ref: "#/components/responses/ServerError" }
+
+  /consent/{provider}:
+    delete:
+      tags: [consent]
+      summary: Revoke AI consent for a provider
+      description: Disables the corresponding generative provider in the router if the name maps to a known ProviderType.
+      operationId: revokeConsent
+      parameters:
+        - { name: provider, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Revoked
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  provider: { type: string }
+                  status: { type: string, enum: [revoked] }
+        "400": { $ref: "#/components/responses/ServerError" }
+
+  /consent/audit:
+    get:
+      tags: [consent]
+      summary: Paginated AI consent audit log
+      operationId: getConsentAuditLog
+      parameters:
+        - { name: page, in: query, required: false, schema: { type: integer, default: 1 } }
+        - { name: per_page, in: query, required: false, schema: { type: integer, default: 20 } }
+      responses:
+        "200":
+          description: Audit page
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true, description: AuditPage }
+        "500": { $ref: "#/components/responses/ServerError" }
+
+  /consent/gdpr:
+    get:
+      tags: [consent]
+      summary: List all GDPR consent decisions
+      description: Returns the latest decision per consent type.
+      operationId: listGdprConsents
+      responses:
+        "200":
+          description: GDPR consent decisions
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  decisions:
+                    type: array
+                    items:
+                      { type: object, additionalProperties: true, description: ConsentDecision }
+        "500": { $ref: "#/components/responses/ServerError" }
+    post:
+      tags: [consent]
+      summary: Record a GDPR consent decision
+      description: |
+        `consent_type` must be one of cloud_ai, data_export, analytics, third_party.
+        Granting/revoking `cloud_ai` also toggles OpenAI/Anthropic/Gemini in the
+        generative router.
+      operationId: recordGdprConsent
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [consent_type, granted]
+              properties:
+                consent_type:
+                  { type: string, enum: [cloud_ai, data_export, analytics, third_party] }
+                granted: { type: boolean }
+      responses:
+        "200":
+          description: Decision recorded
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  decision:
+                    { type: object, additionalProperties: true, description: ConsentDecision }
+        "400":
+          description: Invalid consent_type
+          content:
+            application/json:
+              schema: { type: string }
+        "500": { $ref: "#/components/responses/ServerError" }
+
+  /consent/gdpr/{consent_type}:
+    get:
+      tags: [consent]
+      summary: Get the current effective GDPR consent for one type
+      operationId: getGdprConsent
+      parameters:
+        - { name: consent_type, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Consent decision
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  decision: { type: object, additionalProperties: true }
+        "404":
+          description: No decision recorded for this type
+          content:
+            application/json:
+              schema: { type: string }
+        "500": { $ref: "#/components/responses/ServerError" }
+
+  /consent/erase:
+    post:
+      tags: [consent]
+      summary: Erase all user data (GDPR Article 17)
+      description: Irreversible. Requires the literal confirmation token `"CONFIRM_ERASE_ALL_DATA"`.
+      operationId: eraseUserData
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [confirmation_token]
+              properties:
+                confirmation_token: { type: string, enum: [CONFIRM_ERASE_ALL_DATA] }
+      responses:
+        "200":
+          description: Erasure report
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  report: { type: object, additionalProperties: true, description: ErasureReport }
+        "400":
+          description: Missing or wrong confirmation token
+          content:
+            application/json:
+              schema: { type: string }
+        "500": { $ref: "#/components/responses/ServerError" }
+
+  /consent/export:
+    post:
+      tags: [consent]
+      summary: Export all user data (GDPR Article 20)
+      operationId: exportUserData
+      responses:
+        "200":
+          description: Full data export
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  export: { type: object, additionalProperties: true, description: UserDataExport }
+        "500": { $ref: "#/components/responses/ServerError" }
+
+  /consent/privacy-audit:
+    get:
+      tags: [consent]
+      summary: Paginated GDPR privacy audit log
+      operationId: getPrivacyAuditLog
+      parameters:
+        - { name: page, in: query, required: false, schema: { type: integer, default: 1 } }
+        - { name: per_page, in: query, required: false, schema: { type: integer, default: 20 } }
+      responses:
+        "200":
+          description: Privacy audit page
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true, description: PrivacyAuditPage }
+        "500": { $ref: "#/components/responses/ServerError" }
+
+  # ---------------------------------------------------------------------------
+  # Evaluation (search/clustering quality, A/B tests, IR metrics)
+  # ---------------------------------------------------------------------------
+  /evaluation/search-quality:
+    get:
+      tags: [evaluation]
+      summary: IR quality metrics from recent search interactions
+      description: Treats clicked results as "relevant" and reconstructs the retrieved list from interaction records to compute Recall@K, Precision@K, NDCG@K, and MRR.
+      operationId: getSearchQuality
+      parameters:
+        - { name: k, in: query, required: false, schema: { type: integer, default: 10 } }
+        - {
+            name: limit,
+            in: query,
+            required: false,
+            schema: { type: integer, default: 100 },
+            description: Number of recent interactions to evaluate,
+          }
+      responses:
+        "200":
+          description: Search quality metrics
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  recall_at_k: { type: number, format: float }
+                  precision_at_k: { type: number, format: float }
+                  ndcg_at_k: { type: number, format: float }
+                  mrr: { type: number, format: float }
+                  k: { type: integer }
+                  interactions_evaluated: { type: integer }
+        "500": { $ref: "#/components/responses/ServerError" }
+
+  /evaluation/clustering-quality:
+    get:
+      tags: [evaluation]
+      summary: Silhouette score on current cluster assignments
+      operationId: getClusteringQuality
+      responses:
+        "200":
+          description: Clustering quality metrics
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  silhouette_score: { type: number, format: float }
+                  cluster_count: { type: integer }
+                  total_emails: { type: integer }
+
+  /evaluation/report:
+    get:
+      tags: [evaluation]
+      summary: Aggregated evaluation report
+      description: Combines clustering quality (ARI, silhouette), classification quality (macro-F1), and subscription-detection quality (precision/recall/F1) in one response.
+      operationId: getEvaluationReport
+      responses:
+        "200":
+          description: Aggregated report (all fields optional -- null when there's not enough data)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ari: { type: number, format: float, nullable: true }
+                  silhouette: { type: number, format: float, nullable: true }
+                  classification_f1: { type: number, format: float, nullable: true }
+                  classification_accuracy: { type: number, format: float, nullable: true }
+                  subscription_precision: { type: number, format: float, nullable: true }
+                  subscription_recall: { type: number, format: float, nullable: true }
+                  subscription_f1: { type: number, format: float, nullable: true }
+        "500": { $ref: "#/components/responses/ServerError" }
+
+  /evaluation/ab-tests:
+    get:
+      tags: [evaluation]
+      summary: List A/B tests
+      operationId: listAbTests
+      parameters:
+        - {
+            name: status,
+            in: query,
+            required: false,
+            schema: { type: string, enum: [running, concluded, cancelled] },
+          }
+      responses:
+        "200":
+          description: A/B tests
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { type: object, additionalProperties: true, description: ABTest }
+    post:
+      tags: [evaluation]
+      summary: Create an A/B test
+      operationId: createAbTest
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, variant_a, variant_b]
+              properties:
+                name: { type: string }
+                variant_a: { type: object, additionalProperties: true, description: VariantConfig }
+                variant_b: { type: object, additionalProperties: true, description: VariantConfig }
+                traffic_split: { type: number, format: float, default: 0.5 }
+      responses:
+        "200":
+          description: Created test
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true, description: ABTest }
+        "500": { $ref: "#/components/responses/ServerError" }
+
+  /evaluation/ab-tests/{test_id}:
+    get:
+      tags: [evaluation]
+      summary: Get a single A/B test
+      operationId: getAbTest
+      parameters:
+        - { name: test_id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: A/B test
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        "404":
+          description: Test not found
+          content:
+            application/json:
+              schema: { type: string }
+
+  /evaluation/ab-tests/{test_id}/conclude:
+    post:
+      tags: [evaluation]
+      summary: Conclude an A/B test
+      operationId: concludeAbTest
+      parameters:
+        - { name: test_id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Test summary
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true, description: ABTestSummary }
+        "500": { $ref: "#/components/responses/ServerError" }
+
+  /evaluation/ab-tests/{test_id}/observe:
+    post:
+      tags: [evaluation]
+      summary: Record an A/B test observation
+      operationId: recordAbObservation
+      parameters:
+        - { name: test_id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [variant, mrr, precision, recall, ndcg]
+              properties:
+                variant: { type: string }
+                mrr: { type: number, format: double }
+                precision: { type: number, format: double }
+                recall: { type: number, format: double }
+                ndcg: { type: number, format: double }
+      responses:
+        "204": { description: Recorded }
+        "500": { $ref: "#/components/responses/ServerError" }
+
+  /evaluation/ir-metrics:
+    post:
+      tags: [evaluation]
+      summary: Compute IR metrics from raw inputs
+      description: Stateless computation over caller-supplied relevance data (MRR, Precision@K, Recall@K, NDCG) -- doesn't read from the DB.
+      operationId: computeIrMetrics
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                relevant_positions:
+                  type: array
+                  items: { type: integer }
+                  description: 1-based positions of relevant results
+                relevant_in_topk: { type: integer, default: 0 }
+                total_relevant: { type: integer, default: 0 }
+                k: { type: integer, default: 10 }
+                relevance_scores:
+                  type: array
+                  items: { type: number, format: double }
+                ideal_scores:
+                  type: array
+                  items: { type: number, format: double }
+      responses:
+        "200":
+          description: Computed metrics
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  mrr: { type: number, format: double }
+                  precision_at_k: { type: number, format: double }
+                  recall_at_k: { type: number, format: double }
+                  ndcg: { type: number, format: double }
+
+  # ---------------------------------------------------------------------------
+  # Clustering (topic clusters -- S3-01, S3-02)
+  # ---------------------------------------------------------------------------
+  /clustering/clusters:
+    get:
+      operationId: listClusters
+      tags: [clustering]
+      summary: List all topic clusters
+      description: backend/src/api/clustering.rs::list_clusters
+      responses:
+        "200":
+          description: Clusters with top terms and representative emails
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClusterListResponse"
+        "500":
+          $ref: "#/components/responses/ServerError"
+
+  /clustering/clusters/{id}:
+    get:
+      operationId: getCluster
+      tags: [clustering]
+      summary: Get cluster details, including every member email ID
+      description: backend/src/api/clustering.rs::get_cluster
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Cluster detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClusterDetailResponse"
+        "404":
+          description: Cluster not found
+        "500":
+          $ref: "#/components/responses/ServerError"
+
+  /clustering/status:
+    get:
+      operationId: getClusteringStatus
+      tags: [clustering]
+      summary: Clustering readiness and in-progress state
+      description: |
+        backend/src/api/clustering.rs::clustering_status. Response is an inline JSON
+        object, not a named struct in the handler.
+      responses:
+        "200":
+          description: Clustering status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  clusterCount: { type: integer }
+                  totalClusteredEmails: { type: integer }
+                  isClustering: { type: boolean }
+                  isIngesting: { type: boolean }
+                  phase:
+                    type: string
+                    nullable: true
+                    description: Only present (non-null) while isIngesting is true
+
+  /clustering/recluster:
+    post:
+      operationId: recluster
+      tags: [clustering]
+      summary: Trigger a full recluster of the corpus
+      description: backend/src/api/clustering.rs::recluster
+      responses:
+        "200":
+          description: Reclustering report
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReclusterResponse"
+        "500":
+          $ref: "#/components/responses/ServerError"
+
+  /clustering/clusters/{id}/pin:
+    post:
+      operationId: pinCluster
+      tags: [clustering]
+      summary: Pin a cluster so it survives reclustering
+      description: backend/src/api/clustering.rs::pin_cluster
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Pin confirmation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PinResponse"
+        "404":
+          description: Cluster not found
+        "500":
+          $ref: "#/components/responses/ServerError"
+
+  /clustering/clusters/{id}/unpin:
+    post:
+      operationId: unpinCluster
+      tags: [clustering]
+      summary: Unpin a cluster
+      description: |
+        backend/src/api/clustering.rs::unpin_cluster. Verified as of this writing:
+        the handler confirms the cluster exists and returns pinned:false, but the
+        underlying ClusterEngine::unpin_cluster has not landed yet (per the handler's
+        own comment) -- calling this does not actually clear the pinned flag in
+        storage. Documented as-is rather than as a working unpin.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Response shape matches pin (pinned is always false); does not yet persist
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PinResponse"
+        "404":
+          description: Cluster not found
+
+  # ---------------------------------------------------------------------------
+  # Rules (rules engine -- R-03)
+  # ---------------------------------------------------------------------------
+  /rules:
+    get:
+      operationId: listRules
+      tags: [rules]
+      summary: List all rules
+      description: backend/src/api/rules.rs::list_rules
+      responses:
+        "200":
+          description: All rules
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/RuleResponse" }
+    post:
+      operationId: createRule
+      tags: [rules]
+      summary: Create a rule
+      description: backend/src/api/rules.rs::create_rule
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateRuleRequest"
+      responses:
+        "201":
+          description: Rule created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RuleResponse"
+        "400":
+          description: Invalid natural-language/condition payload, or rule failed validation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RulesErrorResponse"
+
+  /rules/suggestions:
+    get:
+      operationId: getRuleSuggestions
+      tags: [rules]
+      summary: Sender-pattern-driven rule suggestions
+      description: backend/src/api/rules.rs::get_suggestions
+      parameters:
+        - name: offset
+          in: query
+          schema: { type: integer, default: 0 }
+          description: Number of already-seen suggestions to skip
+        - name: limit
+          in: query
+          schema: { type: integer }
+          description: Defaults to config rules.suggestions_page_size
+      responses:
+        "200":
+          description: Suggested rules
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/RuleSuggestion" }
+
+  /rules/{id}:
+    get:
+      operationId: getRule
+      tags: [rules]
+      summary: Get a single rule
+      description: backend/src/api/rules.rs::get_rule
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Rule
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RuleResponse"
+        "404":
+          description: Rule not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RulesErrorResponse"
+    put:
+      operationId: updateRule
+      tags: [rules]
+      summary: Partially update a rule
+      description: backend/src/api/rules.rs::update_rule -- every field is optional and only present fields are applied
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateRuleRequest"
+      responses:
+        "200":
+          description: Updated rule
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RuleResponse"
+        "400":
+          description: Rule failed validation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RulesErrorResponse"
+        "404":
+          description: Rule not found
+    delete:
+      operationId: deleteRule
+      tags: [rules]
+      summary: Delete a rule
+      description: backend/src/api/rules.rs::delete_rule_handler
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "204":
+          description: Deleted
+        "404":
+          description: Rule not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RulesErrorResponse"
+
+  /rules/{id}/run:
+    post:
+      operationId: runRule
+      tags: [rules]
+      summary: Apply a single rule to the current inbox now
+      description: |
+        backend/src/api/rules.rs::run_rule. Evaluates the rule against every active
+        (non-trash, non-spam, non-deleted) email, calls the connected provider to apply
+        each action, updates local DB state, and persists an incremented match_count +
+        last_run_at back onto the rule row. Provider-call failures are logged and do not
+        abort the run -- executed_count reflects local DB updates only.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Run summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RunRuleResponse"
+        "404":
+          description: Rule not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RulesErrorResponse"
+
+  /rules/validate:
+    post:
+      operationId: validateRule
+      tags: [rules]
+      summary: Validate rule conditions/actions without saving
+      description: |
+        backend/src/api/rules.rs::validate_rule. Runs single-rule validation plus,
+        when existing rules are loadable, cross-rule checks including loop detection.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ValidateRequest"
+      responses:
+        "200":
+          description: Validation result (200 even when invalid=true)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationResponse"
+
+  /rules/test:
+    post:
+      operationId: testRule
+      tags: [rules]
+      summary: Test rule conditions against the current inbox without saving or applying
+      description: |
+        backend/src/api/rules.rs::test_rule. conditions are accepted as raw JSON
+        (no `type` discriminant required) and normalized via json_parser; entries that
+        fail to parse are silently skipped rather than rejecting the request.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TestRuleRequest"
+      responses:
+        "200":
+          description: Match count and up to 5 sample matches
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TestResponse"
+        "500":
+          description: Failed to evaluate against inbox
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RulesErrorResponse"
+
+  # ---------------------------------------------------------------------------
+  # Interactions (search/click/feedback tracking -- S3-08)
+  # ---------------------------------------------------------------------------
+  /interactions/search:
+    post:
+      operationId: recordSearchInteraction
+      tags: [interactions]
+      summary: Record a search query as a trackable interaction
+      description: backend/src/api/interactions.rs::record_search. All fields snake_case (no rename_all).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [query]
+              properties:
+                query: { type: string }
+      responses:
+        "200":
+          description: The new interaction's ID, to reference from click/feedback calls
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  interaction_id: { type: string }
+        "500":
+          $ref: "#/components/responses/ServerError"
+
+  /interactions/{id}/click:
+    post:
+      operationId: recordInteractionClick
+      tags: [interactions]
+      summary: Record a click on a search result
+      description: backend/src/api/interactions.rs::record_click
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+          description: The interaction_id returned by POST /interactions/search
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email_id, rank]
+              properties:
+                email_id: { type: string }
+                rank: { type: integer }
+      responses:
+        "200":
+          description: Recorded
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+        "404":
+          description: Interaction not found
+        "500":
+          $ref: "#/components/responses/ServerError"
+
+  /interactions/{id}/feedback:
+    post:
+      operationId: recordInteractionFeedback
+      tags: [interactions]
+      summary: Record relevance feedback on a search result
+      description: backend/src/api/interactions.rs::record_feedback
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+          description: The interaction_id returned by POST /interactions/search
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email_id, feedback]
+              properties:
+                email_id: { type: string }
+                feedback: { type: string }
+      responses:
+        "200":
+          description: Recorded
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+        "404":
+          description: Interaction not found
+        "500":
+          $ref: "#/components/responses/ServerError"
+
+  /interactions/recent:
+    get:
+      operationId: getRecentInteractions
+      tags: [interactions]
+      summary: List recent search interactions
+      description: backend/src/api/interactions.rs::recent_interactions
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, default: 50 }
+      responses:
+        "200":
+          description: Recent interactions
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  interactions:
+                    type: array
+                    items: { $ref: "#/components/schemas/InteractionItem" }
+                  total: { type: integer }
+        "500":
+          $ref: "#/components/responses/ServerError"
+
+  # ---------------------------------------------------------------------------
+  # Learning (relevance learning -- S3-03..S3-06, SONA)
+  # ---------------------------------------------------------------------------
+  /learning/feedback:
+    post:
+      operationId: submitLearningFeedback
+      tags: [learning]
+      summary: Submit user feedback for relevance learning
+      description: |
+        backend/src/api/learning.rs::submit_feedback. All fields snake_case (no
+        rename_all). action is internally tagged (`type`, snake_case variant names:
+        reclassify, move_to_group, star, reply, archive, delete) -- distinct from the
+        rules module's RuleCondition/RuleAction tagging, which is camelCase. A
+        reclassify action also immediately persists the new category to the emails
+        table, ahead of and independent from the learning engine's own update.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FeedbackRequest"
+      responses:
+        "200":
+          description: Feedback outcome
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FeedbackResponse"
+        "500":
+          $ref: "#/components/responses/ServerError"
+
+  /learning/metrics:
+    get:
+      operationId: getLearningMetrics
+      tags: [learning]
+      summary: Relevance-learning counters
+      description: backend/src/api/learning.rs::get_metrics
+      responses:
+        "200":
+          description: Metrics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MetricsResponse"
+
+  /learning/consolidate:
+    post:
+      operationId: consolidateLearning
+      tags: [learning]
+      summary: Trigger session consolidation (normally run hourly)
+      description: backend/src/api/learning.rs::consolidate
+      responses:
+        "200":
+          description: Consolidation report
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConsolidateResponse"
+        "500":
+          $ref: "#/components/responses/ServerError"
+
+  /learning/session:
+    get:
+      operationId: getLearningSessionState
+      tags: [learning]
+      summary: Current SONA Tier-2 session state
+      description: backend/src/api/learning.rs::get_session_state
+      responses:
+        "200":
+          description: Session state, including a diagnostic rerank boost against a zero vector
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionStateResponse"
+
+  # ---------------------------------------------------------------------------
+  # Wipe (remote wipe -- ADR-008)
+  # ---------------------------------------------------------------------------
+  /wipe/user/{user_id}:
+    post:
+      operationId: wipeUserData
+      tags: [wipe]
+      summary: Wipe all data for a specific user
+      description: backend/src/api/wipe.rs::wipe_user. user_id restricted to alphanumeric, '-', '_'.
+      parameters:
+        - name: user_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Wipe result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WipeResponse"
+        "400":
+          description: Empty or invalid user_id
+        "500":
+          $ref: "#/components/responses/ServerError"
+
+  /wipe/vectors:
+    post:
+      operationId: wipeVectors
+      tags: [wipe]
+      summary: Wipe all vector store data, keeping config and metadata
+      description: backend/src/api/wipe.rs::wipe_vectors
+      responses:
+        "200":
+          description: Wipe result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WipeResponse"
+        "500":
+          $ref: "#/components/responses/ServerError"
+
+  /wipe/all:
+    post:
+      operationId: wipeAll
+      tags: [wipe]
+      summary: Full platform data wipe (admin only)
+      description: |
+        backend/src/api/wipe.rs::wipe_all. Requires confirmationToken to equal the
+        literal string "CONFIRM_FULL_WIPE" or the request is rejected with 400.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [confirmation_token]
+              properties:
+                confirmation_token:
+                  type: string
+                  description: Must be exactly "CONFIRM_FULL_WIPE"
+      responses:
+        "200":
+          description: Wipe result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WipeResponse"
+        "400":
+          description: Missing or incorrect confirmation_token
+        "500":
+          $ref: "#/components/responses/ServerError"
+
+  /wipe/scheduled:
+    get:
+      operationId: listScheduledWipes
+      tags: [wipe]
+      summary: List all pending scheduled wipes
+      description: backend/src/api/wipe.rs::list_scheduled
+      responses:
+        "200":
+          description: Scheduled wipes
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScheduledWipesResponse"
+
+  /wipe/scheduled/{user_id}:
+    delete:
+      operationId: cancelScheduledWipe
+      tags: [wipe]
+      summary: Cancel a pending scheduled wipe for a user
+      description: backend/src/api/wipe.rs::cancel_scheduled
+      parameters:
+        - name: user_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Cancellation result (200 whether or not a wipe existed for this user -- check `cancelled`)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CancelWipeResponse"
+        "400":
+          description: Empty user_id
+
+  # ---------------------------------------------------------------------------
+  # Backup (vector backup -- ADR-003, S1-04)
+  # ---------------------------------------------------------------------------
+  /backup/trigger:
+    post:
+      operationId: triggerBackup
+      tags: [backup]
+      summary: Manually trigger a full backup of all vectors
+      description: backend/src/api/backup.rs::trigger_backup
+      responses:
+        "200":
+          description: Backup result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BackupTriggerResponse"
+        "500":
+          $ref: "#/components/responses/ServerError"
+
+  /backup/stats:
+    get:
+      operationId: getBackupStats
+      tags: [backup]
+      summary: Backup statistics
+      description: backend/src/api/backup.rs::backup_stats -- queried live from the vector_backups table.
+      responses:
+        "200":
+          description: Backup stats
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BackupStatsResponse"
+        "500":
+          $ref: "#/components/responses/ServerError"
+
+  /backup/restore:
+    post:
+      operationId: restoreBackup
+      tags: [backup]
+      summary: Restore vectors from the SQLite backup table
+      description: backend/src/api/backup.rs::restore_backup -- re-inserts every restored document into the live vector store.
+      responses:
+        "200":
+          description: Restore result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RestoreResponse"
+        "500":
+          $ref: "#/components/responses/ServerError"
+
+  # ---------------------------------------------------------------------------
+  # Unsubscribe (bulk unsubscribe -- R-04)
+  # ---------------------------------------------------------------------------
+  /unsubscribe:
+    post:
+      operationId: batchUnsubscribe
+      tags: [unsubscribe]
+      summary: Execute a batch unsubscribe (max 100 targets)
+      description: backend/src/api/unsubscribe.rs::batch_unsubscribe
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [subscriptions]
+              properties:
+                subscriptions:
+                  type: array
+                  maxItems: 100
+                  items: { $ref: "#/components/schemas/SubscriptionTarget" }
+      responses:
+        "200":
+          description: |
+            Batch result, flattened (serde flatten) -- fields appear at the top
+            level, not nested under a "result" key.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BatchResult"
+        "400":
+          description: Empty or oversized subscriptions list
+        "503":
+          description: Unsubscribe service not available in this deployment
+
+  /unsubscribe/undo/{batch_id}:
+    post:
+      operationId: undoUnsubscribeBatch
+      tags: [unsubscribe]
+      summary: Undo a previous batch unsubscribe (5-minute window)
+      description: backend/src/api/unsubscribe.rs::undo_batch
+      parameters:
+        - name: batch_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Undo confirmation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UndoResponse"
+        "400":
+          description: Empty batch_id
+        "404":
+          description: No undo entry found for this batch_id
+        "410":
+          description: Undo window (5 minutes) has expired
+
+  /unsubscribe/preview:
+    get:
+      operationId: previewUnsubscribeQuery
+      tags: [unsubscribe]
+      summary: Preview unsubscribe outcomes for senders given as a query string (no engagement data)
+      description: backend/src/api/unsubscribe.rs::preview
+      parameters:
+        - name: senders
+          in: query
+          schema: { type: string }
+          description: Comma-separated sender addresses
+      responses:
+        "200":
+          description: Previews
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PreviewResponse"
+        "503":
+          description: Unsubscribe service not available in this deployment
+    post:
+      operationId: previewUnsubscribeBody
+      tags: [unsubscribe]
+      summary: Preview unsubscribe outcomes with full subscription targets and engagement rates
+      description: backend/src/api/unsubscribe.rs::preview_post
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [subscriptions]
+              properties:
+                subscriptions:
+                  type: array
+                  items: { $ref: "#/components/schemas/SubscriptionTarget" }
+                engagement_rates:
+                  type: object
+                  additionalProperties: { type: number, format: float }
+                  description: "Sender -> engagement rate (0.0-1.0), field name NOT camelCase (top struct has no rename_all)"
+      responses:
+        "200":
+          description: Previews
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PreviewResponse"
+        "503":
+          description: Unsubscribe service not available in this deployment
+
+  # ---------------------------------------------------------------------------
+  # Vectors -- remainder (models, quantization, hybrid search; ADR-002/ADR-007)
+  # ---------------------------------------------------------------------------
+  /vectors/search/hybrid:
+    post:
+      operationId: hybridSearch
+      tags: [vectors]
+      summary: Combined semantic + keyword (FTS) search with SONA re-ranking
+      description: |
+        backend/src/api/vectors.rs::hybrid_search. mode selects "semantic", "keyword",
+        or defaults to "hybrid" for any other/missing value. Response reuses the same
+        SearchResponse/SearchResultItem shape as GET /vectors/search.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [query]
+              properties:
+                query: { type: string }
+                mode:
+                  type: string
+                  enum: [hybrid, semantic, keyword]
+                  default: hybrid
+                limit: { type: integer, nullable: true }
+                filters:
+                  type: object
+                  nullable: true
+                  additionalProperties: true
+      responses:
+        "200":
+          description: Search results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SearchResponse"
+        "500":
+          $ref: "#/components/responses/ServerError"
+
+  /vectors/quantization:
+    get:
+      operationId: getQuantizationStatus
+      tags: [vectors]
+      summary: Current and recommended vector quantization tier, with memory estimates
+      description: backend/src/api/vectors.rs::quantization_status (ADR-007)
+      responses:
+        "200":
+          description: Quantization status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QuantizationStatusResponse"
+        "500":
+          $ref: "#/components/responses/ServerError"
+
+  /vectors/models:
+    get:
+      operationId: listEmbeddingModels
+      tags: [vectors]
+      summary: List known embedding models and the currently active one
+      description: backend/src/api/vectors.rs::list_models (ADR-002)
+      responses:
+        "200":
+          description: Model list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModelsResponse"
+
+  # ---------------------------------------------------------------------------
+  # Ingestion -- remainder (checkpoint/resume, embedding status, poll, progress)
+  # ---------------------------------------------------------------------------
+  /ingestion/lock-status:
+    get:
+      operationId: getIngestionLockStatus
+      tags: [ingestion]
+      summary: Check whether a pipeline is currently running for an account
+      description: |
+        backend/src/api/ingestion.rs::lock_status. Response is the account's
+        PipelineActivity if a pipeline is running, or JSON null if idle -- shape is
+        determined by PipelineActivity's own Serialize impl, not modeled further here.
+      parameters:
+        - name: account_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: PipelineActivity, or null when idle
+          content:
+            application/json:
+              schema:
+                type: object
+                nullable: true
+                additionalProperties: true
+
+  /ingestion/resume-checkpoint:
+    post:
+      operationId: resumeFromCheckpoint
+      tags: [ingestion]
+      summary: Resume ingestion from the last failure checkpoint for an account
+      description: backend/src/api/ingestion.rs::resume_from_checkpoint
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [account_id]
+              properties:
+                account_id: { type: string }
+      responses:
+        "200":
+          description: Job resumed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JobResponse"
+        "404":
+          description: No incomplete checkpoint found for this account
+        "500":
+          $ref: "#/components/responses/ServerError"
+
+  /ingestion/checkpoint:
+    get:
+      operationId: getIngestionCheckpoint
+      tags: [ingestion]
+      summary: Get the latest ingestion checkpoint for an account
+      description: |
+        backend/src/api/ingestion.rs::get_checkpoint. Response shape is the pipeline's
+        internal checkpoint type's own Serialize impl, not modeled further here.
+      parameters:
+        - name: account_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Checkpoint
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "404":
+          description: No checkpoint found for this account
+        "500":
+          $ref: "#/components/responses/ServerError"
+
+  /ingestion/embedding-status:
+    get:
+      operationId: getEmbeddingStatus
+      tags: [ingestion]
+      summary: Real embedding-status counts across the emails table
+      description: backend/src/api/ingestion.rs::embedding_status
+      responses:
+        "200":
+          description: Embedding status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmbeddingStatusResponse"
+        "500":
+          $ref: "#/components/responses/ServerError"
+
+  /ingestion/poll-status:
+    get:
+      operationId: getPollStatus
+      tags: [ingestion]
+      summary: Current state of the background email poller
+      description: |
+        backend/src/api/ingestion.rs::poll_status. Response is
+        email::poll_scheduler::PollStatus's own Serialize impl, not modeled further here.
+      responses:
+        "200":
+          description: Poll status
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "503":
+          description: Poll scheduler not initialized in this deployment
+
+  /ingestion/poll-toggle:
+    post:
+      operationId: togglePoll
+      tags: [ingestion]
+      summary: Enable or disable background polling
+      description: backend/src/api/ingestion.rs::poll_toggle
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [enabled]
+              properties:
+                enabled: { type: boolean }
+      responses:
+        "200":
+          description: New state
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  enabled: { type: boolean }
+        "503":
+          description: Poll scheduler not initialized in this deployment
+
+  /ingestion/progress:
+    get:
+      operationId: getIngestionProgress
+      tags: [ingestion]
+      summary: Point-in-time JSON snapshot of ingestion progress (poll alternative to the SSE /status stream)
+      description: |
+        backend/src/api/ingestion.rs::ingestion_progress_json. Checks the pipeline's
+        own job state first (embedding/categorizing/etc), then falls back to the
+        broadcast cache (covers the syncing phase, which runs before the pipeline
+        creates a job). Response is an inline JSON object, not a named struct.
+      responses:
+        "200":
+          description: Progress snapshot
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  active: { type: boolean }
+                  jobId: { type: string }
+                  phase: { type: string, nullable: true }
+                  total: { type: integer }
+                  processed: { type: integer }
+                  embedded: { type: integer }
+                  categorized: { type: integer }
+                  failed: { type: integer }
+                  etaSeconds: { type: integer, nullable: true }
+                  emailsPerSecond: { type: number, format: float, nullable: true }
+
+  /ingestion/backfill-progress:
+    get:
+      operationId: getBackfillProgress
+      tags: [ingestion]
+      summary: Poll current LLM categorization-backfill state
+      description: backend/src/api/ingestion.rs::backfill_progress_json. Response is an inline JSON object, not a named struct.
+      responses:
+        "200":
+          description: Backfill progress
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  active: { type: boolean }
+                  total: { type: integer }
+                  categorized: { type: integer }
+                  failed: { type: integer }
+
+  # ---------------------------------------------------------------------------
+  # Insights -- remainder (temporal, topics)
+  # ---------------------------------------------------------------------------
+  /insights/temporal:
+    get:
+      operationId: getTemporalInsights
+      tags: [insights]
+      summary: Temporal analytics -- daily volume, category-per-day, day-of-week, hour-of-day, all over the last 90 days
+      description: backend/src/api/insights.rs::temporal_insights
+      responses:
+        "200":
+          description: Temporal insights
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TemporalInsights"
+        "500":
+          $ref: "#/components/responses/ServerError"
+
+  /insights/topics:
+    get:
+      operationId: getTopicClusters
+      tags: [insights]
+      summary: Topic clusters grouped by AI-assigned category
+      description: backend/src/api/insights.rs::topic_clusters
+      responses:
+        "200":
+          description: Topic clusters
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/TopicCluster" }
+        "500":
+          $ref: "#/components/responses/ServerError"
 
   # ---------------------------------------------------------------------------
   # Ingestion
@@ -251,17 +2983,14 @@ paths:
           description: Filter events to a specific ingestion job
       responses:
         "200":
-          description: SSE event stream
+          description: |
+            SSE event stream. The wire format is `event: progress` followed by a
+            `data:` line, e.g. `data: {"job_id":"...","total":100,"processed":50,...}` —
+            each `data:` line's JSON payload is one IngestionProgress.
           content:
             text/event-stream:
               schema:
-                type: string
-                description: |
-                  Each event has the format:
-                  ```
-                  event: progress
-                  data: {"job_id":"...","total":100,"processed":50,...}
-                  ```
+                $ref: "#/components/schemas/IngestionProgress"
 
   /ingestion/start:
     post:
@@ -364,6 +3093,491 @@ paths:
                 $ref: "#/components/schemas/ErrorResponse"
 
   # ---------------------------------------------------------------------------
+  # AI (model management, chat, provider control)
+  # ---------------------------------------------------------------------------
+  /ai/models:
+    get:
+      tags: [ai]
+      summary: List embedding model statuses
+      description: Lists all known embedding models with download/active status relative to the current active model and cache directory.
+      operationId: listModels
+      responses:
+        "200":
+          description: Model statuses
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ModelStatus"
+
+  /ai/status:
+    get:
+      tags: [ai]
+      summary: AI subsystem status
+      description: Overall status of the embedding pipeline -- active model, dimensions, provider, availability, and whether a re-index is in progress.
+      operationId: getAiStatus
+      responses:
+        "200":
+          description: AI subsystem status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AiStatusResponse"
+
+  /ai/reindex-status:
+    get:
+      tags: [ai]
+      summary: Re-indexing progress
+      description: Progress of any in-flight embedding re-index (triggered via /ai/reembed).
+      operationId: getReindexStatus
+      responses:
+        "200":
+          description: Re-index status snapshot
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReindexStatus"
+
+  /ai/providers:
+    get:
+      tags: [ai]
+      summary: List generative providers
+      description: Lists all registered generative providers (builtin, ollama, cloud, openrouter, ...) with priority, enabled, and availability status.
+      operationId: listAiProviders
+      responses:
+        "200":
+          description: Registered providers
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  providers:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ProviderStatus"
+
+  /ai/providers/{provider}/disable:
+    post:
+      tags: [ai]
+      summary: Disable a generative provider at runtime
+      operationId: disableAiProvider
+      parameters:
+        - name: provider
+          in: path
+          required: true
+          schema: { type: string }
+          description: Provider type (see ProviderType enum -- onnx, built_in, ollama, open_ai, anthropic, gemini, rule_based, open_router, none)
+      responses:
+        "200":
+          description: Provider disabled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderActionResponse"
+        "400":
+          description: Unknown provider type
+          content:
+            application/json:
+              schema: { type: string }
+
+  /ai/providers/{provider}/enable:
+    post:
+      tags: [ai]
+      summary: Re-enable a generative provider at runtime
+      operationId: enableAiProvider
+      parameters:
+        - name: provider
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Provider enabled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderActionResponse"
+        "400":
+          description: Unknown provider type
+          content:
+            application/json:
+              schema: { type: string }
+
+  /ai/chat:
+    post:
+      tags: [ai]
+      summary: Send a chat message (JSON response)
+      description: |
+        Sends a message to the AI email assistant and returns the full reply as JSON.
+        For an incremental/streamed reply use POST /ai/chat/stream instead. Requires
+        a generative model to be configured (503 if none is available).
+      operationId: sendChatMessage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChatRequest"
+      responses:
+        "200":
+          description: Assistant reply
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChatResponse"
+        "503":
+          description: Chat service not available (no generative model configured)
+          content:
+            application/json:
+              schema: { type: string }
+
+  /ai/chat/stream:
+    post:
+      tags: [ai]
+      summary: Send a chat message (SSE stream)
+      description: |
+        Same request as POST /ai/chat, but streams the reply as Server-Sent Events.
+        Event `data` payloads are JSON with a `type` field: "token" (incremental text),
+        "tool_call"/"tool_result" (when a tool-calling provider handles the turn, ADR-028),
+        "confirmation" (a tool call awaiting user approval via /ai/chat/confirm), "done"
+        (terminal, carries sessionId), or "error".
+      operationId: streamChatMessage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChatRequest"
+      responses:
+        "200":
+          description: SSE event stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        "503":
+          description: Chat service not available
+          content:
+            application/json:
+              schema: { type: string }
+
+  /ai/chat/confirm:
+    post:
+      tags: [ai]
+      summary: Approve or reject a pending tool call
+      description: When the orchestrator emits a "confirmation" SSE event, the client calls this to approve or reject executing that tool.
+      operationId: confirmToolCall
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConfirmToolCallRequest"
+      responses:
+        "200":
+          description: Confirmation recorded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConfirmToolCallResponse"
+        "404":
+          description: No pending confirmation with that id
+          content:
+            application/json:
+              schema: { type: string }
+
+  /ai/chat/sessions:
+    get:
+      tags: [ai]
+      summary: List active chat sessions
+      operationId: listChatSessions
+      responses:
+        "200":
+          description: Chat session summaries
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/SessionSummary"
+        "503":
+          description: Chat service not available
+          content:
+            application/json:
+              schema: { type: string }
+
+  /ai/chat/sessions/{id}:
+    delete:
+      tags: [ai]
+      summary: Delete a chat session
+      operationId: deleteChatSession
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Deletion result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeleteSessionResponse"
+        "503":
+          description: Chat service not available
+          content:
+            application/json:
+              schema: { type: string }
+
+  /ai/model-catalog:
+    get:
+      tags: [ai]
+      summary: List built-in LLM models with hardware recommendations
+      description: Reads config/models-llm.yaml's builtin provider catalog and annotates each model with whether it's cached and whether it fits available RAM.
+      operationId: getModelCatalog
+      responses:
+        "200":
+          description: Model catalog entries
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ModelCatalogEntry"
+
+  /ai/embedding-catalog:
+    get:
+      tags: [ai]
+      summary: List embedding models grouped by provider
+      description: Reads the embedding model catalog (config/models-embedding.yaml), filtered to models that fit available RAM.
+      operationId: getEmbeddingCatalog
+      responses:
+        "200":
+          description: Embedding catalog entries
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/EmbeddingCatalogEntry"
+
+  /ai/system-info:
+    get:
+      tags: [ai]
+      summary: System hardware info for model selection
+      operationId: getSystemInfo
+      responses:
+        "200":
+          description: Hardware info (RAM available for models, etc.)
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                description: See backend/src/vectors/model_catalog.rs::SystemInfo for the full field list.
+
+  /ai/switch-model:
+    post:
+      tags: [ai]
+      summary: Switch the active built-in LLM at runtime
+      description: |
+        If the requested model is already cached, activates it immediately (status
+        "ready"). If not cached, starts a background download and returns status
+        "downloading" -- poll GET /ai/model-status/{model_id} for progress. Requires
+        the backend to be built with the `builtin-llm` Cargo feature; returns 501
+        otherwise.
+      operationId: switchModel
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SwitchModelRequest"
+      responses:
+        "200":
+          description: Switch result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SwitchModelResponse"
+        "501":
+          description: Backend not built with the builtin-llm feature
+          content:
+            application/json:
+              schema: { type: string }
+
+  /ai/model-status/{model_id}:
+    get:
+      tags: [ai]
+      summary: Check if a built-in model is cached or downloading
+      operationId: getModelStatus
+      parameters:
+        - name: model_id
+          in: path
+          required: true
+          schema: { type: string }
+          example: "qwen3-1.7b-q4km"
+      responses:
+        "200":
+          description: Model status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModelStatusResponse"
+
+  /ai/reembed:
+    post:
+      tags: [ai]
+      summary: Mark emails for re-embedding
+      description: |
+        Resets the embedding status of emails per `mode` ("all" clears the whole
+        vector store and cluster state first; "failed"/"stale" only reset emails
+        in those states). Auto-triggers ingestion for the first account with
+        newly-pending emails.
+      operationId: triggerReembed
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReembedRequest"
+      responses:
+        "200":
+          description: Re-embed triggered
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReembedResponse"
+        "500":
+          description: Database error
+          content:
+            application/json:
+              schema: { type: string }
+
+  /ai/config/prompts:
+    get:
+      tags: [ai]
+      summary: Get prompt templates from YAML config
+      description: Returns config/prompts.yaml verbatim (PromptsConfig).
+      operationId: getPromptsConfig
+      responses:
+        "200":
+          description: Prompt templates
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /ai/config/classification:
+    get:
+      tags: [ai]
+      summary: Get classification categories/rules from YAML config
+      description: Returns config/classification.yaml verbatim (ClassificationConfig).
+      operationId: getClassificationConfig
+      responses:
+        "200":
+          description: Classification categories and rules
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /ai/config/tuning:
+    get:
+      tags: [ai]
+      summary: Get AI tuning parameters from YAML config
+      description: Returns config/tuning.yaml verbatim (TuningConfig) -- RAG budget overhead, chat max tokens, memory safety margin, etc.
+      operationId: getTuningConfig
+      responses:
+        "200":
+          description: Tuning parameters
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /ai/config/app:
+    get:
+      tags: [ai]
+      summary: Get application settings from YAML config
+      description: |
+        Returns config/app.yaml verbatim (AppConfig) -- sync, email, cache, network,
+        defaults, providers, hardware, security, rules, and paths settings. Fully
+        documented in docs/configuration-reference.md's "Application Settings
+        (config/app.yaml)" section.
+      operationId: getAppConfig
+      responses:
+        "200":
+          description: Application settings
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /ai/settings:
+    get:
+      tags: [ai]
+      summary: Get persisted user settings
+      description: Returns all rows of the app_settings table as a flat key-value JSON object.
+      operationId: getUserSettings
+      responses:
+        "200":
+          description: Persisted settings
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: { type: string }
+        "500":
+          description: Database error
+          content:
+            application/json:
+              schema: { type: string }
+    put:
+      tags: [ai]
+      summary: Persist user settings
+      description: |
+        Upserts each key in the request body into the app_settings table. The
+        frontend sends its full Zustand settings blob on every save; each field
+        is stored as a separate row.
+      operationId: saveUserSettings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+            example:
+              theme: "dark"
+              builtInLlmModel: "qwen3-1.7b-q4km"
+      responses:
+        "200":
+          description: Settings saved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  saved:
+                    type: integer
+                    description: Number of keys persisted
+                  status:
+                    type: string
+                    enum: [ok]
+        "500":
+          description: Database error
+          content:
+            application/json:
+              schema: { type: string }
+
+  # ---------------------------------------------------------------------------
   # Insights
   # ---------------------------------------------------------------------------
   /insights/subscriptions:
@@ -384,15 +3598,17 @@ paths:
                 items:
                   $ref: "#/components/schemas/SubscriptionInsight"
               example:
-                - sender: "newsletter@techblog.com"
-                  sender_name: "TechBlog Weekly"
-                  category: "Newsletter"
-                  email_count: 52
-                  recurrence_pattern: "weekly"
-                  has_unsubscribe: true
-                  first_seen: "2025-01-15T10:00:00Z"
-                  last_seen: "2026-03-20T10:00:00Z"
-                  estimated_read_rate: 0.35
+                - senderAddress: "newsletter@techblog.com"
+                  senderDomain: "techblog.com"
+                  frequency: "weekly"
+                  emailCount: 52
+                  firstSeen: "2025-01-15T10:00:00Z"
+                  lastSeen: "2026-03-20T10:00:00Z"
+                  hasUnsubscribe: true
+                  category: "newsletter"
+                  suggestedAction: "keep"
+                  readRate: 0.35
+                  listUnsubscribe: "<mailto:unsub@techblog.com>"
         "500":
           description: Insight analysis failed
           content:
@@ -400,7 +3616,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
 
-  /insights/recurring:
+  /insights/recurring-senders:
     get:
       tags: [insights]
       summary: Recurring sender patterns
@@ -419,12 +3635,9 @@ paths:
                   $ref: "#/components/schemas/RecurringSenderInsight"
               example:
                 - sender: "reports@analytics.com"
-                  sender_name: "Analytics Dashboard"
-                  email_count: 90
-                  recurrence_pattern: "daily"
-                  avg_interval_days: 1.02
-                  first_seen: "2025-12-01T08:00:00Z"
-                  last_seen: "2026-03-22T08:00:00Z"
+                  emailCount: 90
+                  avgIntervalDays: 1.02
+                  category: "notification"
         "500":
           description: Insight analysis failed
           content:
@@ -437,9 +3650,9 @@ paths:
       tags: [insights]
       summary: Inbox intelligence report
       description: |
-        Generate an aggregated inbox health report including total email
-        count, category breakdown, top senders, subscription count,
-        and recommended actions.
+        Generate an aggregated inbox health report: total email count,
+        category breakdown, top senders, subscription count, estimated
+        reading time saved, and overall read rate.
       operationId: getInboxReport
       responses:
         "200":
@@ -449,22 +3662,22 @@ paths:
               schema:
                 $ref: "#/components/schemas/InboxReport"
               example:
-                total_emails: 12450
-                categories:
+                totalEmails: 12450
+                categoryBreakdown:
                   Work: 4200
                   Newsletter: 3100
                   Marketing: 2800
                   Personal: 1500
                   Finance: 450
                   Uncategorized: 400
-                top_senders:
+                topSenders:
                   - sender: "notifications@github.com"
                     count: 1200
                   - sender: "newsletter@techblog.com"
                     count: 520
-                subscription_count: 45
-                estimated_time_savings_minutes: 120
-                generated_at: "2026-03-23T14:30:00Z"
+                subscriptionCount: 45
+                estimatedReadingHours: 8.5
+                readRate: 0.42
         "500":
           description: Report generation failed
           content:
@@ -476,7 +3689,1116 @@ paths:
 # Schemas
 # ---------------------------------------------------------------------------
 components:
+  responses:
+    ServerError:
+      description: Internal server error
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
   schemas:
+    WipeResponse:
+      type: object
+      description: |
+        backend/src/api/wipe.rs::WipeResponse. `result` is `#[serde(flatten)]`, so
+        WipeResult's fields (all snake_case, no rename_all on WipeResult itself)
+        appear at the top level alongside `message`, not nested under a "result" key.
+      properties:
+        message: { type: string }
+        vectors_deleted: { type: integer, format: int64 }
+        backups_deleted: { type: integer, format: int64 }
+        learning_records_deleted: { type: integer, format: int64 }
+        interactions_deleted: { type: integer, format: int64 }
+        scope:
+          type: string
+          enum: [user, vectors_only, all]
+          description: WipeScope, serde(rename_all = "snake_case")
+        user_id: { type: string, nullable: true }
+
+    ScheduledWipe:
+      type: object
+      description: No rename_all -- backend/src/vectors/remote_wipe.rs::ScheduledWipe.
+      properties:
+        user_id: { type: string }
+        scheduled_at: { type: string, format: date-time }
+        execute_at: { type: string, format: date-time }
+        scope:
+          type: string
+          enum: [user, vectors_only, all]
+        cancelled: { type: boolean }
+
+    ScheduledWipesResponse:
+      type: object
+      description: No rename_all -- backend/src/api/wipe.rs::ScheduledWipesResponse.
+      properties:
+        scheduled_wipes:
+          type: array
+          items: { $ref: "#/components/schemas/ScheduledWipe" }
+        count: { type: integer }
+
+    CancelWipeResponse:
+      type: object
+      description: No rename_all -- backend/src/api/wipe.rs::CancelWipeResponse.
+      properties:
+        cancelled: { type: boolean }
+        message: { type: string }
+
+    BackupTriggerResponse:
+      type: object
+      description: No rename_all -- backend/src/api/backup.rs::BackupTriggerResponse.
+      properties:
+        vectors_backed_up: { type: integer, format: int64 }
+        message: { type: string }
+
+    BackupStatsResponse:
+      type: object
+      description: No rename_all -- backend/src/api/backup.rs::BackupStatsResponse.
+      properties:
+        backup_count: { type: integer, format: int64 }
+        last_backup_at: { type: string, nullable: true }
+        total_size_bytes: { type: integer, format: int64, nullable: true }
+
+    RestoreResponse:
+      type: object
+      description: No rename_all -- backend/src/api/backup.rs::RestoreResponse.
+      properties:
+        vectors_restored: { type: integer, format: int64 }
+        message: { type: string }
+
+    SubscriptionTarget:
+      type: object
+      description: |
+        camelCase (backend/src/email/unsubscribe.rs::SubscriptionTarget) -- note the
+        wrapping request structs in api/unsubscribe.rs (e.g. { subscriptions: [...] })
+        have NO rename_all themselves; only this nested type is camelCase.
+      required: [sender]
+      properties:
+        sender: { type: string }
+        listUnsubscribeHeader: { type: string, nullable: true }
+        listUnsubscribePost: { type: string, nullable: true }
+        emailId: { type: string, nullable: true }
+
+    UnsubscribeMethod:
+      description: |
+        Tagged union over `type`, snake_case
+        (backend/src/email/unsubscribe.rs::UnsubscribeMethod): mailto { email,
+        subject? }, http_get { url }, http_post { url }.
+      type: object
+      required: [type]
+      properties:
+        type: { type: string, enum: [mailto, http_get, http_post] }
+        email: { type: string, description: "mailto only" }
+        subject: { type: string, nullable: true, description: "mailto only" }
+        url: { type: string, description: "http_get / http_post only" }
+
+    UnsubscribeResult:
+      type: object
+      description: camelCase (backend/src/email/unsubscribe.rs::UnsubscribeResult).
+      properties:
+        sender: { type: string }
+        methodUsed:
+          allOf: [{ $ref: "#/components/schemas/UnsubscribeMethod" }]
+          nullable: true
+        success: { type: boolean }
+        error: { type: string, nullable: true }
+
+    BatchResult:
+      type: object
+      description: camelCase (backend/src/email/unsubscribe.rs::BatchResult).
+      properties:
+        batchId: { type: string }
+        total: { type: integer }
+        succeeded: { type: integer }
+        failed: { type: integer }
+        results:
+          type: array
+          items: { $ref: "#/components/schemas/UnsubscribeResult" }
+        undoAvailableUntil: { type: string, format: date-time }
+
+    UndoResponse:
+      type: object
+      description: No rename_all -- backend/src/api/unsubscribe.rs::UndoResponse.
+      properties:
+        batch_id: { type: string }
+        status: { type: string, enum: [undone] }
+        message: { type: string }
+
+    UnsubscribePreview:
+      type: object
+      description: camelCase (backend/src/email/unsubscribe.rs::UnsubscribePreview).
+      properties:
+        sender: { type: string }
+        methods:
+          type: array
+          items: { $ref: "#/components/schemas/UnsubscribeMethod" }
+        bestMethod:
+          allOf: [{ $ref: "#/components/schemas/UnsubscribeMethod" }]
+          nullable: true
+        warning: { type: string, nullable: true }
+
+    PreviewResponse:
+      type: object
+      description: No rename_all -- backend/src/api/unsubscribe.rs::PreviewResponse.
+      properties:
+        previews:
+          type: array
+          items: { $ref: "#/components/schemas/UnsubscribePreview" }
+        total: { type: integer }
+
+    QuantizationStatusResponse:
+      type: object
+      description: No rename_all -- backend/src/api/vectors.rs::QuantizationStatusResponse (ADR-007).
+      properties:
+        current_tier: { type: string }
+        recommended_tier: { type: string }
+        vector_count: { type: integer, format: int64 }
+        compression_ratio: { type: number, format: float }
+        estimated_memory_bytes: { type: integer, format: int64 }
+        estimated_memory_uncompressed_bytes: { type: integer, format: int64 }
+
+    ModelsResponse:
+      type: object
+      description: No rename_all -- backend/src/api/vectors.rs::ModelsResponse (ADR-002).
+      properties:
+        available:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+            description: models::ModelManifest -- shape not expanded here
+        active_model: { type: string }
+        active_dimensions: { type: integer }
+
+    EmbeddingStatusSummary:
+      type: object
+      description: camelCase (backend/src/api/ingestion.rs::EmbeddingStatusSummary).
+      properties:
+        embeddedCount: { type: integer, format: int64 }
+        pendingCount: { type: integer, format: int64 }
+        failedCount: { type: integer, format: int64 }
+        staleCount: { type: integer, format: int64 }
+
+    EmbeddingStatusSample:
+      type: object
+      description: No rename_all -- backend/src/api/ingestion.rs::EmbeddingStatusSample. Static demonstration values, not live data.
+      properties:
+        pending: { type: string, enum: [pending] }
+        embedded: { type: string, enum: [embedded] }
+        failed: { type: string, enum: [failed] }
+        stale: { type: string, enum: [stale] }
+
+    EmbeddingStatusResponse:
+      type: object
+      description: camelCase (backend/src/api/ingestion.rs::EmbeddingStatusResponse).
+      properties:
+        totalEmails: { type: integer, format: int64 }
+        embeddingStatusSummary: { $ref: "#/components/schemas/EmbeddingStatusSummary" }
+        sampleRecord: { $ref: "#/components/schemas/EmbeddingStatusSample" }
+
+    DailyCount:
+      type: object
+      description: No rename_all -- backend/src/api/insights.rs::DailyCount.
+      properties:
+        date: { type: string }
+        count: { type: integer, format: int64 }
+
+    CategoryDailyCount:
+      type: object
+      description: camelCase (backend/src/api/insights.rs::CategoryDailyCount).
+      properties:
+        date: { type: string }
+        category: { type: string }
+        count: { type: integer, format: int64 }
+
+    DayOfWeekCount:
+      type: object
+      description: No rename_all -- backend/src/api/insights.rs::DayOfWeekCount.
+      properties:
+        day: { type: integer, description: "0=Sunday .. 6=Saturday" }
+        count: { type: integer, format: int64 }
+
+    HourOfDayCount:
+      type: object
+      description: No rename_all -- backend/src/api/insights.rs::HourOfDayCount.
+      properties:
+        hour: { type: integer, description: "0-23" }
+        count: { type: integer, format: int64 }
+
+    TemporalInsights:
+      type: object
+      description: camelCase (backend/src/api/insights.rs::TemporalInsights).
+      properties:
+        dailyVolume:
+          type: array
+          items: { $ref: "#/components/schemas/DailyCount" }
+        categoryDaily:
+          type: array
+          items: { $ref: "#/components/schemas/CategoryDailyCount" }
+        dayOfWeek:
+          type: array
+          items: { $ref: "#/components/schemas/DayOfWeekCount" }
+        hourOfDay:
+          type: array
+          items: { $ref: "#/components/schemas/HourOfDayCount" }
+
+    DateRange:
+      type: object
+      description: No rename_all -- backend/src/api/insights.rs::DateRange.
+      properties:
+        start: { type: string }
+        end: { type: string }
+
+    TopicCluster:
+      type: object
+      description: camelCase (backend/src/api/insights.rs::TopicCluster).
+      properties:
+        id: { type: string }
+        name: { type: string }
+        group:
+          type: string
+          enum: [category, subscription]
+        emailCount: { type: integer, format: int64 }
+        unreadCount: { type: integer, format: int64 }
+        dateRange: { $ref: "#/components/schemas/DateRange" }
+        topSenders:
+          type: array
+          items: { type: string }
+        sampleSubjects:
+          type: array
+          items: { type: string }
+
+    ClusterTermResponse:
+      type: object
+      description: camelCase (backend/src/api/clustering.rs).
+      properties:
+        word: { type: string }
+        score: { type: number, format: float }
+        count: { type: integer }
+
+    RepresentativeEmail:
+      type: object
+      description: camelCase (backend/src/api/clustering.rs).
+      properties:
+        id: { type: string }
+        subject: { type: string }
+        fromAddr: { type: string }
+        fromName: { type: string, nullable: true }
+
+    ClusterSummary:
+      type: object
+      description: camelCase (backend/src/api/clustering.rs).
+      properties:
+        id: { type: string }
+        name: { type: string }
+        description: { type: string }
+        emailCount: { type: integer }
+        stabilityScore: { type: number, format: float }
+        isPinned: { type: boolean }
+        topTerms:
+          type: array
+          items: { $ref: "#/components/schemas/ClusterTermResponse" }
+        representativeEmails:
+          type: array
+          items: { $ref: "#/components/schemas/RepresentativeEmail" }
+
+    ClusterListResponse:
+      type: object
+      description: camelCase (backend/src/api/clustering.rs).
+      properties:
+        clusters:
+          type: array
+          items: { $ref: "#/components/schemas/ClusterSummary" }
+        total: { type: integer }
+
+    ClusterDetailResponse:
+      type: object
+      description: camelCase (backend/src/api/clustering.rs).
+      properties:
+        id: { type: string }
+        name: { type: string }
+        description: { type: string }
+        emailIds:
+          type: array
+          items: { type: string }
+        emailCount: { type: integer }
+        stabilityScore: { type: number, format: float }
+        stabilityRuns: { type: integer }
+        isPinned: { type: boolean }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    ReclusterResponse:
+      type: object
+      description: |
+        No rename_all (backend/src/api/clustering.rs::ReclusterResponse) -- one field,
+        report, wrapping the internal ClusteringReport shape verbatim.
+      properties:
+        report:
+          type: object
+          additionalProperties: true
+
+    PinResponse:
+      type: object
+      description: No rename_all (backend/src/api/clustering.rs::PinResponse).
+      properties:
+        cluster_id: { type: string }
+        pinned: { type: boolean }
+
+    RuleConditionFieldMatch:
+      type: object
+      description: |
+        RuleCondition::FieldMatch, internally tagged (type="fieldMatch",
+        rename_all=camelCase; backend/src/rules/types.rs).
+      required: [type, field, operator, value]
+      properties:
+        type: { type: string, enum: [fieldMatch] }
+        field:
+          type: string
+          enum: [from, to, subject, body, labels, date]
+        operator:
+          type: string
+          enum: [contains, equals, startsWith, endsWith, regex, greaterThan, lessThan]
+        value: { type: string }
+
+    RuleConditionSemantic:
+      type: object
+      description: RuleCondition::Semantic (type="semantic"). threshold defaults to 0.75.
+      required: [type, query]
+      properties:
+        type: { type: string, enum: [semantic] }
+        query: { type: string }
+        threshold: { type: number, format: float, default: 0.75 }
+
+    RuleCondition:
+      description: |
+        Tagged union over `type` (backend/src/rules/types.rs::RuleCondition):
+        fieldMatch | semantic | and | or | not. and/or wrap a `conditions` array of
+        RuleCondition; not wraps a single `condition`. Documented as
+        additionalProperties for the recursive combinators rather than expanding
+        oneOf/recursive $ref, which most OpenAPI 3.0.3 tooling handles poorly.
+      oneOf:
+        - $ref: "#/components/schemas/RuleConditionFieldMatch"
+        - $ref: "#/components/schemas/RuleConditionSemantic"
+        - type: object
+          description: 'and: { type: "and", conditions: RuleCondition[] }'
+          additionalProperties: true
+        - type: object
+          description: 'or: { type: "or", conditions: RuleCondition[] }'
+          additionalProperties: true
+        - type: object
+          description: 'not: { type: "not", condition: RuleCondition }'
+          additionalProperties: true
+
+    RuleAction:
+      description: |
+        Tagged union over `type`, camelCase (backend/src/rules/types.rs::RuleAction):
+        addLabel { label }, removeLabel { label }, archive, delete { permanent?: bool
+        = false }, forward { to }, markRead, markImportant.
+      type: object
+      required: [type]
+      properties:
+        type:
+          type: string
+          enum: [addLabel, removeLabel, archive, delete, forward, markRead, markImportant]
+        label: { type: string, description: "addLabel/removeLabel only" }
+        permanent: { type: boolean, default: false, description: "delete only" }
+        to: { type: string, description: "forward only" }
+
+    CreateRuleRequest:
+      type: object
+      description: camelCase (backend/src/api/rules.rs::CreateRuleRequest).
+      required: [name, actions]
+      properties:
+        name: { type: string }
+        description: { type: string, default: "" }
+        conditions:
+          type: array
+          items: { $ref: "#/components/schemas/RuleCondition" }
+          description: May be empty when naturalLanguage is provided instead
+        actions:
+          type: array
+          items: { $ref: "#/components/schemas/RuleAction" }
+        priority: { type: integer, default: 0 }
+        enabled: { type: boolean, default: true }
+        naturalLanguage:
+          type: string
+          nullable: true
+          description: Parsed via json_parser::parse_natural_language and prepended to conditions
+
+    UpdateRuleRequest:
+      type: object
+      description: camelCase (backend/src/api/rules.rs::UpdateRuleRequest). Every field optional -- only present fields are applied.
+      properties:
+        name: { type: string, nullable: true }
+        description: { type: string, nullable: true }
+        conditions:
+          type: array
+          items: { $ref: "#/components/schemas/RuleCondition" }
+          nullable: true
+        actions:
+          type: array
+          items: { $ref: "#/components/schemas/RuleAction" }
+          nullable: true
+        priority: { type: integer, nullable: true }
+        enabled: { type: boolean, nullable: true }
+
+    ValidateRequest:
+      type: object
+      description: camelCase (backend/src/api/rules.rs::ValidateRequest).
+      required: [conditions, actions]
+      properties:
+        conditions:
+          type: array
+          items: { $ref: "#/components/schemas/RuleCondition" }
+        actions:
+          type: array
+          items: { $ref: "#/components/schemas/RuleAction" }
+        name: { type: string, default: "" }
+
+    TestRuleRequest:
+      type: object
+      description: |
+        camelCase (backend/src/api/rules.rs::TestRuleRequest). conditions are raw
+        JSON values (no type discriminant required) -- normalized server-side via
+        json_parser, and entries that fail to parse are silently dropped.
+      required: [conditions]
+      properties:
+        conditions:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        name: { type: string, default: "" }
+
+    RuleResponse:
+      type: object
+      description: camelCase (backend/src/api/rules.rs::RuleResponse).
+      properties:
+        id: { type: string }
+        name: { type: string }
+        description: { type: string }
+        conditions:
+          type: array
+          items: { $ref: "#/components/schemas/RuleCondition" }
+        actions:
+          type: array
+          items: { $ref: "#/components/schemas/RuleAction" }
+        priority: { type: integer }
+        enabled: { type: boolean }
+        matchCount:
+          type: integer
+          format: int64
+          description: 0 on POST /rules (freshly created); populated from the rules table on GET /rules
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    ValidationResponse:
+      type: object
+      description: camelCase (backend/src/api/rules.rs::ValidationResponse).
+      properties:
+        valid: { type: boolean }
+        errors:
+          type: array
+          items: { type: string }
+        warnings:
+          type: array
+          items: { type: string }
+
+    SampleEmailMatch:
+      type: object
+      description: camelCase (backend/src/api/rules.rs::SampleEmailMatch).
+      properties:
+        emailId: { type: string }
+        subject: { type: string }
+        from: { type: string }
+        receivedAt: { type: string, format: date-time }
+
+    TestResponse:
+      type: object
+      description: camelCase (backend/src/api/rules.rs::TestResponse).
+      properties:
+        matchCount: { type: integer, format: int64 }
+        sampleMatches:
+          type: array
+          items: { $ref: "#/components/schemas/SampleEmailMatch" }
+          description: Up to 5 samples
+
+    RunRuleResponse:
+      type: object
+      description: camelCase (backend/src/api/rules.rs::RunRuleResponse).
+      properties:
+        matchCount: { type: integer, format: int64 }
+        executedCount:
+          type: integer
+          format: int64
+          description: Count of actions that succeeded locally; may be less than matchCount x actions when a provider call fails (logged, non-fatal)
+        sampleMatches:
+          type: array
+          items: { $ref: "#/components/schemas/SampleEmailMatch" }
+
+    RuleSuggestion:
+      type: object
+      description: camelCase (backend/src/api/rules.rs::RuleSuggestion).
+      properties:
+        rule: { $ref: "#/components/schemas/RuleResponse" }
+        reason: { type: string }
+        estimatedMatches: { type: integer, format: int64 }
+
+    RulesErrorResponse:
+      type: object
+      description: No rename_all -- backend/src/api/rules.rs::ErrorResponse (one field, distinct from the top-level ErrorResponse used elsewhere).
+      properties:
+        error: { type: string }
+
+    InteractionItem:
+      type: object
+      description: No rename_all -- backend/src/api/interactions.rs::InteractionItem.
+      properties:
+        id: { type: string }
+        query_text: { type: string }
+        result_email_id: { type: string }
+        result_rank: { type: integer }
+        clicked: { type: boolean }
+        feedback: { type: string, nullable: true }
+        created_at: { type: string, format: date-time }
+
+    FeedbackActionRequest:
+      description: |
+        Internally tagged on `type`, snake_case (backend/src/api/learning.rs::FeedbackActionRequest):
+        reclassify { from, to: EmailCategory }, move_to_group { group_id }, star,
+        reply { delay_secs? }, archive, delete.
+      type: object
+      required: [type]
+      properties:
+        type:
+          type: string
+          enum: [reclassify, move_to_group, star, reply, archive, delete]
+        from: { type: string, description: "reclassify only -- EmailCategory" }
+        to: { type: string, description: "reclassify only -- EmailCategory" }
+        group_id: { type: string, description: "move_to_group only" }
+        delay_secs: { type: integer, nullable: true, description: "reply only" }
+
+    FeedbackRequest:
+      type: object
+      description: No rename_all (backend/src/api/learning.rs::FeedbackRequest).
+      required: [email_id, action]
+      properties:
+        email_id: { type: string }
+        action: { $ref: "#/components/schemas/FeedbackActionRequest" }
+
+    FeedbackResponse:
+      type: object
+      description: No rename_all (backend/src/api/learning.rs::FeedbackResponse).
+      properties:
+        quality: { type: number, format: float }
+        centroid_updated: { type: boolean }
+        safeguard_triggered: { type: boolean }
+
+    MetricsResponse:
+      type: object
+      description: No rename_all (backend/src/api/learning.rs::MetricsResponse).
+      properties:
+        total_feedback: { type: integer, format: int64 }
+        rank1_clicks: { type: integer, format: int64 }
+        total_clicks: { type: integer, format: int64 }
+        centroid_drift:
+          type: object
+          additionalProperties: { type: number, format: float }
+        ab_control_queries: { type: integer, format: int64 }
+        ab_sona_queries: { type: integer, format: int64 }
+
+    ConsolidateResponse:
+      type: object
+      description: No rename_all (backend/src/api/learning.rs::ConsolidateResponse).
+      properties:
+        centroids_updated: { type: integer }
+        emails_reclassified: { type: integer }
+        new_clusters: { type: integer }
+        duration_ms: { type: integer, format: int64 }
+
+    SessionStateResponse:
+      type: object
+      description: No rename_all (backend/src/api/learning.rs::SessionStateResponse).
+      properties:
+        session_id: { type: string }
+        age_seconds: { type: integer, format: int64 }
+        interaction_count: { type: integer }
+        clicked_count: { type: integer }
+        skipped_count: { type: integer }
+        has_preference_vector: { type: boolean }
+        preference_vector_dims: { type: integer, nullable: true }
+        sample_rerank_boost:
+          type: number
+          format: float
+          description: Diagnostic rerank boost computed against a zero vector
+
+    CleanupErrorBody:
+      type: object
+      description: Serialized camelCase (backend/src/cleanup/api/plan.rs::ErrorBody) -- used by all /cleanup/* endpoints instead of the generic ErrorResponse.
+      properties:
+        error:
+          {
+            type: string,
+            description: "Machine-readable error code, e.g. invalid_user, not_found, apply_in_progress",
+          }
+        message: { type: string }
+
+    CreatePlanResponse:
+      type: object
+      description: Serialized camelCase.
+      properties:
+        planId: { type: string, format: uuid }
+        validUntil: { type: string, format: date-time }
+        totals: { type: object, additionalProperties: true, description: PlanTotals }
+        risk: { type: object, additionalProperties: true, description: RiskRollup }
+        status: { type: string }
+        warningsCount: { type: integer, format: int64 }
+
+    BeginApplyRequest:
+      type: object
+      description: Serialized camelCase (backend/src/cleanup/api/apply.rs::BeginApplyBody). Both fields default to empty if the body is omitted entirely.
+      properties:
+        acknowledgedHighRiskSeqs:
+          type: array
+          items: { type: integer, format: int64 }
+          description: Sequence numbers of high-risk operations the user explicitly acknowledged
+        acknowledgedMediumGroups:
+          type: array
+          items: { type: string }
+          description: Group ids of medium-risk operations the user explicitly acknowledged
+
+    ReviewedTelemetryRequest:
+      type: object
+      required: [event, planId, userId, timeOnReviewMs]
+      description: Serialized camelCase.
+      properties:
+        event:
+          type: string
+          enum: [cleanup_plan_reviewed]
+          description: Must be exactly this literal value; any other value is rejected with 400
+        planId: { type: string, format: uuid }
+        userId:
+          {
+            type: string,
+            description: "Hashed server-side before any logging; never persisted in plaintext",
+          }
+        timeOnReviewMs: { type: integer, format: int64 }
+        expandedGroups: { type: integer, format: int64, default: 0 }
+        samplesViewed: { type: integer, format: int64, default: 0 }
+
+    AccountResponse:
+      type: object
+      description: |
+        Serialized camelCase (backend/src/api/accounts.rs::AccountResponse). Note
+        `is_active` carries an explicit `#[serde(rename = "isActive")]` -- redundant
+        with the struct's own camelCase rename_all, but present in the source.
+      properties:
+        id: { type: string, format: uuid }
+        provider: { type: string, enum: [gmail, outlook, imap] }
+        emailAddress: { type: string, format: email }
+        isActive: { type: boolean }
+        status: { type: string }
+        emailCount: { type: integer, format: int64 }
+        lastSyncAt: { type: string, format: date-time, nullable: true }
+        archiveStrategy: { type: string }
+        labelPrefix: { type: string }
+        syncDepth: { type: string }
+        syncFrequency: { type: integer }
+
+    AccountStatusResponse:
+      type: object
+      description: No rename_all -- backend/src/api/accounts.rs::AccountStatusResponse.
+      properties:
+        account_id: { type: string }
+        status: { type: string }
+        last_sync_at: { type: string, format: date-time, nullable: true }
+        emails_synced: { type: integer, format: int64 }
+        sync_failures: { type: integer }
+        last_error: { type: string, nullable: true }
+
+    UpdateAccountRequest:
+      type: object
+      description: Serialized camelCase. All fields optional -- only provided fields are updated.
+      properties:
+        archiveStrategy: { type: string, nullable: true }
+        labelPrefix: { type: string, nullable: true }
+        syncDepth: { type: string, nullable: true }
+        syncFrequency: { type: integer, nullable: true }
+
+    DangerZoneResponse:
+      type: object
+      description: Serialized camelCase.
+      properties:
+        messagesProcessed: { type: integer, format: int64 }
+        labelsDeleted: { type: integer, format: int64 }
+
+    ImapConnectRequest:
+      type: object
+      required: [email, password, imapServer, imapPort, smtpServer, smtpPort, encryption]
+      description: Serialized camelCase (backend/src/api/accounts.rs::ImapConnectRequest).
+      properties:
+        email: { type: string, format: email }
+        password:
+          { type: string, description: "The provider app password, encrypted at rest on connect" }
+        imapServer: { type: string, example: "imap.gmail.com" }
+        imapPort: { type: integer, example: 993 }
+        smtpServer: { type: string, example: "smtp.gmail.com" }
+        smtpPort: { type: integer, example: 465 }
+        encryption:
+          type: string
+          enum: [ssl, tls, none]
+          description: "ssl = implicit TLS (recommended); tls = STARTTLS; none = plaintext (trusted local relays only)"
+
+    EmailResponse:
+      type: object
+      description: Serialized camelCase (backend/src/api/emails.rs::EmailResponse).
+      properties:
+        id: { type: string }
+        accountId: { type: string }
+        provider: { type: string }
+        messageId: { type: string, nullable: true }
+        threadId: { type: string, nullable: true }
+        subject: { type: string }
+        fromAddr: { type: string, format: email }
+        fromName: { type: string, nullable: true }
+        toAddrs:
+          {
+            type: string,
+            description: "Comma-separated addresses (stored as a single column, not an array)",
+          }
+        ccAddrs: { type: string, nullable: true }
+        receivedAt: { type: string, format: date-time }
+        bodyText: { type: string, nullable: true }
+        bodyHtml: { type: string, nullable: true }
+        labels: { type: string, nullable: true, description: "Comma-separated label names" }
+        isRead: { type: boolean }
+        isStarred: { type: boolean }
+        hasAttachments: { type: boolean }
+        embeddingStatus: { type: string }
+        category: { type: string }
+        categoryConfidence: { type: number, nullable: true }
+        folder: { type: string, nullable: true }
+
+    ThreadResponse:
+      type: object
+      description: Serialized camelCase.
+      properties:
+        threadId: { type: string }
+        emails:
+          type: array
+          items: { $ref: "#/components/schemas/EmailResponse" }
+        subject: { type: string }
+        participants:
+          type: array
+          items: { type: string }
+        lastActivity: { type: string, format: date-time }
+
+    AggregatedLabel:
+      type: object
+      description: Serialized camelCase.
+      properties:
+        name: { type: string, description: "Title-cased display name" }
+        kind: { type: string, enum: [label] }
+        isSystem: { type: boolean }
+        emailCount: { type: integer, format: int64 }
+        unreadCount: { type: integer, format: int64 }
+        accountIds:
+          type: array
+          items: { type: string }
+
+    FolderOrLabel:
+      type: object
+      description: backend/src/email/provider.rs::FolderOrLabel (no rename_all; kind is the MoveKind enum, camelCase-rendered "folder"/"label").
+      properties:
+        id: { type: string }
+        name: { type: string }
+        kind: { type: string, enum: [folder, label] }
+        is_system: { type: boolean }
+
+    EnrichedCategory:
+      type: object
+      description: Serialized camelCase.
+      properties:
+        name: { type: string }
+        group: { type: string, enum: [subscription, system, category] }
+        emailCount: { type: integer, format: int64 }
+        unreadCount: { type: integer, format: int64 }
+
+    EmailCounts:
+      type: object
+      description: Serialized camelCase.
+      properties:
+        total: { type: integer, format: int64 }
+        unread: { type: integer, format: int64 }
+        archivedCount: { type: integer, format: int64 }
+        spamCount: { type: integer, format: int64 }
+        trashCount: { type: integer, format: int64 }
+        sentCount: { type: integer, format: int64 }
+        byCategory:
+          type: array
+          items: { $ref: "#/components/schemas/CategoryCount" }
+
+    CategoryCount:
+      type: object
+      description: Serialized camelCase.
+      properties:
+        category: { type: string }
+        total: { type: integer, format: int64 }
+        unread: { type: integer, format: int64 }
+
+    SendEmailRequest:
+      type: object
+      required: [to, subject, accountId]
+      description: Serialized camelCase.
+      properties:
+        to: { type: string, format: email }
+        cc: { type: string, nullable: true }
+        bcc: { type: string, nullable: true }
+        subject: { type: string }
+        bodyText: { type: string, nullable: true }
+        bodyHtml: { type: string, nullable: true }
+        accountId: { type: string }
+
+    SendEmailResponse:
+      type: object
+      description: Serialized camelCase.
+      properties:
+        messageId: { type: string }
+
+    MoveEmailRequest:
+      type: object
+      required: [accountId, targetId, kind]
+      description: Serialized camelCase.
+      properties:
+        accountId: { type: string }
+        targetId:
+          {
+            type: string,
+            description: "Target folder name (kind=folder) or label name (kind=label)",
+          }
+        kind: { type: string, enum: [folder, label] }
+
+    AttachmentResponse:
+      type: object
+      description: Serialized camelCase (backend/src/api/attachments.rs::AttachmentResponse).
+      properties:
+        id: { type: string }
+        emailId: { type: string }
+        filename: { type: string }
+        contentType: { type: string }
+        sizeBytes: { type: integer, format: int64 }
+        isInline: { type: boolean }
+        fetchStatus: { type: string, enum: [pending, fetched, failed] }
+
+    ModelStatus:
+      type: object
+      description: No rename_all -- backend/src/vectors/models.rs::ModelStatus.
+      properties:
+        name: { type: string, description: Model identifier }
+        downloaded: { type: boolean, description: Whether the model files exist on disk }
+        active: { type: boolean, description: Whether this is the currently active embedding model }
+        dimensions: { type: integer, description: Output embedding dimensions }
+        cache_path: { type: string, nullable: true, description: Local cache path, if downloaded }
+
+    AiStatusResponse:
+      type: object
+      description: No rename_all -- backend/src/api/ai.rs::AiStatusResponse.
+      properties:
+        active_model: { type: string }
+        dimensions: { type: integer }
+        provider: { type: string }
+        embedding_available: { type: boolean }
+        reindex_in_progress: { type: boolean }
+
+    ReindexStatus:
+      type: object
+      description: No rename_all -- backend/src/vectors/reindex.rs::ReindexStatus.
+      properties:
+        in_progress: { type: boolean }
+        total_emails: { type: integer, format: int64 }
+        stale_emails: { type: integer, format: int64 }
+        reindexed_emails: { type: integer, format: int64 }
+        progress_percent: { type: number, format: float }
+        estimated_remaining_secs: { type: integer, format: int64, nullable: true }
+        reason: { type: string, nullable: true }
+
+    ProviderStatus:
+      type: object
+      description: No rename_all -- backend/src/vectors/generative_router.rs::ProviderStatus.
+      properties:
+        provider_type:
+          type: string
+          enum: [onnx, built_in, ollama, open_ai, anthropic, gemini, rule_based, open_router, none]
+          description: ProviderType enum, serde(rename_all = "snake_case")
+        priority: { type: integer }
+        enabled: { type: boolean }
+        available: { type: boolean }
+
+    ProviderActionResponse:
+      type: object
+      description: No rename_all -- backend/src/api/ai.rs::ProviderActionResponse.
+      properties:
+        provider: { type: string }
+        enabled: { type: boolean }
+
+    ChatRequest:
+      type: object
+      required: [message]
+      description: Serialized camelCase (backend/src/api/ai.rs::ChatRequest).
+      properties:
+        sessionId:
+          type: string
+          nullable: true
+          description: Existing session to continue; a new one is created if omitted
+        message:
+          type: string
+          example: "What meetings do I have this week?"
+        history:
+          description: Accepted but ignored server-side -- the backend maintains its own session history
+          nullable: true
+
+    ChatResponse:
+      type: object
+      description: |
+        Serialized camelCase (backend/src/vectors/chat.rs::ChatResponse). The `reply`
+        Rust field is itself renamed to "message" to match the frontend contract.
+      properties:
+        sessionId: { type: string }
+        message:
+          {
+            type: string,
+            description: The assistant's reply text (Rust field name is `reply`,
+            serialized as "message"),
+          }
+        messageCount: { type: integer }
+
+    ConfirmToolCallRequest:
+      type: object
+      required: [sessionId, confirmationId, approved]
+      description: Serialized camelCase (backend/src/api/ai.rs::ConfirmToolCallRequest).
+      properties:
+        sessionId: { type: string }
+        confirmationId: { type: string }
+        approved: { type: boolean }
+
+    ConfirmToolCallResponse:
+      type: object
+      description: Serialized camelCase.
+      properties:
+        confirmationId: { type: string }
+        status: { type: string, enum: [approved, rejected] }
+
+    SessionSummary:
+      type: object
+      description: Serialized camelCase (backend/src/vectors/chat.rs::SessionSummary).
+      properties:
+        id: { type: string }
+        messageCount: { type: integer }
+        createdAt: { type: string, format: date-time }
+        lastActive: { type: string, format: date-time }
+        contextEmailCount: { type: integer }
+
+    DeleteSessionResponse:
+      type: object
+      description: No rename_all.
+      properties:
+        deleted: { type: boolean }
+        session_id: { type: string }
+
+    ModelCatalogEntry:
+      type: object
+      description: backend/src/vectors/model_catalog.rs::ModelInfo -- fields as read from config/models-llm.yaml plus computed `recommended`/`cached` flags.
+      properties:
+        id: { type: string }
+        name: { type: string }
+        params: { type: string }
+        disk_mb: { type: integer }
+        ram_mb: { type: integer }
+        context_size: { type: integer }
+        quality: { type: string }
+        recommended:
+          {
+            type: boolean,
+            description: Whether this model fits available RAM with the configured safety margin,
+          }
+        cached: { type: boolean }
+        repo_id: { type: string }
+        filename: { type: string }
+        family: { type: string, nullable: true }
+        chat_template: { type: string, nullable: true }
+        rag_capable: { type: boolean, nullable: true }
+        tool_calling: { type: boolean, nullable: true }
+        default_for_ram_mb: { type: integer, nullable: true }
+        notes: { type: string, nullable: true }
+        cost_per_1m_input: { type: number, nullable: true }
+        cost_per_1m_output: { type: number, nullable: true }
+
+    EmbeddingCatalogEntry:
+      type: object
+      description: Serialized camelCase (backend/src/api/ai.rs::EmbeddingCatalogEntry).
+      properties:
+        id: { type: string }
+        name: { type: string }
+        provider: { type: string }
+        dimensions: { type: integer }
+        maxTokens: { type: integer }
+        quality: { type: string }
+        description: { type: string }
+        diskMb: { type: integer, nullable: true }
+        minRamMb: { type: integer, nullable: true }
+        costPer1mTokens: { type: number, nullable: true }
+        downloadRequired: { type: boolean }
+        providerDescription: { type: string, nullable: true }
+        fastembedVariant: { type: string, nullable: true }
+        fastembedQuantized: { type: string, nullable: true }
+        isDefault: { type: boolean }
+        ollamaTag: { type: string, nullable: true }
+        baseUrl: { type: string, nullable: true }
+        apiKeyEnv: { type: string, nullable: true }
+
+    SwitchModelRequest:
+      type: object
+      required: [modelId]
+      description: Serialized camelCase.
+      properties:
+        modelId:
+          type: string
+          example: "qwen3-8b-q4km"
+
+    SwitchModelResponse:
+      type: object
+      description: Serialized camelCase.
+      properties:
+        modelId: { type: string }
+        status: { type: string, enum: [ready, downloading, error] }
+        message: { type: string }
+
+    ModelStatusResponse:
+      type: object
+      description: Serialized camelCase.
+      properties:
+        modelId: { type: string }
+        status: { type: string, enum: [cached, downloading, not_cached] }
+        cached: { type: boolean }
+
+    ReembedRequest:
+      type: object
+      description: Serialized camelCase. Body itself is optional; omitted body defaults to mode "all".
+      properties:
+        mode:
+          type: string
+          enum: [all, failed, stale]
+          default: all
+
+    ReembedResponse:
+      type: object
+      description: Serialized camelCase.
+      properties:
+        emailsReset: { type: integer, format: int64 }
+        mode: { type: string }
+        message: { type: string }
+        ingestionTriggered: { type: boolean }
+
     SemanticSearchRequest:
       type: object
       required: [query]
@@ -506,6 +4828,11 @@ components:
           format: float
           description: Minimum cosine similarity score (default from server config)
           example: 0.5
+        mode:
+          type: string
+          enum: [semantic, hybrid, keyword]
+          description: Search mode override. "hybrid" delegates to RRF-fused hybrid search.
+          example: "semantic"
 
     FindSimilarRequest:
       type: object
@@ -571,6 +4898,10 @@ components:
 
     SearchResponse:
       type: object
+      description: |
+        Response fields are serialized camelCase (`#[serde(rename_all = "camelCase")]`
+        on `backend/src/api/vectors.rs::SearchResponse`) -- unlike the request schema above,
+        which has no rename_all and stays snake_case.
       properties:
         results:
           type: array
@@ -579,15 +4910,23 @@ components:
         total:
           type: integer
           description: Number of results returned
-        latency_ms:
+        latencyMs:
           type: integer
           format: int64
           description: Server-side search latency in milliseconds
+        mode:
+          type: string
+          enum: [semantic, hybrid, keyword]
+          description: The search mode actually used
+        interactionId:
+          type: string
+          description: Interaction ID for click/feedback tracking (present when interaction tracking is active)
 
     SearchResultItem:
       type: object
+      description: Serialized camelCase (see SearchResponse).
       properties:
-        email_id:
+        emailId:
           type: string
           description: Source email identifier
         score:
@@ -602,27 +4941,38 @@ components:
           additionalProperties:
             type: string
           description: Filterable metadata attributes
+        matchType:
+          type: string
+          description: How this result was matched (present only for hybrid search)
+        vectorRank:
+          type: integer
+          description: Rank in the vector search results (present only for hybrid search)
+        ftsRank:
+          type: integer
+          description: Rank in the full-text search results (present only for hybrid search)
 
     HealthStatus:
       type: object
+      description: Serialized camelCase (`#[serde(rename_all = "camelCase")]` on backend/src/vectors/types.rs::HealthStatus).
       properties:
         status:
           type: string
           enum: [healthy, degraded]
           description: Overall service health
-        store_healthy:
+        storeHealthy:
           type: boolean
           description: Whether the vector store is operational
-        embedding_available:
+        embeddingAvailable:
           type: boolean
           description: Whether at least one embedding provider is available
-        store_stats:
+        storeStats:
           $ref: "#/components/schemas/VectorStats"
 
     VectorStats:
       type: object
+      description: Serialized camelCase (see HealthStatus).
       properties:
-        total_vectors:
+        totalVectors:
           type: integer
           format: int64
           description: Total number of stored vectors
@@ -635,16 +4985,17 @@ components:
         dimensions:
           type: integer
           description: Embedding dimensionality (e.g., 384 for MiniLM)
-        memory_bytes:
+        memoryBytes:
           type: integer
           format: int64
           description: Estimated memory usage in bytes
-        index_type:
+        indexType:
           type: string
           description: Type of vector index in use
 
     StartRequest:
       type: object
+      description: No rename_all -- fields are plain Rust snake_case as written.
       properties:
         account_id:
           type: string
@@ -652,6 +5003,10 @@ components:
         full_sync:
           type: boolean
           description: Whether to re-sync all emails (default false)
+        source:
+          type: string
+          enum: [onboarding, manual_sync, inbox_clean, poll]
+          description: Who initiated this ingestion, for attribution/telemetry
 
     PauseResumeRequest:
       type: object
@@ -717,79 +5072,91 @@ components:
 
     SubscriptionInsight:
       type: object
+      description: |
+        Serialized camelCase (`#[serde(rename_all = "camelCase")]` on
+        backend/src/vectors/insights.rs::SubscriptionInsight). `frequency` and `category`/
+        `suggestedAction` are Rust enums with custom lowercase-string serialization, not the
+        title-case values an earlier draft of this doc assumed.
       properties:
-        sender:
+        senderAddress:
           type: string
           format: email
           description: Sender email address
-        sender_name:
+        senderDomain:
           type: string
-          description: Display name of the sender
-        category:
+          description: Domain portion of the sender address
+        frequency:
           type: string
-          enum: [Newsletter, Marketing, Notification, Receipt, Social, Unknown]
-          description: Subscription category
-        email_count:
+          enum: [daily, weekly, biweekly, monthly, quarterly, irregular]
+          description: Detected send cadence
+        emailCount:
           type: integer
           format: int64
           description: Total emails received from this sender
-        recurrence_pattern:
-          type: string
-          description: Detected send frequency
-        has_unsubscribe:
-          type: boolean
-          description: Whether List-Unsubscribe header is present
-        first_seen:
+        firstSeen:
           type: string
           format: date-time
           description: Date of the earliest email from this sender
-        last_seen:
+        lastSeen:
           type: string
           format: date-time
           description: Date of the most recent email from this sender
-        estimated_read_rate:
+        hasUnsubscribe:
+          type: boolean
+          description: Whether a List-Unsubscribe header was present on the most recent email
+        category:
+          type: string
+          enum: [newsletter, marketing, notification, receipt, social, unknown]
+          description: Subscription category
+        suggestedAction:
+          type: string
+          enum: [keep, unsubscribe, archive, digest]
+          description: Suggested next action for this subscription
+        readRate:
           type: number
-          format: float
+          format: double
           description: Estimated percentage of emails opened (0.0 to 1.0)
+        listUnsubscribe:
+          type: string
+          nullable: true
+          description: RFC 2369 List-Unsubscribe header from the most recent email, if present
+        listUnsubscribePost:
+          type: string
+          nullable: true
+          description: RFC 8058 List-Unsubscribe-Post header from the most recent email, if present
 
     RecurringSenderInsight:
       type: object
+      description: Serialized camelCase (see SubscriptionInsight).
       properties:
         sender:
           type: string
           format: email
-        sender_name:
-          type: string
-        email_count:
+        emailCount:
           type: integer
           format: int64
-        recurrence_pattern:
-          type: string
-          description: Detected pattern (daily, weekly, monthly, etc.)
-        avg_interval_days:
+        avgIntervalDays:
           type: number
           format: float
           description: Average days between emails
-        first_seen:
+        category:
           type: string
-          format: date-time
-        last_seen:
-          type: string
-          format: date-time
+          description: Free-text category label (not the same enum as SubscriptionInsight.category)
 
     InboxReport:
       type: object
+      description: Serialized camelCase (see SubscriptionInsight). Has no generated_at/timestamp field.
       properties:
-        total_emails:
+        totalEmails:
           type: integer
           format: int64
-        categories:
+        categoryBreakdown:
           type: object
           additionalProperties:
             type: integer
             format: int64
           description: Email count per category
-        top_senders:
+        topSenders:
           type: array
           items:
             type: object
@@ -799,15 +5166,17 @@ components:
               count:
                 type: integer
                 format: int64
-        subscription_count:
+        subscriptionCount:
           type: integer
           description: Number of detected subscriptions
-        estimated_time_savings_minutes:
-          type: integer
-          description: Estimated minutes saved by using Emailibrium
-        generated_at:
-          type: string
-          format: date-time
+        estimatedReadingHours:
+          type: number
+          format: float
+          description: Estimated hours of reading time represented by the current inbox
+        readRate:
+          type: number
+          format: double
+          description: Overall read rate across all email (0.0 to 1.0)
 
     ErrorResponse:
       type: object

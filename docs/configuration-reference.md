@@ -10,11 +10,14 @@ Emailibrium uses a layered configuration system via [figment](https://docs.rs/fi
 2. `config.local.yaml` -- local overrides (gitignored)
 3. `EMAILIBRIUM_*` environment variables -- runtime overrides
 
-> **Note:** Environment-specific files (`config.{APP_ENV}.yaml`) and Docker
-> secrets (`/run/secrets/*`) are not yet wired into the figment chain.
-> They are documented in `docs/configuration/CONFIG_HIERARCHY.md` as a
-> planned extension. For now, use `config.local.yaml` or environment
-> variables for environment-specific overrides.
+> **Note:** Figment itself only merges `config.yaml` -> `config.local.yaml` -> env vars — it
+> doesn't natively load `config.{APP_ENV}.yaml` files. Docker Compose achieves environment-specific
+> config a different way: it bind-mounts `config/environments/config.${APP_ENV}.yaml` (see
+> [Deployment Guide](deployment-guide.md#docker-configuration-files)) directly over `/app/config.yaml`
+> inside the container, so the "base defaults" file itself changes per environment rather than
+> being layered by Figment. Docker secrets (`/run/secrets/*`) are resolved into env vars by
+> `backend/entrypoint.sh` before the backend starts (see the entrypoint script for exactly which
+> names it exports). Outside Docker, use `config.local.yaml` or environment variables directly.
 
 ## Environment Variables
 
@@ -34,15 +37,20 @@ EMAILIBRIUM_LEARNING_SONA_ENABLED=true
 EMAILIBRIUM_QUANTIZATION_MODE=scalar
 ```
 
+One incidental exception: the backend also reads the OS-standard `HOME` variable directly
+(`backend/src/vectors/model_integrity.rs`) as a fallback base path for the model cache directory
+when `generative.builtin.cache_dir` isn't set. It isn't an Emailibrium-specific config knob and
+has no `EMAILIBRIUM_` equivalent.
+
 ## Complete Key Reference
 
 ### Top-Level
 
-| Key            | Type   | Default                          | Env Override               | Description                      |
-| -------------- | ------ | -------------------------------- | -------------------------- | -------------------------------- |
-| `host`         | String | `127.0.0.1`                      | `EMAILIBRIUM_HOST`         | Server bind address              |
-| `port`         | u16    | `8080`                           | `EMAILIBRIUM_PORT`         | Server listen port               |
-| `database_url` | String | `sqlite:emailibrium.db?mode=rwc` | `EMAILIBRIUM_DATABASE_URL` | SQLite/PostgreSQL connection URL |
+| Key            | Type   | Default                          | Env Override               | Description                                                                                                                                     |
+| -------------- | ------ | -------------------------------- | -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `host`         | String | `127.0.0.1`                      | `EMAILIBRIUM_HOST`         | Server bind address                                                                                                                             |
+| `port`         | u16    | `8080`                           | `EMAILIBRIUM_PORT`         | Server listen port                                                                                                                              |
+| `database_url` | String | `sqlite:emailibrium.db?mode=rwc` | `EMAILIBRIUM_DATABASE_URL` | SQLite connection URL -- `postgres://` is not yet supported, see [Deployment Guide](deployment-guide.md#database-strategy-sqlite-vs-postgresql) |
 
 ### Store (`store.*`)
 
@@ -180,64 +188,91 @@ Uses the Cohere embed API v2 (`embed-english-v3.0` by default).
 
 Controls email classification and chat. Default provider is `builtin` — a small language model that runs locally with no external service.
 
-| Key                                      | Type    | Default                       | Description                                     |
-| ---------------------------------------- | ------- | ----------------------------- | ----------------------------------------------- |
-| `generative.provider`                    | string  | `"builtin"`                   | Provider: `builtin`, `none`, `ollama`, `cloud`  |
-| `generative.builtin.model_id`            | string  | `"qwen2.5-0.5b-q4km"`         | GGUF model identifier                           |
-| `generative.builtin.context_size`        | integer | `2048`                        | Context window in tokens                        |
-| `generative.builtin.gpu_layers`          | integer | `99`                          | GPU layer offload (0=CPU, 99=all)               |
-| `generative.builtin.idle_timeout_secs`   | integer | `300`                         | Seconds before unloading idle model             |
-| `generative.builtin.cache_dir`           | string  | `~/.emailibrium/models/llm`   | Model cache directory                           |
-| `generative.ollama.base_url`             | string  | `"http://localhost:11434"`    | Ollama API URL                                  |
-| `generative.ollama.classification_model` | string  | `"llama3.2:1b"`               | Model for classification                        |
-| `generative.ollama.chat_model`           | string  | `"llama3.2:3b"`               | Model for chat                                  |
-| `generative.cloud.provider`              | string  | `"openai"`                    | Cloud provider: `openai`, `anthropic`, `gemini` |
-| `generative.cloud.model`                 | string  | `"gpt-4o-mini"`               | Cloud model identifier                          |
-| `generative.cloud.api_key_env`           | string  | `"EMAILIBRIUM_CLOUD_API_KEY"` | Environment variable for API key                |
+| Key                                      | Type    | Default                       | Description                                                  |
+| ---------------------------------------- | ------- | ----------------------------- | ------------------------------------------------------------ |
+| `generative.provider`                    | string  | `"builtin"`                   | Provider: `builtin`, `none`, `ollama`, `cloud`, `openrouter` |
+| `generative.builtin.model_id`            | string  | `"qwen3-1.7b-q4km"`           | GGUF model identifier                                        |
+| `generative.builtin.context_size`        | integer | `2048`                        | Context window in tokens                                     |
+| `generative.builtin.gpu_layers`          | integer | `99`                          | GPU layer offload (0=CPU, 99=all)                            |
+| `generative.builtin.idle_timeout_secs`   | integer | `300`                         | Seconds before unloading idle model                          |
+| `generative.builtin.cache_dir`           | string  | `~/.emailibrium/models/llm`   | Model cache directory                                        |
+| `generative.ollama.base_url`             | string  | `"http://localhost:11434"`    | Ollama API URL                                               |
+| `generative.ollama.classification_model` | string  | `"llama3.2:1b"`               | Model for classification                                     |
+| `generative.ollama.chat_model`           | string  | `"llama3.2:3b"`               | Model for chat                                               |
+| `generative.cloud.provider`              | string  | `"openai"`                    | Cloud provider: `openai`, `anthropic`, `gemini`              |
+| `generative.cloud.model`                 | string  | `"gpt-4o-mini"`               | Cloud model identifier                                       |
+| `generative.cloud.api_key_env`           | string  | `"EMAILIBRIUM_CLOUD_API_KEY"` | Environment variable for API key                             |
 
 ### Provider Tiers
 
-| Tier    | Provider            | What It Does                              | Requirements                 |
-| ------- | ------------------- | ----------------------------------------- | ---------------------------- |
-| **0**   | `none`              | Rule-based keyword heuristics only        | Nothing                      |
-| **0.5** | `builtin` (default) | Local LLM via llama.cpp + ONNX embeddings | ~350 MB model download       |
-| **1**   | `ollama`            | Local Ollama server + ONNX embeddings     | Ollama installed and running |
-| **2**   | `cloud`             | Cloud LLM API + optional cloud embeddings | API key + consent            |
+| Tier    | Provider            | What It Does                                                             | Requirements                                          |
+| ------- | ------------------- | ------------------------------------------------------------------------ | ----------------------------------------------------- |
+| **0**   | `none`              | Rule-based keyword heuristics only                                       | Nothing                                               |
+| **0.5** | `builtin` (default) | Local LLM via llama.cpp + ONNX embeddings                                | ~1.1 GB model download (default model)                |
+| **1**   | `ollama`            | Local Ollama server + ONNX embeddings                                    | Ollama installed and running                          |
+| **2**   | `cloud`             | Cloud LLM API (OpenAI, Anthropic, or Gemini) + optional cloud embeddings | API key + consent                                     |
+| **2**   | `openrouter`        | 300+ models via OpenRouter's OpenAI-compatible proxy                     | API key + consent (separate from `cloud` — see below) |
 
 ### Environment Variable Overrides
 
 ```bash
-EMAILIBRIUM_GENERATIVE_PROVIDER=builtin   # or: none, ollama, cloud
-EMAILIBRIUM_GENERATIVE_BUILTIN_MODEL_ID=qwen2.5-0.5b-q4km
+EMAILIBRIUM_GENERATIVE_PROVIDER=builtin   # or: none, ollama, cloud, openrouter
+EMAILIBRIUM_GENERATIVE_BUILTIN_MODEL_ID=qwen3-1.7b-q4km
 EMAILIBRIUM_GENERATIVE_BUILTIN_GPU_LAYERS=0  # CPU only
 ```
 
 ### Available Built-in Models
 
-| Model ID            | Size   | RAM     | Quality  | Use Case                       |
-| ------------------- | ------ | ------- | -------- | ------------------------------ |
-| `qwen2.5-0.5b-q4km` | 350 MB | ~500 MB | Good     | Classification (default)       |
-| `smollm2-360m-q4km` | 250 MB | ~400 MB | Adequate | Ultra-light classification     |
-| `smollm2-1.7b-q4km` | 1 GB   | ~1.5 GB | Better   | Classification + basic chat    |
-| `llama3.2-3b-q4km`  | 1.8 GB | ~2.5 GB | Good     | High-quality chat              |
-| `phi3.5-mini-q4km`  | 2.3 GB | ~3 GB   | Best     | Best quality, higher resources |
+The full, current catalog lives in `config/models-llm.yaml` (edit that file to add/remove
+models -- this table is a snapshot). Each model's `default_for_ram_mb` (if set) makes it the
+auto-selected default once the machine's available RAM crosses that threshold;
+`qwen3-1.7b-q4km` is the overall default (`generative.builtin.model_id`) below that.
+
+| Model ID                            | Disk    | Min RAM | Quality   | RAM tier            |
+| ----------------------------------- | ------- | ------- | --------- | ------------------- |
+| `qwen3-1.7b-q4km`                   | 1.1 GB  | 1.5 GB  | Fair      | 8 GB (default)      |
+| `qwen2.5-3b-q4km`                   | 2.0 GB  | 2.5 GB  | Good      | 8 GB                |
+| `qwen3-4b-q4km`                     | 2.5 GB  | 4.0 GB  | Good      | 16 GB               |
+| `gemma3-4b-q4km`                    | 2.5 GB  | 4.5 GB  | Good      | 16 GB               |
+| `phi4-mini-q4km`                    | 2.4 GB  | 4.0 GB  | Good      | 16 GB               |
+| `gemma4-e4b-q4km`                   | 2.8 GB  | 4.5 GB  | Excellent | 16 GB               |
+| `nemotron3-nano-4b-q4km`            | 2.7 GB  | 5.0 GB  | Good      | 16 GB               |
+| `qwen3-8b-q4km`                     | 5.0 GB  | 7.0 GB  | Excellent | 16 GB (default)     |
+| `gemma3-12b-q4km`                   | 8.1 GB  | 11 GB   | Excellent | 32 GB               |
+| `qwen3-14b-q4km`                    | 9.0 GB  | 12 GB   | Excellent | 32 GB (default)     |
+| `mistral-small-24b-q4km`            | 14 GB   | 18 GB   | Excellent | 64-128 GB           |
+| `gemma4-26b-a4b-q4km` (MoE)         | 16 GB   | 20 GB   | Excellent | 64-128 GB           |
+| `nemotron3-nano-30b-a3b-q4km` (MoE) | 18 GB   | 20 GB   | Excellent | 64-128 GB           |
+| `qwen3-30b-a3b-q4km` (MoE)          | 18.6 GB | 22 GB   | Excellent | 64-128 GB (default) |
+| `qwen3-32b-q4km`                    | 19.8 GB | 24 GB   | Excellent | 64-128 GB           |
+| `gemma4-31b-q4km`                   | 20 GB   | 24 GB   | Excellent | 64-128 GB           |
+
+Also available via `generative.provider: ollama` (pull with `ollama pull <tag>`),
+`generative.provider: cloud` (OpenAI, Anthropic, or Gemini -- set `generative.cloud.provider`
+accordingly, API key required), or `generative.provider: openrouter` (300+ models via
+OpenRouter's OpenAI-compatible proxy -- a **separate** top-level provider value, not a `cloud`
+option; reuses `generative.cloud.model` as the model id and reads its API key/base
+URL/headers from `config/models-llm.yaml`'s `providers.openrouter` catalog entry, falling back
+to `config/app.yaml`'s `providers.openrouter.*`). See `config/models-llm.yaml` for the full
+`ollama`/`openai`/`anthropic`/`openrouter` model catalogs.
 
 ### OAuth (`oauth.*`) -- DDD-005
 
 OAuth client credentials are loaded from environment variables (never from config files) to prevent accidental secret exposure. The config controls which env vars to read and endpoint URLs.
 
-| Key                               | Type          | Default                                                  | Env Override                          | Description                                     |
-| --------------------------------- | ------------- | -------------------------------------------------------- | ------------------------------------- | ----------------------------------------------- |
-| `oauth.redirect_base_url`         | String        | `http://localhost:8080`                                  | `EMAILIBRIUM_OAUTH_REDIRECT_BASE_URL` | Base URL for constructing OAuth redirect URIs   |
-| `oauth.gmail.client_id_env`       | String        | `EMAILIBRIUM_GOOGLE_CLIENT_ID`                           | --                                    | Env var holding the Google OAuth Client ID      |
-| `oauth.gmail.client_secret_env`   | String        | `EMAILIBRIUM_GOOGLE_CLIENT_SECRET`                       | --                                    | Env var holding the Google OAuth Client Secret  |
-| `oauth.gmail.scopes`              | Vec\<String\> | `[gmail.modify, gmail.labels, userinfo.email]`           | --                                    | OAuth scopes requested from Google              |
-| `oauth.gmail.auth_url`            | String        | `https://accounts.google.com/o/oauth2/v2/auth`           | --                                    | Google authorization endpoint                   |
-| `oauth.gmail.token_url`           | String        | `https://oauth2.googleapis.com/token`                    | --                                    | Google token endpoint                           |
-| `oauth.outlook.client_id_env`     | String        | `EMAILIBRIUM_MICROSOFT_CLIENT_ID`                        | --                                    | Env var holding the Microsoft Client ID         |
-| `oauth.outlook.client_secret_env` | String        | `EMAILIBRIUM_MICROSOFT_CLIENT_SECRET`                    | --                                    | Env var holding the Microsoft Client Secret     |
-| `oauth.outlook.tenant`            | String        | `common`                                                 | `EMAILIBRIUM_OAUTH_OUTLOOK_TENANT`    | Microsoft tenant ID (`common` for multi-tenant) |
-| `oauth.outlook.scopes`            | Vec\<String\> | `[Mail.ReadWrite, Mail.Send, offline_access, User.Read]` | --                                    | OAuth scopes requested from Microsoft           |
+| Key                               | Type          | Default                                                  | Env Override                          | Description                                                                                                                                           |
+| --------------------------------- | ------------- | -------------------------------------------------------- | ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `oauth.redirect_base_url`         | String        | `http://localhost:8080`                                  | `EMAILIBRIUM_OAUTH_REDIRECT_BASE_URL` | Base URL for constructing OAuth redirect URIs                                                                                                         |
+| `oauth.gmail.client_id_env`       | String        | `EMAILIBRIUM_GOOGLE_CLIENT_ID`                           | --                                    | Env var holding the Google OAuth Client ID                                                                                                            |
+| `oauth.gmail.client_secret_env`   | String        | `EMAILIBRIUM_GOOGLE_CLIENT_SECRET`                       | --                                    | Env var holding the Google OAuth Client Secret                                                                                                        |
+| `oauth.gmail.scopes`              | Vec\<String\> | `[gmail.modify, gmail.labels, userinfo.email]`           | --                                    | OAuth scopes requested from Google                                                                                                                    |
+| `oauth.gmail.auth_url`            | String        | `https://accounts.google.com/o/oauth2/v2/auth`           | --                                    | Google authorization endpoint                                                                                                                         |
+| `oauth.gmail.token_url`           | String        | `https://oauth2.googleapis.com/token`                    | --                                    | Google token endpoint                                                                                                                                 |
+| `oauth.outlook.client_id_env`     | String        | `EMAILIBRIUM_MICROSOFT_CLIENT_ID`                        | --                                    | Env var holding the Microsoft Client ID                                                                                                               |
+| `oauth.outlook.client_secret_env` | String        | `EMAILIBRIUM_MICROSOFT_CLIENT_SECRET`                    | --                                    | Env var holding the Microsoft Client Secret                                                                                                           |
+| `oauth.outlook.tenant`            | String        | `common`                                                 | `EMAILIBRIUM_OAUTH_OUTLOOK_TENANT`    | Microsoft tenant ID (`common` for multi-tenant)                                                                                                       |
+| `oauth.outlook.scopes`            | Vec\<String\> | `[Mail.ReadWrite, Mail.Send, offline_access, User.Read]` | --                                    | OAuth scopes requested from Microsoft                                                                                                                 |
+| `oauth.frontend_url`              | String        | `http://localhost:3000`                                  | `EMAILIBRIUM_OAUTH_FRONTEND_URL`      | Frontend origin the backend redirects to after an OAuth connect/deny/success -- override this in production if the frontend isn't on `localhost:3000` |
 
 ### Redis (`redis.*`)
 
@@ -255,6 +290,196 @@ The backend operates without Redis (graceful degradation). When enabled, hot-pat
 | -------------------------- | ------------- | ------------------------------------------------ | -------------------------------------- | ------------------------------- |
 | `security.allowed_origins` | Vec\<String\> | `[http://localhost:3000, http://localhost:5173]` | `EMAILIBRIUM_SECURITY_ALLOWED_ORIGINS` | CORS allowed origins            |
 | `security.csp_enabled`     | bool          | `true`                                           | `EMAILIBRIUM_SECURITY_CSP_ENABLED`     | Whether CSP headers are emitted |
+
+#### Rate limiting (`security.rate_limit.*`) -- R-05
+
+| Key                                       | Type | Default | Env Override                                          | Description                              |
+| ----------------------------------------- | ---- | ------- | ----------------------------------------------------- | ---------------------------------------- |
+| `security.rate_limit.enabled`             | bool | `true`  | `EMAILIBRIUM_SECURITY_RATE_LIMIT_ENABLED`             | Whether rate limiting is enabled         |
+| `security.rate_limit.requests_per_second` | u32  | `10`    | `EMAILIBRIUM_SECURITY_RATE_LIMIT_REQUESTS_PER_SECOND` | Sustained requests per second per IP     |
+| `security.rate_limit.burst_size`          | u32  | `50`    | `EMAILIBRIUM_SECURITY_RATE_LIMIT_BURST_SIZE`          | Maximum burst size (initial token count) |
+
+Separately, `backend/src/middleware/rate_limit.rs` also reads a set of **raw, non-`EMAILIBRIUM_`-prefixed**
+env vars for its route-specific presets and Redis-backed distributed limiting -- these are not part
+of the Figment chain above:
+
+| Variable                        | Description                                                        |
+| ------------------------------- | ------------------------------------------------------------------ |
+| `RATE_LIMIT_PRESET`             | Named preset selecting a full set of route limits at once          |
+| `RATE_LIMIT_AUTH_START`         | Override for the OAuth-start route's limit                         |
+| `RATE_LIMIT_AUTH_CALLBACK`      | Override for the OAuth-callback route's limit                      |
+| `RATE_LIMIT_SESSION_STATUS`     | Override for the session-status route's limit                      |
+| `RATE_LIMIT_TOKEN_REFRESH`      | Override for the token-refresh route's limit                       |
+| `RATE_LIMIT_REDIS_URL`          | Redis URL for distributed (multi-instance) rate limiting           |
+| `RATE_LIMIT_ENABLE_REDIS`       | Whether to use Redis instead of in-memory limiting                 |
+| `RATE_LIMIT_REDIS_FALLBACK`     | Whether to fall back to in-memory limiting if Redis is unreachable |
+| `RATE_LIMIT_ENABLE_USER_LIMITS` | Whether to apply additional per-authenticated-user limits          |
+| `RATE_LIMIT_USER_MULTIPLIER`    | Multiplier applied to the base limit for authenticated users       |
+
+#### HSTS (`security.hsts.*`) -- R-05
+
+| Key                                | Type | Default    | Env Override                                   | Description                                               |
+| ---------------------------------- | ---- | ---------- | ---------------------------------------------- | --------------------------------------------------------- |
+| `security.hsts.enabled`            | bool | `false`    | `EMAILIBRIUM_SECURITY_HSTS_ENABLED`            | Whether the `Strict-Transport-Security` header is emitted |
+| `security.hsts.max_age_secs`       | u64  | `63072000` | `EMAILIBRIUM_SECURITY_HSTS_MAX_AGE_SECS`       | `max-age` directive in seconds (default: 2 years)         |
+| `security.hsts.include_subdomains` | bool | `true`     | `EMAILIBRIUM_SECURITY_HSTS_INCLUDE_SUBDOMAINS` | Whether the `includeSubDomains` directive is added        |
+
+`backend/src/middleware/security_headers.rs` also reads its own raw, non-`EMAILIBRIUM_`-prefixed
+env vars (these take priority over the `security.hsts.*`/`security.csp_enabled` keys above when set):
+
+| Variable                  | Description                                                         |
+| ------------------------- | ------------------------------------------------------------------- |
+| `HSTS_MAX_AGE`            | Overrides the HSTS `max-age` (seconds)                              |
+| `HSTS_PRELOAD`            | Whether to add the `preload` directive                              |
+| `CSP_REPORT_URI`          | CSP `report-uri` directive target                                   |
+| `CSP_ALLOW_INLINE_STYLES` | Whether to allow `'unsafe-inline'` in the CSP `style-src` directive |
+| `CSP_CONNECT_SRC_ORIGINS` | Additional origins allowed in the CSP `connect-src` directive       |
+
+## Application Settings (`config/app.yaml`)
+
+A **separate** config file from everything above -- general application settings, polling
+intervals, frontend cache tuning, UI defaults, and provider metadata. Loaded directly via
+`vectors::yaml_config::load_yaml_config`, **not** through Figment: no `config.local.yaml` layer,
+no `EMAILIBRIUM_*` env-var overrides. To change a value, edit `config/app.yaml` itself (or the
+per-environment copies in `config/environments/`) and restart the backend.
+
+### Sync & Polling (`sync.*`)
+
+| Key                                      | Default | Description                                            |
+| ---------------------------------------- | ------- | ------------------------------------------------------ |
+| `sync.poll_interval_secs`                | `15`    | Background email poll scheduler tick                   |
+| `sync.default_sync_frequency_minutes`    | `5`     | User-configurable sync interval default                |
+| `sync.sync_completion_stable_checks`     | `2`     | Number of stable count checks before marking sync done |
+| `sync.sync_completion_check_interval_ms` | `3000`  | Interval between stability checks                      |
+| `sync.max_sync_wait_polls`               | `120`   | Max polls before giving up (120 \* 3s = 6 min)         |
+
+### Email (`email.*`)
+
+| Key                                 | Default | Description                                    |
+| ----------------------------------- | ------- | ---------------------------------------------- |
+| `email.trash_retention_days`        | `30`    | Auto-purge trashed emails after N days         |
+| `email.spam_retention_days`         | `30`    | Auto-purge spam emails after N days            |
+| `email.label_repair_interval_hours` | `6`     | Re-resolve unresolved label IDs (0 = disabled) |
+
+### Frontend Cache -- React Query (`cache.*`)
+
+Tuning knobs for the frontend's TanStack Query cache. Rarely need changing; listed here for
+completeness since they're real, operator-editable settings.
+
+| Key                                             | Default | Description                                                                  |
+| ----------------------------------------------- | ------- | ---------------------------------------------------------------------------- |
+| `cache.default_stale_time_ms`                   | `30000` | Global default for React Query `staleTime`                                   |
+| `cache.default_retry_count`                     | `1`     | Global default retry count                                                   |
+| `cache.email_counts_stale_time_ms`              | `10000` | Stale time for email-count queries                                           |
+| `cache.email_counts_refetch_interval_ms`        | `30000` | Refetch interval for email-count queries                                     |
+| `cache.categories_stale_time_ms`                | `30000` | Stale time for category-list queries                                         |
+| `cache.labels_stale_time_ms`                    | `30000` | Stale time for label-list queries                                            |
+| `cache.chat_sessions_stale_time_ms`             | `30000` | Stale time for chat-session queries                                          |
+| `cache.subscriptions_stale_time_ms`             | `60000` | Stale time for subscription-list queries                                     |
+| `cache.ollama_models_stale_time_ms`             | `30000` | Stale time for the Ollama model-list query                                   |
+| `cache.model_catalog_stale_time_ms`             | `60000` | Stale time for the model-catalog query                                       |
+| `cache.clusters_stale_time_ms`                  | `10000` | Stale time for cluster-list queries (idle)                                   |
+| `cache.clusters_refetch_interval_ms`            | `30000` | Refetch interval for cluster-list queries (idle)                             |
+| `cache.clusters_active_stale_time_ms`           | `3000`  | Stale time for cluster-list queries during active ingestion                  |
+| `cache.clusters_active_refetch_interval_ms`     | `5000`  | Refetch interval for cluster-list queries during active ingestion            |
+| `cache.clustering_status_stale_time_ms`         | `5000`  | Stale time for the clustering-status query                                   |
+| `cache.clustering_status_refetch_interval_ms`   | `10000` | Refetch interval for the clustering-status query                             |
+| `cache.dashboard_accounts_refetch_interval_ms`  | `10000` | Refetch interval for the dashboard accounts widget                           |
+| `cache.dashboard_embedding_refetch_interval_ms` | `10000` | Refetch interval for the dashboard embedding-status widget                   |
+| `cache.embedding_active_refetch_interval_ms`    | `5000`  | Refetch interval during active re-embedding (must stay under the rate limit) |
+| `cache.ingestion_active_refetch_interval_ms`    | `3000`  | Poll interval for email counts + stats during active ingestion               |
+| `cache.ingestion_active_stale_time_ms`          | `2000`  | Stale time for queries during active ingestion                               |
+| `cache.stats_refetch_interval_ms`               | `30000` | Vector-stats poll interval (idle)                                            |
+| `cache.stats_active_refetch_interval_ms`        | `5000`  | Vector-stats poll interval (active ingestion)                                |
+
+### Network Timeouts (`network.*`)
+
+| Key                                      | Default  | Description                                        |
+| ---------------------------------------- | -------- | -------------------------------------------------- |
+| `network.ollama_fetch_timeout_ms`        | `3000`   | Timeout for the Ollama model-list fetch            |
+| `network.model_catalog_fetch_timeout_ms` | `3000`   | Timeout for the model-catalog fetch                |
+| `network.ingestion_start_timeout_ms`     | `300000` | 5 min -- sync fetches all emails from the provider |
+| `network.recluster_timeout_ms`           | `300000` | 5 min -- GraphSAGE + KMeans is compute-heavy       |
+| `network.reembed_timeout_ms`             | `60000`  | 1 min -- resets DB rows then triggers ingestion    |
+| `network.model_switch_poll_interval_ms`  | `2000`   | Poll interval during a model download              |
+| `network.model_switch_max_polls`         | `150`    | 150 \* 2s = 5 min max download wait                |
+
+### UI Defaults (`defaults.*`)
+
+Initial values for user-configurable settings; users can override them via the Settings page
+(persisted to `localStorage`).
+
+| Key                                  | Default       | Description                               |
+| ------------------------------------ | ------------- | ----------------------------------------- |
+| `defaults.theme`                     | `system`      | `light` \| `dark` \| `system`             |
+| `defaults.sidebar_position`          | `left`        | `left` \| `right`                         |
+| `defaults.font_size_px`              | `14`          | Base UI font size                         |
+| `defaults.email_density`             | `comfortable` | `compact` \| `comfortable` \| `spacious`  |
+| `defaults.data_retention_days`       | `90`          | GDPR: auto-delete local data after N days |
+| `defaults.sona_learning_enabled`     | `true`        | SONA adaptive learning on/off             |
+| `defaults.learning_rate_sensitivity` | `0.5`         | 0.0-1.0, how aggressively to adapt        |
+
+### Providers (`providers.*`)
+
+API key **environment variable names** and base URLs only -- the actual keys are never stored in
+this file. These are a separate registry from `generative.cloud.*`/`embedding.cloud.*` in
+`backend/config.yaml` above; both exist in the codebase today.
+
+| Key                                                  | Default                               | Description                                                   |
+| ---------------------------------------------------- | ------------------------------------- | ------------------------------------------------------------- |
+| `providers.ollama.base_url`                          | `http://localhost:11434`              | Ollama server URL                                             |
+| `providers.openai.api_key_env`                       | `OPENAI_API_KEY`                      | Env var name for the OpenAI key (no `EMAILIBRIUM_` prefix)    |
+| `providers.anthropic.api_key_env`                    | `ANTHROPIC_API_KEY`                   | Env var name for the Anthropic key (no `EMAILIBRIUM_` prefix) |
+| `providers.openrouter.api_key_env`                   | `OPENROUTER_API_KEY`                  | Env var name for the OpenRouter key                           |
+| `providers.openrouter.base_url`                      | `https://openrouter.ai/api/v1`        | OpenRouter API base URL                                       |
+| `providers.openrouter.required_headers.HTTP-Referer` | `https://emailibrium.app`             | Required OpenRouter attribution header                        |
+| `providers.openrouter.required_headers.X-Title`      | `Emailibrium`                         | Required OpenRouter attribution header                        |
+| `providers.google_oauth.client_id_env`               | `EMAILIBRIUM_GOOGLE_CLIENT_ID`        | Env var name for the Google OAuth client ID                   |
+| `providers.google_oauth.client_secret_env`           | `EMAILIBRIUM_GOOGLE_CLIENT_SECRET`    | Env var name for the Google OAuth client secret               |
+| `providers.microsoft_oauth.client_id_env`            | `EMAILIBRIUM_MICROSOFT_CLIENT_ID`     | Env var name for the Microsoft OAuth client ID                |
+| `providers.microsoft_oauth.client_secret_env`        | `EMAILIBRIUM_MICROSOFT_CLIENT_SECRET` | Env var name for the Microsoft OAuth client secret            |
+
+### Hardware Detection (`hardware.*`)
+
+| Key                         | Default                      | Description                                        |
+| --------------------------- | ---------------------------- | -------------------------------------------------- |
+| `hardware.backend_priority` | `[metal, cuda, vulkan, cpu]` | GPU backend selection priority order               |
+| `hardware.os_overhead_mb`   | `4096`                       | RAM reserved for OS + app when recommending models |
+
+### Security (`security.*`, app.yaml) -- distinct from `security.*` above
+
+Env var **names**, not the secrets themselves, plus two rate-limit/HSTS defaults that mirror (and
+today can drift from) the `security.rate_limit.*`/`security.hsts.*` keys in `backend/config.yaml`.
+
+| Key                                  | Default                                  | Description                                                          |
+| ------------------------------------ | ---------------------------------------- | -------------------------------------------------------------------- |
+| `security.jwt_secret_env`            | `JWT_SECRET`                             | Env var name for the JWT signing secret                              |
+| `security.encryption_key_env`        | `EMAILIBRIUM_ENCRYPTION_MASTER_PASSWORD` | Env var name for the encryption master password                      |
+| `security.rate_limit_capacity`       | `500`                                    | Max requests in the burst window (high for dev; lower in production) |
+| `security.rate_limit_refill_per_sec` | `20.0`                                   | Tokens refilled per second                                           |
+| `security.hsts_max_age_secs`         | `63072000`                               | HSTS `max-age` (2 years)                                             |
+
+### Rules Studio (`rules.*`)
+
+| Key                                 | Default | Description                                       |
+| ----------------------------------- | ------- | ------------------------------------------------- |
+| `rules.suggestions_page_size`       | `5`     | Suggestions loaded per "Build with AI" click      |
+| `rules.suggestions_min_email_count` | `5`     | Min emails from a sender to appear in suggestions |
+
+### Paths (`paths.*`)
+
+| Key                         | Default                     | Description                          |
+| --------------------------- | --------------------------- | ------------------------------------ |
+| `paths.llm_cache_dir`       | `~/.emailibrium/models/llm` | GGUF model cache directory           |
+| `paths.embedding_cache_dir` | `.fastembed_cache`          | ONNX/fastembed model cache directory |
+| `paths.vector_data_dir`     | `data/vectors`              | Vector store data directory          |
+| `paths.database_file`       | `emailibrium.db`            | SQLite database filename             |
+
+### Other
+
+| Key       | Default | Description                            |
+| --------- | ------- | -------------------------------------- |
+| `version` | `"1.0"` | `config/app.yaml`'s own schema version |
 
 ## Configuration Files
 

@@ -153,6 +153,3 @@ just dev
 | `just release-push`              | Push latest tag to origin                                     |
 | `just release VERSION=x.y.z`     | Full one-command release (bump, changelog, commit, tag, push) |
 | `just changelog`                 | Regenerate CHANGELOG.md via git-cliff                         |
-| `just release-check`             | Run full CI pipeline only                                     |
-| `just release-tag VERSION=x.y.z` | Create annotated tag only                                     |
-| `just release-push`              | Push latest tag to origin only                                |

@@ -5,6 +5,13 @@
 **Authors:** Chris Phillipson, Claude
 **Supersedes:** Partial defaults in ADR-009 (GraphSAGE + KMeans++ pipeline)
 
+## Amendments
+
+- **2026-08-01 — Numbering collision noted.** `docs/ADRs/ADR-021-built-in-local-llm.md`
+  independently self-identifies as ADR-021 too. Both files are left as originally
+  numbered/titled (renumbering is a filing decision outside this note's scope); this entry
+  exists so a reader who lands on either doesn't assume the other is a duplicate or typo.
+
 ## Context
 
 The clustering pipeline (embedding + categorization + GraphSAGE + KMeans++ + TF-IDF)

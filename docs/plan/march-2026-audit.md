@@ -1,5 +1,11 @@
 # Documentation Audit Report — Emailibrium
 
+> **Point-in-time document, superseded.** `make install`/`make dev`/`make docker-secrets`
+> below predate ADR-032 (Make -> just, 2026-07-31); use `just install`/`just dev`/
+> `just docker-secrets` instead. For a current documentation-accuracy audit, see
+> `docs/audit/inventory.md` and `docs/audit/drift-report.md` -- this report's own findings
+> have since been remediated where they overlapped.
+
 **Date:** 2026-03-24
 **Scope:** All 32 project docs vs actual implementation
 **Method:** 5-agent parallel swarm audit (architecture/ADRs, DDDs, guides, plans, code inventory)

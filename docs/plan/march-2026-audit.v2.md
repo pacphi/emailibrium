@@ -1,5 +1,16 @@
 # Emailibrium Audit v2 — March 2026
 
+> **Point-in-time snapshot — not current guidance.** Every figure below (ADR/DDD counts,
+> Makefile target counts, CI job list, LOC counts, coverage estimates) reflects the repo's
+> state on 2026-03-31 and has since drifted, sometimes substantially: `docs/ADRs/` now has
+> 29 files (not 23), `Makefile`s were removed entirely in ADR-032 (Make -> just, 2026-07-31)
+> so "Makefile targets: 100+" no longer applies, and the "CI jobs: 11 (..., lighthouse,
+> bundlewatch, ...)" enumeration below names jobs that were never in `ci.yml` (bundlewatch
+> never existed anywhere in this repo; lighthouse lives in its own separate,
+> `workflow_dispatch`-only workflow) -- the 11 count matches `ci.yml`'s current job count
+> only by coincidence, not because that job list is accurate. For current counts, check the
+> repo directly rather than this report.
+
 **Date:** 2026-03-31
 **Auditor:** Agentic QE MCP (SAST) + cargo-audit + pnpm audit + manual review
 **Scope:** Implementation, testing, documentation, security posture, commercial licensing exposure

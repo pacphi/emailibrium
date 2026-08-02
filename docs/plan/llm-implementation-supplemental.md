@@ -2,6 +2,9 @@
 
 ## Emailibrium: Tiered AI Provider Architecture
 
+> **Point-in-time document.** `make download-models`/`make dev` referenced below predate
+> ADR-032 (Make -> just, 2026-07-31); use `just download-models`/`just dev` instead.
+
 Version 1.0 | Date: 2026-03-23 | Status: Sprint-Ready
 
 ---

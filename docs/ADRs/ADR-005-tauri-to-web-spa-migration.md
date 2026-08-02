@@ -3,6 +3,31 @@
 - **Status**: Proposed
 - **Date**: 2026-03-23
 
+## Amendments
+
+The Status, Context, Decision, and Consequences below are left exactly as originally
+written. These notes record what has changed since, without rewriting the historical
+record.
+
+- **2026-08-01 — Effectively shipped.** The web SPA migration has been implemented; this
+  repo's `frontend/` tree matches the Technology Stack section below exactly (React 19,
+  Zustand, TanStack Router, Tailwind, Vite, Vitest + RTL + Playwright). Status is left as
+  `Proposed` above per this pipeline's own no-quiet-edits convention -- this note is the
+  correction, not a silent field change.
+- **2026-08-01 — Performance Budget enforcement correction.** `.github/workflows/lighthouse.yml`
+  only runs via `workflow_dispatch` (manual trigger) -- it is not wired to any `pull_request`
+  or `push` event, so no PR is ever blocked by it. `frontend/lighthouserc.json`'s assertions
+  (LCP/FCP/CLS/TBT/category scores) are in fact all severity `"error"` -- a manual run would
+  genuinely fail on a budget miss, contradicting that workflow's own header comment, which
+  claims `"warn"`-only and is itself stale (parked as a discovered item, not fixed here --
+  it's a workflow-file comment, not a doc in this pipeline's scope). Net effect either way:
+  no automatic gate exists today. No Bundlewatch integration exists anywhere in this repo
+  (`grep -rn -i bundlewatch .github/workflows/` returns nothing) -- the bundle-size row was
+  aspirational, never implemented.
+- **2026-08-01 — Accessibility correction.** No `axe-core` (or equivalent) automated
+  accessibility check runs in CI. WCAG 2.1 AA compliance is a design target verified
+  manually, not gated by a check.
+
 ## Context
 
 The original Emailibrium plan specified Tauri 2.0 as the desktop application framework. This decision is being revisited in favor of a pure web SPA (Single Page Application) built with React and TypeScript. The migration is motivated by distribution friction (desktop apps require download, install, and platform-specific builds), cross-platform limitations (Tauri requires separate testing on macOS, Windows, Linux), and development velocity (web HMR cycles are approximately 10x faster than Tauri rebuild cycles).
@@ -57,13 +82,13 @@ Rust Backend Server (Axum)
 
 ### Performance Budget
 
-| Metric                         | Target             | Enforcement             |
-| ------------------------------ | ------------------ | ----------------------- |
-| Largest Contentful Paint (LCP) | < 1.5s             | Lighthouse CI gate      |
-| First Input Delay (FID)        | < 100ms            | Lighthouse CI gate      |
-| Cumulative Layout Shift (CLS)  | < 0.1              | Lighthouse CI gate      |
-| Initial bundle size (gzipped)  | < 200KB            | Bundlewatch CI gate     |
-| Route-based code splitting     | All feature routes | Build-time verification |
+| Metric                         | Target             | Enforcement                      |
+| ------------------------------ | ------------------ | -------------------------------- |
+| Largest Contentful Paint (LCP) | < 1.5s             | Lighthouse CI gate               |
+| First Input Delay (FID)        | < 100ms            | Lighthouse CI gate               |
+| Cumulative Layout Shift (CLS)  | < 0.1              | Lighthouse CI gate               |
+| Initial bundle size (gzipped)  | < 200KB            | Not CI-enforced (see Amendments) |
+| Route-based code splitting     | All feature routes | Build-time verification          |
 
 ### Accessibility
 

@@ -1,5 +1,9 @@
 # Predecessor Comparison: pacphi/emailibrium vs Current Repo
 
+> **Point-in-time document.** `make` commands referenced below (e.g. `make setup`) predate
+> ADR-032 (Make -> just, 2026-07-31) -- the Makefiles were removed; use the equivalent `just`
+> recipe instead (`just install`/`just setup`, etc.).
+
 **Date:** 2026-03-24
 **Purpose:** Identify capabilities from the predecessor Rust/Tauri implementation worth adopting into the current vector-native platform.
 
