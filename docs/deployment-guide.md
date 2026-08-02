@@ -92,7 +92,7 @@ search:
 
 # Generative AI (ADR-012, ADR-021) -- classification fallback and chat
 generative:
-  provider: 'builtin' # "builtin" | "none" | "ollama" | "cloud"
+  provider: 'builtin' # "builtin" | "none" | "ollama" | "cloud" | "openrouter"
   builtin:
     model_id: 'qwen3-1.7b-q4km'
     context_size: 2048

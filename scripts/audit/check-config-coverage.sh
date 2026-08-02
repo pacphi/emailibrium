@@ -20,10 +20,31 @@
 # `security.hsts_max_age_secs`). Every one of those was proven with a real key deleted from
 # a scratch copy of the doc during phase 6's own adversarial review -- see
 # .autopilot/court/docs-accuracy-audit/phase-6.md.
+#
+# MIN_EXPECTED_KEYS is a sanity floor on the *extraction*, not the coverage ratio: a
+# failing extract-config-keys.sh piped into `while read` via process substitution does NOT
+# trip `set -e` in the parent shell (the subshell's exit status isn't checked) -- it just
+# produces zero lines, which read as "0 keys, 0 undocumented, 100% covered". Caught during
+# the integration review for this same pipeline: a deliberately broken extractor produced a
+# clean "All config keys documented (0 checked)" pass. Floor set comfortably below the real
+# count (156 as of this writing).
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 DOC="$REPO_ROOT/docs/configuration-reference.md"
+MIN_EXPECTED_KEYS=100
+
+keys="$(bash "$REPO_ROOT/scripts/audit/extract-config-keys.sh")"
+key_count=$(printf '%s\n' "$keys" | grep -c . || true)
+
+if [ "$key_count" -lt "$MIN_EXPECTED_KEYS" ]; then
+  echo "::error::scripts/audit/extract-config-keys.sh returned only $key_count key(s) (expected at least $MIN_EXPECTED_KEYS)." >&2
+  echo "This almost certainly means the extraction script itself is broken (a YAML parse error in" >&2
+  echo "backend/config.yaml or config/app.yaml, or its grep/sed pipeline no longer matching), NOT that" >&2
+  echo "the config surface shrank by ~50 keys. Run \`bash scripts/audit/extract-config-keys.sh\` standalone" >&2
+  echo "and fix whatever it reports before touching any doc." >&2
+  exit 1
+fi
 
 undocumented=()
 while IFS= read -r prefixed_key; do
@@ -32,7 +53,7 @@ while IFS= read -r prefixed_key; do
   key="${key#env:}"
   escaped_key=$(printf '%s' "$key" | sed 's/[.[\*^$/]/\\&/g')
   grep -qE -- "\`${escaped_key}\`" "$DOC" || undocumented+=("$prefixed_key")
-done < <(bash "$REPO_ROOT/scripts/audit/extract-config-keys.sh")
+done <<< "$keys"
 
 if [ "${#undocumented[@]}" -gt 0 ]; then
   echo "::error::${#undocumented[@]} config key(s) exist in code but are not documented in docs/configuration-reference.md:" >&2
