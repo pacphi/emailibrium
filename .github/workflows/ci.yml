@@ -269,7 +269,10 @@ jobs:
         working-directory: frontend
         run: pnpm turbo build
 
-  # Documentation validation
+  # Documentation validation (format/lint only — does this markdown/yaml parse and follow
+  # style rules). Whether the docs' *content* is still true is a separate concern, checked
+  # by the path-filtered .github/workflows/docs-accuracy.yml instead: see
+  # docs/audit/README.md for what that gate checks and how to re-baseline it.
   validate-markdown:
     name: Validate Markdown
     runs-on: ubuntu-latest

@@ -1,0 +1,67 @@
+name: Docs Accuracy
+
+# Mechanical drift checks only, per docs/audit/README.md's rationale — never gates on
+# wording, tone, or completeness, only on things a script can prove: does a config key
+# documented (or missing) in docs/configuration-reference.md actually exist in code, and
+# does every real REST route have an OpenAPI entry (or a documented reason it can't).
+#
+# Path-filtered to what these checks can actually be affected by, so unrelated PRs never
+# see this job. If either check starts firing on false positives, disable it here first and
+# fix the underlying script/doc at leisure rather than letting a noisy gate erode trust in
+# every other required check — see docs/audit/README.md.
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - "backend/src/**"
+      - "backend/config.yaml"
+      - "config/app.yaml"
+      - "docs/configuration-reference.md"
+      - "docs/api/openapi.yaml"
+      - "docs/audit/api-coverage.md"
+      - "scripts/audit/**"
+      - ".github/workflows/docs-accuracy.yml"
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - "backend/src/**"
+      - "backend/config.yaml"
+      - "config/app.yaml"
+      - "docs/configuration-reference.md"
+      - "docs/api/openapi.yaml"
+      - "docs/audit/api-coverage.md"
+      - "scripts/audit/**"
+      - ".github/workflows/docs-accuracy.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: docs-accuracy-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  config-key-coverage:
+    name: Config Key Coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install PyYAML
+        run: pip install pyyaml
+      - name: Every real config key is documented
+        run: bash scripts/audit/check-config-coverage.sh
+
+  api-route-coverage:
+    name: API Route Coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install PyYAML
+        run: pip install pyyaml
+      - name: Every real REST route is documented (or explicitly excluded)
+        run: bash scripts/audit/check-api-coverage.sh
