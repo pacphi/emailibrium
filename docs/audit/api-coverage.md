@@ -21,14 +21,16 @@ zero missing, zero extra.
 
 Starting point for this phase (per `docs/audit/drift-report.md`, phase 0): 12 documented paths
 against ~124 raw route fragments — most of the HTTP surface was undocumented. This phase closed
-that gap in two passes:
+that gap in two passes: fixed 8 pre-existing `openapi.yaml` entries that were wrong
+(camelCase/snake_case mismatches, one hallucinated path), then added entries for the rest of
+the real surface. The final spec's 136 paths, by domain (from `docs/api/openapi.yaml`'s own
+`tags:`, one tag per path, summing to the full 136 -- this replaces an earlier draft's
+"124 newly-added, by domain" tally, whose per-domain figures didn't actually sum to its own
+stated 124 total):
 
-- 8 pre-existing `openapi.yaml` entries were wrong (camelCase/snake_case mismatches, one
-  hallucinated path) and were fixed rather than left in place.
-- 124 previously-undocumented routes were added across 13 domains: AI (22), Emails +
-  Attachments (25), Auth (10), Cleanup (10), Consent + Evaluation (16), Clustering (6), Rules
-  (6), Interactions (4), Learning (4), Wipe (5), Backup (3), Unsubscribe (3), Vectors remainder
-  (3), Ingestion remainder (8), Insights remainder (2).
+AI (22), Auth (10), Backup (3), Cleanup (10), Clustering (6), Consent (8), Emails +
+Attachments (22), Evaluation (8), Ingestion (12), Insights (5), Interactions (4), Learning (4),
+Rules (6), Unsubscribe (3), Vectors (8), Wipe (5).
 
 ## Deliberate exclusions
 
