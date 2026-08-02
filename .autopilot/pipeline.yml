@@ -49,14 +49,14 @@ spec: |
   new one for each addition.
 
 references:
-  prd:     ""
-  plan:    ""
+  prd: ""
+  plan: ""
   adr_dir: "docs/ADRs"
   ddd_dir: "docs/DDDs"
-  extra:   ["docs/user-guide.md"]
+  extra: ["docs/user-guide.md"]
 
 trunk: main
-base:  develop
+base: develop
 
 autonomy: pr_ci
 
@@ -86,7 +86,12 @@ phases:
       - "prose: apps/web/src/features/command-center/hooks/useCommandPalette.ts no longer contains its own document.addEventListener('keydown', ...) block"
     conventions: "Match apps/web/src/shared/hooks/useKeyboard.ts's existing JSDoc and ShortcutMap conventions; follow the repo's existing Vitest + Testing Library patterns for hook tests."
     depends_on: []
-    touches: ["frontend/apps/web/src/shared/hooks/**", "frontend/apps/web/src/features/command-center/**", "frontend/apps/web/src/features/email/EmailList.tsx"]
+    touches:
+      [
+        "frontend/apps/web/src/shared/hooks/**",
+        "frontend/apps/web/src/features/command-center/**",
+        "frontend/apps/web/src/features/email/EmailList.tsx",
+      ]
     adrs: []
     ddd: []
 

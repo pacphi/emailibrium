@@ -15,7 +15,7 @@ import { CommandPalette } from './CommandPalette';
 import { SearchResults } from './SearchResults';
 import { SyncStatusIndicator } from './SyncStatusIndicator';
 import { useStats } from './hooks/useStats';
-import { useCommandPalette } from './hooks/useCommandPalette';
+import { useCommandPaletteStore } from './hooks/useCommandPalette';
 import { useSyncStore } from '@/shared/stores/syncStore';
 import { useAppConfig } from '@/shared/hooks';
 
@@ -27,7 +27,7 @@ export function CommandCenter() {
     return params.get('view') === 'search' ? 'search' : 'dashboard';
   });
   const [completeDismissed, setCompleteDismissed] = useState(false);
-  const { open: openPalette } = useCommandPalette();
+  const openPalette = useCommandPaletteStore((s) => s.open);
   const queryClient = useQueryClient();
   const appConfig = useAppConfig();
   const { cache } = appConfig;
