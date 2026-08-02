@@ -1,5 +1,9 @@
 # CI/CD Potential Improvements for Built-in LLM
 
+> **Point-in-time proposal.** `make test-ai` referenced below was never implemented under
+> `make` or its post-ADR-032 (2026-07-31) `just` replacement -- there is no `test-ai` recipe
+> in any `justfile` today.
+
 Date: 2026-03-26 | Status: Proposed | Context: ADR-021, BL-1 through BL-4, UX alignment
 
 ---
