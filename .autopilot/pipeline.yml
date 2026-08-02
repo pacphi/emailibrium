@@ -1,230 +1,156 @@
-# pipeline.yml — QUEUED plan, parked by autopilot:plan on 2026-07-31.
+# pipeline.yml — QUEUED plan, parked by autopilot:plan on 2026-08-01.
 #
-# NOT ACTIVE. The `ci-build-optimization` pipeline is still in flight (3 of 8 phases
-# shipped at parking time), and there is only ever ONE active .autopilot/pipeline.yml.
-# This file lives in the git-ignored .autopilot/queued/ dir until a human promotes it
-# (mv into place + seed ledger record 0 + commit — see the autopilot plugin's
-# docs/lifecycle.md). Its ledger is deliberately NOT seeded yet.
+# NOT ACTIVE. `docs-accuracy-audit` is still in flight, and there is only ever ONE active
+# .autopilot/pipeline.yml. This file lives in the git-ignored .autopilot/queued/ dir until a
+# human promotes it (mv into place + seed ledger record 0 + commit — see the autopilot
+# plugin's docs/lifecycle.md).
 #
-# ORDERING MATTERS: promote this only AFTER ci-build-optimization finishes. Its phase 7
-# (Make -> Just) rewrites the command examples in README.md, QUICKSTART.md, CLAUDE.md and
-# most of docs/*.md. Auditing docs before that lands would audit text that is about to be
-# rewritten, and the two pipelines would collide on nearly every file.
+# This pipeline's footprint (frontend/apps/web/src/**, docs/user-guide.md) is disjoint from
+# both docs-accuracy-audit's remaining phases and the queued postgres-support pipeline
+# (backend/**, CI, deployment/config docs), so ordering between the two queued plans doesn't
+# matter — promote whichever the user wants to run first.
 
-feature_id: "docs-accuracy-audit"
-goal: "Make every doc in the repo an accurate description of what the code actually does today, audited and remediated per consumer persona, with guardrails so it stops drifting."
+feature_id: "keyboard-shortcuts"
+goal: "Implement, test, and ship the keyboard shortcuts that docs-accuracy-audit phase 1 removed from docs.md as aspirational-but-unbuilt, alongside the shortcuts already implemented and documented, as one reconciled set."
 spec: |
-  Audit and remediate the documentation corpus so it reflects the current implementation for
-  every persona that consumes it. Motivating evidence gathered while scoping (2026-07-31):
+  Motivating evidence gathered while scoping (2026-08-01):
 
-    * API surface drift: the backend registers ~124 distinct route paths
-      (`grep -rhoE '\.route\("[^"]+"' backend/src | sort -u`), while docs/api/openapi.yaml
-      documents 12 path entries. Even discounting nesting prefixes, most of the HTTP surface
-      is undocumented.
-    * Known stale claims already logged as parking-lot items on the ci-build-optimization
-      pipeline: docs/ADRs/ADR-005-tauri-to-web-spa-migration.md still describes a "Bundlewatch
-      CI gate" that never had teeth and no longer exists; docs/plan/march-2026-audit.v2.md
-      still counts 11 CI jobs (now 9).
-    * Recent large features landed without a documentation pass being verified — notably the
-      unified MCP tool registry + stdio transport (PR #203) and the Dependabot consolidation
-      (PR #202).
-    * ~3,200 lines across the 11 main human-facing guides, none of which have an automated
-      accuracy check today. Only internal-link checking (lychee) exists.
+    * The docs-accuracy-audit pipeline's phase 1 diff to docs/user-guide.md (or
+      docs/user-interface-overview.md) removed a Keyboard Shortcuts table row set that did not
+      match any real implementation: `C` (compose), `R` (reply), `F` (forward), `E` (archive),
+      `#` (delete), `J`/`K` (next/prev in list — since superseded by arrow-key nav), `Cmd+Shift+A`
+      (select all), `Cmd+,` (open settings), `?` (show shortcut help). What survived the
+      correction — because it's real — is `Cmd+K` (command palette), `Escape`, `↓`/`↑` (list
+      nav), `Cmd+Enter` (send reply), `Enter`/`Shift+Enter` (chat box). The corrected doc now
+      states explicitly: "Other actions (compose, reply, forward, archive, delete, search focus,
+      select-all, open settings) are click/tap-only today — there is no keyboard shortcut for
+      them yet."
+    * `frontend/apps/web/src/shared/hooks/useKeyboard.ts` already exists: a complete,
+      well-designed shortcut-registration hook (`ShortcutMap` — string like `"cmd+shift+p"` to
+      handler; auto preventDefault/stopPropagation; skips non-modifier shortcuts while an
+      input/textarea/contenteditable is focused). It is exported from the shared hooks barrel
+      (`apps/web/src/shared/hooks/index.ts`, `apps/web/src/shared/index.ts`) but has **zero call
+      sites** anywhere in the app and zero test coverage — built, then apparently never wired up,
+      which is likely exactly how the doc drifted ahead of the implementation in the first place.
+    * The two shortcuts that DO work today are wired ad hoc, not through that hook:
+      `apps/web/src/features/command-center/hooks/useCommandPalette.ts` has its own raw
+      `document.addEventListener('keydown', ...)` checking `(event.metaKey || event.ctrlKey) &&
+      event.key === 'k'`; `apps/web/src/features/email/EmailList.tsx` has a local
+      `React.KeyboardEvent` handler for list navigation. Neither goes through useKeyboard.
+    * Relevant existing feature surfaces the new shortcuts need to call into:
+      apps/web/src/features/email/ComposeEmail.tsx (compose), ReplyBox.tsx (reply),
+      EmailList.tsx (archive/delete/select-all state), MoveDialog.tsx.
 
-  Personae / consumers to cover, each with its own doc set:
-    1. End user            — README.md, QUICKSTART.md, docs/user-guide.md,
-                             docs/user-interface-overview.md, images/*.png
-    2. Operator / deployer — docs/setup-guide.md, docs/deployment-guide.md,
-                             docs/oauth-setup-guide.md, docs/configuration-reference.md,
-                             docker-compose*.yml
-    3. API / MCP consumer  — docs/api/openapi.yaml, MCP tool documentation
-    4. Contributor / maintainer — docs/maintainer-guide.md, docs/releasing.md,
-                             docs/architecture.md
-    5. AI coding agent     — CLAUDE.md, AGENTS.md (this repo is heavily agent-driven, so these
-                             are load-bearing, not decoration)
-    6. Decision reader     — docs/ADRs/**, docs/DDDs/** (historical records: correct by
-                             annotation/superseding, never by rewriting history)
+  Scope: implement the 8 removed-from-docs shortcuts for real (C, R, F, E, #, Cmd+Shift+A,
+  Cmd+,, ?) — J/K is intentionally NOT restored, since arrow-key nav already superseded it and
+  restoring a second nav binding would be a regression, not parity. Consolidate the 2 already-
+  working shortcuts onto the same useKeyboard registry so there is one dispatch mechanism and
+  one source of truth for the docs table going forward, instead of two ad hoc listeners plus a
+  new one for each addition.
 
 references:
-  prd: ""
-  plan: ""
+  prd:     ""
+  plan:    ""
   adr_dir: "docs/ADRs"
   ddd_dir: "docs/DDDs"
-  extra: ["docs/api/openapi.yaml", "README.md", "QUICKSTART.md", "AGENTS.md", "CLAUDE.md"]
+  extra:   ["docs/user-guide.md"]
 
 trunk: main
-base: develop
+base:  develop
 
-# pr_ci to match how the user has been running ci-build-optimization: each phase branches off
-# develop, PRs into develop, auto-merges on green CI; one final develop -> main PR is the human
-# review point. CI covers PRs into develop (widened to [main, develop] on 2026-07-31).
 autonomy: pr_ci
 
 fix_budget: 5
-
-# Phases 1-5 are per-persona and touch disjoint file sets, so this plan is a genuine candidate
-# for max_parallel > 1 once the user trusts the loop. Left serial by default.
 max_parallel: 1
 requeue_budget: 2
 
-# Phase 6 adds CI enforcement. A doc gate that is too strict would block every future PR in the
-# repo, so it gets the adversarial passes. The remediation phases only edit prose.
-risk_phases: [6]
+# Plain UI feature work — no auth/merge/security logic, no generated-edit execution. Every
+# phase still gets the mandatory Tier-3 adversarial review regardless of this list being empty.
+risk_phases: []
 
 court: auto
 
 phases:
   - id: 0
-    goal: "A ground-truth inventory exists that says, per doc and per persona, exactly which claims are still true, which are stale, and which are missing — so remediation is driven by evidence instead of vibes."
-    track: "audit"
+    goal: "One shortcut-dispatch mechanism exists and is proven: useKeyboard is wired into the app shell, both currently-working shortcuts are migrated onto it with no behavior change, and the hook itself finally has test coverage."
+    track: "keyboard-shortcuts"
     deliverables:
-      - "docs/audit/inventory.md — every tracked doc listed with its persona owner, last-meaningful-update date (from git), and line count."
-      - "docs/audit/drift-report.md — an itemized, evidence-backed list of inaccurate or missing claims, each citing file:line in the doc AND the file:line in code (or the command output) that contradicts it. Every item tagged with its persona and a severity (breaks-a-user / misleading / cosmetic)."
-      - "scripts/audit/extract-routes.sh — emits the backend's actual HTTP route surface, so the API drift number is reproducible rather than a one-off grep."
-      - "scripts/audit/extract-config-keys.sh — emits the actual config keys the backend reads, for checking docs/configuration-reference.md."
+      - "useKeyboard mounted once at the app-shell/layout level as the single global shortcut registry (not per-feature ad hoc listeners)."
+      - "Cmd+K (apps/web/src/features/command-center/hooks/useCommandPalette.ts) migrated from its raw document listener onto the registry."
+      - "↓/↑ list navigation (apps/web/src/features/email/EmailList.tsx) migrated onto the registry where feasible without breaking list-item-focus semantics."
+      - "apps/web/src/shared/hooks/useKeyboard.test.ts — first-ever test coverage for the hook (modifier matching, editable-field guard, cleanup on unmount)."
     definition_of_done:
-      - "cmd: test -f docs/audit/inventory.md && test -f docs/audit/drift-report.md"
-      - "cmd: bash scripts/audit/extract-routes.sh | head -1"
-      - "cmd: bash scripts/audit/extract-config-keys.sh | head -1"
-      - "grep: End user in docs/audit/inventory.md"
-      - "grep: Operator in docs/audit/inventory.md"
-      - "grep: API in docs/audit/inventory.md"
-      - "grep: Contributor in docs/audit/inventory.md"
-      - "grep: AI coding agent in docs/audit/inventory.md"
-      - "grep: Decision reader in docs/audit/inventory.md"
-      - "prose: every item in drift-report.md cites BOTH a doc file:line and the contradicting code file:line or command output — no unevidenced assertions. Spot-check at least 5 items by re-running the cited evidence."
-    conventions: "This phase writes NO remediation — it only establishes ground truth. Resist fixing things you find; record them. A fix made here escapes the per-persona review that phases 1-5 give it. The extract-*.sh scripts must be deterministic and CI-runnable (no interactive prompts, no network) because phase 6 reuses them as the drift gate."
+      - "cmd: pnpm --filter web test -- useKeyboard passes"
+      - "cmd: pnpm --filter web test passes (full suite — existing Cmd+K and list-nav behavior tests, if any, still pass unchanged)"
+      - "cmd: pnpm --filter web typecheck passes"
+      - "prose: apps/web/src/features/command-center/hooks/useCommandPalette.ts no longer contains its own document.addEventListener('keydown', ...) block"
+    conventions: "Match apps/web/src/shared/hooks/useKeyboard.ts's existing JSDoc and ShortcutMap conventions; follow the repo's existing Vitest + Testing Library patterns for hook tests."
     depends_on: []
-    touches: ["docs/audit/**", "scripts/audit/**"]
+    touches: ["frontend/apps/web/src/shared/hooks/**", "frontend/apps/web/src/features/command-center/**", "frontend/apps/web/src/features/email/EmailList.tsx"]
     adrs: []
     ddd: []
 
   - id: 1
-    goal: "An end user can follow README/QUICKSTART/user-guide start to finish and have every step match what the app actually does."
-    track: "end-user"
+    goal: "C, R, and F work: compose, reply, and forward are keyboard-accessible."
+    track: "keyboard-shortcuts"
     deliverables:
-      - "README.md, QUICKSTART.md, docs/user-guide.md, docs/user-interface-overview.md corrected against the drift report's end-user items."
-      - "Screenshots in images/ verified to match the current UI, with any materially stale one replaced or removed (a wrong screenshot is worse than none)."
-      - "Every command in these docs verified to actually run as written."
+      - "`C` opens compose (global, not scoped to a focused email) — wires into ComposeEmail.tsx's existing open path."
+      - "`R` opens reply on the currently focused/open email — wires into ReplyBox.tsx."
+      - "`F` opens forward on the currently focused/open email."
     definition_of_done:
-      - "cmd: markdownlint-cli2 --config .markdownlint.yaml README.md QUICKSTART.md docs/user-guide.md docs/user-interface-overview.md"
-      - "cmd: lychee --scheme file --include-fragments --config .lychee.toml README.md QUICKSTART.md docs/user-guide.md docs/user-interface-overview.md"
-      - "grep:absent: TODO|FIXME|TBD in README.md QUICKSTART.md docs/user-guide.md"
-      - "prose: every shell command shown in these four docs was executed (or explicitly dry-run justified) and produced the documented result — list each command and its outcome in the PR body."
-      - "prose: every end-user-tagged item in docs/audit/drift-report.md is either fixed here or explicitly deferred with a written reason."
-    conventions: "Match the existing voice of each doc. QUICKSTART is deliberately terse (87 lines) — keep it that way; depth belongs in user-guide.md. Do not add aspirational features: if the code cannot do it, the doc must not claim it."
+      - "cmd: pnpm --filter web test passes, including new tests asserting each of C/R/F triggers its action and is a no-op with nothing focused where that applies"
+      - "cmd: pnpm --filter web typecheck passes"
+      - "prose: all three are registered through the phase-0 useKeyboard instance, not a new ad hoc listener"
+    conventions: "Reuse the existing compose/reply/forward trigger functions already called by the click-driven UI — the shortcut is a second entry point into the same action, not a new implementation of it."
     depends_on: [0]
-    touches:
-      [
-        "README.md",
-        "QUICKSTART.md",
-        "docs/user-guide.md",
-        "docs/user-interface-overview.md",
-        "images/**",
-      ]
+    touches: ["frontend/apps/web/src/features/email/**", "frontend/apps/web/src/features/chat/**"]
     adrs: []
     ddd: []
 
   - id: 2
-    goal: "An operator can stand up and configure the system from the docs alone, with every config key, env var, and compose service matching reality."
-    track: "operator"
+    goal: "E, #, and Cmd+Shift+A work: archive, delete, and select-all are keyboard-accessible."
+    track: "keyboard-shortcuts"
     deliverables:
-      - "docs/setup-guide.md, docs/deployment-guide.md, docs/oauth-setup-guide.md corrected against the drift report's operator items."
-      - "docs/configuration-reference.md reconciled against the real config surface via scripts/audit/extract-config-keys.sh — every documented key exists, every existing key is documented (or explicitly marked internal)."
-      - "Compose services, ports, volumes, and required secrets in the docs verified against docker-compose.yml and docker-compose.dev.yml."
+      - "`E` archives the currently focused email."
+      - "`#` deletes the currently focused email."
+      - "`Cmd+Shift+A` selects all emails in the current view."
     definition_of_done:
-      - 'cmd: bash scripts/audit/extract-config-keys.sh | sed -E "s/^(yaml|app-yaml|env)://" > /tmp/keys.txt && while read -r k; do grep -q -- "$k" docs/configuration-reference.md || { echo "UNDOCUMENTED: $k"; exit 1; }; done < /tmp/keys.txt'
-      - "cmd: markdownlint-cli2 --config .markdownlint.yaml docs/setup-guide.md docs/deployment-guide.md docs/oauth-setup-guide.md docs/configuration-reference.md"
-      - "cmd: lychee --scheme file --include-fragments --config .lychee.toml docs/setup-guide.md docs/deployment-guide.md docs/oauth-setup-guide.md docs/configuration-reference.md"
-      - "cmd: docker compose -f docker-compose.yml config -q"
-      - "cmd: docker compose -f docker-compose.yml -f docker-compose.dev.yml config -q"
-      - "prose: every service name, published port, and required secret named in the operator docs was cross-checked against the compose files — cite the compose line for each."
-    conventions: "Never put real secret values in docs, only placeholder names — see the security_invariants in .autopilot/profile.yml. The repo keeps a secrets/ dir and Docker secrets; document the mechanism, never the material."
+      - "cmd: pnpm --filter web test passes, including new tests asserting archive/delete fire the same mutation the click UI fires, and select-all selects every currently-visible row"
+      - "cmd: pnpm --filter web typecheck passes"
+    conventions: "Reuse EmailList.tsx's existing archive/delete/select-all handlers — same pattern as phase 1."
     depends_on: [0]
-    touches:
-      [
-        "docs/setup-guide.md",
-        "docs/deployment-guide.md",
-        "docs/oauth-setup-guide.md",
-        "docs/configuration-reference.md",
-      ]
+    touches: ["frontend/apps/web/src/features/email/**"]
     adrs: []
     ddd: []
 
   - id: 3
-    goal: "The documented API and MCP surface matches what the server actually exposes, closing the ~124-routes-vs-12-documented gap."
-    track: "api-consumer"
+    goal: "Cmd+, and ? work: settings is keyboard-accessible, and a help surface documents the live shortcut set."
+    track: "keyboard-shortcuts"
     deliverables:
-      - "docs/api/openapi.yaml expanded to cover the real HTTP surface emitted by scripts/audit/extract-routes.sh — or, where a route is deliberately internal/undocumented, an explicit allowlist file recording why."
-      - "MCP tool surface documented from the unified tool registry (PR #203): tool names, arguments, and transports (stdio + streamable-http), for consumers wiring emailibrium into an MCP client."
-      - "Documented request/response shapes spot-verified against the handlers, not invented from the route name."
+      - "`Cmd+,` opens/navigates to settings."
+      - "`?` opens a keyboard-shortcut help panel/modal that enumerates the full live set (ideally rendered FROM the useKeyboard registry's own shortcut map, so it can't drift from reality the way the docs table did)."
     definition_of_done:
-      - 'cmd: python3 -c "import yaml,sys; d=yaml.safe_load(open(''docs/api/openapi.yaml'')); sys.exit(0 if d.get(''paths'') else 1)"'
-      - "cmd: bash scripts/audit/extract-routes.sh | wc -l"
-      - "cmd: test -f docs/audit/api-coverage.md"
-      - "prose: docs/audit/api-coverage.md reports documented-vs-actual route coverage as a number, and every undocumented route is either now documented or listed in the deliberate-exclusion allowlist with a reason."
-      - "prose: at least 8 documented endpoints had their request/response shape verified against the actual handler code — cite handler file:line for each."
-    conventions: "The 124-path figure counts relative sub-paths that get nested under router prefixes, so the true endpoint count differs — establish the real number with the extract script first and report it honestly rather than repeating the raw grep count. Keep openapi.yaml valid OpenAPI; it is consumed by tooling, not just read."
+      - "cmd: pnpm --filter web test passes, including new tests asserting Cmd+, navigates to settings and ? opens the help surface"
+      - "cmd: pnpm --filter web typecheck passes"
+      - "prose: the help panel's shortcut list is sourced from the same registry the hook dispatches from, not a hand-maintained duplicate"
+    conventions: "New help component should match the existing CommandPalette.tsx's modal/overlay styling conventions."
     depends_on: [0]
-    touches: ["docs/api/**", "docs/audit/api-coverage.md"]
-    adrs: ["ADR-028-mcp-tool-calling-chat"]
+    touches: ["frontend/apps/web/src/features/command-center/**"]
+    adrs: []
     ddd: []
 
   - id: 4
-    goal: "A contributor can navigate the architecture, build, test, and release process from the docs without hitting a stale instruction."
-    track: "contributor"
+    goal: "docs/user-guide.md's Keyboard Shortcuts table is complete and accurate again — this time verifiably, not just by inspection."
+    track: "docs"
     deliverables:
-      - "docs/maintainer-guide.md (694 lines — the largest and highest drift risk) corrected against the drift report."
-      - "docs/architecture.md reconciled with the actual module layout (backend DDD-ish modules; frontend feature-slice under apps/web/src/features)."
-      - "docs/releasing.md verified against the real release.yml job graph as it stands after the ci-build-optimization pipeline."
+      - "docs/user-guide.md Keyboard Shortcuts table rewritten to list the full reconciled set: the pre-existing Cmd+K/Escape/↓↑/Cmd+Enter/Enter/Shift+Enter rows plus the 7 newly-real rows from phases 1-3 (C, R, F, E, #, Cmd+Shift+A, Cmd+,, ?) — J/K deliberately omitted (superseded by arrow nav, not restored)."
+      - "A small verification script (in the spirit of docs-accuracy-audit's scripts/audit/extract-routes.sh) comparing the runtime shortcut registry's keys against the doc table, so this table can be checked instead of trusted."
     definition_of_done:
-      - "cmd: markdownlint-cli2 --config .markdownlint.yaml docs/maintainer-guide.md docs/architecture.md docs/releasing.md"
-      - "cmd: lychee --scheme file --include-fragments --config .lychee.toml docs/maintainer-guide.md docs/architecture.md docs/releasing.md"
-      - "prose: every module/directory path named in docs/architecture.md exists — list each path and confirm with a filesystem check."
-      - "prose: the release steps in docs/releasing.md match the actual job graph in .github/workflows/release.yml — cite job names and their needs: edges."
-      - "prose: every contributor-tagged drift item is fixed or explicitly deferred with a reason."
-    conventions: "Reconcile against the state of CI AFTER the ci-build-optimization pipeline lands (9 CI jobs, not 11; just recipes, not make targets; runtime-stage Docker images). Promoting this plan before that pipeline completes would document a moving target — that is why this plan is queued."
-    depends_on: [0]
-    touches: ["docs/maintainer-guide.md", "docs/architecture.md", "docs/releasing.md"]
-    adrs: []
-    ddd: []
-
-  - id: 5
-    goal: "The agent-facing instructions (CLAUDE.md, AGENTS.md) and the historical decision records are accurate, with superseded decisions annotated rather than silently rewritten."
-    track: "agent-and-decisions"
-    deliverables:
-      - "CLAUDE.md and AGENTS.md corrected: commands, paths, and conventions they assert must be real. These steer automated changes, so a stale claim here causes wrong code, not just confusion."
-      - "Stale ADR/DDD claims annotated with a superseded/amended note pointing at the current reality — including the known ADR-005 'Bundlewatch CI gate' claim (parking-lot pl-ci-job-doc-drift on the ci-build-optimization pipeline)."
-      - "docs/plan/** and docs/research/** point-in-time documents given a dated header where they are being mistaken for current guidance (e.g. march-2026-audit.v2.md's stale 11-CI-jobs count)."
-    definition_of_done:
-      - "cmd: markdownlint-cli2 --config .markdownlint.yaml CLAUDE.md AGENTS.md 'docs/ADRs/*.md' 'docs/DDDs/*.md'"
-      - "cmd: lychee --scheme file --include-fragments --config .lychee.toml CLAUDE.md AGENTS.md"
-      - "grep:absent: Bundlewatch CI gate in docs/ADRs/ADR-005-tauri-to-web-spa-migration.md"
-      - "prose: every command or path asserted in CLAUDE.md and AGENTS.md was verified to exist/run — list each with its result."
-      - "prose: no ADR's original Decision or Context text was rewritten; corrections are additive notes only. Show the diff shape for each ADR touched."
-    conventions: "ADRs and DDDs are historical records — an ADR that was correct when written and is now superseded gets a dated 'Superseded by / Amended' note, never a quiet edit to make history look right. That distinction is the whole value of an ADR log. docs/plan and docs/research are likewise point-in-time; date them rather than update them."
-    depends_on: [0]
-    touches:
-      ["CLAUDE.md", "AGENTS.md", "docs/ADRs/**", "docs/DDDs/**", "docs/plan/**", "docs/research/**"]
-    adrs: []
-    ddd: []
-
-  - id: 6
-    goal: "Docs cannot silently drift again — CI fails when a doc contradicts the code, without becoming a gate so brittle it blocks unrelated PRs."
-    track: "guardrail"
-    deliverables:
-      - "A docs-accuracy CI job (extending .github/workflows/ci.yml or a new workflow) that runs the phase-0 extract scripts and fails on a real contradiction — undocumented config keys, and API coverage regressing below the baseline phase 3 established."
-      - "Internal link checking promoted from its current state to a genuine blocking check for the docs the audit now guarantees."
-      - "docs/audit/README.md explaining how to re-run the audit and how to update the baselines when a change is intentional — so the gate is maintainable rather than mysterious."
-    definition_of_done:
-      - "grep: docs in .github/workflows/ci.yml .github/workflows/docs-accuracy.yml"
-      - "cmd: test -f docs/audit/README.md"
-      - "cmd: bash scripts/audit/extract-config-keys.sh >/dev/null && bash scripts/audit/extract-routes.sh >/dev/null"
-      - "cmd: yamllint -c .yamllint.yaml .github/"
-      - "prose: the new gate was proven to FAIL on a deliberately introduced contradiction (show the failing run or a local reproduction), then pass once reverted — an unproven gate is theater, which is exactly what the ci-build-optimization pipeline just removed."
-      - "prose: the gate's failure message tells a contributor exactly which doc contradicts which code location and how to fix or re-baseline it."
-    conventions: "This is the risk phase for a reason: a doc gate that fires on false positives will get disabled within a week, and a gate that never fires is theater. Bias toward a small number of checks that are unambiguously mechanical (does this documented config key exist? did API coverage drop?) over anything requiring judgment about prose. Do not gate on wording, tone, or completeness."
-    depends_on: [1, 2, 3, 4, 5]
-    touches: [".github/workflows/**", "scripts/audit/**", "docs/audit/README.md"]
+      - "prose: every shortcut key present in the phase-0..3 useKeyboard registrations has a corresponding row in docs/user-guide.md's table, and vice versa — verified by the verification script's output, not by eye"
+      - "cmd: just lint (or the docs-only subset: markdownlint) passes"
+      - "grep:absent: click/tap-only today in the Keyboard Shortcuts section of docs/user-guide.md (the caveat this pipeline makes obsolete)"
+    conventions: "Match the existing table formatting docs-accuracy-audit's phase 1 already established in this file."
+    depends_on: [1, 2, 3]
+    touches: ["docs/user-guide.md", "scripts/audit/**"]
     adrs: []
     ddd: []
