@@ -1,5 +1,8 @@
 # Plan: Externalized Model Catalog via YAML Configuration
 
+> **Point-in-time document.** `make models` referenced below predates ADR-032 (Make -> just,
+> 2026-07-31); use `just models` instead.
+
 - **Status**: Implemented (Phases 1-3 complete)
 - **Research**: [2026 Model Leaderboard Research](../research/2026-model-leaderboard-research.md)
 - **Date**: 2026-03-27

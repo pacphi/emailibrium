@@ -3,6 +3,25 @@
 - **Status**: Proposed
 - **Date**: 2026-03-23
 
+## Amendments
+
+The Status, Context, Decision, and Consequences below are left exactly as originally
+written. These notes record what has changed since, without rewriting the historical
+record.
+
+- **2026-08-01 — Effectively shipped.** RuVector is the default vector-store backend:
+  `backend/Cargo.toml`'s `ruvector-core` dependency is annotated "ADR-003: RuVector as
+  primary", and `backend/src/vectors/mod.rs`'s default match arm constructs `RuVectorStore`.
+  Status is left as `Proposed` above per this pipeline's own no-quiet-edits convention --
+  this note is the correction, not a silent field change.
+- **2026-08-01 — Qdrant fallback correction.** The Architecture diagram's "QdrantStore
+  (fallback, behind feature flag)" describes a _runtime_ selection, not a Cargo feature:
+  `backend/Cargo.toml` has no `qdrant` feature, and `backend/src/vectors/mod.rs` selects
+  `QdrantVectorStore` via a runtime `match` on `config.store.backend == "qdrant"`.
+  (`SqliteVectorStore`, the third backend the same diagram already lists as "emergency
+  fallback, slow but reliable", is correct as originally written -- no correction needed
+  there.)
+
 ## Context
 
 Emailibrium requires a vector database for storing and searching email embeddings via HNSW (Hierarchical Navigable Small World) indices. The system runs locally on user machines, so the vector DB must be embeddable (no separate server process), performant on consumer hardware, and reliable under unexpected shutdowns (laptop lid close, power loss).

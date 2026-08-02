@@ -5,6 +5,15 @@
 - **Extends**: ADR-011 (ONNX Runtime as Default Embedding Provider)
 - **Research References**: docs/research/llm-options.md -- Sections 3.4, 5.2, 8.1, 9.3, 10
 
+## Amendments
+
+- **2026-08-01 — Disk Space Management note.** The proposed `make clean-models` target and
+  `emailibrium --clean-models` CLI command below were never implemented: the repo's
+  Makefiles were removed in ADR-032 (Make -> just) with no `clean-models`/equivalent `just`
+  recipe added, and `backend/src/main.rs`'s CLI flag parsing has no `--clean-models` case
+  (only `--download-model(s)`, `--verify-models`, `--models-dir`, `--model` exist).
+  `--download-models` itself did ship as described.
+
 ## Context
 
 ADR-011 establishes ONNX-based embedding via `fastembed` as the default provider, with models auto-downloaded from Hugging Face Hub on first run. This introduces a model lifecycle that must be managed: download, integrity verification, caching, disk space, model switching, and re-embedding when models change.

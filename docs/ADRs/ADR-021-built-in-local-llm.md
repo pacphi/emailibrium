@@ -5,6 +5,15 @@
 - **Extends**: ADR-012 (Tiered AI Provider Architecture), DDD-006 (AI Providers Domain)
 - **Research References**: Conversation research on local LLM runtimes (2026-03-26)
 
+## Amendments
+
+- **2026-08-01 — Numbering collision noted.** `docs/ADRs/ADR-021-clustering-performance.md`
+  independently self-identifies as ADR-021 too. Both files are left as originally
+  numbered/titled (renumbering is a filing decision outside this note's scope); this entry
+  exists so a reader who lands on either doesn't assume the other is a duplicate or typo.
+  `ADR-021-addendum-rust-backend-llm.md` is not part of the collision -- it correctly
+  extends this ADR, not a separate decision.
+
 ## Context
 
 The tiered AI provider architecture (ADR-012) defines three tiers:

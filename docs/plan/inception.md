@@ -6,6 +6,7 @@
 > **v1.2**: All dependency versions verified against crates.io + npm registry (2026-03-23). Added Makefile targets. Confirmed pnpm-based workflow.
 > **v1.3**: Rust 1.94.0 (latest stable). Docker Compose full-stack setup. Externalized config per OWASP/NIST/12-factor. Scrubbed migration/backward-compat language — greenfield architecture doc.
 > **v1.4**: Full email client (view/reply/compose). Ingest→Tag→Archive zero-inbox strategy. Dynamic auto-grouping + continuous SONA learning. Image/attachment/hyperlink content features (FEAT-064–075).
+> **v1.5 (2026-08-01)**: Point-in-time note, not a content revision: the `make <target>` commands throughout this document (16+ occurrences) predate ADR-032 (Make → just, 2026-07-31). The Makefiles were removed; use the equivalent `just` recipe (`just install`, `just dev`, etc. — see `just --list`) instead of any `make` command below.
 
 ---
 

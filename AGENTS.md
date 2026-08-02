@@ -87,17 +87,15 @@ npx gitnexus analyze --embeddings
 
 To check whether embeddings exist, inspect `.gitnexus/meta.json` — the `stats.embeddings` field shows the count (0 means no embeddings). **Running analyze without `--embeddings` will delete any previously generated embeddings.**
 
-> Claude Code users: A PostToolUse hook handles this automatically after `git commit` and `git merge`.
+> No PostToolUse hook wires this automatically in this repo (`.claude/settings.json` and
+> `.claude/settings.local.json` have no `gitnexus` hook entry) -- re-run `npx gitnexus
+analyze` by hand after `git commit` or `git merge`.
 
 ## CLI
 
-| Task                                         | Read this skill file                                        |
-| -------------------------------------------- | ----------------------------------------------------------- |
-| Understand architecture / "How does X work?" | `.claude/skills/gitnexus/gitnexus-exploring/SKILL.md`       |
-| Blast radius / "What breaks if I change X?"  | `.claude/skills/gitnexus/gitnexus-impact-analysis/SKILL.md` |
-| Trace bugs / "Why is X failing?"             | `.claude/skills/gitnexus/gitnexus-debugging/SKILL.md`       |
-| Rename / extract / split / refactor          | `.claude/skills/gitnexus/gitnexus-refactoring/SKILL.md`     |
-| Tools, resources, schema reference           | `.claude/skills/gitnexus/gitnexus-guide/SKILL.md`           |
-| Index, status, clean, wiki CLI commands      | `.claude/skills/gitnexus/gitnexus-cli/SKILL.md`             |
+No `.claude/skills/gitnexus/` skill files exist in this repo (`find . -iname "*gitnexus*"`
+returns nothing) -- the six-row skill-file table this section used to point at was
+aspirational, not present. `gitnexus` itself is a real CLI (available on `PATH` / via `npx
+gitnexus`); run `npx gitnexus --help` for its command reference directly.
 
 <!-- gitnexus:end -->

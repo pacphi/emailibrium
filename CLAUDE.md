@@ -6,16 +6,16 @@ Vector-native, local-first email intelligence: semantic search, clustering, clas
 
 ## Layout
 
-| Path                   | What                                                                                                                   | Stack                                                              |
-| ---------------------- | ---------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
-| `backend/`             | Axum REST + SSE API and the intelligence layer                                                                         | Rust 1.96 (edition 2021), SQLx/SQLite, Moka, Redis                 |
-| `backend/src/vectors/` | 22+ vector intelligence modules: embedding, HNSW search, SONA learning, clustering, RAG, encryption                    | —                                                                  |
-| `backend/src/mcp/`     | MCP server exposing email tools                                                                                        | —                                                                  |
-| `backend/migrations/`  | Numbered SQLite migrations — **append the next number, never edit an applied one**                                     | —                                                                  |
-| `frontend/`            | pnpm + Turborepo monorepo (app in `apps/web/`)                                                                         | React 19, TS 5.9, Vite 8, TanStack Router/Query, Zustand, Tailwind |
-| `ruvector/`            | **Git submodule** (ruvnet/ruvector) — the vector engine. Treat as vendored: don't edit; backend depends on it via path | Rust workspace                                                     |
-| `docs/`                | `architecture.md`, `ADRs/`, `DDDs/`, evaluation, setup/oauth guides                                                    | —                                                                  |
-| `config/`, `secrets/`  | Runtime config + dev secrets (never commit secrets)                                                                    | —                                                                  |
+| Path                   | What                                                                                                                   | Stack                                                                 |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| `backend/`             | Axum REST + SSE API and the intelligence layer                                                                         | Rust 1.97 (edition 2021), SQLx/SQLite, Moka, Redis (optional)         |
+| `backend/src/vectors/` | 48 vector intelligence modules: embedding, HNSW search, SONA learning, clustering, RAG, encryption                     | —                                                                     |
+| `backend/src/mcp/`     | MCP server exposing email tools                                                                                        | —                                                                     |
+| `backend/migrations/`  | Numbered SQLite migrations — **append the next number, never edit an applied one**                                     | —                                                                     |
+| `frontend/`            | pnpm + Turborepo monorepo (app in `apps/web/`)                                                                         | React 19, TS ^6.0.3, Vite 8, TanStack Router/Query, Zustand, Tailwind |
+| `ruvector/`            | **Git submodule** (ruvnet/ruvector) — the vector engine. Treat as vendored: don't edit; backend depends on it via path | Rust workspace                                                        |
+| `docs/`                | `architecture.md`, `ADRs/`, `DDDs/`, evaluation, setup/oauth guides                                                    | —                                                                     |
+| `config/`, `secrets/`  | Runtime config + dev secrets (never commit secrets)                                                                    | —                                                                     |
 
 ## Build & Test — justfile-driven, not npm
 
@@ -26,8 +26,8 @@ just ci          # format-check + lint + typecheck + test (run before committing
 just test        # backend (cargo) + frontend (Vitest)
 just build       # build everything
 just dev         # full stack: backend :8080, frontend :3000
-just lint        # code + docs (markdownlint, yamllint)
-just audit       # cargo-audit + npm audit
+just lint        # cargo clippy + eslint + docs (markdownlint, yamllint)
+just audit       # cargo-audit + pnpm audit
 just --list        # all targets
 ```
 
