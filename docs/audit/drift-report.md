@@ -5,6 +5,16 @@ the code actually does. Phase 0 of the docs-accuracy-audit pipeline — **no rem
 here**; phases 1–5 fix these per persona, phase 6 gates the mechanical ones (routes, config keys)
 in CI so they can't silently reopen.
 
+> **Remediation status (as of the pipeline's optimization pass, phase 6 complete):** all 74
+> findings below, across all six personas, have been fixed or formally amended. Findings are
+> left exactly as originally worded — this is a point-in-time snapshot of what phase 0 found, not
+> a live status board — but phase-by-phase remediation detail (what changed, why, and the
+> Tier-3/qe-court evidence behind each fix) lives in `.autopilot/runs/docs-accuracy-audit.jsonl`
+> (one firing record per phase) and, for the risk phase, `.autopilot/court/docs-accuracy-audit/
+phase-6.md`. Two structural gaps found _during_ remediation (not originally in this report) are
+> tracked separately as parking-lot items in `.autopilot/discovered/docs-accuracy-audit.jsonl` --
+> they're real but out of this pipeline's scope, not unfixed findings from this list.
+
 **Method:** six read-only investigation passes, one per persona, each required to cite a doc
 `file:line` for the claim AND either a code `file:line` or an actually-executed command's output
 for the contradicting reality — no unevidenced assertions. Two passes used the ground-truth
