@@ -7,6 +7,7 @@ import type { SidebarGroup } from './EmailSidebar';
 import { EmailList } from './EmailList';
 import { GroupedEmailList } from './GroupedEmailList';
 import { groupByDomain } from './utils/groupBySender';
+import { selectAllEmailIds } from './utils/selectAll';
 import { ThreadView } from './ThreadView';
 import { ComposeEmail } from './ComposeEmail';
 import { MoveDialog } from './MoveDialog';
@@ -513,8 +514,12 @@ export function EmailClient() {
         archiveMutation.mutate(id);
       }
       setCheckedIds(new Set());
+      if (selectedEmailId && checkedIds.has(selectedEmailId)) {
+        setSelectedEmailId(null);
+      }
     } else if (selectedEmailId) {
       archiveMutation.mutate(selectedEmailId);
+      setSelectedEmailId(null);
     }
   }, [checkedIds, selectedEmailId, archiveMutation]);
 
@@ -598,10 +603,16 @@ export function EmailClient() {
   const handleCompose = useCallback(() => setIsComposeOpen(true), []);
   const handleOpenReply = useCallback((signal: ReplyOpenSignal) => setReplyOpenSignal(signal), []);
   const handleReplyOpenSignalConsumed = useCallback(() => setReplyOpenSignal(null), []);
+  const handleSelectAll = useCallback(() => {
+    setCheckedIds(selectAllEmailIds(filteredEmails));
+  }, [filteredEmails]);
   useEmailShortcuts({
     selectedEmailId,
     onCompose: handleCompose,
     onOpenReply: handleOpenReply,
+    onArchive: handleThreadArchive,
+    onDelete: handleThreadDelete,
+    onSelectAll: handleSelectAll,
   });
 
   const handleBackToList = useCallback(() => {
