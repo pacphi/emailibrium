@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Send, Reply, ReplyAll, Forward } from 'lucide-react';
 import type { Email } from '@emailibrium/types';
+import type { ReplyOpenSignal } from './hooks/useEmailShortcuts';
 
 type ReplyMode = 'reply' | 'reply-all' | 'forward';
 
@@ -9,13 +10,45 @@ interface ReplyBoxProps {
   onSendReply: (body: string) => void;
   onSendForward: (to: string, body: string) => void;
   isSending: boolean;
+  /** Set (a fresh object) to expand the box in the given mode -- e.g. from the `r`/`f`
+   * keyboard shortcuts. Call `onOpenSignalConsumed` once applied so the caller can clear
+   * it, mirroring the scrollToEmailId/onScrollToComplete pattern used elsewhere. */
+  openSignal?: ReplyOpenSignal | null;
+  onOpenSignalConsumed?: () => void;
 }
 
-export function ReplyBox({ originalEmail, onSendReply, onSendForward, isSending }: ReplyBoxProps) {
+export function ReplyBox({
+  originalEmail,
+  onSendReply,
+  onSendForward,
+  isSending,
+  openSignal,
+  onOpenSignalConsumed,
+}: ReplyBoxProps) {
   const [mode, setMode] = useState<ReplyMode>('reply');
   const [body, setBody] = useState('');
   const [forwardTo, setForwardTo] = useState('');
   const [isExpanded, setIsExpanded] = useState(false);
+
+  // Reset to the pristine, collapsed state whenever the underlying email changes -- this
+  // component instance is reused across different emails/threads (no key, and a warm
+  // TanStack Query cache means it often doesn't unmount between selections), so without
+  // this a draft typed for one email would silently carry over and get sent against a
+  // different one. Declared before the openSignal effect below so, if both ever fire in
+  // the same commit, the reset always applies first.
+  useEffect(() => {
+    setMode('reply');
+    setBody('');
+    setForwardTo('');
+    setIsExpanded(false);
+  }, [originalEmail.id]);
+
+  useEffect(() => {
+    if (!openSignal) return;
+    setMode(openSignal.mode);
+    setIsExpanded(true);
+    onOpenSignalConsumed?.();
+  }, [openSignal, onOpenSignalConsumed]);
 
   const quotedText = `\n\n---\nOn ${originalEmail.receivedAt}, ${originalEmail.fromName || originalEmail.fromAddr} wrote:\n> ${(
     originalEmail.bodyText ?? ''
