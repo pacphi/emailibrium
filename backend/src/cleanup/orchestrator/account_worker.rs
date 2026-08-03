@@ -70,10 +70,10 @@ pub struct AccountWorkerCtx {
     pub user_id: String,
     /// Job id for this apply run; carried into every audit row.
     pub job_id: JobId,
-    /// Optional local DB pool — when set, a successful provider archive
-    /// also updates `is_archived = 1` in the local emails table so the
+    /// Optional local DB handle — when set, a successful provider archive
+    /// also updates `is_archived = true` in the local emails table so the
     /// Archive view shows the email immediately without waiting for a sync.
-    pub db: Option<sqlx::SqlitePool>,
+    pub db: Option<crate::db::Database>,
 }
 
 impl AccountWorkerCtx {}
@@ -525,13 +525,8 @@ impl AccountWorker {
             PlanAction::Archive => {
                 let r = provider.archive_message(access_token, email_id).await;
                 if r.is_ok() {
-                    if let Some(ref pool) = self.ctx.db {
-                        let _ = sqlx::query(
-                            "UPDATE emails SET labels = 'ARCHIVED', is_archived = 1 WHERE id = ?1",
-                        )
-                        .bind(email_id)
-                        .execute(pool)
-                        .await;
+                    if let Some(ref db) = self.ctx.db {
+                        mark_archived_locally(db, email_id).await;
                     }
                 }
                 r
@@ -561,11 +556,8 @@ impl AccountWorker {
                     // Permanent: delete from provider, then remove from local DB.
                     let r = provider.delete_message(access_token, email_id).await;
                     if r.is_ok() {
-                        if let Some(ref pool) = self.ctx.db {
-                            let _ = sqlx::query("DELETE FROM emails WHERE id = ?1")
-                                .bind(email_id)
-                                .execute(pool)
-                                .await;
+                        if let Some(ref db) = self.ctx.db {
+                            delete_locally(db, email_id).await;
                         }
                     }
                     r
@@ -573,13 +565,8 @@ impl AccountWorker {
                     // Soft delete: archive on provider + mark locally.
                     let r = provider.archive_message(access_token, email_id).await;
                     if r.is_ok() {
-                        if let Some(ref pool) = self.ctx.db {
-                            let _ = sqlx::query(
-                                "UPDATE emails SET labels = 'ARCHIVED', is_archived = 1 WHERE id = ?1",
-                            )
-                            .bind(email_id)
-                            .execute(pool)
-                            .await;
+                        if let Some(ref db) = self.ctx.db {
+                            mark_archived_locally(db, email_id).await;
                         }
                     }
                     r
@@ -654,6 +641,52 @@ impl AccountWorker {
                 code: "unsubscribe_failed".into(),
                 message: format!("{} of {} failed", batch.failed, batch.total),
             }))
+        }
+    }
+}
+
+/// Mark an email `is_archived` locally after a successful provider archive. Best-effort:
+/// errors are swallowed (matching this call site's pre-existing `let _ =` behavior — the
+/// provider-side archive already succeeded, so a failure here is a local cache staleness,
+/// not an apply failure). `is_archived` is a real BOOLEAN column in both dialects, so this
+/// binds `true` rather than embedding a `1` literal — Postgres rejects an integer literal
+/// against a BOOLEAN column (ADR-035).
+async fn mark_archived_locally(db: &crate::db::Database, email_id: &str) {
+    let sql = db.adapt("UPDATE emails SET labels = 'ARCHIVED', is_archived = ? WHERE id = ?");
+    match db {
+        crate::db::Database::Sqlite(pool) => {
+            let _ = sqlx::query(crate::db::audited_sql(&sql))
+                .bind(true)
+                .bind(email_id)
+                .execute(pool)
+                .await;
+        }
+        crate::db::Database::Postgres(pool) => {
+            let _ = sqlx::query(crate::db::audited_sql(&sql))
+                .bind(true)
+                .bind(email_id)
+                .execute(pool)
+                .await;
+        }
+    }
+}
+
+/// Remove an email from the local cache after a successful permanent provider delete.
+/// Best-effort, matching `mark_archived_locally`'s error-swallowing rationale.
+async fn delete_locally(db: &crate::db::Database, email_id: &str) {
+    let sql = db.adapt("DELETE FROM emails WHERE id = ?");
+    match db {
+        crate::db::Database::Sqlite(pool) => {
+            let _ = sqlx::query(crate::db::audited_sql(&sql))
+                .bind(email_id)
+                .execute(pool)
+                .await;
+        }
+        crate::db::Database::Postgres(pool) => {
+            let _ = sqlx::query(crate::db::audited_sql(&sql))
+                .bind(email_id)
+                .execute(pool)
+                .await;
         }
     }
 }

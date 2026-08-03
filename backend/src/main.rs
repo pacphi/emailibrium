@@ -572,7 +572,7 @@ async fn main() -> anyhow::Result<()> {
         .with_provider_factory(provider_factory)
         .with_audit(cleanup_audit_writer.clone())
         .with_telemetry(cleanup_telemetry.clone())
-        .with_db(db.pool().clone()),
+        .with_db((*db).clone()),
     );
     // One registry for the whole process. It owns the rate limiter, so building
     // it here rather than per MCP session is what stops a client from resetting
