@@ -10,7 +10,8 @@ packages:
 minimumReleaseAge: 0
 overrides:
   # brace-expansion < 1.1.16 (1.x line): exponential-time ReDoS via chained {} groups (GHSA-3jxr-9vmj-r5cp)
-  "brace-expansion@<1.1.16": "1.1.16"
+  # < 1.1.17: unbounded expansion length OOM crash (GHSA-mh99-v99m-4gvg), supersedes the 1.1.16 pin above
+  "brace-expansion@<1.1.17": "1.1.17"
   # brace-expansion 4.x/5.x line < 5.0.8: ReDoS (GHSA-3jxr-9vmj-r5cp) +
   # unbounded expansion length OOM crash (GHSA-mh99-v99m-4gvg)
   "brace-expansion@>=4.0.0 <5.0.8": "5.0.8"
