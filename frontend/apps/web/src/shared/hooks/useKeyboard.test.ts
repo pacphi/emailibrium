@@ -13,12 +13,14 @@ function mount(shortcuts: ShortcutMap) {
     useKeyboard(shortcuts);
     return null;
   }
-  render(createElement(Harness));
+  return render(createElement(Harness));
 }
 
 function press(
   key: string,
-  modifiers: Partial<Pick<KeyboardEventInit, 'ctrlKey' | 'metaKey' | 'shiftKey' | 'altKey'>> = {},
+  modifiers: Partial<
+    Pick<KeyboardEventInit, 'ctrlKey' | 'metaKey' | 'shiftKey' | 'altKey' | 'repeat'>
+  > = {},
   // A real keydown's `event.target` is always an actual node (the focused element, or
   // document.body when nothing is focused) -- never `window` itself. Default to body so
   // the isEditable check in useKeyboard.ts sees a realistic target.
@@ -108,24 +110,38 @@ describe('useKeyboard', () => {
       expect(handler).toHaveBeenCalledTimes(1);
     });
 
-    it('dispatches only the first matching entry per keydown', () => {
+    it('dispatches only the first matching entry within one map ("cmd" and "meta" aliases both match the same event)', () => {
+      // 'cmd+k' and 'meta+k' parse to the identical modifier set, so BOTH entries match a
+      // single Meta+K press -- the only way two entries in one map can genuinely collide.
+      // This pins the early-return: without it, one keypress would fire both handlers.
       const first = vi.fn();
       const second = vi.fn();
-      mount({ k: first, 'cmd+k': second });
+      mount({ 'cmd+k': first, 'meta+k': second });
 
       press('k', { metaKey: true });
 
-      expect(second).toHaveBeenCalledTimes(1);
-      expect(first).not.toHaveBeenCalled();
+      expect(first).toHaveBeenCalledTimes(1);
+      expect(second).not.toHaveBeenCalled();
     });
 
-    it('calls preventDefault and stopPropagation on a match', () => {
+    it('calls preventDefault on a match', () => {
       const handler = vi.fn();
       mount({ k: handler });
 
       const event = press('k');
 
       expect(event.defaultPrevented).toBe(true);
+    });
+
+    it('calls stopPropagation on a match', () => {
+      const handler = vi.fn();
+      mount({ k: handler });
+      const event = new KeyboardEvent('keydown', { key: 'k', bubbles: true, cancelable: true });
+      const stopSpy = vi.spyOn(event, 'stopPropagation');
+
+      document.body.dispatchEvent(event);
+
+      expect(stopSpy).toHaveBeenCalledTimes(1);
     });
 
     it('does not call preventDefault when nothing matches', () => {
@@ -136,19 +152,78 @@ describe('useKeyboard', () => {
 
       expect(event.defaultPrevented).toBe(false);
     });
+
+    it('ignores OS key auto-repeat (holding a key fires its handler once, not repeatedly)', () => {
+      const handler = vi.fn();
+      mount({ e: handler });
+
+      press('e');
+      press('e', { repeat: true });
+      press('e', { repeat: true });
+
+      expect(handler).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('symbol keys are layout-independent', () => {
+    it('"#" matches when the layout produces it WITH shift held (US: Shift+3)', () => {
+      const handler = vi.fn();
+      mount({ '#': handler });
+
+      press('#', { shiftKey: true });
+
+      expect(handler).toHaveBeenCalledTimes(1);
+    });
+
+    it('"#" matches when the layout produces it WITHOUT shift (UK: dedicated # key)', () => {
+      const handler = vi.fn();
+      mount({ '#': handler });
+
+      press('#');
+
+      expect(handler).toHaveBeenCalledTimes(1);
+    });
+
+    it('"?" matches regardless of the shift flag', () => {
+      const handler = vi.fn();
+      mount({ '?': handler });
+
+      press('?', { shiftKey: true });
+      press('?');
+
+      expect(handler).toHaveBeenCalledTimes(2);
+    });
+
+    it('a symbol key still requires its non-shift modifiers exactly', () => {
+      const handler = vi.fn();
+      mount({ '#': handler });
+
+      press('#', { metaKey: true });
+
+      expect(handler).not.toHaveBeenCalled();
+    });
+
+    it('letter and digit keys keep strict shift matching', () => {
+      const handler = vi.fn();
+      mount({ a: handler });
+
+      press('a', { shiftKey: true });
+
+      expect(handler).not.toHaveBeenCalled();
+    });
   });
 
   describe('editable-field guard', () => {
-    function mountWithInput(shortcuts: ShortcutMap) {
-      const input = document.createElement('input');
-      document.body.appendChild(input);
+    function mountWithElement(shortcuts: ShortcutMap, tagName: string) {
+      const el = document.createElement(tagName);
+      document.body.appendChild(el);
       mount(shortcuts);
-      return input;
+      return el;
     }
 
     it('skips a non-modifier shortcut while an <input> is focused', () => {
       const handler = vi.fn();
-      const input = mountWithInput({ k: handler });
+      const input = mountWithElement({ k: handler }, 'input');
 
       press('k', {}, input);
 
@@ -158,9 +233,7 @@ describe('useKeyboard', () => {
 
     it('skips a non-modifier shortcut while a <textarea> is focused', () => {
       const handler = vi.fn();
-      const textarea = document.createElement('textarea');
-      document.body.appendChild(textarea);
-      mount({ k: handler });
+      const textarea = mountWithElement({ k: handler }, 'textarea');
 
       press('k', {}, textarea);
 
@@ -168,7 +241,17 @@ describe('useKeyboard', () => {
       document.body.removeChild(textarea);
     });
 
-    it('skips a non-modifier shortcut while a contenteditable element is focused', () => {
+    it('skips a non-modifier shortcut while a <select> is focused (typing in a select jumps options)', () => {
+      const handler = vi.fn();
+      const select = mountWithElement({ e: handler }, 'select');
+
+      press('e', {}, select);
+
+      expect(handler).not.toHaveBeenCalled();
+      document.body.removeChild(select);
+    });
+
+    it('skips a non-modifier shortcut while a contenteditable="true" element is focused', () => {
       const handler = vi.fn();
       const div = document.createElement('div');
       div.setAttribute('contenteditable', 'true');
@@ -181,11 +264,57 @@ describe('useKeyboard', () => {
       document.body.removeChild(div);
     });
 
+    it('skips a non-modifier shortcut for the empty-string contenteditable form (contenteditable="")', () => {
+      const handler = vi.fn();
+      const div = document.createElement('div');
+      div.setAttribute('contenteditable', '');
+      document.body.appendChild(div);
+      mount({ k: handler });
+
+      press('k', {}, div);
+
+      expect(handler).not.toHaveBeenCalled();
+      document.body.removeChild(div);
+    });
+
+    it('treats contenteditable="false" as NOT editable', () => {
+      const handler = vi.fn();
+      const div = document.createElement('div');
+      div.setAttribute('contenteditable', 'false');
+      document.body.appendChild(div);
+      mount({ k: handler });
+
+      press('k', {}, div);
+
+      expect(handler).toHaveBeenCalledTimes(1);
+      document.body.removeChild(div);
+    });
+
     it('still fires a modifier shortcut while an <input> is focused', () => {
       const handler = vi.fn();
-      const input = mountWithInput({ 'cmd+k': handler });
+      const input = mountWithElement({ 'cmd+k': handler }, 'input');
 
       press('k', { metaKey: true }, input);
+
+      expect(handler).toHaveBeenCalledTimes(1);
+      document.body.removeChild(input);
+    });
+
+    it('an alt-modified shortcut also bypasses the guard (alt counts as a modifier)', () => {
+      const handler = vi.fn();
+      const input = mountWithElement({ 'alt+x': handler }, 'input');
+
+      press('x', { altKey: true }, input);
+
+      expect(handler).toHaveBeenCalledTimes(1);
+      document.body.removeChild(input);
+    });
+
+    it('"escape" is exempt from the guard: it fires while an <input> is focused (it never types anything)', () => {
+      const handler = vi.fn();
+      const input = mountWithElement({ escape: handler }, 'input');
+
+      press('Escape', {}, input);
 
       expect(handler).toHaveBeenCalledTimes(1);
       document.body.removeChild(input);
@@ -204,6 +333,46 @@ describe('useKeyboard', () => {
     });
   });
 
+  describe('shared dispatch across consumers (newest registration wins)', () => {
+    it('fires only the newest registration when two mounted consumers register the same key', () => {
+      const older = vi.fn();
+      const newer = vi.fn();
+      mount({ escape: older });
+      mount({ escape: newer });
+
+      press('Escape');
+
+      expect(newer).toHaveBeenCalledTimes(1);
+      expect(older).not.toHaveBeenCalled();
+    });
+
+    it('falls back to the older registration once the newer one unmounts', () => {
+      const older = vi.fn();
+      const newer = vi.fn();
+      mount({ escape: older });
+      const { unmount } = mount({ escape: newer });
+
+      unmount();
+      press('Escape');
+
+      expect(older).toHaveBeenCalledTimes(1);
+      expect(newer).not.toHaveBeenCalled();
+    });
+
+    it('consumers with disjoint keys all keep working through the shared listener', () => {
+      const a = vi.fn();
+      const b = vi.fn();
+      mount({ 'cmd+k': a });
+      mount({ e: b });
+
+      press('k', { metaKey: true });
+      press('e');
+
+      expect(a).toHaveBeenCalledTimes(1);
+      expect(b).toHaveBeenCalledTimes(1);
+    });
+  });
+
   describe('cleanup on unmount', () => {
     it('stops handling keydown after the component unmounts', () => {
       const handler = vi.fn();
@@ -219,20 +388,18 @@ describe('useKeyboard', () => {
       expect(handler).not.toHaveBeenCalled();
     });
 
-    it('removes the window listener exactly once per registration', () => {
+    it('keeps the shared window listener while any consumer is still mounted, removing it only with the last one', () => {
       const removeSpy = vi.spyOn(window, 'removeEventListener');
-      function Harness() {
-        useKeyboard({ k: vi.fn() });
-        return null;
-      }
-      const { unmount } = render(createElement(Harness));
+      const keydownRemovals = () =>
+        removeSpy.mock.calls.filter((call) => (call[0] as string) === 'keydown').length;
+      const first = mount({ k: vi.fn() });
+      const second = mount({ e: vi.fn() });
 
-      unmount();
+      first.unmount();
+      expect(keydownRemovals()).toBe(0);
 
-      const keydownRemovals = removeSpy.mock.calls.filter(
-        (call) => (call[0] as string) === 'keydown',
-      );
-      expect(keydownRemovals).toHaveLength(1);
+      second.unmount();
+      expect(keydownRemovals()).toBe(1);
       removeSpy.mockRestore();
     });
 
@@ -315,7 +482,7 @@ describe('useKeyboard', () => {
         return null;
       }
       function ConsumerB() {
-        useKeyboard({ e: () => {}, 'shift+#': () => {} });
+        useKeyboard({ e: () => {}, '#': () => {} });
         return null;
       }
       render(
@@ -326,37 +493,53 @@ describe('useKeyboard', () => {
         ]),
       );
 
-      expect(keys.sort()).toEqual(['cmd+k', 'e', 'shift+#'].sort());
+      expect(keys.sort()).toEqual(['#', 'cmd+k', 'e'].sort());
     });
 
-    it('keeps a shared key registered while at least one consumer still holds it (reference counting)', () => {
+    // These maps live at module scope so their identity NEVER changes across rerenders --
+    // an inline object literal here would make each consumer's effect re-run (and
+    // re-register) on every rerender, silently masking a broken unregister/decrement path.
+    const STABLE_MAP_A: ShortcutMap = { 'cmd+k': () => {} };
+    const STABLE_MAP_B: ShortcutMap = { 'cmd+k': () => {} };
+
+    function StableConsumerA() {
+      useKeyboard(STABLE_MAP_A);
+      return null;
+    }
+    function StableConsumerB() {
+      useKeyboard(STABLE_MAP_B);
+      return null;
+    }
+
+    it('keeps a shared key registered while at least one consumer still holds it (reference counting, no accidental re-registration)', () => {
       let keysFromReader: string[] = [];
       function Reader() {
         keysFromReader = useActiveShortcuts();
         return null;
       }
-      function ConsumerA() {
-        useKeyboard({ 'cmd+k': () => {} });
-        return null;
-      }
-      function ConsumerB() {
-        useKeyboard({ 'cmd+k': () => {} });
-        return null;
-      }
       const { rerender } = render(
         createElement('div', null, [
-          createElement(ConsumerA, { key: 'a' }),
-          createElement(ConsumerB, { key: 'b' }),
+          createElement(StableConsumerA, { key: 'a' }),
+          createElement(StableConsumerB, { key: 'b' }),
+          createElement(Reader, { key: 'r' }),
         ]),
       );
-      render(createElement(Reader));
       expect(keysFromReader).toContain('cmd+k');
 
-      // Unmount only ConsumerA -- ConsumerB still holds 'cmd+k'.
-      rerender(createElement('div', null, [createElement(ConsumerB, { key: 'b' })]));
-      render(createElement(Reader));
-
+      // Unmount only ConsumerA. ConsumerB's map identity is stable, so its effect does
+      // NOT re-run here -- if the decrement path over- or under-counted, this is where
+      // the key would wrongly disappear.
+      rerender(
+        createElement('div', null, [
+          createElement(StableConsumerB, { key: 'b' }),
+          createElement(Reader, { key: 'r' }),
+        ]),
+      );
       expect(keysFromReader).toContain('cmd+k');
+
+      // Unmount the last holder -- now the key must actually leave the registry.
+      rerender(createElement('div', null, [createElement(Reader, { key: 'r' })]));
+      expect(keysFromReader).not.toContain('cmd+k');
     });
   });
 });

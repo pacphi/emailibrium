@@ -3,27 +3,29 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, cleanup, act } from '@testing-library/react';
 import { createElement } from 'react';
 import { useEmailShortcuts } from '../useEmailShortcuts';
-import { press } from '@/shared/test-utils/press';
+import { press } from '@test-utils/press';
 
 afterEach(() => {
   cleanup();
 });
 
 interface MountOverrides {
+  enabled?: boolean;
   selectedEmailId?: string | null;
   onCompose?: () => void;
   onOpenReply?: (s: unknown) => void;
-  onArchive?: () => void;
+  onArchive?: (() => void) | undefined;
   onDelete?: () => void;
   onSelectAll?: () => void;
 }
 
 function mount(overrides: MountOverrides = {}) {
   const args = {
+    enabled: overrides.enabled,
     selectedEmailId: overrides.selectedEmailId ?? null,
     onCompose: overrides.onCompose ?? vi.fn(),
     onOpenReply: overrides.onOpenReply ?? vi.fn(),
-    onArchive: overrides.onArchive ?? vi.fn(),
+    onArchive: 'onArchive' in overrides ? overrides.onArchive : vi.fn(),
     onDelete: overrides.onDelete ?? vi.fn(),
     onSelectAll: overrides.onSelectAll ?? vi.fn(),
   };
@@ -98,7 +100,7 @@ describe('useEmailShortcuts', () => {
     expect(onArchive).toHaveBeenCalledTimes(1);
   });
 
-  it('"#" (shift+3) fires the same onDelete the thread action bar\'s Delete button calls', () => {
+  it('"#" fires onDelete when the layout produces it with shift held (US: Shift+3)', () => {
     const onDelete = vi.fn();
     mount({ onDelete });
 
@@ -107,13 +109,48 @@ describe('useEmailShortcuts', () => {
     expect(onDelete).toHaveBeenCalledTimes(1);
   });
 
-  it('bare "#" without the shift flag does not fire (useKeyboard requires the exact modifier match)', () => {
+  it('"#" also fires on a layout that produces it without shift (symbol keys are layout-independent)', () => {
     const onDelete = vi.fn();
     mount({ onDelete });
 
     press('#');
 
+    expect(onDelete).toHaveBeenCalledTimes(1);
+  });
+
+  it('registers no shortcuts at all while disabled (e.g. a modal is open) -- nothing can fire behind an overlay', () => {
+    const onCompose = vi.fn();
+    const onArchive = vi.fn();
+    const onDelete = vi.fn();
+    const onSelectAll = vi.fn();
+    mount({
+      enabled: false,
+      selectedEmailId: 'email-1',
+      onCompose,
+      onArchive,
+      onDelete,
+      onSelectAll,
+    });
+
+    press('c');
+    press('e');
+    press('#', { shiftKey: true });
+    press('a', { metaKey: true, shiftKey: true });
+
+    expect(onCompose).not.toHaveBeenCalled();
+    expect(onArchive).not.toHaveBeenCalled();
     expect(onDelete).not.toHaveBeenCalled();
+    expect(onSelectAll).not.toHaveBeenCalled();
+  });
+
+  it('leaves "e" unregistered when onArchive is omitted (spam/trash views offer no Archive)', () => {
+    const onDelete = vi.fn();
+    mount({ onArchive: undefined, onDelete });
+
+    press('e');
+    press('#', { shiftKey: true });
+
+    expect(onDelete).toHaveBeenCalledTimes(1);
   });
 
   it('cmd+shift+a fires onSelectAll', () => {

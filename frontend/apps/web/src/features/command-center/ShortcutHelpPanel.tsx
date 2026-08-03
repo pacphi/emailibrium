@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import { X } from 'lucide-react';
-import { useActiveShortcuts, splitShortcut } from '@/shared/hooks';
+import { useActiveShortcuts, useFocusTrap, splitShortcut } from '@/shared/hooks';
 import { useShortcutHelpStore } from './hooks/useShortcutHelp';
 
 // Friendly label for each known shortcut key. The SET of shortcuts shown is always
@@ -15,12 +15,12 @@ const SHORTCUT_LABELS: Record<string, string> = {
   r: 'Reply to email',
   f: 'Forward email',
   e: 'Archive email',
-  'shift+#': 'Delete email',
+  '#': 'Delete email',
   'cmd+shift+a': 'Select all emails',
   'ctrl+shift+a': 'Select all emails',
   'cmd+,': 'Open settings',
   'ctrl+,': 'Open settings',
-  'shift+?': 'Show keyboard shortcuts',
+  '?': 'Show keyboard shortcuts',
 };
 
 const MODIFIER_SYMBOLS: Record<string, string> = {
@@ -66,20 +66,30 @@ export function buildShortcutRows(activeKeys: string[]): ShortcutRow[] {
 export function ShortcutHelpPanel() {
   const isOpen = useShortcutHelpStore((s) => s.isOpen);
   const close = useShortcutHelpStore((s) => s.close);
-  const activeKeys = useActiveShortcuts();
-  const rows = useMemo(() => buildShortcutRows(activeKeys), [activeKeys]);
 
   if (!isOpen) return null;
+
+  return <ShortcutHelpDialog onClose={close} />;
+}
+
+/** Mounted only while the panel is open, so useFocusTrap's mount effect lines up with
+ * the dialog appearing: it moves focus to the first focusable element (the close
+ * button), cycles Tab/Shift+Tab inside the dialog, and restores focus on close. */
+function ShortcutHelpDialog({ onClose }: { onClose: () => void }) {
+  const activeKeys = useActiveShortcuts();
+  const rows = useMemo(() => buildShortcutRows(activeKeys), [activeKeys]);
+  const trapRef = useFocusTrap<HTMLDivElement>();
 
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center pt-[20vh]">
       <div
         className="fixed inset-0 bg-black/50 backdrop-blur-sm"
-        onClick={close}
+        onClick={onClose}
         aria-hidden="true"
       />
 
       <div
+        ref={trapRef}
         className="relative w-full max-w-xl rounded-xl border border-gray-200 bg-white shadow-2xl dark:border-gray-700 dark:bg-gray-800"
         role="dialog"
         aria-label="Keyboard shortcuts"
@@ -91,7 +101,7 @@ export function ShortcutHelpPanel() {
           </h2>
           <button
             type="button"
-            onClick={close}
+            onClick={onClose}
             className="rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-700 dark:hover:text-gray-300"
             aria-label="Close"
           >

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, cleanup } from '@testing-library/react';
+import { render, screen, cleanup, act } from '@testing-library/react';
 import { createElement } from 'react';
 import { useKeyboard } from '@/shared/hooks';
 import { ShortcutHelpPanel, formatShortcutKey, buildShortcutRows } from '../ShortcutHelpPanel';
@@ -28,7 +28,11 @@ describe('formatShortcutKey', () => {
   });
 
   it('leaves a symbol key (not a letter) as-is', () => {
-    expect(formatShortcutKey('shift+#')).toBe('⇧+#');
+    expect(formatShortcutKey('#')).toBe('#');
+  });
+
+  it('capitalizes a multi-character key name ("escape" renders as "Escape")', () => {
+    expect(formatShortcutKey('escape')).toBe('Escape');
   });
 });
 
@@ -39,6 +43,19 @@ describe('buildShortcutRows', () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]?.label).toBe('Open command palette');
     expect(rows[0]?.keys.sort()).toEqual(['cmd+k', 'ctrl+k']);
+  });
+
+  it('sorts rows by label and keys within a row -- asserted on the EXACT output, so the ordering itself is pinned', () => {
+    // Inputs deliberately out of order on both axes: 'ctrl+k' before 'cmd+k' (within-row
+    // key sort) and 'Open command palette' material before 'Archive email' material (row
+    // label sort). No .sort() on the actual value here -- re-sorting the output before
+    // comparing would silently discard exactly the property being tested.
+    const rows = buildShortcutRows(['ctrl+k', 'e', 'cmd+k']);
+
+    expect(rows).toEqual([
+      { label: 'Archive email', keys: ['e'] },
+      { label: 'Open command palette', keys: ['cmd+k', 'ctrl+k'] },
+    ]);
   });
 
   it('falls back to the raw key string as the label for an unrecognized shortcut', () => {
@@ -71,8 +88,12 @@ describe('ShortcutHelpPanel', () => {
   });
 
   it('renders shortcuts sourced live from the useKeyboard registry when open', () => {
+    // Mirrors the real topology: the panel is mounted in the app shell (Layout), as a
+    // SIBLING of whatever route content is registering shortcuts -- e.g. EmailClient's
+    // useEmailShortcuts while /email is mounted. A co-mounted registrant is exactly what
+    // production looks like.
     function Registrant() {
-      useKeyboard({ e: vi.fn(), 'shift+#': vi.fn() });
+      useKeyboard({ e: vi.fn(), '#': vi.fn() });
       return null;
     }
     useShortcutHelpStore.setState({ isOpen: true });
@@ -94,6 +115,33 @@ describe('ShortcutHelpPanel', () => {
     render(createElement(ShortcutHelpPanel));
 
     expect(screen.getByText('No shortcuts are currently active on this page.')).not.toBeNull();
+  });
+
+  it('moves focus into the dialog on open (focus trap auto-focuses the close button)', () => {
+    useShortcutHelpStore.setState({ isOpen: true });
+
+    render(createElement(ShortcutHelpPanel));
+
+    expect(document.activeElement).toBe(screen.getByLabelText('Close'));
+  });
+
+  it('restores focus to the previously-focused element on close', () => {
+    const outside = document.createElement('button');
+    document.body.appendChild(outside);
+    outside.focus();
+    render(createElement(ShortcutHelpPanel));
+
+    act(() => {
+      useShortcutHelpStore.setState({ isOpen: true });
+    });
+    expect(document.activeElement).not.toBe(outside);
+
+    act(() => {
+      useShortcutHelpStore.setState({ isOpen: false });
+    });
+
+    expect(document.activeElement).toBe(outside);
+    document.body.removeChild(outside);
   });
 
   it('closes on clicking the close button', () => {

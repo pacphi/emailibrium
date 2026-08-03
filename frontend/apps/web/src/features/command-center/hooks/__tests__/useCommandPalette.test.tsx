@@ -2,7 +2,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { render, cleanup } from '@testing-library/react';
 import { useCommandPalette, useCommandPaletteStore } from '../useCommandPalette';
-import { press } from '@/shared/test-utils/press';
+import { useActiveShortcuts } from '@/shared/hooks';
+import { press } from '@test-utils/press';
 
 // Mirrors the real app structure: CommandCenter reads only `open` from the store
 // (no shortcut registration), while CommandPalette calls the full `useCommandPalette()`
@@ -37,7 +38,7 @@ describe('useCommandPalette', () => {
     expect(useCommandPaletteStore.getState().isOpen).toBe(true);
   });
 
-  it('regression: two full useCommandPalette() consumers mounted together double-toggle to a no-op -- this is exactly the bug CommandCenter.tsx used to have before it switched to the store-only selector', () => {
+  it('regression: two full useCommandPalette() consumers mounted together still toggle correctly -- the shared dispatcher fires only the newest registration, so double-mounting no longer double-toggles to a no-op (the bug CommandCenter.tsx used to have)', () => {
     render(
       <>
         <PaletteConsumer />
@@ -47,7 +48,7 @@ describe('useCommandPalette', () => {
 
     press('k', { metaKey: true });
 
-    expect(useCommandPaletteStore.getState().isOpen).toBe(false);
+    expect(useCommandPaletteStore.getState().isOpen).toBe(true);
   });
 
   it('opens on Ctrl+K', () => {
@@ -66,6 +67,38 @@ describe('useCommandPalette', () => {
     press('Escape');
 
     expect(useCommandPaletteStore.getState().isOpen).toBe(false);
+  });
+
+  it('closes on Escape dispatched from a focused <input> -- the palette autofocuses its search input, so this is the state every real Escape press happens in', () => {
+    render(<PaletteConsumer />);
+    press('k', { metaKey: true });
+    expect(useCommandPaletteStore.getState().isOpen).toBe(true);
+    const input = document.createElement('input');
+    document.body.appendChild(input);
+
+    press('Escape', {}, input);
+
+    expect(useCommandPaletteStore.getState().isOpen).toBe(false);
+    document.body.removeChild(input);
+  });
+
+  it('registers "escape" only while the palette is open (registry-level check)', () => {
+    let activeKeys: string[] = [];
+    function Probe() {
+      activeKeys = useActiveShortcuts();
+      return null;
+    }
+    render(
+      <>
+        <PaletteConsumer />
+        <Probe />
+      </>,
+    );
+    expect(activeKeys).not.toContain('escape');
+
+    press('k', { metaKey: true });
+
+    expect(activeKeys).toContain('escape');
   });
 
   it('is a no-op on Escape while already closed', () => {
