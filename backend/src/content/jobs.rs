@@ -293,24 +293,35 @@ impl JobQueue {
             return Ok(None);
         };
 
-        // Mark as running.
-        let update_sql = self.db.adapt(
-            r#"UPDATE background_jobs
-               SET status = 'running', attempts = attempts + 1, updated_at = datetime('now')
-               WHERE id = ? AND status = 'pending'"#,
-        );
+        // Mark as running. `updated_at` is TEXT (not TIMESTAMPTZ) in both dialects
+        // (ADR-033), so this does NOT go through `Database::adapt()`'s mechanical
+        // `datetime('now')` -> `now()` substitution: that would assign a timestamptz
+        // value to a TEXT column, and while Postgres accepts the assignment cast, the
+        // resulting string ("2026-08-03 22:31:37.104356+00") is shaped differently
+        // from SQLite's `datetime('now')` output — see ADR-035's note on this. The
+        // Postgres arm instead hand-writes `to_char(...)` to match the exact
+        // 'YYYY-MM-DD HH:MI:SS' shape the migration's own column DEFAULT produces.
         match &self.db {
             Database::Sqlite(pool) => {
-                sqlx::query(crate::db::audited_sql(&update_sql))
-                    .bind(&r.0)
-                    .execute(pool)
-                    .await?;
+                sqlx::query(
+                    r#"UPDATE background_jobs
+                       SET status = 'running', attempts = attempts + 1, updated_at = datetime('now')
+                       WHERE id = ? AND status = 'pending'"#,
+                )
+                .bind(&r.0)
+                .execute(pool)
+                .await?;
             }
             Database::Postgres(pool) => {
-                sqlx::query(crate::db::audited_sql(&update_sql))
-                    .bind(&r.0)
-                    .execute(pool)
-                    .await?;
+                sqlx::query(
+                    r#"UPDATE background_jobs
+                       SET status = 'running', attempts = attempts + 1,
+                           updated_at = to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')
+                       WHERE id = $1 AND status = 'pending'"#,
+                )
+                .bind(&r.0)
+                .execute(pool)
+                .await?;
             }
         }
 
@@ -330,23 +341,31 @@ impl JobQueue {
 
     /// Mark a job as completed.
     pub async fn mark_completed(&self, job_id: &str) -> Result<(), sqlx::Error> {
-        let sql = self.db.adapt(
-            r#"UPDATE background_jobs
-               SET status = 'completed', completed_at = datetime('now'), updated_at = datetime('now')
-               WHERE id = ?"#,
-        );
+        // See dequeue()'s comment: completed_at/updated_at are TEXT in both dialects,
+        // so the Postgres arm is hand-written rather than routed through
+        // Database::adapt()'s datetime('now') substitution.
         match &self.db {
             Database::Sqlite(pool) => {
-                sqlx::query(crate::db::audited_sql(&sql))
-                    .bind(job_id)
-                    .execute(pool)
-                    .await?;
+                sqlx::query(
+                    r#"UPDATE background_jobs
+                       SET status = 'completed', completed_at = datetime('now'), updated_at = datetime('now')
+                       WHERE id = ?"#,
+                )
+                .bind(job_id)
+                .execute(pool)
+                .await?;
             }
             Database::Postgres(pool) => {
-                sqlx::query(crate::db::audited_sql(&sql))
-                    .bind(job_id)
-                    .execute(pool)
-                    .await?;
+                sqlx::query(
+                    r#"UPDATE background_jobs
+                       SET status = 'completed',
+                           completed_at = to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS'),
+                           updated_at = to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')
+                       WHERE id = $1"#,
+                )
+                .bind(job_id)
+                .execute(pool)
+                .await?;
             }
         }
 
@@ -389,27 +408,34 @@ impl JobQueue {
             }
         };
 
-        let update_sql = self.db.adapt(
-            r#"UPDATE background_jobs
-               SET status = ?, error_msg = ?, updated_at = datetime('now')
-               WHERE id = ?"#,
-        );
+        // See dequeue()'s comment: updated_at is TEXT in both dialects, so the
+        // Postgres arm hand-writes to_char(...) instead of going through
+        // Database::adapt()'s datetime('now') substitution.
         match &self.db {
             Database::Sqlite(pool) => {
-                sqlx::query(crate::db::audited_sql(&update_sql))
-                    .bind(final_status)
-                    .bind(error)
-                    .bind(job_id)
-                    .execute(pool)
-                    .await?;
+                sqlx::query(
+                    r#"UPDATE background_jobs
+                       SET status = ?, error_msg = ?, updated_at = datetime('now')
+                       WHERE id = ?"#,
+                )
+                .bind(final_status)
+                .bind(error)
+                .bind(job_id)
+                .execute(pool)
+                .await?;
             }
             Database::Postgres(pool) => {
-                sqlx::query(crate::db::audited_sql(&update_sql))
-                    .bind(final_status)
-                    .bind(error)
-                    .bind(job_id)
-                    .execute(pool)
-                    .await?;
+                sqlx::query(
+                    r#"UPDATE background_jobs
+                       SET status = $1, error_msg = $2,
+                           updated_at = to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')
+                       WHERE id = $3"#,
+                )
+                .bind(final_status)
+                .bind(error)
+                .bind(job_id)
+                .execute(pool)
+                .await?;
             }
         }
 
@@ -418,22 +444,27 @@ impl JobQueue {
 
     /// Cancel a pending or running job.
     pub async fn cancel(&self, job_id: &str) -> Result<bool, sqlx::Error> {
-        let sql = self.db.adapt(
-            r#"UPDATE background_jobs
-               SET status = 'cancelled', updated_at = datetime('now')
-               WHERE id = ? AND status IN ('pending', 'running')"#,
-        );
+        // See dequeue()'s comment on why this doesn't route through Database::adapt().
         let affected = match &self.db {
-            Database::Sqlite(pool) => sqlx::query(crate::db::audited_sql(&sql))
-                .bind(job_id)
-                .execute(pool)
-                .await?
-                .rows_affected(),
-            Database::Postgres(pool) => sqlx::query(crate::db::audited_sql(&sql))
-                .bind(job_id)
-                .execute(pool)
-                .await?
-                .rows_affected(),
+            Database::Sqlite(pool) => sqlx::query(
+                r#"UPDATE background_jobs
+                   SET status = 'cancelled', updated_at = datetime('now')
+                   WHERE id = ? AND status IN ('pending', 'running')"#,
+            )
+            .bind(job_id)
+            .execute(pool)
+            .await?
+            .rows_affected(),
+            Database::Postgres(pool) => sqlx::query(
+                r#"UPDATE background_jobs
+                   SET status = 'cancelled',
+                       updated_at = to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')
+                   WHERE id = $1 AND status IN ('pending', 'running')"#,
+            )
+            .bind(job_id)
+            .execute(pool)
+            .await?
+            .rows_affected(),
         };
 
         Ok(affected > 0)
@@ -483,20 +514,25 @@ impl JobQueue {
     /// Called on startup to reset jobs that were running when the process
     /// was interrupted.
     pub async fn resume_abandoned(&self) -> Result<u64, sqlx::Error> {
-        let sql = self.db.adapt(
-            r#"UPDATE background_jobs
-               SET status = 'pending', updated_at = datetime('now')
-               WHERE status = 'running'"#,
-        );
+        // See dequeue()'s comment on why this doesn't route through Database::adapt().
         let count = match &self.db {
-            Database::Sqlite(pool) => sqlx::query(crate::db::audited_sql(&sql))
-                .execute(pool)
-                .await?
-                .rows_affected(),
-            Database::Postgres(pool) => sqlx::query(crate::db::audited_sql(&sql))
-                .execute(pool)
-                .await?
-                .rows_affected(),
+            Database::Sqlite(pool) => sqlx::query(
+                r#"UPDATE background_jobs
+                   SET status = 'pending', updated_at = datetime('now')
+                   WHERE status = 'running'"#,
+            )
+            .execute(pool)
+            .await?
+            .rows_affected(),
+            Database::Postgres(pool) => sqlx::query(
+                r#"UPDATE background_jobs
+                   SET status = 'pending',
+                       updated_at = to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')
+                   WHERE status = 'running'"#,
+            )
+            .execute(pool)
+            .await?
+            .rows_affected(),
         };
         if count > 0 {
             info!(count, "Resumed abandoned jobs");

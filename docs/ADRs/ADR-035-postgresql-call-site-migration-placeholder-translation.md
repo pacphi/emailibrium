@@ -52,6 +52,16 @@ pub async fn update_email_state(db: &Database, email_id: &str, /* … */) -> Res
 
 The `.bind()` chain is written once per match arm (sqlx's builder type is concretely `Sqlite`- or `Postgres`-flavored once bound to a pool, so it cannot be shared across both in a single expression without a generic function) — but the *query text* and the *business logic* are authored exactly once. This is the same "duplicate only the unavoidable, share everything else" shape ADR-033's migration-directory split already uses.
 
+### 2.5 The `datetime('now')` substitution is unsafe when the target column is TEXT, not TIMESTAMPTZ
+
+Discovered mid-phase, after `content/jobs.rs` had already shipped through `adapt()`'s substitution: several tables (`background_jobs`, `processing_checkpoints`, `connected_accounts`, `sync_state`) deliberately keep their `created_at`/`updated_at`/`completed_at` columns as **TEXT** in the PostgreSQL migrations too — not `TIMESTAMPTZ` — specifically because "downstream Rust code parses these columns as plain strings in that exact format" (verbatim from the migration comments; see e.g. `migrations/postgres/004_accounts.sql`, `006_ingestion_checkpoints.sql`). Their column `DEFAULT` uses `to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')`, producing the same `'YYYY-MM-DD HH:MM:SS'` shape SQLite's `datetime('now')` produces — not bare `now()`.
+
+`adapt()`'s blind `datetime('now')` → `now()` substitution doesn't know a given occurrence targets one of these TEXT columns. Confirmed via `psql`: assigning `now()` (a `timestamptz`) into a TEXT column does **not** error — Postgres has a general assignment-cast to `text` from any type via its output function — but the resulting string is shaped like `2026-08-03 22:31:37.104356+00` (fractional seconds, `+00` offset), not `2026-08-03 22:31:37`. This is a **silent format drift**, not a crash: `content/jobs.rs`'s `updated_at`/`completed_at` are plain `String` fields with no downstream parsing, so nothing broke loudly, but the two backends now write differently-shaped strings for the same logical value — exactly the cross-backend behavioral parity this whole phase exists to guarantee. (For a column that *is* parsed back into a `DateTime`, e.g. `email/oauth.rs`'s `connected_accounts.created_at`/`updated_at`, the drift is worse: the parse falls through both the RFC3339 attempt and the `%Y-%m-%d %H:%M:%S` fallback and the row is silently dropped by a `filter_map`.)
+
+**Fix:** any call site whose target column is TEXT-with-a-`datetime('now')`-shaped-default must **not** rely on `adapt()`'s substitution for that literal — hand-write the Postgres arm's SQL with `to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')` in place of `datetime('now')`, matching §2.4's two-arm pattern (this is a "genuinely different SQL text" case in the same bucket as `INSERT OR REPLACE`/`json_set` from `plan_repo.rs`, not a case `adapt()` can cover mechanically). `adapt()`'s substitution remains correct and usable only when the target is a genuine `TIMESTAMPTZ` column (none of the call sites converted so far bind a bare `datetime('now')` SQL literal against one — those columns are instead always populated by binding an explicit `DateTime<Utc>` Rust value, e.g. `rules.created_at`).
+
+**Action taken:** `content/jobs.rs`'s five affected call sites (`dequeue`, `mark_completed`, `mark_failed`, `cancel`, `resume_abandoned`) were fixed to hand-write the Postgres arm. Every subsequent call site touching a TEXT-shaped timestamp column follows this pattern from the start rather than reaching for `adapt()`.
+
 ## 3. Consequences
 
 **Positive**
@@ -64,6 +74,7 @@ The `.bind()` chain is written once per match arm (sqlx's builder type is concre
 
 - A hand-rolled SQL scanner, however small and tested, is still hand-rolled parsing logic — a genuinely malformed edge case (e.g. a query string with unbalanced quotes) would misbehave. Mitigated by the fact that every query string in this codebase is a static literal authored by the codebase itself, never user input — the translator's input space is bounded and enumerable, not adversarial.
 - Every migrated call site still has the two-arm `match` for the terminal execute/fetch call — not zero duplication, just far less than duplicating full query text.
+- The `datetime('now')` substitution is a mechanical text replace with no awareness of the target column's actual type — §2.5 documents the TEXT-vs-TIMESTAMPTZ footgun this creates and requires each call site to be checked against its migration, not assumed safe.
 
 ## 4. Alternatives Considered
 
