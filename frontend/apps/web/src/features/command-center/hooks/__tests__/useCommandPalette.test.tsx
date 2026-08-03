@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { render, cleanup, act } from '@testing-library/react';
+import { render, cleanup } from '@testing-library/react';
 import { useCommandPalette, useCommandPaletteStore } from '../useCommandPalette';
+import { press } from '@/shared/test-utils/press';
 
 // Mirrors the real app structure: CommandCenter reads only `open` from the store
 // (no shortcut registration), while CommandPalette calls the full `useCommandPalette()`
@@ -13,14 +14,6 @@ function TriggerConsumer() {
 function PaletteConsumer() {
   useCommandPalette();
   return null;
-}
-
-function press(key: string, modifiers: Partial<KeyboardEventInit> = {}) {
-  act(() => {
-    document.body.dispatchEvent(
-      new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, ...modifiers }),
-    );
-  });
 }
 
 describe('useCommandPalette', () => {

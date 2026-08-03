@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { useKeyboard, type ShortcutMap } from '@/shared/hooks';
+import { useKeyboard, metaOrCtrl, type ShortcutMap } from '@/shared/hooks';
 
 export type ReplyOpenMode = 'reply' | 'forward';
 
@@ -51,8 +51,7 @@ export function useEmailShortcuts({
       // '#' is Shift+3 on a standard layout -- event.shiftKey is true, so the shortcut
       // must be registered with the shift modifier for useKeyboard's exact-match to fire.
       'shift+#': onDelete,
-      'cmd+shift+a': onSelectAll,
-      'ctrl+shift+a': onSelectAll,
+      ...metaOrCtrl('shift+a', onSelectAll),
     }),
     [selectedEmailId, onCompose, onOpenReply, onArchive, onDelete, onSelectAll],
   );

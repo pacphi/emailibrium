@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { useKeyboard, type ShortcutMap } from '@/shared/hooks';
+import { useKeyboard, metaOrCtrl, type ShortcutMap } from '@/shared/hooks';
 import { useShortcutHelpStore } from './useShortcutHelp';
 
 function navigateToSettings() {
@@ -30,8 +30,7 @@ export function useCommandCenterShortcuts(): void {
 
   const shortcuts = useMemo<ShortcutMap>(() => {
     const map: ShortcutMap = {
-      'cmd+,': navigateToSettings,
-      'ctrl+,': navigateToSettings,
+      ...metaOrCtrl(',', navigateToSettings),
       // '?' is Shift+/ on a standard layout -- event.shiftKey is true, so the shortcut
       // must be registered with the shift modifier for useKeyboard's exact-match to fire.
       'shift+?': toggleHelp,

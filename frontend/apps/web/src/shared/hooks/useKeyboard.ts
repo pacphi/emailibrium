@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import { create } from 'zustand';
+import { useShallow } from 'zustand/react/shallow';
 
 /**
  * Mapping of shortcut strings to handler functions.
@@ -16,11 +17,6 @@ interface ActiveShortcutsState {
   /** Reference-counted so two simultaneously-mounted registrants of the same key
    * (e.g. during a remount) don't clear each other's entry early. */
   counts: Record<string, number>;
-  /** Derived from `counts` and updated only inside `register`/`unregister`, so it's a
-   * stable reference between updates -- computing this fresh inside a selector instead
-   * (e.g. `Object.keys(state.counts)`) returns a new array every read, which
-   * useSyncExternalStore treats as a perpetual change and infinite-loops on. */
-  keys: string[];
   register: (keys: string[]) => void;
   unregister: (keys: string[]) => void;
 }
@@ -33,14 +29,13 @@ interface ActiveShortcutsState {
  */
 const useActiveShortcutsStore = create<ActiveShortcutsState>((set) => ({
   counts: {},
-  keys: [],
   register: (newKeys) =>
     set((state) => {
       const counts = { ...state.counts };
       for (const key of newKeys) {
         counts[key] = (counts[key] ?? 0) + 1;
       }
-      return { counts, keys: Object.keys(counts) };
+      return { counts };
     }),
   unregister: (oldKeys) =>
     set((state) => {
@@ -53,7 +48,7 @@ const useActiveShortcutsStore = create<ActiveShortcutsState>((set) => ({
           counts[key] = next;
         }
       }
-      return { counts, keys: Object.keys(counts) };
+      return { counts };
     }),
 }));
 
@@ -61,9 +56,13 @@ const useActiveShortcutsStore = create<ActiveShortcutsState>((set) => ({
  * Every shortcut string currently registered by a mounted `useKeyboard` call,
  * anywhere in the app -- the ground truth for a help panel that must not drift
  * from what's actually dispatching. Order is not guaranteed.
+ *
+ * Wrapped in `useShallow`: `Object.keys(state.counts)` builds a new array every read,
+ * which would otherwise make useSyncExternalStore see a perpetual change and infinite-loop;
+ * useShallow memoizes by shallow-comparing the array's contents instead.
  */
 export function useActiveShortcuts(): string[] {
-  return useActiveShortcutsStore((state) => state.keys);
+  return useActiveShortcutsStore(useShallow((state) => Object.keys(state.counts)));
 }
 
 interface ParsedShortcut {
@@ -74,10 +73,19 @@ interface ParsedShortcut {
   key: string;
 }
 
-function parseShortcut(shortcut: string): ParsedShortcut {
-  const parts = shortcut.toLowerCase().split('+');
+/** Splits a shortcut string into its modifier tokens (in written order) and final key,
+ * e.g. "cmd+shift+a" -> `{ modifierTokens: ["cmd", "shift"], key: "a" }`. Exported so
+ * anything that needs to *display* a shortcut (not just match it) can reuse the same
+ * grammar instead of re-deriving it. */
+export function splitShortcut(shortcut: string): { modifierTokens: string[]; key: string } {
+  const parts = shortcut.split('+');
   const key = parts[parts.length - 1] ?? '';
-  const modifiers = new Set(parts.slice(0, -1));
+  return { modifierTokens: parts.slice(0, -1), key };
+}
+
+function parseShortcut(shortcut: string): ParsedShortcut {
+  const { modifierTokens, key } = splitShortcut(shortcut.toLowerCase());
+  const modifiers = new Set(modifierTokens);
 
   return {
     ctrl: modifiers.has('ctrl'),
@@ -86,6 +94,12 @@ function parseShortcut(shortcut: string): ParsedShortcut {
     alt: modifiers.has('alt'),
     key,
   };
+}
+
+/** Both entries a Cmd+K-style shortcut needs for Mac/Windows-Linux parity, e.g.
+ * `metaOrCtrl('k', toggle)` -> `{'cmd+k': toggle, 'ctrl+k': toggle}`. */
+export function metaOrCtrl(key: string, handler: () => void): ShortcutMap {
+  return { [`cmd+${key}`]: handler, [`ctrl+${key}`]: handler };
 }
 
 function matchesShortcut(event: KeyboardEvent, parsed: ParsedShortcut): boolean {
@@ -109,15 +123,10 @@ function matchesShortcut(event: KeyboardEvent, parsed: ParsedShortcut): boolean 
  */
 export function useKeyboard(shortcuts: ShortcutMap): void {
   useEffect(() => {
-    const parsedEntries = Object.entries(shortcuts).map(([shortcut, handler]) => ({
-      parsed: parseShortcut(shortcut),
-      handler,
-      hasModifier:
-        shortcut.toLowerCase().includes('ctrl') ||
-        shortcut.toLowerCase().includes('cmd') ||
-        shortcut.toLowerCase().includes('meta') ||
-        shortcut.toLowerCase().includes('alt'),
-    }));
+    const parsedEntries = Object.entries(shortcuts).map(([shortcut, handler]) => {
+      const parsed = parseShortcut(shortcut);
+      return { parsed, handler, hasModifier: parsed.ctrl || parsed.meta || parsed.alt };
+    });
 
     const handleKeyDown = (event: KeyboardEvent): void => {
       const target = event.target as HTMLElement | null;
