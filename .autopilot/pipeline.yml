@@ -1,17 +1,13 @@
-# pipeline.yml — QUEUED plan, parked by autopilot:plan on 2026-08-01.
+# pipeline.yml — ACTIVE plan, promoted 2026-08-03.
 #
-# NOT ACTIVE. `docs-accuracy-audit` is still in flight (phases 0-2 of 7 shipped at parking
-# time; phase 3 in progress on branch autopilot/docs-accuracy-audit/phase-3), and there is
-# only ever ONE active .autopilot/pipeline.yml. This file lives in the git-ignored
-# .autopilot/queued/ dir until a human promotes it (mv into place + seed ledger record 0 +
-# commit — see the autopilot plugin's docs/lifecycle.md).
-#
-# ORDERING: promote this after docs-accuracy-audit finishes (or sooner, at the user's
-# discretion — this pipeline's touches are backend Rust + CI + two docs files, disjoint
-# from docs-accuracy-audit's docs/api/**, docs/audit/**, docs/ADRs/**, docs/DDDs/**
-# footprint, so running them concurrently on separate branches would not collide on files,
-# though only one can be the *active* .autopilot/pipeline.yml at a time under the current
-# one-pipeline-at-a-time lifecycle).
+# Promoted from .autopilot/queued/postgres-support.pipeline.yml (parked 2026-08-01, behind
+# docs-accuracy-audit and keyboard-shortcuts, both now shipped). Re-planned in place the same
+# day per the user's added requirement: both SQLite and PostgreSQL must stay conveniently
+# selectable across every mode the app is deployed/run in (native `just dev`/`dev-llm`,
+# `just docker-up-dev`, `just docker-up`) — not just "Postgres works if you know the right
+# env var." This folded new deliverables/DoD into phases 0, 3, and 4 (see their comments below)
+# rather than adding a phase — it is the same coherent concern (dual-backend support), just
+# with "convenient" made a checkable property instead of an implicit assumption.
 
 feature_id: "postgres-support"
 goal: "Make PostgreSQL a real, working, CI-verified second database backend — not just a docker-compose service and an aspirational doc claim."
@@ -87,15 +83,17 @@ phases:
       - "sqlx `postgres` feature enabled in backend/Cargo.toml alongside the existing `sqlite` feature."
       - "A `Database` abstraction in backend/src/db/mod.rs (enum-of-pools or trait object) whose `connect(url)` picks Sqlite vs Postgres by URL scheme, replacing the current unconditional `SqlitePoolOptions` call."
       - "docs/ADRs/ADR-033-postgresql-backend-support.md recording the dual-backend decision: why URL-scheme dispatch, why runtime (not compile-time-checked) queries, what stays SQLite-only (if anything)."
+      - "backend/config.yaml's `database_url` key gains an inline comment documenting BOTH accepted URL schemes (`sqlite:...` and `postgres://...`) as the single, single-variable point of backend selection — mirroring how the adjacent `store.backend` key already documents its own valid values (`ruvector | memory | qdrant | sqlite`) inline. No separate feature flag/enum for the database backend; the URL scheme IS the selector, and that convention must be self-evident from reading the config file, not just the ADR."
     definition_of_done:
       - "cmd: cd backend && cargo build --features vectors passes with the postgres feature enabled"
       - "cmd: cd backend && cargo test passes (existing SQLite-path tests unaffected)"
       - "grep: postgres in backend/Cargo.toml (the sqlx features line)"
+      - "grep: postgres:// in backend/config.yaml (the documented example URL, alongside the existing sqlite: default)"
       - "prose: backend/src/db/mod.rs no longer imports sqlx::sqlite::{SqlitePool, SqlitePoolOptions} directly at the connect() call site — it goes through the new abstraction"
-      - "prose: docs/ADRs/ADR-033-postgresql-backend-support.md exists and documents the URL-scheme dispatch decision"
-    conventions: "Match backend/src/db/mod.rs's existing doc-comment style (see the audited_sql() block); keep the abstraction minimal — this phase is plumbing, not the migration of the 22 call sites (that's phase 2)."
+      - "prose: docs/ADRs/ADR-033-postgresql-backend-support.md exists and documents the URL-scheme dispatch decision, and explicitly states that it is the ONE mechanism used to select a backend across every deploy/run mode (native, docker dev, docker prod) — later phases must not invent a second, mode-specific selection mechanism"
+    conventions: "Match backend/src/db/mod.rs's existing doc-comment style (see the audited_sql() block); keep the abstraction minimal — this phase is plumbing, not the migration of the 22 call sites (that's phase 2). Match config.yaml's existing inline-comment style for enumerating valid values (see the `store.backend` line)."
     depends_on: []
-    touches: ["backend/Cargo.toml", "backend/src/db/mod.rs", "docs/ADRs/ADR-033-postgresql-backend-support.md"]
+    touches: ["backend/Cargo.toml", "backend/src/db/mod.rs", "backend/config.yaml", "docs/ADRs/ADR-033-postgresql-backend-support.md"]
     adrs: []
     ddd: []
 
@@ -134,33 +132,41 @@ phases:
     ddd: []
 
   - id: 3
-    goal: "CI actually proves PostgreSQL works — the entrypoint secret-plumbing bug that made smoke.yml silently test SQLite while believing it tested Postgres is fixed, and a dedicated CI job runs the backend suite against a live Postgres service."
+    goal: "CI actually proves PostgreSQL works, and choosing SQLite vs PostgreSQL is a one-flag decision in every deploy/run mode — not just something that works if you already know the right env var."
     track: "ci"
     deliverables:
       - "backend/entrypoint.sh (or the compose secret name) fixed so the postgres:// URL smoke.yml already writes actually reaches EMAILIBRIUM_DATABASE_URL."
       - "A new job in .github/workflows/ci.yml running the backend test suite against a live postgres:16-alpine service container (mirroring the sqlite-path job)."
       - "smoke.yml updated/verified to assert it is genuinely exercising Postgres post-fix (e.g. a diagnostic log line or health-endpoint field naming the active backend)."
+      - "docker-compose.yml's `postgres` service gated behind a compose profile (`profiles: [\"postgres\"]`), mirroring the existing `qdrant` service's opt-in pattern (same file, ~line 204) — so `docker compose up` (no profile) is a valid, fully-working SQLite-only deployment that never has to pull/start/health-check a Postgres container it won't use. The backend service's `depends_on: postgres: condition: service_healthy` is adjusted (e.g. moved to a profile-scoped override, or made conditional per whatever mechanism the phase's own research into current Compose profile+depends_on semantics confirms actually works — verify empirically, do not assume) so backend still starts cleanly with no profile active."
+      - "docker-compose.yml (or docker-compose.dev.yml) documents, at the point of use, the one env var / profile flag that switches a docker deployment from SQLite to Postgres — e.g. a header comment on the `postgres` service and/or the `backend.environment` block, not just prose in a separate doc file."
+      - "justfile's `docker-up` / `docker-up-dev` recipe help text (the `help` recipe's printed Quick Start / Deploy sections) names the exact toggle for running each mode against Postgres instead of the SQLite default, so the answer is visible from `just` / `just --list` itself."
     definition_of_done:
       - "cmd: cd backend && EMAILIBRIUM_DATABASE_URL=postgres://... cargo test passes locally against a throwaway postgres container (documented reproduction command)"
       - "grep: EMAILIBRIUM_DATABASE_URL in backend/entrypoint.sh (or wherever the fix lands)"
       - "prose: .github/workflows/ci.yml contains a postgres service-container job running the backend suite"
       - "prose: the CI job referenced above is green on the phase's own PR (remote CI is the authority per orchestrate's invariants — this line is verified by the gate reading real check results, not asserted)"
-    conventions: "Match ci.yml's existing job structure and docker.yml/smoke.yml's service-container + healthcheck conventions."
+      - "cmd: docker compose config succeeds with no profile flags and does not include the postgres service"
+      - "cmd: docker compose --profile postgres config succeeds and includes the postgres service, wired the same way it is today"
+      - "prose: justfile's help text (or the docker-up/docker-up-dev recipe comments) documents the SQLite-vs-Postgres toggle for docker deployments"
+    conventions: "Match ci.yml's existing job structure and docker.yml/smoke.yml's service-container + healthcheck conventions. Match the qdrant service's existing `profiles:` pattern exactly (docker-compose.yml ~line 200-223) rather than inventing a new opt-in mechanism."
     depends_on: [1, 2]
-    touches: [".github/workflows/ci.yml", ".github/workflows/smoke.yml", "backend/entrypoint.sh"]
+    touches: [".github/workflows/ci.yml", ".github/workflows/smoke.yml", "backend/entrypoint.sh", "docker-compose.yml", "docker-compose.dev.yml", "justfile"]
     adrs: ["ADR-033-postgresql-backend-support"]
     ddd: []
 
   - id: 4
-    goal: "The operator docs describe PostgreSQL support accurately now that it's real, closing the loop the docs-accuracy-audit pipeline opened."
+    goal: "The operator docs describe PostgreSQL support accurately now that it's real, closing the loop the docs-accuracy-audit pipeline opened, and every deploy/run mode has an explicit, findable answer for 'how do I use Postgres here instead of SQLite.'"
     track: "docs"
     deliverables:
       - "docs/deployment-guide.md Database Strategy section rewritten: remove the 'SQLite is currently the only database...' language, document real Postgres setup + the actual multi-user/HA guidance now that it applies."
+      - "docs/deployment-guide.md gains a per-mode subsection or table covering all four ways emailibrium is actually run — native (`just dev` / `just dev-llm`), `just docker-up-dev`, and `just docker-up` — each row/entry stating the exact one-line toggle (the `EMAILIBRIUM_DATABASE_URL` value and/or the compose `--profile postgres` flag from phase 3) to run that mode against SQLite vs PostgreSQL. This is the single place a user checks instead of re-deriving it from config.yaml + docker-compose.yml + the ADR."
       - "docs/configuration-reference.md's EMAILIBRIUM_DATABASE_URL entry updated with a working postgres:// example."
     definition_of_done:
       - "grep:absent: planned, not implemented in docs/deployment-guide.md (the specific phrase this pipeline makes obsolete)"
       - "cmd: just lint (or the docs-only subset: markdownlint + lychee) passes"
       - "prose: docs/deployment-guide.md's Database Strategy table reflects PostgreSQL as an available option with accurate operational notes"
+      - "prose: docs/deployment-guide.md explicitly documents the SQLite-vs-Postgres toggle for each of native dev, docker dev, and docker prod modes, consistent with what phase 3 actually shipped (not a generic restatement of the ADR)"
     conventions: "Match docs-accuracy-audit's phase-2 prose style in these same two files — this phase is a direct continuation of that edit, now describing working code instead of documenting its absence."
     depends_on: [3]
     touches: ["docs/deployment-guide.md", "docs/configuration-reference.md"]
