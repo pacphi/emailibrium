@@ -489,18 +489,18 @@ async fn setup_test_db() -> SqlitePool {
 
     // Use raw_sql to execute multi-statement migration scripts in one call.
     let migrations: &[&str] = &[
-        include_str!("../migrations/001_initial_schema.sql"),
-        include_str!("../migrations/002_ai_consent.sql"),
-        include_str!("../migrations/003_ai_metadata.sql"),
-        include_str!("../migrations/004_accounts.sql"),
-        include_str!("../migrations/006_ingestion_checkpoints.sql"),
-        include_str!("../migrations/007_per_user_learning.sql"),
-        include_str!("../migrations/008_cloud_api_audit.sql"),
-        include_str!("../migrations/009_ab_tests.sql"),
-        include_str!("../migrations/010_gdpr_consent.sql"),
-        include_str!("../migrations/011_sync_queue.sql"),
-        include_str!("../migrations/012_rules.sql"),
-        include_str!("../migrations/014_attachments.sql"),
+        include_str!("../migrations/sqlite/001_initial_schema.sql"),
+        include_str!("../migrations/sqlite/002_ai_consent.sql"),
+        include_str!("../migrations/sqlite/003_ai_metadata.sql"),
+        include_str!("../migrations/sqlite/004_accounts.sql"),
+        include_str!("../migrations/sqlite/006_ingestion_checkpoints.sql"),
+        include_str!("../migrations/sqlite/007_per_user_learning.sql"),
+        include_str!("../migrations/sqlite/008_cloud_api_audit.sql"),
+        include_str!("../migrations/sqlite/009_ab_tests.sql"),
+        include_str!("../migrations/sqlite/010_gdpr_consent.sql"),
+        include_str!("../migrations/sqlite/011_sync_queue.sql"),
+        include_str!("../migrations/sqlite/012_rules.sql"),
+        include_str!("../migrations/sqlite/014_attachments.sql"),
     ];
 
     for sql in migrations {

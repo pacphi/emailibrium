@@ -305,7 +305,7 @@ async fn test_vector_backup_encrypted() {
         .await
         .unwrap();
 
-    sqlx::query(include_str!("../migrations/001_initial_schema.sql"))
+    sqlx::query(include_str!("../migrations/sqlite/001_initial_schema.sql"))
         .execute(&pool)
         .await
         .unwrap();

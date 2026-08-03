@@ -626,7 +626,7 @@ mod tests {
             .connect(":memory:")
             .await
             .expect("connect");
-        let raw = include_str!("../../../migrations/024_cleanup_planning.sql");
+        let raw = include_str!("../../../migrations/sqlite/024_cleanup_planning.sql");
         // Strip line comments before splitting on ';'.
         let cleaned: String = raw
             .lines()
