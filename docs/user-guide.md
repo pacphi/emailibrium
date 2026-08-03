@@ -215,12 +215,10 @@ Rules are evaluated during ingestion and can also be applied retroactively to ex
 | `Shift+Enter`                  | New line (in the Chat box)     |
 
 `C`/`R`/`F`/`E`/`Shift+#`/`Shift+?` are suppressed while typing in any text field, so typing those
-characters in an email body, reply, or search box behaves normally — `Cmd+Shift+A`, `Cmd+,`,
-`Ctrl+Shift+A`, and `Ctrl+,` are not suppressed (same category as `Cmd+K`), since a shortcut with
-Cmd/Ctrl held is assumed deliberate regardless of focus. `J`/`K` list navigation was considered but
-deliberately not restored — `↓`/`↑` already supersede it. The command palette (`Cmd+K`) and
-shortcut help panel (`Shift+?`) are available on the Command Center page; search-box focus (in the
-email list's filter bar) remains mouse/tap-only, since no shortcut moves focus there yet.
+characters in an email body, reply, or search box behaves normally. `Cmd+Shift+A`, `Cmd+,`,
+`Ctrl+Shift+A`, and `Ctrl+,` work even while a text field is focused, the same as `Cmd+K`. The
+command palette (`Cmd+K`) and shortcut help panel (`Shift+?`) are available on the Command Center
+page; search-box focus (in the email list's filter bar) is mouse/tap-only.
 
 This table is verified against the app's actual registered shortcuts by
 `bash scripts/audit/extract-shortcuts.sh`, which prints every shortcut key the frontend actually
