@@ -175,7 +175,7 @@ pub struct ErrorResponse {
 async fn list_rules(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<RuleResponse>>, (StatusCode, Json<ErrorResponse>)> {
-    let loaded = RuleEngine::load_rules(state.db.pool())
+    let loaded = RuleEngine::load_rules(&state.db)
         .await
         .map_err(internal_error)?;
 
@@ -278,7 +278,7 @@ async fn create_rule(
         ));
     }
 
-    RuleEngine::save_rule(state.db.pool(), &rule)
+    RuleEngine::save_rule(&state.db, &rule)
         .await
         .map_err(internal_error)?;
 
@@ -290,7 +290,7 @@ async fn get_rule(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<RuleResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let rule = RuleEngine::get_rule(state.db.pool(), &id)
+    let rule = RuleEngine::get_rule(&state.db, &id)
         .await
         .map_err(internal_error)?
         .ok_or_else(|| {
@@ -311,7 +311,7 @@ async fn update_rule(
     Path(id): Path<String>,
     Json(req): Json<UpdateRuleRequest>,
 ) -> Result<Json<RuleResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let mut rule = RuleEngine::get_rule(state.db.pool(), &id)
+    let mut rule = RuleEngine::get_rule(&state.db, &id)
         .await
         .map_err(internal_error)?
         .ok_or_else(|| {
@@ -360,7 +360,7 @@ async fn update_rule(
         ));
     }
 
-    RuleEngine::save_rule(state.db.pool(), &rule)
+    RuleEngine::save_rule(&state.db, &rule)
         .await
         .map_err(internal_error)?;
 
@@ -372,7 +372,7 @@ async fn delete_rule_handler(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
-    let deleted = RuleEngine::delete_rule(state.db.pool(), &id)
+    let deleted = RuleEngine::delete_rule(&state.db, &id)
         .await
         .map_err(internal_error)?;
 
@@ -417,7 +417,7 @@ async fn validate_rule(
     let mut findings = rule_validator::validate_rule(&rule);
 
     // Cross-rule validation (loop detection, etc.) against all persisted rules.
-    if let Ok(existing_rules) = RuleEngine::load_rules(state.db.pool()).await {
+    if let Ok(existing_rules) = RuleEngine::load_rules(&state.db).await {
         let mut all_rules = existing_rules;
         all_rules.push(rule);
         let cross_findings = rule_validator::validate_rules(&all_rules);
@@ -587,7 +587,7 @@ async fn run_rule(
     use crate::rules::executor::apply_rule_action;
     use crate::rules::rule_processor::evaluate_rule;
 
-    let rule = RuleEngine::get_rule(state.db.pool(), &rule_id)
+    let rule = RuleEngine::get_rule(&state.db, &rule_id)
         .await
         .map_err(internal_error)?
         .ok_or_else(|| {
@@ -696,7 +696,7 @@ async fn run_rule(
             }
 
             // Local DB update (idempotent).
-            if apply_rule_action(state.db.pool(), &email_id, action)
+            if apply_rule_action(&state.db, &email_id, action)
                 .await
                 .is_ok()
             {
@@ -753,7 +753,7 @@ async fn get_suggestions(
     let page_size = params.limit.unwrap_or(cfg.suggestions_page_size as usize);
     let min_count = cfg.suggestions_min_email_count as i64;
 
-    let existing = RuleEngine::load_rules(state.db.pool())
+    let existing = RuleEngine::load_rules(&state.db)
         .await
         .map_err(internal_error)?;
 

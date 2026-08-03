@@ -494,15 +494,14 @@ async fn main() -> anyhow::Result<()> {
     let cleanup_apply_job_repo = Arc::new(cleanup::repository::SqliteCleanupApplyJobRepo::new(
         (*db).clone(),
     ));
-    let cleanup_email_repo = Arc::new(cleanup::repository::SqlxEmailRepository {
-        pool: db.pool().clone(),
-    }) as Arc<dyn cleanup::domain::ports::EmailRepository>;
-    let cleanup_rule_eval = Arc::new(cleanup::repository::SqlxRuleEvaluator {
-        pool: db.pool().clone(),
-    }) as Arc<dyn cleanup::domain::ports::RuleEvaluator>;
-    let cleanup_account_state = Arc::new(cleanup::repository::SqlxAccountStateProvider {
-        pool: db.pool().clone(),
-    }) as Arc<dyn cleanup::domain::ports::AccountStateProvider>;
+    let cleanup_email_repo =
+        Arc::new(cleanup::repository::SqlxEmailRepository { db: (*db).clone() })
+            as Arc<dyn cleanup::domain::ports::EmailRepository>;
+    let cleanup_rule_eval = Arc::new(cleanup::repository::SqlxRuleEvaluator { db: (*db).clone() })
+        as Arc<dyn cleanup::domain::ports::RuleEvaluator>;
+    let cleanup_account_state =
+        Arc::new(cleanup::repository::SqlxAccountStateProvider { db: (*db).clone() })
+            as Arc<dyn cleanup::domain::ports::AccountStateProvider>;
     let drift_detector = Arc::new(cleanup::orchestrator::DriftDetector::new(
         cleanup_account_state,
     ));

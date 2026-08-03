@@ -16,9 +16,10 @@
 //! storage for fast dispatch and persists state to SQLite for durability.
 
 use serde::{Deserialize, Serialize};
-use sqlx::SqlitePool;
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
+
+use crate::db::Database;
 
 /// Job to extract content from a raw email asynchronously.
 ///
@@ -140,29 +141,36 @@ impl std::fmt::Display for JobType {
 }
 
 /// A persisted job record from the `background_jobs` table.
+///
+/// `priority`/`attempts`/`max_retries` are `i32` to match the `INTEGER` column type in both
+/// backends' migrations — PostgreSQL's `INTEGER` is a real 4-byte type (unlike SQLite's
+/// dynamically-8-byte one), so binding/decoding these as `i64` compiles but fails at runtime
+/// against Postgres (`ColumnDecode: i64/INT8 incompatible with INT4`) — caught only by testing
+/// against a live Postgres instance, not by `cargo build`/`cargo test` (ADR-035).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JobRecord {
     pub id: String,
     pub job_type: String,
     pub payload: String,
     pub status: String,
-    pub priority: i64,
-    pub attempts: i64,
-    pub max_retries: i64,
+    pub priority: i32,
+    pub attempts: i32,
+    pub max_retries: i32,
     pub error_msg: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
 
-/// Row tuple returned when querying the `background_jobs` table.
+/// Row tuple returned when querying the `background_jobs` table. See [`JobRecord`]'s doc for
+/// why `priority`/`attempts`/`max_retries` are `i32`, not `i64`.
 type JobRow = (
     String,
     String,
     String,
     String,
-    i64,
-    i64,
-    i64,
+    i32,
+    i32,
+    i32,
     Option<String>,
     String,
     String,
@@ -177,13 +185,13 @@ type JobRow = (
 /// directly to SQLite for durability across restarts.
 #[derive(Clone)]
 pub struct JobQueue {
-    pool: SqlitePool,
+    db: Database,
 }
 
 impl JobQueue {
-    /// Create a new job queue backed by the given SQLite connection pool.
-    pub fn new(pool: SqlitePool) -> Self {
-        Self { pool }
+    /// Create a new job queue backed by the given database connection.
+    pub fn new(db: Database) -> Self {
+        Self { db }
     }
 
     /// Enqueue a content extraction job.
@@ -191,7 +199,7 @@ impl JobQueue {
         &self,
         job: &ContentExtractionJob,
     ) -> Result<String, sqlx::Error> {
-        self.enqueue(JobType::ContentExtraction, job, job.priority as i64)
+        self.enqueue(JobType::ContentExtraction, job, job.priority as i32)
             .await
     }
 
@@ -218,21 +226,35 @@ impl JobQueue {
         &self,
         job_type: JobType,
         payload: &T,
-        priority: i64,
+        priority: i32,
     ) -> Result<String, sqlx::Error> {
         let id = Uuid::new_v4().to_string();
         let payload_json = serde_json::to_string(payload).unwrap_or_else(|_| "{}".to_string());
 
-        sqlx::query(
+        let sql = self.db.adapt(
             r#"INSERT INTO background_jobs (id, job_type, payload, status, priority)
                VALUES (?, ?, ?, 'pending', ?)"#,
-        )
-        .bind(&id)
-        .bind(job_type.as_str())
-        .bind(&payload_json)
-        .bind(priority)
-        .execute(&self.pool)
-        .await?;
+        );
+        match &self.db {
+            Database::Sqlite(pool) => {
+                sqlx::query(crate::db::audited_sql(&sql))
+                    .bind(&id)
+                    .bind(job_type.as_str())
+                    .bind(&payload_json)
+                    .bind(priority)
+                    .execute(pool)
+                    .await?;
+            }
+            Database::Postgres(pool) => {
+                sqlx::query(crate::db::audited_sql(&sql))
+                    .bind(&id)
+                    .bind(job_type.as_str())
+                    .bind(&payload_json)
+                    .bind(priority)
+                    .execute(pool)
+                    .await?;
+            }
+        }
 
         debug!(job_id = %id, job_type = %job_type, "Job enqueued");
         Ok(id)
@@ -244,31 +266,53 @@ impl JobQueue {
     /// with an immediate `UPDATE` to prevent double-processing.
     pub async fn dequeue(&self, job_type: JobType) -> Result<Option<JobRecord>, sqlx::Error> {
         // Fetch the highest-priority pending job.
-        let row: Option<JobRow> = sqlx::query_as(
+        let select_sql = self.db.adapt(
             r#"SELECT id, job_type, payload, status, priority, attempts, max_retries,
                           error_msg, created_at, updated_at
                    FROM background_jobs
                    WHERE job_type = ? AND status = 'pending'
                    ORDER BY priority ASC, created_at ASC
                    LIMIT 1"#,
-        )
-        .bind(job_type.as_str())
-        .fetch_optional(&self.pool)
-        .await?;
+        );
+        let row: Option<JobRow> = match &self.db {
+            Database::Sqlite(pool) => {
+                sqlx::query_as(crate::db::audited_sql(&select_sql))
+                    .bind(job_type.as_str())
+                    .fetch_optional(pool)
+                    .await?
+            }
+            Database::Postgres(pool) => {
+                sqlx::query_as(crate::db::audited_sql(&select_sql))
+                    .bind(job_type.as_str())
+                    .fetch_optional(pool)
+                    .await?
+            }
+        };
 
         let Some(r) = row else {
             return Ok(None);
         };
 
         // Mark as running.
-        sqlx::query(
+        let update_sql = self.db.adapt(
             r#"UPDATE background_jobs
                SET status = 'running', attempts = attempts + 1, updated_at = datetime('now')
                WHERE id = ? AND status = 'pending'"#,
-        )
-        .bind(&r.0)
-        .execute(&self.pool)
-        .await?;
+        );
+        match &self.db {
+            Database::Sqlite(pool) => {
+                sqlx::query(crate::db::audited_sql(&update_sql))
+                    .bind(&r.0)
+                    .execute(pool)
+                    .await?;
+            }
+            Database::Postgres(pool) => {
+                sqlx::query(crate::db::audited_sql(&update_sql))
+                    .bind(&r.0)
+                    .execute(pool)
+                    .await?;
+            }
+        }
 
         Ok(Some(JobRecord {
             id: r.0,
@@ -286,14 +330,25 @@ impl JobQueue {
 
     /// Mark a job as completed.
     pub async fn mark_completed(&self, job_id: &str) -> Result<(), sqlx::Error> {
-        sqlx::query(
+        let sql = self.db.adapt(
             r#"UPDATE background_jobs
                SET status = 'completed', completed_at = datetime('now'), updated_at = datetime('now')
                WHERE id = ?"#,
-        )
-        .bind(job_id)
-        .execute(&self.pool)
-        .await?;
+        );
+        match &self.db {
+            Database::Sqlite(pool) => {
+                sqlx::query(crate::db::audited_sql(&sql))
+                    .bind(job_id)
+                    .execute(pool)
+                    .await?;
+            }
+            Database::Postgres(pool) => {
+                sqlx::query(crate::db::audited_sql(&sql))
+                    .bind(job_id)
+                    .execute(pool)
+                    .await?;
+            }
+        }
 
         debug!(job_id = %job_id, "Job completed");
         Ok(())
@@ -305,11 +360,23 @@ impl JobQueue {
     /// for automatic retry.
     pub async fn mark_failed(&self, job_id: &str, error: &str) -> Result<(), sqlx::Error> {
         // Check if we should retry.
-        let row: Option<(i64, i64)> =
-            sqlx::query_as(r#"SELECT attempts, max_retries FROM background_jobs WHERE id = ?"#)
-                .bind(job_id)
-                .fetch_optional(&self.pool)
-                .await?;
+        let select_sql = self
+            .db
+            .adapt(r#"SELECT attempts, max_retries FROM background_jobs WHERE id = ?"#);
+        let row: Option<(i32, i32)> = match &self.db {
+            Database::Sqlite(pool) => {
+                sqlx::query_as(crate::db::audited_sql(&select_sql))
+                    .bind(job_id)
+                    .fetch_optional(pool)
+                    .await?
+            }
+            Database::Postgres(pool) => {
+                sqlx::query_as(crate::db::audited_sql(&select_sql))
+                    .bind(job_id)
+                    .fetch_optional(pool)
+                    .await?
+            }
+        };
 
         let final_status = match row {
             Some((attempts, max_retries)) if attempts < max_retries => {
@@ -322,48 +389,90 @@ impl JobQueue {
             }
         };
 
-        sqlx::query(
+        let update_sql = self.db.adapt(
             r#"UPDATE background_jobs
                SET status = ?, error_msg = ?, updated_at = datetime('now')
                WHERE id = ?"#,
-        )
-        .bind(final_status)
-        .bind(error)
-        .bind(job_id)
-        .execute(&self.pool)
-        .await?;
+        );
+        match &self.db {
+            Database::Sqlite(pool) => {
+                sqlx::query(crate::db::audited_sql(&update_sql))
+                    .bind(final_status)
+                    .bind(error)
+                    .bind(job_id)
+                    .execute(pool)
+                    .await?;
+            }
+            Database::Postgres(pool) => {
+                sqlx::query(crate::db::audited_sql(&update_sql))
+                    .bind(final_status)
+                    .bind(error)
+                    .bind(job_id)
+                    .execute(pool)
+                    .await?;
+            }
+        }
 
         Ok(())
     }
 
     /// Cancel a pending or running job.
     pub async fn cancel(&self, job_id: &str) -> Result<bool, sqlx::Error> {
-        let result = sqlx::query(
+        let sql = self.db.adapt(
             r#"UPDATE background_jobs
                SET status = 'cancelled', updated_at = datetime('now')
                WHERE id = ? AND status IN ('pending', 'running')"#,
-        )
-        .bind(job_id)
-        .execute(&self.pool)
-        .await?;
+        );
+        let affected = match &self.db {
+            Database::Sqlite(pool) => sqlx::query(crate::db::audited_sql(&sql))
+                .bind(job_id)
+                .execute(pool)
+                .await?
+                .rows_affected(),
+            Database::Postgres(pool) => sqlx::query(crate::db::audited_sql(&sql))
+                .bind(job_id)
+                .execute(pool)
+                .await?
+                .rows_affected(),
+        };
 
-        Ok(result.rows_affected() > 0)
+        Ok(affected > 0)
     }
 
     /// Count pending jobs, optionally filtered by type.
     pub async fn pending_count(&self, job_type: Option<JobType>) -> Result<i64, sqlx::Error> {
         let count: (i64,) = match job_type {
-            Some(jt) => sqlx::query_as(
-                "SELECT COUNT(*) FROM background_jobs WHERE status = 'pending' AND job_type = ?",
-            )
-            .bind(jt.as_str())
-            .fetch_one(&self.pool)
-            .await?,
-            None => {
-                sqlx::query_as("SELECT COUNT(*) FROM background_jobs WHERE status = 'pending'")
-                    .fetch_one(&self.pool)
-                    .await?
+            Some(jt) => {
+                let sql = self.db.adapt(
+                    "SELECT COUNT(*) FROM background_jobs WHERE status = 'pending' AND job_type = ?",
+                );
+                match &self.db {
+                    Database::Sqlite(pool) => {
+                        sqlx::query_as(crate::db::audited_sql(&sql))
+                            .bind(jt.as_str())
+                            .fetch_one(pool)
+                            .await?
+                    }
+                    Database::Postgres(pool) => {
+                        sqlx::query_as(crate::db::audited_sql(&sql))
+                            .bind(jt.as_str())
+                            .fetch_one(pool)
+                            .await?
+                    }
+                }
             }
+            None => match &self.db {
+                Database::Sqlite(pool) => {
+                    sqlx::query_as("SELECT COUNT(*) FROM background_jobs WHERE status = 'pending'")
+                        .fetch_one(pool)
+                        .await?
+                }
+                Database::Postgres(pool) => {
+                    sqlx::query_as("SELECT COUNT(*) FROM background_jobs WHERE status = 'pending'")
+                        .fetch_one(pool)
+                        .await?
+                }
+            },
         };
 
         Ok(count.0)
@@ -374,15 +483,21 @@ impl JobQueue {
     /// Called on startup to reset jobs that were running when the process
     /// was interrupted.
     pub async fn resume_abandoned(&self) -> Result<u64, sqlx::Error> {
-        let result = sqlx::query(
+        let sql = self.db.adapt(
             r#"UPDATE background_jobs
                SET status = 'pending', updated_at = datetime('now')
                WHERE status = 'running'"#,
-        )
-        .execute(&self.pool)
-        .await?;
-
-        let count = result.rows_affected();
+        );
+        let count = match &self.db {
+            Database::Sqlite(pool) => sqlx::query(crate::db::audited_sql(&sql))
+                .execute(pool)
+                .await?
+                .rows_affected(),
+            Database::Postgres(pool) => sqlx::query(crate::db::audited_sql(&sql))
+                .execute(pool)
+                .await?
+                .rows_affected(),
+        };
         if count > 0 {
             info!(count, "Resumed abandoned jobs");
         }
@@ -562,7 +677,7 @@ mod tests {
         .await
         .unwrap();
 
-        let queue = JobQueue::new(pool);
+        let queue = JobQueue::new(Database::Sqlite(pool));
 
         // Enqueue a content extraction job.
         let job = ContentExtractionJob {
@@ -626,7 +741,7 @@ mod tests {
         .await
         .unwrap();
 
-        let queue = JobQueue::new(pool);
+        let queue = JobQueue::new(Database::Sqlite(pool));
 
         let job = EmbeddingJob {
             email_id: "e2".to_string(),
@@ -685,7 +800,7 @@ mod tests {
         .await
         .unwrap();
 
-        let queue = JobQueue::new(pool);
+        let queue = JobQueue::new(Database::Sqlite(pool));
 
         let job = SyncJob {
             account_id: "a1".to_string(),
@@ -731,7 +846,7 @@ mod tests {
         .await
         .unwrap();
 
-        let queue = JobQueue::new(pool);
+        let queue = JobQueue::new(Database::Sqlite(pool));
 
         let job = ContentExtractionJob {
             email_id: "e3".to_string(),
@@ -776,7 +891,7 @@ mod tests {
         .await
         .unwrap();
 
-        let queue = JobQueue::new(pool);
+        let queue = JobQueue::new(Database::Sqlite(pool));
 
         // Enqueue low priority first.
         let low = ContentExtractionJob {

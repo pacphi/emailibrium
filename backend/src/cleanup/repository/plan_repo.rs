@@ -784,20 +784,16 @@ impl CleanupPlanRepository for SqliteCleanupPlanRepo {
                WHERE valid_until < ? AND status IN ('ready', 'draft')"#,
         );
         let affected = match &self.db {
-            Database::Sqlite(pool) => {
-                sqlx::query(audited_sql(&sql))
-                    .bind(now.timestamp_millis())
-                    .execute(pool)
-                    .await?
-                    .rows_affected()
-            }
-            Database::Postgres(pool) => {
-                sqlx::query(audited_sql(&sql))
-                    .bind(now.timestamp_millis())
-                    .execute(pool)
-                    .await?
-                    .rows_affected()
-            }
+            Database::Sqlite(pool) => sqlx::query(audited_sql(&sql))
+                .bind(now.timestamp_millis())
+                .execute(pool)
+                .await?
+                .rows_affected(),
+            Database::Postgres(pool) => sqlx::query(audited_sql(&sql))
+                .bind(now.timestamp_millis())
+                .execute(pool)
+                .await?
+                .rows_affected(),
         };
         Ok(affected as u32)
     }
@@ -807,20 +803,16 @@ impl CleanupPlanRepository for SqliteCleanupPlanRepo {
             .db
             .adapt("DELETE FROM cleanup_plans WHERE valid_until < ?");
         let affected = match &self.db {
-            Database::Sqlite(pool) => {
-                sqlx::query(audited_sql(&sql))
-                    .bind(cutoff.timestamp_millis())
-                    .execute(pool)
-                    .await?
-                    .rows_affected()
-            }
-            Database::Postgres(pool) => {
-                sqlx::query(audited_sql(&sql))
-                    .bind(cutoff.timestamp_millis())
-                    .execute(pool)
-                    .await?
-                    .rows_affected()
-            }
+            Database::Sqlite(pool) => sqlx::query(audited_sql(&sql))
+                .bind(cutoff.timestamp_millis())
+                .execute(pool)
+                .await?
+                .rows_affected(),
+            Database::Postgres(pool) => sqlx::query(audited_sql(&sql))
+                .bind(cutoff.timestamp_millis())
+                .execute(pool)
+                .await?
+                .rows_affected(),
         };
         Ok(affected as u32)
     }

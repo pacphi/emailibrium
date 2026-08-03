@@ -77,18 +77,25 @@ fn err(code: StatusCode, error: &str, message: &str) -> (StatusCode, Json<ErrorB
 }
 
 async fn build_plan_builder(state: &AppState) -> Result<PlanBuilder, sqlx::Error> {
-    let pool = state.db.pool().clone();
+    let db = (*state.db).clone();
 
     // Load per-account providers once so the closure is sync.
-    let rows = sqlx::query("SELECT id, provider FROM connected_accounts")
-        .fetch_all(&pool)
-        .await?;
+    let sql = db.adapt("SELECT id, provider FROM connected_accounts");
+    let rows: Vec<(String, String)> = match &db {
+        crate::db::Database::Sqlite(pool) => {
+            sqlx::query_as(crate::db::audited_sql(&sql))
+                .fetch_all(pool)
+                .await?
+        }
+        crate::db::Database::Postgres(pool) => {
+            sqlx::query_as(crate::db::audited_sql(&sql))
+                .fetch_all(pool)
+                .await?
+        }
+    };
     let provider_map: Arc<HashMap<String, Provider>> = Arc::new(
-        rows.iter()
-            .map(|r| {
-                use sqlx::Row;
-                let id: String = r.get("id");
-                let prov: String = r.get("provider");
+        rows.into_iter()
+            .map(|(id, prov)| {
                 let p = match prov.as_str() {
                     "outlook" => Provider::Outlook,
                     "imap" => Provider::Imap,
@@ -101,13 +108,12 @@ async fn build_plan_builder(state: &AppState) -> Result<PlanBuilder, sqlx::Error
     );
 
     Ok(PlanBuilder {
-        emails: Arc::new(SqlxEmailRepository { pool: pool.clone() }) as Arc<dyn EmailRepository>,
-        subs: Arc::new(SqlxSubscriptionRepository { pool: pool.clone() })
+        emails: Arc::new(SqlxEmailRepository { db: db.clone() }) as Arc<dyn EmailRepository>,
+        subs: Arc::new(SqlxSubscriptionRepository { db: db.clone() })
             as Arc<dyn SubscriptionRepository>,
-        clusters: Arc::new(SqlxClusterRepository { pool: pool.clone() })
-            as Arc<dyn ClusterRepository>,
-        rules: Arc::new(SqlxRuleEvaluator { pool: pool.clone() }) as Arc<dyn RuleEvaluator>,
-        accounts: Arc::new(SqlxAccountStateProvider { pool }) as Arc<dyn AccountStateProvider>,
+        clusters: Arc::new(SqlxClusterRepository { db: db.clone() }) as Arc<dyn ClusterRepository>,
+        rules: Arc::new(SqlxRuleEvaluator { db: db.clone() }) as Arc<dyn RuleEvaluator>,
+        accounts: Arc::new(SqlxAccountStateProvider { db }) as Arc<dyn AccountStateProvider>,
         classifier: Arc::new(RiskClassifier::new()),
         provider_for: Arc::new(move |account_id: &str| {
             *provider_map.get(account_id).unwrap_or(&Provider::Gmail)

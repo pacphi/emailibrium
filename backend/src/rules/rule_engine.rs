@@ -4,12 +4,58 @@
 //! It delegates evaluation to `rule_processor` and validation to `rule_validator`.
 
 use anyhow::{Context, Result};
-use chrono::Utc;
-use sqlx::{Row, SqlitePool};
+use chrono::{DateTime, Utc};
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use super::types::{Rule, RuleAction, RuleCondition};
+use crate::db::{audited_sql, Database};
+
+/// Portable decode target for one `rules` row across both backends — `enabled` is
+/// decoded as its raw INTEGER (0/1) rather than `bool` because the column is
+/// INTEGER (not BOOLEAN) in both dialects, and Postgres won't implicitly coerce
+/// an integer literal into a `bool`-typed bind on the way back in either
+/// (see `bind_enabled` below). See ADR-035.
+type RuleRow = (
+    String,
+    String,
+    String,
+    String,
+    String,
+    i32,
+    i32,
+    DateTime<Utc>,
+    DateTime<Utc>,
+);
+
+fn row_to_rule(row: RuleRow) -> Result<Rule> {
+    let (
+        id,
+        name,
+        description,
+        conditions_json,
+        actions_json,
+        priority,
+        enabled,
+        created_at,
+        updated_at,
+    ) = row;
+    let conditions: Vec<RuleCondition> = serde_json::from_str(&conditions_json)
+        .with_context(|| format!("Failed to deserialise conditions for rule '{id}'"))?;
+    let actions: Vec<RuleAction> = serde_json::from_str(&actions_json)
+        .with_context(|| format!("Failed to deserialise actions for rule '{id}'"))?;
+    Ok(Rule {
+        id,
+        name,
+        description,
+        conditions,
+        actions,
+        priority,
+        enabled: enabled != 0,
+        created_at,
+        updated_at,
+    })
+}
 
 /// In-memory rule engine backed by SQLite persistence.
 pub struct RuleEngine {
@@ -23,86 +69,77 @@ impl RuleEngine {
     }
 
     /// Load all rules from the database.
-    pub async fn load_rules(pool: &SqlitePool) -> Result<Vec<Rule>> {
-        let rows = sqlx::query(
-            r#"
-            SELECT id, name, description, conditions_json, actions_json,
-                   priority, enabled, created_at, updated_at
-            FROM rules
-            ORDER BY priority DESC
-            "#,
-        )
-        .fetch_all(pool)
-        .await
+    pub async fn load_rules(db: &Database) -> Result<Vec<Rule>> {
+        let sql = "SELECT id, name, description, conditions_json, actions_json, \
+                   priority, enabled, created_at, updated_at \
+                   FROM rules ORDER BY priority DESC";
+        let rows: Vec<RuleRow> = match db {
+            Database::Sqlite(pool) => sqlx::query_as(sql).fetch_all(pool).await,
+            Database::Postgres(pool) => sqlx::query_as(sql).fetch_all(pool).await,
+        }
         .context("Failed to load rules from database")?;
 
-        let mut rules = Vec::with_capacity(rows.len());
-        for row in rows {
-            let id: String = row.get("id");
-            let name: String = row.get("name");
-            let description: String = row.get("description");
-            let conditions_json: String = row.get("conditions_json");
-            let actions_json: String = row.get("actions_json");
-            let priority: i32 = row.get("priority");
-            let enabled: bool = row.get("enabled");
-            let created_at: chrono::DateTime<Utc> = row.get("created_at");
-            let updated_at: chrono::DateTime<Utc> = row.get("updated_at");
-
-            let conditions: Vec<RuleCondition> = serde_json::from_str(&conditions_json)
-                .with_context(|| format!("Failed to deserialise conditions for rule '{id}'"))?;
-
-            let actions: Vec<RuleAction> = serde_json::from_str(&actions_json)
-                .with_context(|| format!("Failed to deserialise actions for rule '{id}'"))?;
-
-            rules.push(Rule {
-                id,
-                name,
-                description,
-                conditions,
-                actions,
-                priority,
-                enabled,
-                created_at,
-                updated_at,
-            });
-        }
+        let rules = rows
+            .into_iter()
+            .map(row_to_rule)
+            .collect::<Result<Vec<_>>>()?;
 
         info!(count = rules.len(), "Rules loaded from database");
         Ok(rules)
     }
 
     /// Save (insert or update) a rule to the database.
-    pub async fn save_rule(pool: &SqlitePool, rule: &Rule) -> Result<()> {
+    pub async fn save_rule(db: &Database, rule: &Rule) -> Result<()> {
         let conditions_json = serde_json::to_string(&rule.conditions)
             .context("Failed to serialise rule conditions")?;
         let actions_json =
             serde_json::to_string(&rule.actions).context("Failed to serialise rule actions")?;
 
-        sqlx::query(
-            r#"
-            INSERT INTO rules (id, name, description, conditions_json, actions_json, priority, enabled, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET
-                name = excluded.name,
-                description = excluded.description,
-                conditions_json = excluded.conditions_json,
-                actions_json = excluded.actions_json,
-                priority = excluded.priority,
-                enabled = excluded.enabled,
-                updated_at = excluded.updated_at
-            "#,
-        )
-        .bind(&rule.id)
-        .bind(&rule.name)
-        .bind(&rule.description)
-        .bind(&conditions_json)
-        .bind(&actions_json)
-        .bind(rule.priority)
-        .bind(rule.enabled)
-        .bind(rule.created_at)
-        .bind(rule.updated_at)
-        .execute(pool)
-        .await
+        // `INSERT ... ON CONFLICT(id) DO UPDATE SET ... = excluded....` is valid upsert
+        // syntax in both SQLite (3.24+) and PostgreSQL, so this goes through the ordinary
+        // placeholder-adapting path — only `enabled`'s bind type differs per backend,
+        // since the column is INTEGER (not BOOLEAN) in both dialects and Postgres refuses
+        // to implicitly coerce a `bool`-typed bind into an integer column (see ADR-035).
+        let sql = db.adapt(
+            r#"INSERT INTO rules (id, name, description, conditions_json, actions_json, priority, enabled, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(id) DO UPDATE SET
+                   name = excluded.name,
+                   description = excluded.description,
+                   conditions_json = excluded.conditions_json,
+                   actions_json = excluded.actions_json,
+                   priority = excluded.priority,
+                   enabled = excluded.enabled,
+                   updated_at = excluded.updated_at"#,
+        );
+        match db {
+            Database::Sqlite(pool) => sqlx::query(audited_sql(&sql))
+                .bind(&rule.id)
+                .bind(&rule.name)
+                .bind(&rule.description)
+                .bind(&conditions_json)
+                .bind(&actions_json)
+                .bind(rule.priority)
+                .bind(rule.enabled)
+                .bind(rule.created_at)
+                .bind(rule.updated_at)
+                .execute(pool)
+                .await
+                .map(|_| ()),
+            Database::Postgres(pool) => sqlx::query(audited_sql(&sql))
+                .bind(&rule.id)
+                .bind(&rule.name)
+                .bind(&rule.description)
+                .bind(&conditions_json)
+                .bind(&actions_json)
+                .bind(rule.priority)
+                .bind(rule.enabled as i32)
+                .bind(rule.created_at)
+                .bind(rule.updated_at)
+                .execute(pool)
+                .await
+                .map(|_| ()),
+        }
         .context("Failed to save rule")?;
 
         debug!(rule_id = %rule.id, "Rule saved to database");
@@ -110,14 +147,24 @@ impl RuleEngine {
     }
 
     /// Delete a rule by ID.
-    pub async fn delete_rule(pool: &SqlitePool, id: &str) -> Result<bool> {
-        let result = sqlx::query("DELETE FROM rules WHERE id = ?")
-            .bind(id)
-            .execute(pool)
-            .await
-            .context("Failed to delete rule")?;
+    pub async fn delete_rule(db: &Database, id: &str) -> Result<bool> {
+        let sql = db.adapt("DELETE FROM rules WHERE id = ?");
+        let affected = match db {
+            Database::Sqlite(pool) => sqlx::query(audited_sql(&sql))
+                .bind(id)
+                .execute(pool)
+                .await
+                .context("Failed to delete rule")?
+                .rows_affected(),
+            Database::Postgres(pool) => sqlx::query(audited_sql(&sql))
+                .bind(id)
+                .execute(pool)
+                .await
+                .context("Failed to delete rule")?
+                .rows_affected(),
+        };
 
-        let deleted = result.rows_affected() > 0;
+        let deleted = affected > 0;
         if deleted {
             info!(rule_id = %id, "Rule deleted");
         } else {
@@ -127,40 +174,29 @@ impl RuleEngine {
     }
 
     /// Get a single rule by ID.
-    pub async fn get_rule(pool: &SqlitePool, id: &str) -> Result<Option<Rule>> {
-        let row = sqlx::query(
-            r#"
-            SELECT id, name, description, conditions_json, actions_json,
-                   priority, enabled, created_at, updated_at
-            FROM rules
-            WHERE id = ?
-            "#,
-        )
-        .bind(id)
-        .fetch_optional(pool)
-        .await
+    pub async fn get_rule(db: &Database, id: &str) -> Result<Option<Rule>> {
+        let sql = db.adapt(
+            r#"SELECT id, name, description, conditions_json, actions_json,
+                      priority, enabled, created_at, updated_at
+               FROM rules WHERE id = ?"#,
+        );
+        let row: Option<RuleRow> = match db {
+            Database::Sqlite(pool) => {
+                sqlx::query_as(audited_sql(&sql))
+                    .bind(id)
+                    .fetch_optional(pool)
+                    .await
+            }
+            Database::Postgres(pool) => {
+                sqlx::query_as(audited_sql(&sql))
+                    .bind(id)
+                    .fetch_optional(pool)
+                    .await
+            }
+        }
         .context("Failed to fetch rule")?;
 
-        match row {
-            Some(row) => {
-                let conditions: Vec<RuleCondition> =
-                    serde_json::from_str(row.get("conditions_json"))?;
-                let actions: Vec<RuleAction> = serde_json::from_str(row.get("actions_json"))?;
-
-                Ok(Some(Rule {
-                    id: row.get("id"),
-                    name: row.get("name"),
-                    description: row.get("description"),
-                    conditions,
-                    actions,
-                    priority: row.get("priority"),
-                    enabled: row.get("enabled"),
-                    created_at: row.get("created_at"),
-                    updated_at: row.get("updated_at"),
-                }))
-            }
-            None => Ok(None),
-        }
+        row.map(row_to_rule).transpose()
     }
 
     // -- In-memory helpers (useful for batch evaluation) --

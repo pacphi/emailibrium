@@ -4,6 +4,8 @@
 //! separate config flag) is the one backend-selection mechanism, applied consistently across
 //! every deploy/run mode (native, Docker dev, Docker prod).
 
+use std::borrow::Cow;
+
 use sqlx::postgres::{PgPool, PgPoolOptions};
 use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
 
@@ -71,6 +73,90 @@ impl Database {
             ),
         }
     }
+
+    /// Adapt a SQLite-authored query for the connected backend — see ADR-035. Returns `sql`
+    /// unchanged for SQLite (zero-cost); for PostgreSQL, rewrites `?`/`?N` placeholders to
+    /// `$N` and `datetime('now')` to `now()` (the one SQLite-specific function call this
+    /// codebase's application-code queries use — migrations 004/006/010/011/012 needed the
+    /// same substitution, plus a `TIMESTAMPTZ` column-type change these inline application
+    /// queries don't need to make, since they only ever pass the value through `now()`/
+    /// `datetime('now')`'s return, never declare a column type). Every call site authors ONE
+    /// query string, SQLite-style, and calls this before executing it against whichever pool
+    /// is live.
+    pub fn adapt<'a>(&self, sql: &'a str) -> Cow<'a, str> {
+        match self {
+            Self::Sqlite(_) => Cow::Borrowed(sql),
+            Self::Postgres(_) => {
+                let with_now = sql.replace("datetime('now')", "now()");
+                Cow::Owned(sqlite_placeholders_to_postgres(&with_now))
+            }
+        }
+    }
+}
+
+/// Rewrite SQLite's `?`/`?N` bind placeholders into PostgreSQL's `$N` positional parameters.
+///
+/// Single-pass scan tracking single-quoted string literals (SQL-standard `''` escaped quote)
+/// and double-quoted identifiers — a `?` inside either is data/an identifier character, never
+/// rewritten. `?N` (already explicitly numbered) becomes `$N` directly, since SQLite's and
+/// PostgreSQL's numbered-parameter semantics are identical, just spelled differently. A bare
+/// `?` becomes `$<k>` where `k` counts bare `?` occurrences in order of appearance, matching
+/// how SQLite itself treats consecutive bare `?`s as sequential parameters. Mixing bare and
+/// numbered placeholders in the same query is not a case this function is designed to make
+/// sensible — no call site in this codebase does that (see ADR-035 §2.3).
+fn sqlite_placeholders_to_postgres(sql: &str) -> String {
+    let mut out = String::with_capacity(sql.len() + 8);
+    let mut chars = sql.char_indices().peekable();
+    let mut in_single_quote = false;
+    let mut in_double_quote = false;
+    let mut bare_counter: u32 = 0;
+
+    while let Some((_, c)) = chars.next() {
+        match c {
+            '\'' if !in_double_quote => {
+                out.push(c);
+                // A doubled '' inside a single-quoted literal is an escaped quote, not the
+                // string's end — consume both characters and stay inside the literal.
+                if in_single_quote && chars.peek().map(|&(_, next)| next) == Some('\'') {
+                    let (_, next) = chars.next().unwrap();
+                    out.push(next);
+                } else {
+                    in_single_quote = !in_single_quote;
+                }
+            }
+            '"' if !in_single_quote => {
+                out.push(c);
+                if in_double_quote && chars.peek().map(|&(_, next)| next) == Some('"') {
+                    let (_, next) = chars.next().unwrap();
+                    out.push(next);
+                } else {
+                    in_double_quote = !in_double_quote;
+                }
+            }
+            '?' if !in_single_quote && !in_double_quote => {
+                let mut digits = String::new();
+                while let Some(&(_, next)) = chars.peek() {
+                    if next.is_ascii_digit() {
+                        digits.push(next);
+                        chars.next();
+                    } else {
+                        break;
+                    }
+                }
+                if digits.is_empty() {
+                    bare_counter += 1;
+                    out.push('$');
+                    out.push_str(&bare_counter.to_string());
+                } else {
+                    out.push('$');
+                    out.push_str(&digits);
+                }
+            }
+            _ => out.push(c),
+        }
+    }
+
+    out
 }
 
 // ---------------------------------------------------------------------------
@@ -229,5 +315,97 @@ mod tests {
         assert!(trash);
         assert!(!spam);
         assert_eq!(folder, "TRASH");
+    }
+
+    // -----------------------------------------------------------------------
+    // Placeholder translation (ADR-035)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn adapt_bare_placeholders_numbered_sequentially() {
+        let sql = sqlite_placeholders_to_postgres("SELECT * FROM t WHERE a = ? AND b = ?");
+        assert_eq!(sql, "SELECT * FROM t WHERE a = $1 AND b = $2");
+    }
+
+    #[test]
+    fn adapt_numbered_placeholders_pass_through_with_dollar_prefix() {
+        let sql = sqlite_placeholders_to_postgres(
+            "UPDATE emails SET is_trash = ?1, is_spam = ?2, folder = ?3 WHERE id = ?5",
+        );
+        assert_eq!(
+            sql,
+            "UPDATE emails SET is_trash = $1, is_spam = $2, folder = $3 WHERE id = $5"
+        );
+    }
+
+    #[test]
+    fn adapt_ten_bare_placeholders_matches_cloud_api_audit_log_insert() {
+        // Mirrors vectors/audit.rs's real INSERT — the largest bind count in the codebase.
+        let sql = sqlite_placeholders_to_postgres(
+            "INSERT INTO cloud_api_audit_log \
+             (timestamp, provider, model, input_tokens, output_tokens, latency_ms, \
+              user_id, request_type, status, error_message) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        );
+        assert_eq!(
+            sql,
+            "INSERT INTO cloud_api_audit_log \
+             (timestamp, provider, model, input_tokens, output_tokens, latency_ms, \
+              user_id, request_type, status, error_message) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)"
+        );
+    }
+
+    #[test]
+    fn adapt_ignores_question_mark_inside_single_quoted_literal() {
+        let sql =
+            sqlite_placeholders_to_postgres("SELECT * FROM t WHERE a = ? AND b = 'is it ok?'");
+        assert_eq!(sql, "SELECT * FROM t WHERE a = $1 AND b = 'is it ok?'");
+    }
+
+    #[test]
+    fn adapt_honors_escaped_single_quote_inside_literal() {
+        // 'it''s a ?' is ONE literal (the '' is an escaped quote, not the string's end) —
+        // the ? inside must not be rewritten, and the bare ? after the literal is $1.
+        let sql =
+            sqlite_placeholders_to_postgres("SELECT * FROM t WHERE a = 'it''s a ?' AND b = ?");
+        assert_eq!(sql, "SELECT * FROM t WHERE a = 'it''s a ?' AND b = $1");
+    }
+
+    #[test]
+    fn adapt_ignores_question_mark_inside_double_quoted_identifier() {
+        let sql = sqlite_placeholders_to_postgres(r#"SELECT "weird?col" FROM t WHERE a = ?"#);
+        assert_eq!(sql, r#"SELECT "weird?col" FROM t WHERE a = $1"#);
+    }
+
+    #[test]
+    fn adapt_no_placeholders_is_unchanged() {
+        let sql = sqlite_placeholders_to_postgres("SELECT * FROM t");
+        assert_eq!(sql, "SELECT * FROM t");
+    }
+
+    #[tokio::test]
+    async fn database_adapt_is_noop_borrowed_for_sqlite() {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        let sql = "SELECT * FROM t WHERE a = ?";
+        let adapted = db.adapt(sql);
+        assert_eq!(adapted, sql);
+        assert!(matches!(adapted, Cow::Borrowed(_)));
+    }
+
+    #[tokio::test]
+    async fn database_adapt_rewrites_datetime_now_and_placeholders_for_postgres() {
+        // Doesn't require a live Postgres connection to exercise `adapt()`'s branch — only
+        // `Database::connect()` needs a real socket, and this test never calls it for Postgres;
+        // it directly constructs the enum variant it needs to check the Postgres arm.
+        let db = Database::Postgres(
+            sqlx::postgres::PgPoolOptions::new()
+                .max_connections(1)
+                .connect_lazy("postgres://user:pass@localhost/db")
+                .unwrap(),
+        );
+        let adapted = db.adapt("UPDATE t SET updated_at = datetime('now') WHERE id = ?");
+        assert_eq!(adapted, "UPDATE t SET updated_at = now() WHERE id = $1");
+        assert!(matches!(adapted, Cow::Owned(_)));
     }
 }
