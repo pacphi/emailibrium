@@ -163,10 +163,10 @@ struct Env {
 impl Env {
     async fn new(config: ToolsConfig, limiter: Option<Arc<ToolRateLimiter>>) -> Self {
         let (_dir, db) = migrated_db().await;
-        seed(&db.pool).await;
+        seed(db.pool()).await;
         let ctx = Arc::new(
             ToolContext::new(db.clone())
-                .with_oauth(Arc::new(OAuthManager::new(db.pool.clone(), None))),
+                .with_oauth(Arc::new(OAuthManager::new(db.pool().clone(), None))),
         );
         let registry = Arc::new(match limiter {
             Some(l) => ToolRegistry::with_rate_limiter(declarations(), config, l),
@@ -587,7 +587,7 @@ async fn rate_limits_are_shared_across_surfaces_and_sessions() {
     );
 
     // The trail tells the same story the clients saw.
-    let rows = audit_rows(&env.db.pool).await;
+    let rows = audit_rows(env.db.pool()).await;
     let statuses: Vec<&str> = rows.iter().map(|(_, st, _)| st.as_str()).collect();
     assert_eq!(
         statuses,
@@ -643,7 +643,7 @@ async fn throttled_thread_reads_are_tagged_on_all_four_axes() {
     assert_eq!(err_kind(&throttled), "rate_limited");
 
     // Axes 3 + 4: the audit row agrees with the client, and stays a resource.
-    let rows = audit_rows(&env.db.pool).await;
+    let rows = audit_rows(env.db.pool()).await;
     let last = rows.last().expect("audit row for the throttled read");
     assert_eq!(last.0, "resource:thread_read");
     assert_eq!(last.1, "rate_limited");
@@ -702,7 +702,7 @@ async fn resources_read_end_to_end_with_policy_grade_errors() {
     assert_eq!(err_kind(&garbage), "not_found");
 
     // Resource reads are attributed as resources in the trail.
-    let rows = audit_rows(&env.db.pool).await;
+    let rows = audit_rows(env.db.pool()).await;
     assert!(
         rows.iter().any(|(_, _, src)| src == "resource"),
         "no resource-sourced audit rows: {rows:?}"
@@ -750,7 +750,7 @@ async fn preview_cleanup_plan_is_strictly_read_only() {
     let s = env.open_session().await;
 
     let before: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM cleanup_plans")
-        .fetch_one(&env.db.pool)
+        .fetch_one(env.db.pool())
         .await
         .expect("count");
 
@@ -760,7 +760,7 @@ async fn preview_cleanup_plan_is_strictly_read_only() {
     ok(&resp);
 
     let after: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM cleanup_plans")
-        .fetch_one(&env.db.pool)
+        .fetch_one(env.db.pool())
         .await
         .expect("count");
     assert_eq!(

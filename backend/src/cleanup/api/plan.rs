@@ -77,7 +77,7 @@ fn err(code: StatusCode, error: &str, message: &str) -> (StatusCode, Json<ErrorB
 }
 
 async fn build_plan_builder(state: &AppState) -> Result<PlanBuilder, sqlx::Error> {
-    let pool = state.db.pool.clone();
+    let pool = state.db.pool().clone();
 
     // Load per-account providers once so the closure is sync.
     let rows = sqlx::query("SELECT id, provider FROM connected_accounts")

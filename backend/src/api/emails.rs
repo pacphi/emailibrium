@@ -212,7 +212,7 @@ async fn list_emails(
         count_q = count_q.bind(v);
     }
     let total = count_q
-        .fetch_one(&state.db.pool)
+        .fetch_one(state.db.pool())
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -243,7 +243,7 @@ async fn list_emails(
     query = query.bind(limit).bind(offset);
 
     let rows = query
-        .fetch_all(&state.db.pool)
+        .fetch_all(state.db.pool())
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -260,7 +260,7 @@ async fn get_email(
     let sql = format!("SELECT {EMAIL_COLUMNS} FROM emails WHERE id = ?1");
     let row = sqlx::query(crate::db::audited_sql(&sql))
         .bind(&id)
-        .fetch_optional(&state.db.pool)
+        .fetch_optional(state.db.pool())
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -289,7 +289,7 @@ async fn get_thread(
         format!("SELECT {EMAIL_COLUMNS} FROM emails WHERE thread_id = ?1 ORDER BY received_at ASC");
     let rows = sqlx::query(crate::db::audited_sql(&sql))
         .bind(&thread_id)
-        .fetch_all(&state.db.pool)
+        .fetch_all(state.db.pool())
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -298,7 +298,7 @@ async fn get_thread(
         let single_sql = format!("SELECT {EMAIL_COLUMNS} FROM emails WHERE id = ?1");
         let single = sqlx::query(crate::db::audited_sql(&single_sql))
             .bind(&thread_id)
-            .fetch_optional(&state.db.pool)
+            .fetch_optional(state.db.pool())
             .await
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -362,7 +362,7 @@ async fn get_email_account_id(
 ) -> Result<String, (StatusCode, String)> {
     let row: Option<(String,)> = sqlx::query_as("SELECT account_id FROM emails WHERE id = ?1")
         .bind(email_id)
-        .fetch_optional(&state.db.pool)
+        .fetch_optional(state.db.pool())
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     row.map(|(aid,)| aid)
@@ -387,7 +387,7 @@ async fn archive_email(
 
     let rows = sqlx::query("UPDATE emails SET labels = 'ARCHIVED', is_archived = 1 WHERE id = ?1")
         .bind(&id)
-        .execute(&state.db.pool)
+        .execute(state.db.pool())
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -408,7 +408,7 @@ async fn star_email(
     // Determine new starred state from local DB.
     let current: Option<(bool,)> = sqlx::query_as("SELECT is_starred FROM emails WHERE id = ?1")
         .bind(&id)
-        .fetch_optional(&state.db.pool)
+        .fetch_optional(state.db.pool())
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     let new_starred = !current
@@ -427,7 +427,7 @@ async fn star_email(
     sqlx::query("UPDATE emails SET is_starred = ?1 WHERE id = ?2")
         .bind(new_starred)
         .bind(&id)
-        .execute(&state.db.pool)
+        .execute(state.db.pool())
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -461,7 +461,7 @@ async fn mark_read_email(
     sqlx::query("UPDATE emails SET is_read = ?1 WHERE id = ?2")
         .bind(body.read)
         .bind(&id)
-        .execute(&state.db.pool)
+        .execute(state.db.pool())
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -505,7 +505,7 @@ async fn delete_email(
 
         let now = chrono::Utc::now().to_rfc3339();
         let rows =
-            crate::db::update_email_state(&state.db.pool, &id, true, false, "TRASH", Some(&now))
+            crate::db::update_email_state(state.db.pool(), &id, true, false, "TRASH", Some(&now))
                 .await
                 .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -533,7 +533,7 @@ async fn hard_delete_email(state: &AppState, email_id: &str) -> Result<(), (Stat
         "SELECT storage_path FROM attachments WHERE email_id = ?1 AND storage_path IS NOT NULL",
     )
     .bind(email_id)
-    .fetch_all(&state.db.pool)
+    .fetch_all(state.db.pool())
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -547,7 +547,7 @@ async fn hard_delete_email(state: &AppState, email_id: &str) -> Result<(), (Stat
 
     let rows = sqlx::query("DELETE FROM emails WHERE id = ?1")
         .bind(email_id)
-        .execute(&state.db.pool)
+        .execute(state.db.pool())
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -576,7 +576,7 @@ async fn spam_email(
         }
     }
 
-    let rows = crate::db::update_email_state(&state.db.pool, &id, false, true, "SPAM", None)
+    let rows = crate::db::update_email_state(state.db.pool(), &id, false, true, "SPAM", None)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -606,7 +606,7 @@ async fn unspam_email(
         }
     }
 
-    let rows = crate::db::update_email_state(&state.db.pool, &id, false, false, "INBOX", None)
+    let rows = crate::db::update_email_state(state.db.pool(), &id, false, false, "INBOX", None)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -636,7 +636,7 @@ async fn restore_email(
         }
     }
 
-    let rows = crate::db::update_email_state(&state.db.pool, &id, false, false, "INBOX", None)
+    let rows = crate::db::update_email_state(state.db.pool(), &id, false, false, "INBOX", None)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -665,7 +665,7 @@ async fn empty_trash(
         let rows: Vec<(String,)> =
             sqlx::query_as("SELECT id FROM emails WHERE is_trash = 1 AND account_id = ?1")
                 .bind(account_id)
-                .fetch_all(&state.db.pool)
+                .fetch_all(state.db.pool())
                 .await
                 .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
         (
@@ -674,7 +674,7 @@ async fn empty_trash(
         )
     } else {
         let rows: Vec<(String,)> = sqlx::query_as("SELECT id FROM emails WHERE is_trash = 1")
-            .fetch_all(&state.db.pool)
+            .fetch_all(state.db.pool())
             .await
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
         (
@@ -689,7 +689,7 @@ async fn empty_trash(
             "SELECT storage_path FROM attachments WHERE email_id = ?1 AND storage_path IS NOT NULL",
         )
         .bind(email_id)
-        .fetch_all(&state.db.pool)
+        .fetch_all(state.db.pool())
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -705,11 +705,11 @@ async fn empty_trash(
     let result = if let Some(account_id) = &params.account_id {
         sqlx::query(crate::db::audited_sql(&sql))
             .bind(account_id)
-            .execute(&state.db.pool)
+            .execute(state.db.pool())
             .await
     } else {
         sqlx::query(crate::db::audited_sql(&sql))
-            .execute(&state.db.pool)
+            .execute(state.db.pool())
             .await
     };
 
@@ -734,7 +734,7 @@ async fn list_categories(
     let rows: Vec<(String,)> = sqlx::query_as(
         "SELECT DISTINCT category FROM emails WHERE category IS NOT NULL AND category != 'Uncategorized' ORDER BY category",
     )
-    .fetch_all(&state.db.pool)
+    .fetch_all(state.db.pool())
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -811,7 +811,7 @@ async fn move_email(
                 "DRAFT" | "DRAFTS" => (false, false, "DRAFT"),
                 _ => (false, false, "INBOX"),
             };
-            crate::db::update_email_state(&state.db.pool, &id, is_trash, is_spam, folder, None)
+            crate::db::update_email_state(state.db.pool(), &id, is_trash, is_spam, folder, None)
                 .await
                 .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -819,7 +819,7 @@ async fn move_email(
             sqlx::query("UPDATE emails SET labels = ?1 WHERE id = ?2")
                 .bind(&body.target_id)
                 .bind(&id)
-                .execute(&state.db.pool)
+                .execute(state.db.pool())
                 .await
                 .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
         }
@@ -828,7 +828,7 @@ async fn move_email(
             let current: Option<(String,)> =
                 sqlx::query_as("SELECT labels FROM emails WHERE id = ?1")
                     .bind(&id)
-                    .fetch_optional(&state.db.pool)
+                    .fetch_optional(state.db.pool())
                     .await
                     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -842,16 +842,23 @@ async fn move_email(
                 sqlx::query("UPDATE emails SET labels = ?1 WHERE id = ?2")
                     .bind(&new_labels)
                     .bind(&id)
-                    .execute(&state.db.pool)
+                    .execute(state.db.pool())
                     .await
                     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
                 // Derive state from the combined labels.
                 let label_vec: Vec<String> = new_labels.split(',').map(|s| s.to_string()).collect();
                 let (is_trash, is_spam, folder) = crate::db::derive_state_from_labels(&label_vec);
-                crate::db::update_email_state(&state.db.pool, &id, is_trash, is_spam, folder, None)
-                    .await
-                    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+                crate::db::update_email_state(
+                    state.db.pool(),
+                    &id,
+                    is_trash,
+                    is_spam,
+                    folder,
+                    None,
+                )
+                .await
+                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
             }
         }
     }
@@ -920,7 +927,7 @@ async fn list_all_labels(
          WHERE labels IS NOT NULL AND labels != '' \
          AND COALESCE(is_spam, 0) = 0 AND COALESCE(is_trash, 0) = 0",
     )
-    .fetch_all(&state.db.pool)
+    .fetch_all(state.db.pool())
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -1025,7 +1032,7 @@ async fn list_enriched_categories(
          AND COALESCE(is_spam, 0) = 0 AND COALESCE(is_trash, 0) = 0 \
          GROUP BY category ORDER BY total DESC",
     )
-    .fetch_all(&state.db.pool)
+    .fetch_all(state.db.pool())
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -1078,7 +1085,7 @@ async fn email_counts(
          FROM emails \
          WHERE COALESCE(is_spam, 0) = 0 AND COALESCE(is_trash, 0) = 0",
     )
-    .fetch_one(&state.db.pool)
+    .fetch_one(state.db.pool())
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -1088,20 +1095,20 @@ async fn email_counts(
          WHERE COALESCE(is_archived, 0) = 1 \
          AND COALESCE(is_spam, 0) = 0 AND COALESCE(is_trash, 0) = 0",
     )
-    .fetch_one(&state.db.pool)
+    .fetch_one(state.db.pool())
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     // Spam and trash counts.
     let (spam_count,): (i64,) =
         sqlx::query_as("SELECT COALESCE(COUNT(*), 0) FROM emails WHERE is_spam = 1")
-            .fetch_one(&state.db.pool)
+            .fetch_one(state.db.pool())
             .await
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     let (trash_count,): (i64,) =
         sqlx::query_as("SELECT COALESCE(COUNT(*), 0) FROM emails WHERE is_trash = 1")
-            .fetch_one(&state.db.pool)
+            .fetch_one(state.db.pool())
             .await
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -1109,7 +1116,7 @@ async fn email_counts(
         "SELECT COALESCE(COUNT(*), 0) FROM emails WHERE folder = 'SENT' \
          AND COALESCE(is_spam, 0) = 0 AND COALESCE(is_trash, 0) = 0",
     )
-    .fetch_one(&state.db.pool)
+    .fetch_one(state.db.pool())
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -1121,7 +1128,7 @@ async fn email_counts(
          WHERE COALESCE(is_spam, 0) = 0 AND COALESCE(is_trash, 0) = 0 \
          GROUP BY category ORDER BY COUNT(*) DESC",
     )
-    .fetch_all(&state.db.pool)
+    .fetch_all(state.db.pool())
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 

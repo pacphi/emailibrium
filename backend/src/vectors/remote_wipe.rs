@@ -107,21 +107,21 @@ impl RemoteWipeService {
                 status TEXT NOT NULL DEFAULT 'completed'
             )",
         )
-        .execute(&self.db.pool)
+        .execute(self.db.pool())
         .await?;
 
         sqlx::query(
             "CREATE INDEX IF NOT EXISTS idx_wipe_audit_timestamp \
              ON wipe_audit_log(timestamp)",
         )
-        .execute(&self.db.pool)
+        .execute(self.db.pool())
         .await?;
 
         sqlx::query(
             "CREATE INDEX IF NOT EXISTS idx_wipe_audit_user \
              ON wipe_audit_log(user_id)",
         )
-        .execute(&self.db.pool)
+        .execute(self.db.pool())
         .await?;
 
         Ok(())
@@ -146,13 +146,13 @@ impl RemoteWipeService {
              (SELECT id FROM emails WHERE account_id = ?1)",
         )
         .bind(user_id)
-        .execute(&self.db.pool)
+        .execute(self.db.pool())
         .await?;
 
         // Delete search interactions.
         let interactions = sqlx::query("DELETE FROM search_interactions WHERE user_id = ?1")
             .bind(user_id)
-            .execute(&self.db.pool)
+            .execute(self.db.pool())
             .await?;
 
         // Delete user learning data (user_learning_profiles + user_feedback).
@@ -161,7 +161,7 @@ impl RemoteWipeService {
         // Delete user's emails (cascades to related data via FK).
         let vectors = sqlx::query("DELETE FROM emails WHERE account_id = ?1")
             .bind(user_id)
-            .execute(&self.db.pool)
+            .execute(self.db.pool())
             .await?;
 
         let result = WipeResult {
@@ -195,22 +195,22 @@ impl RemoteWipeService {
         warn!("Starting full platform data wipe");
 
         let backups = sqlx::query("DELETE FROM vector_backups")
-            .execute(&self.db.pool)
+            .execute(self.db.pool())
             .await?;
 
         let interactions = sqlx::query("DELETE FROM search_interactions")
-            .execute(&self.db.pool)
+            .execute(self.db.pool())
             .await?;
 
         let learning = self.delete_all_learning().await?;
 
         let vectors = sqlx::query("DELETE FROM emails")
-            .execute(&self.db.pool)
+            .execute(self.db.pool())
             .await?;
 
         // Also clear category centroids.
         sqlx::query("DELETE FROM category_centroids")
-            .execute(&self.db.pool)
+            .execute(self.db.pool())
             .await?;
 
         let result = WipeResult {
@@ -242,11 +242,11 @@ impl RemoteWipeService {
         info!("Starting vectors-only wipe");
 
         let backups = sqlx::query("DELETE FROM vector_backups")
-            .execute(&self.db.pool)
+            .execute(self.db.pool())
             .await?;
 
         let centroids = sqlx::query("DELETE FROM category_centroids")
-            .execute(&self.db.pool)
+            .execute(self.db.pool())
             .await?;
 
         let result = WipeResult {
@@ -390,7 +390,7 @@ impl RemoteWipeService {
         // Try user_learning_profiles (may not exist in all schemas).
         if let Ok(r) = sqlx::query("DELETE FROM user_learning_profiles WHERE user_id = ?1")
             .bind(user_id)
-            .execute(&self.db.pool)
+            .execute(self.db.pool())
             .await
         {
             total += r.rows_affected();
@@ -399,7 +399,7 @@ impl RemoteWipeService {
         // Try user_feedback (may not exist in all schemas).
         if let Ok(r) = sqlx::query("DELETE FROM user_feedback WHERE user_id = ?1")
             .bind(user_id)
-            .execute(&self.db.pool)
+            .execute(self.db.pool())
             .await
         {
             total += r.rows_affected();
@@ -413,14 +413,14 @@ impl RemoteWipeService {
         let mut total = 0u64;
 
         if let Ok(r) = sqlx::query("DELETE FROM user_learning_profiles")
-            .execute(&self.db.pool)
+            .execute(self.db.pool())
             .await
         {
             total += r.rows_affected();
         }
 
         if let Ok(r) = sqlx::query("DELETE FROM user_feedback")
-            .execute(&self.db.pool)
+            .execute(self.db.pool())
             .await
         {
             total += r.rows_affected();
@@ -449,7 +449,7 @@ impl RemoteWipeService {
         .bind(result.learning_records_deleted as i64)
         .bind(result.interactions_deleted as i64)
         .bind(initiated_by)
-        .execute(&self.db.pool)
+        .execute(self.db.pool())
         .await?;
 
         Ok(())
@@ -487,7 +487,7 @@ mod tests {
         ] {
             sqlx::query(ddl).execute(&pool).await.unwrap();
         }
-        Database { pool }
+        Database::Sqlite(pool)
     }
 
     async fn seed(db: &Database, uid: &str) {
@@ -496,7 +496,7 @@ mod tests {
         sqlx::query("INSERT INTO emails (id, account_id, subject) VALUES (?1, ?2, 'Test')")
             .bind(&eid)
             .bind(uid)
-            .execute(&db.pool)
+            .execute(db.pool())
             .await
             .unwrap();
         sqlx::query(
@@ -506,7 +506,7 @@ mod tests {
         )
         .bind(&vid)
         .bind(&eid)
-        .execute(&db.pool)
+        .execute(db.pool())
         .await
         .unwrap();
         sqlx::query(
@@ -514,7 +514,7 @@ mod tests {
             VALUES (?1, 'q', 5, datetime('now'))",
         )
         .bind(uid)
-        .execute(&db.pool)
+        .execute(db.pool())
         .await
         .unwrap();
     }
@@ -538,7 +538,7 @@ mod tests {
         assert_eq!(r.user_id.as_deref(), Some("u1"));
         assert!(r.vectors_deleted >= 1);
         let c: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM emails WHERE account_id='u1'")
-            .fetch_one(&db.pool)
+            .fetch_one(db.pool())
             .await
             .unwrap();
         assert_eq!(c.0, 0);
@@ -560,7 +560,7 @@ mod tests {
         let r = svc.wipe_all_data().await.unwrap();
         assert_eq!(r.scope, WipeScope::All);
         let c: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM emails")
-            .fetch_one(&db.pool)
+            .fetch_one(db.pool())
             .await
             .unwrap();
         assert_eq!(c.0, 0);
@@ -575,12 +575,12 @@ mod tests {
         let r = svc.wipe_vectors_only().await.unwrap();
         assert_eq!(r.scope, WipeScope::VectorsOnly);
         let c: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM vector_backups")
-            .fetch_one(&db.pool)
+            .fetch_one(db.pool())
             .await
             .unwrap();
         assert_eq!(c.0, 0);
         let c: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM emails")
-            .fetch_one(&db.pool)
+            .fetch_one(db.pool())
             .await
             .unwrap();
         assert!(c.0 > 0);
@@ -640,12 +640,12 @@ mod tests {
         seed(&db, "u1").await;
         svc.wipe_user_data("u1").await.unwrap();
         let c: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM wipe_audit_log")
-            .fetch_one(&db.pool)
+            .fetch_one(db.pool())
             .await
             .unwrap();
         assert_eq!(c.0, 1);
         let s: (String,) = sqlx::query_as("SELECT scope FROM wipe_audit_log LIMIT 1")
-            .fetch_one(&db.pool)
+            .fetch_one(db.pool())
             .await
             .unwrap();
         assert_eq!(s.0, "user");

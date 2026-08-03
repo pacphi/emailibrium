@@ -919,7 +919,7 @@ async fn switch_model(
              ON CONFLICT(key) DO UPDATE SET value = excluded.value",
         )
         .bind(&req.model_id)
-        .execute(&state.db.pool)
+        .execute(state.db.pool())
         .await;
 
         return Ok(Json(SwitchModelResponse {
@@ -946,7 +946,7 @@ async fn switch_model(
     tracing::info!(model_id = %model_id, "Starting background model download");
     let router = state.vector_service.generative_router.clone();
     let prompts_for_spawn = state.yaml_config.prompts.clone();
-    let db_pool = state.db.pool.clone();
+    let db_pool = state.db.pool().clone();
     tokio::spawn(async move {
         match BuiltInGenerativeModel::with_params_and_prompts(
             &config,
@@ -1076,7 +1076,7 @@ async fn trigger_reembed(
     };
 
     let reset = sqlx::query(sql)
-        .execute(&state.db.pool)
+        .execute(state.db.pool())
         .await
         .map(|r| r.rows_affected())
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -1089,7 +1089,7 @@ async fn trigger_reembed(
         let account_row: Option<(String,)> = sqlx::query_as(
             "SELECT DISTINCT account_id FROM emails WHERE embedding_status = 'pending' LIMIT 1",
         )
-        .fetch_optional(&state.db.pool)
+        .fetch_optional(state.db.pool())
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -1300,7 +1300,7 @@ async fn get_settings(
     State(state): State<AppState>,
 ) -> Result<Json<std::collections::HashMap<String, String>>, (StatusCode, String)> {
     let rows: Vec<(String, String)> = sqlx::query_as("SELECT key, value FROM app_settings")
-        .fetch_all(&state.db.pool)
+        .fetch_all(state.db.pool())
         .await
         .map_err(|e| {
             (
@@ -1339,7 +1339,7 @@ async fn save_settings(
         )
         .bind(key)
         .bind(&val_str)
-        .execute(&state.db.pool)
+        .execute(state.db.pool())
         .await
         .map_err(|e| {
             (

@@ -7,7 +7,7 @@
 # Server
 host: "127.0.0.1"
 port: 8080
-database_url: "sqlite:emailibrium.db?mode=rwc"
+database_url: "sqlite:emailibrium.db?mode=rwc" # sqlite:<path>?mode=rwc | postgres://user:pass@host:5432/db — the URL scheme is the ONLY backend selector (ADR-033), same variable across every deploy/run mode
 
 # Vector Store
 store:

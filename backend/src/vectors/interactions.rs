@@ -53,7 +53,7 @@ impl InteractionTracker {
         .bind(&id)
         .bind(query)
         .bind(now)
-        .execute(&self.db.pool)
+        .execute(self.db.pool())
         .await?;
 
         Ok(id)
@@ -72,7 +72,7 @@ impl InteractionTracker {
         .bind(email_id)
         .bind(rank)
         .bind(query_id)
-        .execute(&self.db.pool)
+        .execute(self.db.pool())
         .await?
         .rows_affected();
 
@@ -96,7 +96,7 @@ impl InteractionTracker {
         let rows_affected = sqlx::query("UPDATE search_interactions SET feedback = ? WHERE id = ?")
             .bind(feedback)
             .bind(query_id)
-            .execute(&self.db.pool)
+            .execute(self.db.pool())
             .await?
             .rows_affected();
 
@@ -122,7 +122,7 @@ impl InteractionTracker {
              LIMIT ?",
         )
         .bind(limit as i64)
-        .fetch_all(&self.db.pool)
+        .fetch_all(self.db.pool())
         .await?;
 
         Ok(rows.into_iter().map(|r| r.into()).collect())
@@ -136,7 +136,7 @@ impl InteractionTracker {
                 COUNT(*) \
              FROM search_interactions",
         )
-        .fetch_one(&self.db.pool)
+        .fetch_one(self.db.pool())
         .await?;
 
         let (clicks, total) = row;
@@ -156,7 +156,7 @@ impl InteractionTracker {
              GROUP BY result_rank \
              ORDER BY result_rank",
         )
-        .fetch_all(&self.db.pool)
+        .fetch_all(self.db.pool())
         .await?;
 
         let mut dist = HashMap::new();
@@ -213,7 +213,7 @@ mod tests {
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )",
         )
-        .execute(&db.pool)
+        .execute(db.pool())
         .await
         .unwrap();
 

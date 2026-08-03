@@ -116,7 +116,7 @@ impl ToolContext {
 
     /// Most handlers only need the pool.
     pub fn pool(&self) -> &sqlx::SqlitePool {
-        &self.db.pool
+        self.db.pool()
     }
 
     /// Vector services, or `NotConfigured` naming what is missing.

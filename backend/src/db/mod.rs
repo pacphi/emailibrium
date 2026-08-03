@@ -1,27 +1,73 @@
-//! Database layer — SQLite with SQLx.
+//! Database layer — SQLite or PostgreSQL via SQLx, selected by the connection URL's scheme.
+//!
+//! See `docs/ADRs/ADR-033-postgresql-backend-support.md` for why URL-scheme dispatch (not a
+//! separate config flag) is the one backend-selection mechanism, applied consistently across
+//! every deploy/run mode (native, Docker dev, Docker prod).
 
+use sqlx::postgres::{PgPool, PgPoolOptions};
 use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
 
-/// Database connection pool wrapper.
+/// Database connection pool, dispatched to SQLite or PostgreSQL by the connection URL's scheme
+/// (`sqlite:...` vs `postgres://...` / `postgresql://...`) — see ADR-033.
+///
+/// This phase introduces the abstraction and the PostgreSQL connection path; most call sites
+/// elsewhere in the crate still hold a raw `SqlitePool` obtained via [`Database::pool`] rather
+/// than matching on this enum directly — that bridge is intentional and temporary. A later
+/// phase migrates every remaining call site onto this enum so a PostgreSQL-backed deployment
+/// works end to end, not just at the connection layer.
 #[derive(Debug, Clone)]
-pub struct Database {
-    pub pool: SqlitePool,
+pub enum Database {
+    Sqlite(SqlitePool),
+    Postgres(PgPool),
 }
 
 impl Database {
-    /// Connect to SQLite database.
+    /// Connect to SQLite or PostgreSQL, chosen by `url`'s scheme.
+    ///
+    /// `postgres://` or `postgresql://` selects PostgreSQL; anything else (including the
+    /// default `sqlite:...?mode=rwc`) selects SQLite. See ADR-033 for why the URL scheme alone
+    /// is the selector — no separate feature flag exists, or should be added, for this choice.
     pub async fn connect(url: &str) -> Result<Self, sqlx::Error> {
-        let pool = SqlitePoolOptions::new()
-            .max_connections(5)
-            .connect(url)
-            .await?;
-        Ok(Self { pool })
+        if url.starts_with("postgres://") || url.starts_with("postgresql://") {
+            let pool = PgPoolOptions::new().max_connections(5).connect(url).await?;
+            Ok(Self::Postgres(pool))
+        } else {
+            let pool = SqlitePoolOptions::new()
+                .max_connections(5)
+                .connect(url)
+                .await?;
+            Ok(Self::Sqlite(pool))
+        }
     }
 
-    /// Run all pending migrations.
+    /// Run all pending migrations for the connected backend.
+    ///
+    /// A later phase ports the SQLite-only migrations to PostgreSQL-compatible SQL; until then
+    /// this fails against a real PostgreSQL connection (early migrations use SQLite-specific
+    /// syntax). The SQLite path is unaffected.
     pub async fn run_migrations(&self) -> Result<(), sqlx::Error> {
-        sqlx::migrate!("./migrations").run(&self.pool).await?;
+        match self {
+            Self::Sqlite(pool) => sqlx::migrate!("./migrations").run(pool).await?,
+            Self::Postgres(pool) => sqlx::migrate!("./migrations").run(pool).await?,
+        }
         Ok(())
+    }
+
+    /// The SQLite pool, for call sites not yet migrated onto this enum directly (see the module
+    /// doc and ADR-033). Panics if connected to PostgreSQL. Unreachable in production today: a
+    /// `postgres://` `EMAILIBRIUM_DATABASE_URL` fails earlier and more cleanly, at
+    /// `run_migrations()` above, since the migration set isn't PostgreSQL-portable yet (ADR-033
+    /// §2.3). A later phase makes both — migrations, then this accessor's remaining callers —
+    /// safe for PostgreSQL.
+    pub fn pool(&self) -> &SqlitePool {
+        match self {
+            Self::Sqlite(pool) => pool,
+            Self::Postgres(_) => panic!(
+                "Database::pool() called on a PostgreSQL-backed connection — this accessor is a \
+                 temporary bridge for call sites not yet migrated onto the Database enum \
+                 directly (see ADR-033); a later phase removes it."
+            ),
+        }
     }
 }
 

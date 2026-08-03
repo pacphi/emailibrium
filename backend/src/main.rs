@@ -339,7 +339,7 @@ async fn main() -> anyhow::Result<()> {
     if let Ok(row) = sqlx::query_as::<_, (String,)>(
         "SELECT value FROM app_settings WHERE key = 'builtInLlmModel'",
     )
-    .fetch_one(&db.pool)
+    .fetch_one(db.pool())
     .await
     {
         let saved_model = &row.0;
@@ -429,7 +429,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Initialize OAuth manager for email account connections (DDD-005)
     let oauth_manager = Arc::new(email::oauth::OAuthManager::new(
-        db.pool.clone(),
+        db.pool().clone(),
         config.encryption.master_password.as_deref(),
     ));
 
@@ -486,22 +486,22 @@ async fn main() -> anyhow::Result<()> {
     );
 
     let cleanup_plan_repo = Arc::new(cleanup::repository::SqliteCleanupPlanRepo::new(
-        db.pool.clone(),
+        db.pool().clone(),
     ));
     // Apply orchestrator (Phase C). Email providers map starts empty;
     // production wiring will populate per-account `EmailProvider` instances
     // after OAuth resolution. The unsubscribe service is shared.
     let cleanup_apply_job_repo = Arc::new(cleanup::repository::SqliteCleanupApplyJobRepo::new(
-        db.pool.clone(),
+        db.pool().clone(),
     ));
     let cleanup_email_repo = Arc::new(cleanup::repository::SqlxEmailRepository {
-        pool: db.pool.clone(),
+        pool: db.pool().clone(),
     }) as Arc<dyn cleanup::domain::ports::EmailRepository>;
     let cleanup_rule_eval = Arc::new(cleanup::repository::SqlxRuleEvaluator {
-        pool: db.pool.clone(),
+        pool: db.pool().clone(),
     }) as Arc<dyn cleanup::domain::ports::RuleEvaluator>;
     let cleanup_account_state = Arc::new(cleanup::repository::SqlxAccountStateProvider {
-        pool: db.pool.clone(),
+        pool: db.pool().clone(),
     }) as Arc<dyn cleanup::domain::ports::AccountStateProvider>;
     let drift_detector = Arc::new(cleanup::orchestrator::DriftDetector::new(
         cleanup_account_state,
@@ -511,7 +511,7 @@ async fn main() -> anyhow::Result<()> {
         cleanup_email_repo,
     ));
     let cleanup_audit_writer: Arc<dyn cleanup::audit::CleanupAuditWriter> = Arc::new(
-        cleanup::audit::SqliteCleanupAuditWriter::new(db.pool.clone()),
+        cleanup::audit::SqliteCleanupAuditWriter::new(db.pool().clone()),
     );
     let cleanup_telemetry = Arc::new(cleanup::telemetry::TelemetryEmitter::new());
     // Item #1: build OAuth-derived EmailProvider factory. Gmail/Outlook
@@ -574,7 +574,7 @@ async fn main() -> anyhow::Result<()> {
         .with_provider_factory(provider_factory)
         .with_audit(cleanup_audit_writer.clone())
         .with_telemetry(cleanup_telemetry.clone())
-        .with_db(db.pool.clone()),
+        .with_db(db.pool().clone()),
     );
     // One registry for the whole process. It owns the rate limiter, so building
     // it here rather than per MCP session is what stops a client from resetting
@@ -767,7 +767,7 @@ async fn main() -> anyhow::Result<()> {
                         "DELETE FROM emails WHERE is_trash = 1 AND deleted_at < datetime('now', '-{} days')",
                         trash_days
                     );
-                    match sqlx::query(db::audited_sql(&sql)).execute(&db.pool).await {
+                    match sqlx::query(db::audited_sql(&sql)).execute(db.pool()).await {
                         Ok(result) if result.rows_affected() > 0 => {
                             tracing::info!(
                                 purged = result.rows_affected(),
@@ -786,7 +786,7 @@ async fn main() -> anyhow::Result<()> {
                         "DELETE FROM emails WHERE is_spam = 1 AND deleted_at < datetime('now', '-{} days')",
                         spam_days
                     );
-                    match sqlx::query(db::audited_sql(&sql)).execute(&db.pool).await {
+                    match sqlx::query(db::audited_sql(&sql)).execute(db.pool()).await {
                         Ok(result) if result.rows_affected() > 0 => {
                             tracing::info!(
                                 purged = result.rows_affected(),
@@ -1091,7 +1091,7 @@ async fn repair_unresolved_labels(state: &AppState) -> anyhow::Result<()> {
          WHERE labels LIKE '%Label_%' \
          AND COALESCE(is_spam, 0) = 0 AND COALESCE(is_trash, 0) = 0",
     )
-    .fetch_all(&state.db.pool)
+    .fetch_all(state.db.pool())
     .await?;
 
     if rows.is_empty() {
@@ -1155,7 +1155,7 @@ async fn repair_unresolved_labels(state: &AppState) -> anyhow::Result<()> {
             sqlx::query("UPDATE emails SET labels = ?1 WHERE rowid = ?2")
                 .bind(&joined)
                 .bind(rowid)
-                .execute(&state.db.pool)
+                .execute(state.db.pool())
                 .await?;
             resolved_count += 1;
         }

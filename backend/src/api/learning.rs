@@ -92,7 +92,7 @@ async fn submit_feedback(
         )
         .bind(to.to_string())
         .bind(&req.email_id)
-        .execute(&state.db.pool)
+        .execute(state.db.pool())
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     }

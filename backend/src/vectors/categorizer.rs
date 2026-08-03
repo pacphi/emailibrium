@@ -530,7 +530,7 @@ impl VectorCategorizer {
         type CentroidRow = (String, Vec<u8>, i64);
         let rows: Vec<CentroidRow> =
             sqlx::query_as("SELECT category, vector_data, dimensions FROM category_centroids")
-                .fetch_all(&db.pool)
+                .fetch_all(db.pool())
                 .await
                 .map_err(VectorError::DatabaseError)?;
 
@@ -618,7 +618,7 @@ impl VectorCategorizer {
                     .bind(category.to_string())
                     .bind(&blob)
                     .bind(vector.len() as i64)
-                    .execute(&db.pool)
+                    .execute(db.pool())
                     .await;
 
                     centroids.insert(

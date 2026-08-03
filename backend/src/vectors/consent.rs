@@ -81,7 +81,7 @@ impl ConsentManager {
         .bind(provider)
         .bind(Utc::now())
         .bind(acknowledgment)
-        .execute(&self.db.pool)
+        .execute(self.db.pool())
         .await?;
 
         Ok(())
@@ -96,7 +96,7 @@ impl ConsentManager {
         )
         .bind(Utc::now())
         .bind(provider)
-        .execute(&self.db.pool)
+        .execute(self.db.pool())
         .await?;
 
         if result.rows_affected() == 0 {
@@ -114,7 +114,7 @@ impl ConsentManager {
             "SELECT COUNT(*) FROM ai_consent WHERE provider = ? AND revoked_at IS NULL",
         )
         .bind(provider)
-        .fetch_one(&self.db.pool)
+        .fetch_one(self.db.pool())
         .await?;
 
         Ok(row.0 > 0)
@@ -125,7 +125,7 @@ impl ConsentManager {
         let rows = sqlx::query_as::<_, (String, DateTime<Utc>, Option<DateTime<Utc>>, String)>(
             "SELECT provider, consented_at, revoked_at, acknowledgment FROM ai_consent ORDER BY consented_at DESC",
         )
-        .fetch_all(&self.db.pool)
+        .fetch_all(self.db.pool())
         .await?;
 
         Ok(rows
@@ -163,7 +163,7 @@ impl ConsentManager {
         .bind(entry.output_token_count)
         .bind(&entry.input_hash)
         .bind(entry.latency_ms)
-        .execute(&self.db.pool)
+        .execute(self.db.pool())
         .await?;
 
         Ok(())
@@ -175,7 +175,7 @@ impl ConsentManager {
         let limit = per_page as i64;
 
         let (total,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM ai_audit_log")
-            .fetch_one(&self.db.pool)
+            .fetch_one(self.db.pool())
             .await?;
 
         let rows = sqlx::query_as::<
@@ -198,7 +198,7 @@ impl ConsentManager {
         )
         .bind(limit)
         .bind(offset)
-        .fetch_all(&self.db.pool)
+        .fetch_all(self.db.pool())
         .await?;
 
         let entries = rows
@@ -251,7 +251,7 @@ mod tests {
                 acknowledgment TEXT NOT NULL
             )",
         )
-        .execute(&db.pool)
+        .execute(db.pool())
         .await
         .unwrap();
 
@@ -268,7 +268,7 @@ mod tests {
                 latency_ms INTEGER
             )",
         )
-        .execute(&db.pool)
+        .execute(db.pool())
         .await
         .unwrap();
 

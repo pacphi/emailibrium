@@ -109,25 +109,25 @@ impl CloudApiAuditLogger {
                 error_message TEXT
             )",
         )
-        .execute(&self.db.pool)
+        .execute(self.db.pool())
         .await?;
 
         sqlx::query(
             "CREATE INDEX IF NOT EXISTS idx_cloud_audit_timestamp ON cloud_api_audit_log(timestamp)",
         )
-        .execute(&self.db.pool)
+        .execute(self.db.pool())
         .await?;
 
         sqlx::query(
             "CREATE INDEX IF NOT EXISTS idx_cloud_audit_provider ON cloud_api_audit_log(provider)",
         )
-        .execute(&self.db.pool)
+        .execute(self.db.pool())
         .await?;
 
         sqlx::query(
             "CREATE INDEX IF NOT EXISTS idx_cloud_audit_user ON cloud_api_audit_log(user_id)",
         )
-        .execute(&self.db.pool)
+        .execute(self.db.pool())
         .await?;
 
         Ok(())
@@ -159,7 +159,7 @@ impl CloudApiAuditLogger {
         .bind(&entry.request_type)
         .bind(&entry.status)
         .bind(&entry.error_message)
-        .execute(&self.db.pool)
+        .execute(self.db.pool())
         .await?;
 
         Ok(())
@@ -178,11 +178,11 @@ impl CloudApiAuditLogger {
         let total: (i64,) = if let Some(provider) = provider_filter {
             sqlx::query_as("SELECT COUNT(*) FROM cloud_api_audit_log WHERE provider = ?")
                 .bind(provider)
-                .fetch_one(&self.db.pool)
+                .fetch_one(self.db.pool())
                 .await?
         } else {
             sqlx::query_as("SELECT COUNT(*) FROM cloud_api_audit_log")
-                .fetch_one(&self.db.pool)
+                .fetch_one(self.db.pool())
                 .await?
         };
 
@@ -211,7 +211,7 @@ impl CloudApiAuditLogger {
             .bind(provider)
             .bind(limit)
             .bind(offset)
-            .fetch_all(&self.db.pool)
+            .fetch_all(self.db.pool())
             .await?
         } else {
             sqlx::query_as::<
@@ -237,7 +237,7 @@ impl CloudApiAuditLogger {
             )
             .bind(limit)
             .bind(offset)
-            .fetch_all(&self.db.pool)
+            .fetch_all(self.db.pool())
             .await?
         };
 
@@ -294,7 +294,7 @@ impl CloudApiAuditLogger {
              FROM cloud_api_audit_log WHERE timestamp >= ?",
         )
         .bind(since_ts)
-        .fetch_one(&self.db.pool)
+        .fetch_one(self.db.pool())
         .await?;
 
         let provider_rows: Vec<ProviderStatsRow> = sqlx::query_as(
@@ -311,7 +311,7 @@ impl CloudApiAuditLogger {
                  ORDER BY COUNT(*) DESC",
         )
         .bind(since_ts)
-        .fetch_all(&self.db.pool)
+        .fetch_all(self.db.pool())
         .await?;
 
         let by_provider = provider_rows

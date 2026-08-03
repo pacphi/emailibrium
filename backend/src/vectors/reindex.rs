@@ -75,7 +75,7 @@ impl ReindexOrchestrator {
     ) -> Result<bool, VectorError> {
         let stored: Option<(String,)> =
             sqlx::query_as("SELECT value FROM ai_metadata WHERE key = 'active_embedding_model'")
-                .fetch_optional(&self.db.pool)
+                .fetch_optional(self.db.pool())
                 .await
                 .map_err(VectorError::DatabaseError)?;
 
@@ -91,7 +91,7 @@ impl ReindexOrchestrator {
                      VALUES ('active_embedding_model', ?, datetime('now'))",
                 )
                 .bind(current_model)
-                .execute(&self.db.pool)
+                .execute(self.db.pool())
                 .await
                 .map_err(VectorError::DatabaseError)?;
                 Ok(true)
@@ -103,7 +103,7 @@ impl ReindexOrchestrator {
                      VALUES ('active_embedding_model', ?, datetime('now'))",
                 )
                 .bind(current_model)
-                .execute(&self.db.pool)
+                .execute(self.db.pool())
                 .await
                 .map_err(VectorError::DatabaseError)?;
                 Ok(false)
@@ -118,7 +118,7 @@ impl ReindexOrchestrator {
         let result = sqlx::query(
             "UPDATE emails SET embedding_status = 'stale' WHERE embedding_status = 'embedded'",
         )
-        .execute(&self.db.pool)
+        .execute(self.db.pool())
         .await
         .map_err(VectorError::DatabaseError)?;
 
@@ -151,12 +151,12 @@ mod tests {
         let db = Database::connect("sqlite::memory:").await.unwrap();
         // Run the initial schema migration.
         sqlx::query(include_str!("../../migrations/001_initial_schema.sql"))
-            .execute(&db.pool)
+            .execute(db.pool())
             .await
             .unwrap();
         // Run the ai_metadata migration.
         sqlx::query(include_str!("../../migrations/003_ai_metadata.sql"))
-            .execute(&db.pool)
+            .execute(db.pool())
             .await
             .unwrap();
         db
@@ -225,7 +225,7 @@ mod tests {
                  VALUES (?, 'acct-1', 'test', 'embedded')",
             )
             .bind(&id)
-            .execute(&db.pool)
+            .execute(db.pool())
             .await
             .unwrap();
         }
@@ -234,7 +234,7 @@ mod tests {
             "INSERT INTO emails (id, account_id, provider, embedding_status) \
              VALUES ('email-pending', 'acct-1', 'test', 'pending')",
         )
-        .execute(&db.pool)
+        .execute(db.pool())
         .await
         .unwrap();
 
@@ -251,7 +251,7 @@ mod tests {
         // Verify the DB was updated.
         let stale: (i64,) =
             sqlx::query_as("SELECT COUNT(*) FROM emails WHERE embedding_status = 'stale'")
-                .fetch_one(&db.pool)
+                .fetch_one(db.pool())
                 .await
                 .unwrap();
         assert_eq!(stale.0, 5);
@@ -259,7 +259,7 @@ mod tests {
         // Pending email should be unchanged.
         let pending: (String,) =
             sqlx::query_as("SELECT embedding_status FROM emails WHERE id = 'email-pending'")
-                .fetch_one(&db.pool)
+                .fetch_one(db.pool())
                 .await
                 .unwrap();
         assert_eq!(pending.0, "pending");
