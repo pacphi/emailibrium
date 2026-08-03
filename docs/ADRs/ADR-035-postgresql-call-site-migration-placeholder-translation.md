@@ -1,7 +1,7 @@
 # ADR-035: One Query String Per Call Site, Translated at Runtime — Not Duplicated Per Backend
 
-- **Status:** Accepted
-- **Date:** 2026-08-03
+- **Status:** Superseded by ADR-036 (as implementation strategy). **Retained as the authoritative dialect-divergence catalog** — §2.3–§2.7 document the empirically-discovered divergence classes that ADR-036's solution was validated against, and remain the checklist for auditing any raw-SQL escape hatch.
+- **Date:** 2026-08-03 (superseded same day, after 15 of 51 files surfaced the §2.5–§2.7 classes mid-migration)
 - **Deciders:** Chris Phillipson
 - **Context:** ADR-033's phase 2 — migrating every call site off the temporary `Database::pool()` bridge onto the `Database` enum directly — turned out to be a materially bigger problem than "swap the pool type." SQLite and PostgreSQL do not share bind-parameter syntax: SQLite accepts bare `?` and explicit `?N`; PostgreSQL requires `$N`. sqlx's runtime `query()`/`query_as()` API does not translate between them — the placeholder style is baked into the SQL text itself, and the wrong style is a runtime error, not a compile error. A repo-wide audit found **~250 bind-parameter occurrences across roughly 84 query strings**, and separately **41 inline `datetime('now')` calls across 13 files** (a SQLite-specific function with no PostgreSQL equivalent — same problem class phase 1 already solved for migration files, just showing up again in application-code query strings), across the true call-site surface: **51 files** touch `SqlitePool` directly (either typed on a struct field or via the `.pool()` bridge) — more than double the pipeline's original 22-file estimate, since several structs hold their own `pool: SqlitePool` field populated by a `.clone()` from `main.rs` rather than calling `.pool()` themselves.
 

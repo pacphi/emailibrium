@@ -127,6 +127,7 @@ tempfile = "3"
 tokio-test = "0.4"
 axum-test = "21"
 emailibrium = { path = ".", features = ["test-vectors"] }
+sea-orm = { version = "2.0.1", features = ["sqlx-sqlite", "sqlx-postgres", "runtime-tokio", "with-chrono", "with-uuid", "macros"] }
 
 [[bench]]
 name = "vector_benchmarks"
