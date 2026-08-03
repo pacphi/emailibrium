@@ -429,7 +429,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Initialize OAuth manager for email account connections (DDD-005)
     let oauth_manager = Arc::new(email::oauth::OAuthManager::new(
-        db.pool().clone(),
+        (*db).clone(),
         config.encryption.master_password.as_deref(),
     ));
 
