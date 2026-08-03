@@ -1,43 +1,35 @@
-import { create } from 'zustand';
-import { useEffect } from 'react';
+import { useMemo } from 'react';
+import { useKeyboard, metaOrCtrl, type ShortcutMap } from '@/shared/hooks';
+import { createToggleStore } from '@/shared/stores/createToggleStore';
 
-interface CommandPaletteState {
-  isOpen: boolean;
-  open: () => void;
-  close: () => void;
-  toggle: () => void;
-}
-
-export const useCommandPaletteStore = create<CommandPaletteState>((set) => ({
-  isOpen: false,
-  open: () => set({ isOpen: true }),
-  close: () => set({ isOpen: false }),
-  toggle: () => set((state) => ({ isOpen: !state.isOpen })),
-}));
+export const useCommandPaletteStore = createToggleStore();
 
 /**
  * Hook that manages command palette open/close state and registers
- * the global Cmd+K / Ctrl+K keyboard shortcut.
+ * the global Cmd+K / Ctrl+K keyboard shortcut (plus Escape-to-close) through
+ * the shared `useKeyboard` dispatcher.
+ *
+ * Call this from exactly one always-mounted component (`CommandPalette`) so the
+ * shortcut is registered once. A second call site should read `useCommandPaletteStore`
+ * directly instead (e.g. a trigger button only needs `open`) -- a duplicate registration
+ * no longer misfires (the shared dispatcher fires only the newest one), but it still
+ * inflates the live shortcut registry the help panel renders from.
  */
 export function useCommandPalette() {
   const { isOpen, open, close, toggle } = useCommandPaletteStore();
 
-  useEffect(() => {
-    function handleKeyDown(event: KeyboardEvent) {
-      if ((event.metaKey || event.ctrlKey) && event.key === 'k') {
-        event.preventDefault();
-        toggle();
-      }
-
-      if (event.key === 'Escape' && isOpen) {
-        event.preventDefault();
-        close();
-      }
+  const shortcuts = useMemo<ShortcutMap>(() => {
+    const map: ShortcutMap = metaOrCtrl('k', toggle);
+    // Only register `escape` while open. useKeyboard calls preventDefault/stopPropagation on
+    // any matched key, so an always-registered entry would swallow every bare Escape press on
+    // this route even while closed -- the original raw listener only acted (and preventDefault'd)
+    // when `isOpen`, and this preserves that exactly.
+    if (isOpen) {
+      map.escape = close;
     }
-
-    document.addEventListener('keydown', handleKeyDown);
-    return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, close, toggle]);
+    return map;
+  }, [toggle, isOpen, close]);
+  useKeyboard(shortcuts);
 
   return { isOpen, open, close, toggle };
 }

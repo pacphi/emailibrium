@@ -1,5 +1,11 @@
 export { useToast } from './useToast';
-export { useKeyboard, type ShortcutMap } from './useKeyboard';
+export {
+  useKeyboard,
+  useActiveShortcuts,
+  splitShortcut,
+  metaOrCtrl,
+  type ShortcutMap,
+} from './useKeyboard';
 export { useOffline } from './useOffline';
 export { useAnnounce } from './useAnnounce';
 export { useBreakpoint } from './useBreakpoint';

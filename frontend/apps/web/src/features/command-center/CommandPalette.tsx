@@ -100,14 +100,7 @@ export function CommandPalette() {
         aria-label="Command palette"
         aria-modal="true"
       >
-        <Command
-          className="rounded-xl border border-gray-200 bg-white shadow-2xl dark:border-gray-700 dark:bg-gray-800"
-          onKeyDown={(e: React.KeyboardEvent) => {
-            if (e.key === 'Escape') {
-              close();
-            }
-          }}
-        >
+        <Command className="rounded-xl border border-gray-200 bg-white shadow-2xl dark:border-gray-700 dark:bg-gray-800">
           <div className="flex items-center border-b border-gray-200 px-4 dark:border-gray-700">
             <SearchIcon />
             <Command.Input

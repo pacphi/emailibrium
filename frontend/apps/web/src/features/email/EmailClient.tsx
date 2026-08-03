@@ -7,9 +7,11 @@ import type { SidebarGroup } from './EmailSidebar';
 import { EmailList } from './EmailList';
 import { GroupedEmailList } from './GroupedEmailList';
 import { groupByDomain } from './utils/groupBySender';
+import { selectAllEmailIds, selectVisibleGroupedEmailIds } from './utils/selectAll';
 import { ThreadView } from './ThreadView';
 import { ComposeEmail } from './ComposeEmail';
 import { MoveDialog } from './MoveDialog';
+import { useEmailShortcuts, type ReplyOpenSignal } from './hooks/useEmailShortcuts';
 import { useQuery } from '@tanstack/react-query';
 import { getAllLabels, getEnrichedCategories, getEmailCounts } from '@emailibrium/api';
 import {
@@ -48,6 +50,32 @@ function ResizeDivider({
   );
 }
 
+interface PendingBulkAction {
+  type: 'archive' | 'delete' | 'permanentDelete';
+  ids: string[];
+}
+
+const BULK_CONFIRM_COPY: Record<
+  PendingBulkAction['type'],
+  { prompt: (n: number) => string; confirm: string; danger: boolean }
+> = {
+  archive: {
+    prompt: (n) => `Archive ${n} email${n === 1 ? '' : 's'}?`,
+    confirm: 'Archive',
+    danger: false,
+  },
+  delete: {
+    prompt: (n) => `Move ${n} email${n === 1 ? '' : 's'} to trash?`,
+    confirm: 'Move to trash',
+    danger: true,
+  },
+  permanentDelete: {
+    prompt: (n) => `Permanently delete ${n} email${n === 1 ? '' : 's'}? This cannot be undone.`,
+    confirm: 'Delete permanently',
+    danger: true,
+  },
+};
+
 function groupToQueryParam(groupId: string): { category?: string; label?: string } {
   if (groupId === 'inbox' || groupId === 'archived') return {};
   if (groupId.startsWith('cat-')) return { category: groupId.replace('cat-', '') };
@@ -62,6 +90,7 @@ export function EmailClient() {
   const [selectedEmailId, setSelectedEmailId] = useState<string | null>(null);
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
   const [isComposeOpen, setIsComposeOpen] = useState(false);
+  const [replyOpenSignal, setReplyOpenSignal] = useState<ReplyOpenSignal | null>(null);
   const [mobilePanel, setMobilePanel] = useState<'sidebar' | 'list' | 'thread'>('list');
   const [filter, setFilter] = useState<
     'all' | 'read' | 'unread' | 'starred' | 'sent' | 'spam' | 'trash'
@@ -505,14 +534,56 @@ export function EmailClient() {
   }, []);
 
   // Thread-level actions
+  //
+  // A destructive action that would hit MORE than one email (bulk archive/delete after
+  // a multi-select, or the trash view's permanent delete) never runs directly: it parks
+  // in pendingBulkAction and a count-bearing confirmation dialog renders. Select-all can
+  // check far more emails than fit on screen, so the count is shown before anything
+  // destructive happens -- for both the keyboard shortcuts and the action-bar buttons,
+  // which share these handlers.
+  const [pendingBulkAction, setPendingBulkAction] = useState<PendingBulkAction | null>(null);
+
+  const executeBulkAction = useCallback(() => {
+    if (!pendingBulkAction) return;
+    const { type, ids } = pendingBulkAction;
+    for (const id of ids) {
+      if (type === 'archive') archiveMutation.mutate(id);
+      else if (type === 'delete') deleteMutation.mutate(id);
+      else permanentDeleteMutation.mutate(id);
+    }
+    setCheckedIds(new Set());
+    if (selectedEmailId && ids.includes(selectedEmailId)) {
+      setSelectedEmailId(null);
+    }
+    setPendingBulkAction(null);
+    const plural = ids.length === 1 ? '' : 's';
+    const done =
+      type === 'archive'
+        ? `Archived ${ids.length} email${plural}`
+        : type === 'delete'
+          ? `Moved ${ids.length} email${plural} to trash`
+          : `Permanently deleted ${ids.length} email${plural}`;
+    toast(done, 'success');
+  }, [
+    pendingBulkAction,
+    archiveMutation,
+    deleteMutation,
+    permanentDeleteMutation,
+    selectedEmailId,
+    toast,
+  ]);
+
   const handleThreadArchive = useCallback(() => {
-    if (checkedIds.size > 0) {
-      for (const id of checkedIds) {
-        archiveMutation.mutate(id);
-      }
+    if (checkedIds.size > 1) {
+      setPendingBulkAction({ type: 'archive', ids: [...checkedIds] });
+    } else if (checkedIds.size === 1) {
+      const only = [...checkedIds][0]!;
+      archiveMutation.mutate(only);
       setCheckedIds(new Set());
+      if (selectedEmailId === only) setSelectedEmailId(null);
     } else if (selectedEmailId) {
       archiveMutation.mutate(selectedEmailId);
+      setSelectedEmailId(null);
     }
   }, [checkedIds, selectedEmailId, archiveMutation]);
 
@@ -521,14 +592,13 @@ export function EmailClient() {
   }, [selectedEmailId, starMutation]);
 
   const handleThreadDelete = useCallback(() => {
-    if (checkedIds.size > 0) {
-      for (const id of checkedIds) {
-        deleteMutation.mutate(id);
-      }
+    if (checkedIds.size > 1) {
+      setPendingBulkAction({ type: 'delete', ids: [...checkedIds] });
+    } else if (checkedIds.size === 1) {
+      const only = [...checkedIds][0]!;
+      deleteMutation.mutate(only);
       setCheckedIds(new Set());
-      if (selectedEmailId && checkedIds.has(selectedEmailId)) {
-        setSelectedEmailId(null);
-      }
+      if (selectedEmailId === only) setSelectedEmailId(null);
     } else if (selectedEmailId) {
       deleteMutation.mutate(selectedEmailId);
       setSelectedEmailId(null);
@@ -592,6 +662,56 @@ export function EmailClient() {
     },
     [selectedEmailId, forwardMutation],
   );
+
+  const handleCompose = useCallback(() => setIsComposeOpen(true), []);
+  const handleOpenReply = useCallback((signal: ReplyOpenSignal) => setReplyOpenSignal(signal), []);
+  const handleReplyOpenSignalConsumed = useCallback(() => setReplyOpenSignal(null), []);
+  const handleSelectAll = useCallback(() => {
+    // Select only what is actually VISIBLE: in grouped mode that excludes emails inside
+    // collapsed domains/senders, and in either mode it can only ever cover loaded pages.
+    const ids = isGrouped
+      ? selectVisibleGroupedEmailIds(domainGroups, expandedDomains, expandedSenders)
+      : selectAllEmailIds(filteredEmails);
+    setCheckedIds(ids);
+    const more = emailsQuery.hasNextPage ? ' (more emails exist that are not loaded yet)' : '';
+    toast(`Selected ${ids.size} email${ids.size === 1 ? '' : 's'}${more}`, 'info');
+  }, [
+    isGrouped,
+    domainGroups,
+    expandedDomains,
+    expandedSenders,
+    filteredEmails,
+    emailsQuery.hasNextPage,
+    toast,
+  ]);
+
+  // Keyboard shortcuts follow the same per-view rules as the visible action bar: the
+  // spam/trash views offer no Archive (e stays unregistered there), and the trash
+  // view's only delete is the confirmation-gated permanent one.
+  const isSpecialView = viewContext === 'spam' || viewContext === 'trash';
+  const handleShortcutDelete = useCallback(() => {
+    if (viewContext !== 'trash') {
+      handleThreadDelete();
+      return;
+    }
+    const ids = checkedIds.size > 0 ? [...checkedIds] : selectedEmailId ? [selectedEmailId] : [];
+    if (ids.length > 0) {
+      setPendingBulkAction({ type: 'permanentDelete', ids });
+    }
+  }, [viewContext, handleThreadDelete, checkedIds, selectedEmailId]);
+
+  useEmailShortcuts({
+    // Suppress every email shortcut while a modal (compose, move, confirm) is open --
+    // focus inside a modal can legally sit on non-editable elements (buttons, selects),
+    // and a stray e/# must not act on the email behind the overlay.
+    enabled: !isComposeOpen && !isMoveOpen && pendingBulkAction === null,
+    selectedEmailId,
+    onCompose: handleCompose,
+    onOpenReply: handleOpenReply,
+    onArchive: isSpecialView ? undefined : handleThreadArchive,
+    onDelete: handleShortcutDelete,
+    onSelectAll: handleSelectAll,
+  });
 
   const handleBackToList = useCallback(() => {
     setSelectedEmailId(null);
@@ -684,7 +804,7 @@ export function EmailClient() {
             </h2>
             <button
               type="button"
-              onClick={() => setIsComposeOpen(true)}
+              onClick={handleCompose}
               className="flex items-center gap-1 rounded-md bg-indigo-600 px-2.5 py-1 text-xs font-medium text-white transition-colors hover:bg-indigo-700"
               aria-label="Compose new email"
             >
@@ -936,6 +1056,8 @@ export function EmailClient() {
           onSendReply={handleSendReply}
           onSendForward={handleSendForward}
           isSendingReply={replyMutation.isPending || forwardMutation.isPending}
+          replyOpenSignal={replyOpenSignal}
+          onReplyOpenSignalConsumed={handleReplyOpenSignalConsumed}
           onSpam={handleThreadSpam}
           onRestore={handleThreadRestore}
           onPermanentDelete={handleThreadPermanentDelete}
@@ -948,6 +1070,49 @@ export function EmailClient() {
         onClose={() => setIsComposeOpen(false)}
         accounts={accounts}
       />
+
+      {/* Bulk-destructive confirmation -- see pendingBulkAction above */}
+      {pendingBulkAction && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Confirm action"
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') setPendingBulkAction(null);
+          }}
+        >
+          <div className="mx-4 w-full max-w-sm rounded-xl border border-gray-200 bg-white p-4 shadow-2xl dark:border-gray-700 dark:bg-gray-800">
+            <p className="text-sm text-gray-700 dark:text-gray-300">
+              {BULK_CONFIRM_COPY[pendingBulkAction.type].prompt(pendingBulkAction.ids.length)}
+            </p>
+            <div className="mt-3 flex justify-end gap-2">
+              <button
+                type="button"
+                // Focus lands on the SAFE choice, so Enter cancels and acting takes an
+                // explicit Tab (or click) -- and, focus being inside the dialog, no
+                // keystroke reaches the page behind it.
+                autoFocus
+                onClick={() => setPendingBulkAction(null)}
+                className="rounded-md bg-gray-100 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-300"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={executeBulkAction}
+                className={`rounded-md px-3 py-1.5 text-sm font-medium text-white ${
+                  BULK_CONFIRM_COPY[pendingBulkAction.type].danger
+                    ? 'bg-red-600 hover:bg-red-700'
+                    : 'bg-indigo-600 hover:bg-indigo-700'
+                }`}
+              >
+                {BULK_CONFIRM_COPY[pendingBulkAction.type].confirm}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Move to folder dialog */}
       <MoveDialog

@@ -11,11 +11,10 @@ import { StatsCards } from './StatsCards';
 import { QuickActions } from './QuickActions';
 import { RecentActivity } from './RecentActivity';
 import { ClusterVisualization } from './ClusterVisualization';
-import { CommandPalette } from './CommandPalette';
 import { SearchResults } from './SearchResults';
 import { SyncStatusIndicator } from './SyncStatusIndicator';
 import { useStats } from './hooks/useStats';
-import { useCommandPalette } from './hooks/useCommandPalette';
+import { useCommandPaletteStore } from './hooks/useCommandPalette';
 import { useSyncStore } from '@/shared/stores/syncStore';
 import { useAppConfig } from '@/shared/hooks';
 
@@ -27,7 +26,7 @@ export function CommandCenter() {
     return params.get('view') === 'search' ? 'search' : 'dashboard';
   });
   const [completeDismissed, setCompleteDismissed] = useState(false);
-  const { open: openPalette } = useCommandPalette();
+  const openPalette = useCommandPaletteStore((s) => s.open);
   const queryClient = useQueryClient();
   const appConfig = useAppConfig();
   const { cache } = appConfig;
@@ -137,9 +136,6 @@ export function CommandCenter() {
 
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
-      {/* Command palette overlay -- always mounted, controlled by Zustand state */}
-      <CommandPalette />
-
       {/* Header */}
       <header className="border-b border-gray-200 bg-white px-6 py-4 dark:border-gray-700 dark:bg-gray-800">
         <div className="flex items-center justify-between">
