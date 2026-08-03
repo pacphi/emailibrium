@@ -206,24 +206,34 @@ Rules are evaluated during ingestion and can also be applied retroactively to ex
 | `R`                            | Reply to email                 |
 | `F`                            | Forward email                  |
 | `E`                            | Archive email                  |
-| `Shift+#`                      | Delete email                   |
-| `Cmd+Shift+A` / `Ctrl+Shift+A` | Select all emails              |
+| `#`                            | Delete email (move to trash)   |
+| `Cmd+Shift+A` / `Ctrl+Shift+A` | Select all visible emails      |
 | `Cmd+,` / `Ctrl+,`             | Open settings                  |
-| `Shift+?`                      | Show keyboard shortcuts        |
+| `?`                            | Show keyboard shortcuts        |
 | `Cmd+Enter`                    | Send reply (in the reply box)  |
 | `Enter`                        | Send message (in the Chat box) |
 | `Shift+Enter`                  | New line (in the Chat box)     |
 
-`C`/`R`/`F`/`E`/`Shift+#`/`Shift+?` are suppressed while typing in any text field, so typing those
-characters in an email body, reply, or search box behaves normally. `Cmd+Shift+A`, `Cmd+,`,
-`Ctrl+Shift+A`, and `Ctrl+,` work even while a text field is focused, the same as `Cmd+K`. The
-command palette (`Cmd+K`) and shortcut help panel (`Shift+?`) are available on the Command Center
-page; search-box focus (in the email list's filter bar) is mouse/tap-only.
+The command palette (`Cmd+K`), shortcut help panel (`?`), and Settings shortcut (`Cmd+,`) are
+available on every page; the help panel lists the shortcuts active on the current page. The
+email shortcuts (`C`/`R`/`F`/`E`/`#`, select all) are active on the Email page.
+
+`C`/`R`/`F`/`E`/`#`/`?` are suppressed while typing in any text field, so typing those characters
+in an email body, reply, or search box behaves normally. On layouts where `#` or `?` is produced
+with Shift held (for example US layouts), the shortcut works identically. `Escape` and modifier
+combinations (`Cmd+K`, `Cmd+Shift+A`, `Cmd+,`, ...) work even while a text field is focused.
+Email shortcuts are suppressed entirely while a dialog (compose, move, or a confirmation) is
+open. Archiving or deleting more than one email at once asks for confirmation with the exact
+count first, as does any permanent delete in the Trash view; in the Trash view `#` performs the
+permanent delete and `E` is inactive, matching the visible action bar. Holding a key down does
+not repeat its shortcut. The browser or operating system may reserve some combinations (for
+example `Cmd+Shift+A` or `Cmd+,` in some browsers) and handle them before the page receives them.
 
 This table is verified against the app's actual registered shortcuts by
-`bash scripts/audit/extract-shortcuts.sh`, which prints every shortcut key the frontend actually
-dispatches (grounded in `frontend/apps/web/src/shared/hooks/useKeyboard.ts`), so it can be
-checked instead of trusted.
+`bash scripts/audit/extract-shortcuts.sh`, which extracts every shortcut key the frontend
+registers through `frontend/apps/web/src/shared/hooks/useKeyboard.ts`, compares that set
+bidirectionally against this table, and exits non-zero on any drift -- CI runs it on every
+frontend or user-guide change.
 
 ## Tips and Best Practices
 

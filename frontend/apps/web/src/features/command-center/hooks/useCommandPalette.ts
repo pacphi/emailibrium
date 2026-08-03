@@ -11,9 +11,9 @@ export const useCommandPaletteStore = createToggleStore();
  *
  * Call this from exactly one always-mounted component (`CommandPalette`) so the
  * shortcut is registered once. A second call site should read `useCommandPaletteStore`
- * directly instead (e.g. a trigger button only needs `open`) -- calling this hook from
- * two mounted components double-registers the shortcut, which cancels itself out on
- * every keypress (two `toggle()` calls net to a no-op).
+ * directly instead (e.g. a trigger button only needs `open`) -- a duplicate registration
+ * no longer misfires (the shared dispatcher fires only the newest one), but it still
+ * inflates the live shortcut registry the help panel renders from.
  */
 export function useCommandPalette() {
   const { isOpen, open, close, toggle } = useCommandPaletteStore();

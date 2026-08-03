@@ -13,15 +13,25 @@ import {
 } from 'lucide-react';
 import { useSettings } from '../features/settings/hooks/useSettings';
 import { useSyncStore } from '../shared/stores/syncStore';
+import { CommandPalette } from '../features/command-center/CommandPalette';
+import { ShortcutHelpPanel } from '../features/command-center/ShortcutHelpPanel';
+import { useGlobalShortcuts } from '../features/command-center/hooks/useGlobalShortcuts';
 
 interface LayoutProps {
   children: ReactNode;
 }
 
-/** App shell layout with sidebar navigation and main content area. */
+/** App shell layout with sidebar navigation and main content area.
+ *
+ * Also the single mount point for the app-wide keyboard surfaces: the command palette
+ * (Cmd+K), the shortcut help panel (?), and the Settings shortcut (Cmd+,). Mounting them
+ * here -- always rendered, on every route -- is what makes the help panel's live registry
+ * view meaningful: it lists whatever the CURRENT route has registered (e.g. the email
+ * client's c/r/f/e/# only while /email is mounted). */
 export function Layout({ children }: LayoutProps) {
   const { sidebarPosition } = useSettings();
   const isRight = sidebarPosition === 'right';
+  useGlobalShortcuts();
 
   return (
     <div
@@ -29,6 +39,10 @@ export function Layout({ children }: LayoutProps) {
     >
       <Sidebar />
       <main className="flex-1 overflow-auto">{children}</main>
+
+      {/* Overlays -- always mounted, controlled by their Zustand stores */}
+      <CommandPalette />
+      <ShortcutHelpPanel />
     </div>
   );
 }

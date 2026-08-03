@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, screen, cleanup } from '@testing-library/react';
+import { render, screen, cleanup, fireEvent } from '@testing-library/react';
 import type { Email } from '@emailibrium/types';
 import { ReplyBox } from '../ReplyBox';
 
@@ -133,8 +133,11 @@ describe('ReplyBox openSignal', () => {
       />,
     );
     const forwardInput = screen.getByPlaceholderText('recipient@example.com') as HTMLInputElement;
-    forwardInput.value = 'draft-recipient@example.com';
-    forwardInput.dispatchEvent(new Event('input', { bubbles: true }));
+    fireEvent.change(forwardInput, { target: { value: 'draft-recipient@example.com' } });
+    const bodyBefore = screen.getByLabelText('Reply message body') as HTMLTextAreaElement;
+    fireEvent.change(bodyBefore, { target: { value: 'half-typed draft for email-1' } });
+    expect(forwardInput.value).toBe('draft-recipient@example.com');
+    expect(bodyBefore.value).toBe('half-typed draft for email-1');
 
     // Switch to a different email in the same ReplyBox instance (no unmount) -- e.g. the
     // user clicked a different row in the list without sending/discarding first.
@@ -147,9 +150,45 @@ describe('ReplyBox openSignal', () => {
         openSignal={null}
       />,
     );
-
     expect(screen.getByText('Click to reply...')).not.toBeNull();
-    expect(screen.queryByPlaceholderText('recipient@example.com')).toBeNull();
+
+    // Collapsing alone is not enough -- re-open the editor and check the DRAFT STATE was
+    // actually cleared, not just hidden. Without the reset, the old body/recipient would
+    // reappear here, staged against the wrong email.
+    fireEvent.click(screen.getByText('Click to reply...'));
+    fireEvent.click(screen.getByRole('button', { name: 'Forward' }));
+    expect((screen.getByLabelText('Reply message body') as HTMLTextAreaElement).value).toBe('');
+    expect((screen.getByPlaceholderText('recipient@example.com') as HTMLInputElement).value).toBe(
+      '',
+    );
+  });
+
+  it('moves focus into the message body when opened in reply mode (the next keystroke types, not triggers shortcuts)', () => {
+    render(
+      <ReplyBox
+        originalEmail={EMAIL}
+        onSendReply={vi.fn()}
+        onSendForward={vi.fn()}
+        isSending={false}
+        openSignal={{ mode: 'reply' }}
+      />,
+    );
+
+    expect(document.activeElement).toBe(screen.getByLabelText('Reply message body'));
+  });
+
+  it('moves focus into the recipient field when opened in forward mode', () => {
+    render(
+      <ReplyBox
+        originalEmail={EMAIL}
+        onSendReply={vi.fn()}
+        onSendForward={vi.fn()}
+        isSending={false}
+        openSignal={{ mode: 'forward' }}
+      />,
+    );
+
+    expect(document.activeElement).toBe(screen.getByPlaceholderText('recipient@example.com'));
   });
 
   it('does not expand or throw when openSignal is null/absent', () => {
