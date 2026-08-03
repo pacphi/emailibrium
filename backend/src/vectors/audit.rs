@@ -6,15 +6,48 @@
 
 use std::sync::Arc;
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDateTime, Utc};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 
 use super::error::VectorError;
-use crate::db::Database;
+use crate::db::{audited_sql, Database};
 
-/// Row tuple for per-provider audit statistics.
+/// Row tuple for per-provider audit statistics. Identical shape on both backends —
+/// only the query text differs (the Postgres arm casts AVG(latency_ms) to float8,
+/// since Postgres's avg(integer) returns NUMERIC, not a float — ADR-035 §2.7).
 type ProviderStatsRow = (String, i64, Option<i64>, Option<i64>, Option<f64>, i64);
+
+/// cloud_api_audit_log row (SQLite): timestamp decodes as DateTime<Utc>.
+type LogRowSqlite = (
+    i32,
+    DateTime<Utc>,
+    String,
+    String,
+    Option<i32>,
+    Option<i32>,
+    i32,
+    Option<String>,
+    String,
+    String,
+    Option<String>,
+);
+/// cloud_api_audit_log row (Postgres): id/input_tokens/output_tokens/latency_ms are
+/// INTEGER/INT4 (i32, not i64); timestamp is TIMESTAMP (no tz) so it decodes as
+/// NaiveDateTime, not DateTime<Utc> (ADR-035 §2.6).
+type LogRowPostgres = (
+    i32,
+    NaiveDateTime,
+    String,
+    String,
+    Option<i32>,
+    Option<i32>,
+    i32,
+    Option<String>,
+    String,
+    String,
+    Option<String>,
+);
 
 // ---------------------------------------------------------------------------
 // Types
@@ -93,42 +126,69 @@ impl CloudApiAuditLogger {
     }
 
     /// Ensure the audit log table exists.
+    ///
+    /// Migration `008_cloud_api_audit.sql` already creates this table for both
+    /// dialects; this is a defensive idempotent no-op in the normal path (kept for
+    /// tests and any caller that hasn't run migrations). `id`'s auto-increment
+    /// syntax genuinely differs per backend, so the two DDL strings are hand-written
+    /// per backend rather than routed through `Database::adapt()` (ADR-035 §2.3).
     pub async fn ensure_table(&self) -> Result<(), VectorError> {
-        sqlx::query(
-            "CREATE TABLE IF NOT EXISTS cloud_api_audit_log (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                provider TEXT NOT NULL,
-                model TEXT NOT NULL,
-                input_tokens INTEGER,
-                output_tokens INTEGER,
-                latency_ms INTEGER NOT NULL,
-                user_id TEXT,
-                request_type TEXT NOT NULL,
-                status TEXT NOT NULL,
-                error_message TEXT
-            )",
-        )
-        .execute(self.db.pool())
-        .await?;
+        match self.db.as_ref() {
+            Database::Sqlite(pool) => {
+                sqlx::query(
+                    "CREATE TABLE IF NOT EXISTS cloud_api_audit_log (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        provider TEXT NOT NULL,
+                        model TEXT NOT NULL,
+                        input_tokens INTEGER,
+                        output_tokens INTEGER,
+                        latency_ms INTEGER NOT NULL,
+                        user_id TEXT,
+                        request_type TEXT NOT NULL,
+                        status TEXT NOT NULL,
+                        error_message TEXT
+                    )",
+                )
+                .execute(pool)
+                .await?;
+            }
+            Database::Postgres(pool) => {
+                sqlx::query(
+                    "CREATE TABLE IF NOT EXISTS cloud_api_audit_log (
+                        id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                        timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        provider TEXT NOT NULL,
+                        model TEXT NOT NULL,
+                        input_tokens INTEGER,
+                        output_tokens INTEGER,
+                        latency_ms INTEGER NOT NULL,
+                        user_id TEXT,
+                        request_type TEXT NOT NULL,
+                        status TEXT NOT NULL,
+                        error_message TEXT
+                    )",
+                )
+                .execute(pool)
+                .await?;
+            }
+        }
 
-        sqlx::query(
+        let index_stmts = [
             "CREATE INDEX IF NOT EXISTS idx_cloud_audit_timestamp ON cloud_api_audit_log(timestamp)",
-        )
-        .execute(self.db.pool())
-        .await?;
-
-        sqlx::query(
             "CREATE INDEX IF NOT EXISTS idx_cloud_audit_provider ON cloud_api_audit_log(provider)",
-        )
-        .execute(self.db.pool())
-        .await?;
-
-        sqlx::query(
             "CREATE INDEX IF NOT EXISTS idx_cloud_audit_user ON cloud_api_audit_log(user_id)",
-        )
-        .execute(self.db.pool())
-        .await?;
+        ];
+        for stmt in index_stmts {
+            match self.db.as_ref() {
+                Database::Sqlite(pool) => {
+                    sqlx::query(stmt).execute(pool).await?;
+                }
+                Database::Postgres(pool) => {
+                    sqlx::query(stmt).execute(pool).await?;
+                }
+            }
+        }
 
         Ok(())
     }
@@ -143,24 +203,44 @@ impl CloudApiAuditLogger {
             "Audit: cloud API call"
         );
 
-        sqlx::query(
+        let sql = self.db.adapt(
             "INSERT INTO cloud_api_audit_log
              (timestamp, provider, model, input_tokens, output_tokens, latency_ms,
               user_id, request_type, status, error_message)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        )
-        .bind(entry.timestamp)
-        .bind(&entry.provider)
-        .bind(&entry.model)
-        .bind(entry.input_tokens)
-        .bind(entry.output_tokens)
-        .bind(entry.latency_ms)
-        .bind(&entry.user_id)
-        .bind(&entry.request_type)
-        .bind(&entry.status)
-        .bind(&entry.error_message)
-        .execute(self.db.pool())
-        .await?;
+        );
+        match self.db.as_ref() {
+            Database::Sqlite(pool) => {
+                sqlx::query(audited_sql(&sql))
+                    .bind(entry.timestamp)
+                    .bind(&entry.provider)
+                    .bind(&entry.model)
+                    .bind(entry.input_tokens)
+                    .bind(entry.output_tokens)
+                    .bind(entry.latency_ms)
+                    .bind(&entry.user_id)
+                    .bind(&entry.request_type)
+                    .bind(&entry.status)
+                    .bind(&entry.error_message)
+                    .execute(pool)
+                    .await?;
+            }
+            Database::Postgres(pool) => {
+                sqlx::query(audited_sql(&sql))
+                    .bind(entry.timestamp)
+                    .bind(&entry.provider)
+                    .bind(&entry.model)
+                    .bind(entry.input_tokens)
+                    .bind(entry.output_tokens)
+                    .bind(entry.latency_ms)
+                    .bind(&entry.user_id)
+                    .bind(&entry.request_type)
+                    .bind(&entry.status)
+                    .bind(&entry.error_message)
+                    .execute(pool)
+                    .await?;
+            }
+        }
 
         Ok(())
     }
@@ -175,104 +255,95 @@ impl CloudApiAuditLogger {
         let offset = (page.saturating_sub(1)) as i64 * per_page as i64;
         let limit = per_page as i64;
 
-        let total: (i64,) = if let Some(provider) = provider_filter {
-            sqlx::query_as("SELECT COUNT(*) FROM cloud_api_audit_log WHERE provider = ?")
-                .bind(provider)
-                .fetch_one(self.db.pool())
-                .await?
+        let count_sql = if provider_filter.is_some() {
+            self.db
+                .adapt("SELECT COUNT(*) FROM cloud_api_audit_log WHERE provider = ?")
         } else {
-            sqlx::query_as("SELECT COUNT(*) FROM cloud_api_audit_log")
-                .fetch_one(self.db.pool())
-                .await?
+            std::borrow::Cow::Borrowed("SELECT COUNT(*) FROM cloud_api_audit_log")
+        };
+        let total: (i64,) = match self.db.as_ref() {
+            Database::Sqlite(pool) => match provider_filter {
+                Some(provider) => {
+                    sqlx::query_as(audited_sql(&count_sql))
+                        .bind(provider)
+                        .fetch_one(pool)
+                        .await?
+                }
+                None => {
+                    sqlx::query_as(audited_sql(&count_sql))
+                        .fetch_one(pool)
+                        .await?
+                }
+            },
+            Database::Postgres(pool) => match provider_filter {
+                Some(provider) => {
+                    sqlx::query_as(audited_sql(&count_sql))
+                        .bind(provider)
+                        .fetch_one(pool)
+                        .await?
+                }
+                None => {
+                    sqlx::query_as(audited_sql(&count_sql))
+                        .fetch_one(pool)
+                        .await?
+                }
+            },
         };
 
-        let rows = if let Some(provider) = provider_filter {
-            sqlx::query_as::<
-                _,
-                (
-                    i64,
-                    DateTime<Utc>,
-                    String,
-                    String,
-                    Option<i64>,
-                    Option<i64>,
-                    i64,
-                    Option<String>,
-                    String,
-                    String,
-                    Option<String>,
-                ),
-            >(
-                "SELECT id, timestamp, provider, model, input_tokens, output_tokens,
-                        latency_ms, user_id, request_type, status, error_message
-                 FROM cloud_api_audit_log WHERE provider = ?
-                 ORDER BY timestamp DESC LIMIT ? OFFSET ?",
-            )
-            .bind(provider)
-            .bind(limit)
-            .bind(offset)
-            .fetch_all(self.db.pool())
-            .await?
+        let select_sql = self.db.adapt(if provider_filter.is_some() {
+            "SELECT id, timestamp, provider, model, input_tokens, output_tokens,
+                    latency_ms, user_id, request_type, status, error_message
+             FROM cloud_api_audit_log WHERE provider = ?
+             ORDER BY timestamp DESC LIMIT ? OFFSET ?"
         } else {
-            sqlx::query_as::<
-                _,
-                (
-                    i64,
-                    DateTime<Utc>,
-                    String,
-                    String,
-                    Option<i64>,
-                    Option<i64>,
-                    i64,
-                    Option<String>,
-                    String,
-                    String,
-                    Option<String>,
-                ),
-            >(
-                "SELECT id, timestamp, provider, model, input_tokens, output_tokens,
-                        latency_ms, user_id, request_type, status, error_message
-                 FROM cloud_api_audit_log
-                 ORDER BY timestamp DESC LIMIT ? OFFSET ?",
-            )
-            .bind(limit)
-            .bind(offset)
-            .fetch_all(self.db.pool())
-            .await?
-        };
+            "SELECT id, timestamp, provider, model, input_tokens, output_tokens,
+                    latency_ms, user_id, request_type, status, error_message
+             FROM cloud_api_audit_log
+             ORDER BY timestamp DESC LIMIT ? OFFSET ?"
+        });
 
-        let entries = rows
-            .into_iter()
-            .map(
-                |(
-                    id,
-                    timestamp,
-                    provider,
-                    model,
-                    input_tokens,
-                    output_tokens,
-                    latency_ms,
-                    user_id,
-                    request_type,
-                    status,
-                    error_message,
-                )| {
-                    CloudApiAuditEntry {
-                        id: Some(id),
-                        timestamp,
-                        provider,
-                        model,
-                        input_tokens,
-                        output_tokens,
-                        latency_ms,
-                        user_id,
-                        request_type,
-                        status,
-                        error_message,
+        let entries = match self.db.as_ref() {
+            Database::Sqlite(pool) => {
+                let rows: Vec<LogRowSqlite> = match provider_filter {
+                    Some(provider) => {
+                        sqlx::query_as(audited_sql(&select_sql))
+                            .bind(provider)
+                            .bind(limit)
+                            .bind(offset)
+                            .fetch_all(pool)
+                            .await?
                     }
-                },
-            )
-            .collect();
+                    None => {
+                        sqlx::query_as(audited_sql(&select_sql))
+                            .bind(limit)
+                            .bind(offset)
+                            .fetch_all(pool)
+                            .await?
+                    }
+                };
+                rows.into_iter().map(log_row_to_entry_sqlite).collect()
+            }
+            Database::Postgres(pool) => {
+                let rows: Vec<LogRowPostgres> = match provider_filter {
+                    Some(provider) => {
+                        sqlx::query_as(audited_sql(&select_sql))
+                            .bind(provider)
+                            .bind(limit)
+                            .bind(offset)
+                            .fetch_all(pool)
+                            .await?
+                    }
+                    None => {
+                        sqlx::query_as(audited_sql(&select_sql))
+                            .bind(limit)
+                            .bind(offset)
+                            .fetch_all(pool)
+                            .await?
+                    }
+                };
+                rows.into_iter().map(log_row_to_entry_postgres).collect()
+            }
+        };
 
         Ok((entries, total.0))
     }
@@ -284,35 +355,80 @@ impl CloudApiAuditLogger {
     ) -> Result<AuditSummary, VectorError> {
         let since_ts = since.unwrap_or_else(|| Utc::now() - chrono::Duration::days(30));
 
-        let totals: (i64, Option<i64>, Option<i64>, Option<f64>, i64) = sqlx::query_as(
-            "SELECT
-                COUNT(*),
-                COALESCE(SUM(input_tokens), 0),
-                COALESCE(SUM(output_tokens), 0),
-                AVG(latency_ms),
-                COALESCE(SUM(CASE WHEN status != '200' AND status != 'ok' THEN 1 ELSE 0 END), 0)
-             FROM cloud_api_audit_log WHERE timestamp >= ?",
-        )
-        .bind(since_ts)
-        .fetch_one(self.db.pool())
-        .await?;
+        // AVG(latency_ms) needs an explicit ::float8 cast on the Postgres arm: Postgres's
+        // avg(integer) returns NUMERIC, not a float, and sqlx has no lenient
+        // NUMERIC->f64 decode without the bigdecimal/rust_decimal feature (ADR-035 §2.7).
+        // This is genuinely different SQL text per backend, not something
+        // Database::adapt() can cover, so both arms are hand-written.
+        let totals: (i64, Option<i64>, Option<i64>, Option<f64>, i64) = match self.db.as_ref() {
+            Database::Sqlite(pool) => {
+                sqlx::query_as(
+                    "SELECT
+                        COUNT(*),
+                        COALESCE(SUM(input_tokens), 0),
+                        COALESCE(SUM(output_tokens), 0),
+                        AVG(latency_ms),
+                        COALESCE(SUM(CASE WHEN status != '200' AND status != 'ok' THEN 1 ELSE 0 END), 0)
+                     FROM cloud_api_audit_log WHERE timestamp >= ?",
+                )
+                .bind(since_ts)
+                .fetch_one(pool)
+                .await?
+            }
+            Database::Postgres(pool) => {
+                sqlx::query_as(
+                    "SELECT
+                        COUNT(*),
+                        COALESCE(SUM(input_tokens), 0),
+                        COALESCE(SUM(output_tokens), 0),
+                        AVG(latency_ms)::float8,
+                        COALESCE(SUM(CASE WHEN status != '200' AND status != 'ok' THEN 1 ELSE 0 END), 0)
+                     FROM cloud_api_audit_log WHERE timestamp >= $1",
+                )
+                .bind(since_ts)
+                .fetch_one(pool)
+                .await?
+            }
+        };
 
-        let provider_rows: Vec<ProviderStatsRow> = sqlx::query_as(
-            "SELECT
-                    provider,
-                    COUNT(*),
-                    COALESCE(SUM(input_tokens), 0),
-                    COALESCE(SUM(output_tokens), 0),
-                    AVG(latency_ms),
-                    COALESCE(SUM(CASE WHEN status != '200' AND status != 'ok' THEN 1 ELSE 0 END), 0)
-                 FROM cloud_api_audit_log
-                 WHERE timestamp >= ?
-                 GROUP BY provider
-                 ORDER BY COUNT(*) DESC",
-        )
-        .bind(since_ts)
-        .fetch_all(self.db.pool())
-        .await?;
+        let provider_rows: Vec<ProviderStatsRow> = match self.db.as_ref() {
+            Database::Sqlite(pool) => {
+                sqlx::query_as(
+                    "SELECT
+                            provider,
+                            COUNT(*),
+                            COALESCE(SUM(input_tokens), 0),
+                            COALESCE(SUM(output_tokens), 0),
+                            AVG(latency_ms),
+                            COALESCE(SUM(CASE WHEN status != '200' AND status != 'ok' THEN 1 ELSE 0 END), 0)
+                         FROM cloud_api_audit_log
+                         WHERE timestamp >= ?
+                         GROUP BY provider
+                         ORDER BY COUNT(*) DESC",
+                )
+                .bind(since_ts)
+                .fetch_all(pool)
+                .await?
+            }
+            Database::Postgres(pool) => {
+                sqlx::query_as(
+                    "SELECT
+                            provider,
+                            COUNT(*),
+                            COALESCE(SUM(input_tokens), 0),
+                            COALESCE(SUM(output_tokens), 0),
+                            AVG(latency_ms)::float8,
+                            COALESCE(SUM(CASE WHEN status != '200' AND status != 'ok' THEN 1 ELSE 0 END), 0)
+                         FROM cloud_api_audit_log
+                         WHERE timestamp >= $1
+                         GROUP BY provider
+                         ORDER BY COUNT(*) DESC",
+                )
+                .bind(since_ts)
+                .fetch_all(pool)
+                .await?
+            }
+        };
 
         let by_provider = provider_rows
             .into_iter()
@@ -338,6 +454,64 @@ impl CloudApiAuditLogger {
             error_count: totals.4,
             by_provider,
         })
+    }
+}
+
+fn log_row_to_entry_sqlite(row: LogRowSqlite) -> CloudApiAuditEntry {
+    let (
+        id,
+        timestamp,
+        provider,
+        model,
+        input_tokens,
+        output_tokens,
+        latency_ms,
+        user_id,
+        request_type,
+        status,
+        error_message,
+    ) = row;
+    CloudApiAuditEntry {
+        id: Some(id as i64),
+        timestamp,
+        provider,
+        model,
+        input_tokens: input_tokens.map(|v| v as i64),
+        output_tokens: output_tokens.map(|v| v as i64),
+        latency_ms: latency_ms as i64,
+        user_id,
+        request_type,
+        status,
+        error_message,
+    }
+}
+
+fn log_row_to_entry_postgres(row: LogRowPostgres) -> CloudApiAuditEntry {
+    let (
+        id,
+        timestamp,
+        provider,
+        model,
+        input_tokens,
+        output_tokens,
+        latency_ms,
+        user_id,
+        request_type,
+        status,
+        error_message,
+    ) = row;
+    CloudApiAuditEntry {
+        id: Some(id as i64),
+        timestamp: timestamp.and_utc(),
+        provider,
+        model,
+        input_tokens: input_tokens.map(|v| v as i64),
+        output_tokens: output_tokens.map(|v| v as i64),
+        latency_ms: latency_ms as i64,
+        user_id,
+        request_type,
+        status,
+        error_message,
     }
 }
 

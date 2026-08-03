@@ -72,6 +72,14 @@ Confirmed via a throwaway sqlx example: **encoding** a `DateTime<Utc>` bind into
 
 **Rule of thumb going forward:** before writing a decode type for any datetime column, check the actual migration DDL for that column, in both dialects — three shapes are now confirmed to exist in this codebase (TEXT, TIMESTAMP, TIMESTAMPTZ) and each decodes differently on Postgres. Never assume from the SQLite side alone.
 
+### 2.7 `AVG()` over an integer column returns `NUMERIC` on Postgres, not a float
+
+Discovered in `vectors/audit.rs`'s `get_summary()`: SQLite's `AVG(latency_ms)` (over an `INTEGER` column) returns a real number, decodable straight into `Option<f64>` — the existing, pre-migration code relied on exactly this. Postgres's `avg()` aggregate has a different return-type rule: `avg(integer)` (and `avg(bigint)`) returns `NUMERIC`, not `double precision`. Confirmed via `psql`: `pg_typeof(AVG(int_col))` reports `numeric`. Decoding that straight into `Option<f64>` fails: `ColumnDecode { ... Rust type Option<f64> (as SQL type FLOAT8) is not compatible with SQL type NUMERIC }` — sqlx has no lenient numeric-to-float decode, and this codebase doesn't carry the `bigdecimal`/`rust_decimal` sqlx feature that would let it decode `NUMERIC` at all.
+
+**Fix:** cast the aggregate expression explicitly in the Postgres query text — `AVG(latency_ms)::float8` — rather than pulling in a new sqlx feature/dependency just to decode a value that's going to be used as an `f64` anyway. Confirmed via `psql` that the cast produces `double precision` and decodes cleanly. This is a hand-written-per-backend SQL case (§2.3), not something `Database::adapt()` can cover — the two backends' `SELECT` lists are genuinely different text.
+
+**Broader rule:** any aggregate (`AVG`, `SUM`, `COUNT`) applied to an integer-family column needs its Postgres return type checked against SQLite's before choosing a decode type — Postgres's aggregate return-type rules (declared in `pg_aggregate`) don't always match SQLite's dynamic-typing behavior, and this class of mismatch is decode-side only (encoding an aggregate result isn't a thing) so it surfaces only when the query is actually run, not at compile time.
+
 ## 3. Consequences
 
 **Positive**
