@@ -12,7 +12,7 @@ use tokio::sync::RwLock;
 use tracing::{info, warn};
 
 use super::error::VectorError;
-use crate::db::Database;
+use crate::db::{audited_sql, Database};
 
 // ---------------------------------------------------------------------------
 // Types
@@ -92,37 +92,65 @@ impl RemoteWipeService {
     }
 
     /// Ensure the wipe audit log table exists.
+    ///
+    /// Unlike `cloud_api_audit_log`, `wipe_audit_log` has no numbered migration —
+    /// this method is the table's sole source of truth. `id`'s auto-increment syntax
+    /// genuinely differs per backend, so the two DDL strings are hand-written per
+    /// backend rather than routed through `Database::adapt()` (ADR-035 §2.3).
     pub async fn ensure_table(&self) -> Result<(), VectorError> {
-        sqlx::query(
-            "CREATE TABLE IF NOT EXISTS wipe_audit_log (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                scope TEXT NOT NULL,
-                user_id TEXT,
-                vectors_deleted INTEGER NOT NULL DEFAULT 0,
-                backups_deleted INTEGER NOT NULL DEFAULT 0,
-                learning_deleted INTEGER NOT NULL DEFAULT 0,
-                interactions_deleted INTEGER NOT NULL DEFAULT 0,
-                initiated_by TEXT,
-                status TEXT NOT NULL DEFAULT 'completed'
-            )",
-        )
-        .execute(self.db.pool())
-        .await?;
+        match self.db.as_ref() {
+            Database::Sqlite(pool) => {
+                sqlx::query(
+                    "CREATE TABLE IF NOT EXISTS wipe_audit_log (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        scope TEXT NOT NULL,
+                        user_id TEXT,
+                        vectors_deleted INTEGER NOT NULL DEFAULT 0,
+                        backups_deleted INTEGER NOT NULL DEFAULT 0,
+                        learning_deleted INTEGER NOT NULL DEFAULT 0,
+                        interactions_deleted INTEGER NOT NULL DEFAULT 0,
+                        initiated_by TEXT,
+                        status TEXT NOT NULL DEFAULT 'completed'
+                    )",
+                )
+                .execute(pool)
+                .await?;
+            }
+            Database::Postgres(pool) => {
+                sqlx::query(
+                    "CREATE TABLE IF NOT EXISTS wipe_audit_log (
+                        id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                        timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        scope TEXT NOT NULL,
+                        user_id TEXT,
+                        vectors_deleted INTEGER NOT NULL DEFAULT 0,
+                        backups_deleted INTEGER NOT NULL DEFAULT 0,
+                        learning_deleted INTEGER NOT NULL DEFAULT 0,
+                        interactions_deleted INTEGER NOT NULL DEFAULT 0,
+                        initiated_by TEXT,
+                        status TEXT NOT NULL DEFAULT 'completed'
+                    )",
+                )
+                .execute(pool)
+                .await?;
+            }
+        }
 
-        sqlx::query(
-            "CREATE INDEX IF NOT EXISTS idx_wipe_audit_timestamp \
-             ON wipe_audit_log(timestamp)",
-        )
-        .execute(self.db.pool())
-        .await?;
-
-        sqlx::query(
-            "CREATE INDEX IF NOT EXISTS idx_wipe_audit_user \
-             ON wipe_audit_log(user_id)",
-        )
-        .execute(self.db.pool())
-        .await?;
+        let index_stmts = [
+            "CREATE INDEX IF NOT EXISTS idx_wipe_audit_timestamp ON wipe_audit_log(timestamp)",
+            "CREATE INDEX IF NOT EXISTS idx_wipe_audit_user ON wipe_audit_log(user_id)",
+        ];
+        for stmt in index_stmts {
+            match self.db.as_ref() {
+                Database::Sqlite(pool) => {
+                    sqlx::query(stmt).execute(pool).await?;
+                }
+                Database::Postgres(pool) => {
+                    sqlx::query(stmt).execute(pool).await?;
+                }
+            }
+        }
 
         Ok(())
     }
@@ -141,34 +169,35 @@ impl RemoteWipeService {
         info!(user_id = %user_id, "Starting user data wipe");
 
         // Delete vector backups for user's emails.
-        let backups = sqlx::query(
-            "DELETE FROM vector_backups WHERE email_id IN \
-             (SELECT id FROM emails WHERE account_id = ?1)",
-        )
-        .bind(user_id)
-        .execute(self.db.pool())
-        .await?;
+        let backups = self
+            .exec_delete(
+                "DELETE FROM vector_backups WHERE email_id IN \
+                 (SELECT id FROM emails WHERE account_id = ?)",
+                Some(user_id),
+            )
+            .await?;
 
         // Delete search interactions.
-        let interactions = sqlx::query("DELETE FROM search_interactions WHERE user_id = ?1")
-            .bind(user_id)
-            .execute(self.db.pool())
+        let interactions = self
+            .exec_delete(
+                "DELETE FROM search_interactions WHERE user_id = ?",
+                Some(user_id),
+            )
             .await?;
 
         // Delete user learning data (user_learning_profiles + user_feedback).
         let learning = self.delete_user_learning(user_id).await?;
 
         // Delete user's emails (cascades to related data via FK).
-        let vectors = sqlx::query("DELETE FROM emails WHERE account_id = ?1")
-            .bind(user_id)
-            .execute(self.db.pool())
+        let vectors = self
+            .exec_delete("DELETE FROM emails WHERE account_id = ?", Some(user_id))
             .await?;
 
         let result = WipeResult {
-            vectors_deleted: vectors.rows_affected(),
-            backups_deleted: backups.rows_affected(),
+            vectors_deleted: vectors,
+            backups_deleted: backups,
             learning_records_deleted: learning,
-            interactions_deleted: interactions.rows_affected(),
+            interactions_deleted: interactions,
             scope: WipeScope::User,
             user_id: Some(user_id.to_string()),
             completed_at: Utc::now(),
@@ -194,30 +223,22 @@ impl RemoteWipeService {
     pub async fn wipe_all_data(&self) -> Result<WipeResult, VectorError> {
         warn!("Starting full platform data wipe");
 
-        let backups = sqlx::query("DELETE FROM vector_backups")
-            .execute(self.db.pool())
+        let backups = self.exec_delete("DELETE FROM vector_backups", None).await?;
+        let interactions = self
+            .exec_delete("DELETE FROM search_interactions", None)
             .await?;
-
-        let interactions = sqlx::query("DELETE FROM search_interactions")
-            .execute(self.db.pool())
-            .await?;
-
         let learning = self.delete_all_learning().await?;
-
-        let vectors = sqlx::query("DELETE FROM emails")
-            .execute(self.db.pool())
-            .await?;
+        let vectors = self.exec_delete("DELETE FROM emails", None).await?;
 
         // Also clear category centroids.
-        sqlx::query("DELETE FROM category_centroids")
-            .execute(self.db.pool())
+        self.exec_delete("DELETE FROM category_centroids", None)
             .await?;
 
         let result = WipeResult {
-            vectors_deleted: vectors.rows_affected(),
-            backups_deleted: backups.rows_affected(),
+            vectors_deleted: vectors,
+            backups_deleted: backups,
             learning_records_deleted: learning,
-            interactions_deleted: interactions.rows_affected(),
+            interactions_deleted: interactions,
             scope: WipeScope::All,
             user_id: None,
             completed_at: Utc::now(),
@@ -241,17 +262,14 @@ impl RemoteWipeService {
     pub async fn wipe_vectors_only(&self) -> Result<WipeResult, VectorError> {
         info!("Starting vectors-only wipe");
 
-        let backups = sqlx::query("DELETE FROM vector_backups")
-            .execute(self.db.pool())
-            .await?;
-
-        let centroids = sqlx::query("DELETE FROM category_centroids")
-            .execute(self.db.pool())
+        let backups = self.exec_delete("DELETE FROM vector_backups", None).await?;
+        let centroids = self
+            .exec_delete("DELETE FROM category_centroids", None)
             .await?;
 
         let result = WipeResult {
-            vectors_deleted: centroids.rows_affected(),
-            backups_deleted: backups.rows_affected(),
+            vectors_deleted: centroids,
+            backups_deleted: backups,
             learning_records_deleted: 0,
             interactions_deleted: 0,
             scope: WipeScope::VectorsOnly,
@@ -383,26 +401,52 @@ impl RemoteWipeService {
 
     // -- private helpers -----------------------------------------------------
 
+    /// Run a DELETE with an optional single string bind parameter and return the
+    /// number of affected rows. Shared by every wipe method above so the
+    /// per-backend dispatch (and the `adapt()`/`audited_sql()` plumbing) is
+    /// written once instead of at every call site.
+    async fn exec_delete(&self, sql: &str, bind: Option<&str>) -> Result<u64, sqlx::Error> {
+        let sql = self.db.adapt(sql);
+        let affected = match self.db.as_ref() {
+            Database::Sqlite(pool) => {
+                let mut q = sqlx::query(audited_sql(&sql));
+                if let Some(b) = bind {
+                    q = q.bind(b);
+                }
+                q.execute(pool).await?.rows_affected()
+            }
+            Database::Postgres(pool) => {
+                let mut q = sqlx::query(audited_sql(&sql));
+                if let Some(b) = bind {
+                    q = q.bind(b);
+                }
+                q.execute(pool).await?.rows_affected()
+            }
+        };
+        Ok(affected)
+    }
+
     /// Delete user-specific learning data.
     async fn delete_user_learning(&self, user_id: &str) -> Result<u64, VectorError> {
         let mut total = 0u64;
 
         // Try user_learning_profiles (may not exist in all schemas).
-        if let Ok(r) = sqlx::query("DELETE FROM user_learning_profiles WHERE user_id = ?1")
-            .bind(user_id)
-            .execute(self.db.pool())
+        if let Ok(n) = self
+            .exec_delete(
+                "DELETE FROM user_learning_profiles WHERE user_id = ?",
+                Some(user_id),
+            )
             .await
         {
-            total += r.rows_affected();
+            total += n;
         }
 
         // Try user_feedback (may not exist in all schemas).
-        if let Ok(r) = sqlx::query("DELETE FROM user_feedback WHERE user_id = ?1")
-            .bind(user_id)
-            .execute(self.db.pool())
+        if let Ok(n) = self
+            .exec_delete("DELETE FROM user_feedback WHERE user_id = ?", Some(user_id))
             .await
         {
-            total += r.rows_affected();
+            total += n;
         }
 
         Ok(total)
@@ -412,18 +456,15 @@ impl RemoteWipeService {
     async fn delete_all_learning(&self) -> Result<u64, VectorError> {
         let mut total = 0u64;
 
-        if let Ok(r) = sqlx::query("DELETE FROM user_learning_profiles")
-            .execute(self.db.pool())
+        if let Ok(n) = self
+            .exec_delete("DELETE FROM user_learning_profiles", None)
             .await
         {
-            total += r.rows_affected();
+            total += n;
         }
 
-        if let Ok(r) = sqlx::query("DELETE FROM user_feedback")
-            .execute(self.db.pool())
-            .await
-        {
-            total += r.rows_affected();
+        if let Ok(n) = self.exec_delete("DELETE FROM user_feedback", None).await {
+            total += n;
         }
 
         Ok(total)
@@ -435,22 +476,40 @@ impl RemoteWipeService {
         result: &WipeResult,
         initiated_by: Option<&str>,
     ) -> Result<(), VectorError> {
-        sqlx::query(
+        let sql = self.db.adapt(
             "INSERT INTO wipe_audit_log \
              (timestamp, scope, user_id, vectors_deleted, backups_deleted, \
               learning_deleted, interactions_deleted, initiated_by, status) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'completed')",
-        )
-        .bind(result.completed_at)
-        .bind(result.scope.to_string())
-        .bind(&result.user_id)
-        .bind(result.vectors_deleted as i64)
-        .bind(result.backups_deleted as i64)
-        .bind(result.learning_records_deleted as i64)
-        .bind(result.interactions_deleted as i64)
-        .bind(initiated_by)
-        .execute(self.db.pool())
-        .await?;
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'completed')",
+        );
+        match self.db.as_ref() {
+            Database::Sqlite(pool) => {
+                sqlx::query(audited_sql(&sql))
+                    .bind(result.completed_at)
+                    .bind(result.scope.to_string())
+                    .bind(&result.user_id)
+                    .bind(result.vectors_deleted as i64)
+                    .bind(result.backups_deleted as i64)
+                    .bind(result.learning_records_deleted as i64)
+                    .bind(result.interactions_deleted as i64)
+                    .bind(initiated_by)
+                    .execute(pool)
+                    .await?;
+            }
+            Database::Postgres(pool) => {
+                sqlx::query(audited_sql(&sql))
+                    .bind(result.completed_at)
+                    .bind(result.scope.to_string())
+                    .bind(&result.user_id)
+                    .bind(result.vectors_deleted as i64)
+                    .bind(result.backups_deleted as i64)
+                    .bind(result.learning_records_deleted as i64)
+                    .bind(result.interactions_deleted as i64)
+                    .bind(initiated_by)
+                    .execute(pool)
+                    .await?;
+            }
+        }
 
         Ok(())
     }
