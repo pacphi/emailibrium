@@ -12,10 +12,12 @@ import { QuickActions } from './QuickActions';
 import { RecentActivity } from './RecentActivity';
 import { ClusterVisualization } from './ClusterVisualization';
 import { CommandPalette } from './CommandPalette';
+import { ShortcutHelpPanel } from './ShortcutHelpPanel';
 import { SearchResults } from './SearchResults';
 import { SyncStatusIndicator } from './SyncStatusIndicator';
 import { useStats } from './hooks/useStats';
 import { useCommandPaletteStore } from './hooks/useCommandPalette';
+import { useCommandCenterShortcuts } from './hooks/useCommandCenterShortcuts';
 import { useSyncStore } from '@/shared/stores/syncStore';
 import { useAppConfig } from '@/shared/hooks';
 
@@ -28,6 +30,7 @@ export function CommandCenter() {
   });
   const [completeDismissed, setCompleteDismissed] = useState(false);
   const openPalette = useCommandPaletteStore((s) => s.open);
+  useCommandCenterShortcuts();
   const queryClient = useQueryClient();
   const appConfig = useAppConfig();
   const { cache } = appConfig;
@@ -139,6 +142,9 @@ export function CommandCenter() {
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
       {/* Command palette overlay -- always mounted, controlled by Zustand state */}
       <CommandPalette />
+
+      {/* Keyboard-shortcut help panel -- always mounted, controlled by Zustand state */}
+      <ShortcutHelpPanel />
 
       {/* Header */}
       <header className="border-b border-gray-200 bg-white px-6 py-4 dark:border-gray-700 dark:bg-gray-800">

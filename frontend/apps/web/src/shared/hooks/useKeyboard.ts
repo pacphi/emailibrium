@@ -1,4 +1,5 @@
 import { useEffect } from 'react';
+import { create } from 'zustand';
 
 /**
  * Mapping of shortcut strings to handler functions.
@@ -10,6 +11,60 @@ import { useEffect } from 'react';
  * Examples: `"ctrl+k"`, `"cmd+shift+p"`, `"escape"`, `"ctrl+enter"`
  */
 export type ShortcutMap = Record<string, () => void>;
+
+interface ActiveShortcutsState {
+  /** Reference-counted so two simultaneously-mounted registrants of the same key
+   * (e.g. during a remount) don't clear each other's entry early. */
+  counts: Record<string, number>;
+  /** Derived from `counts` and updated only inside `register`/`unregister`, so it's a
+   * stable reference between updates -- computing this fresh inside a selector instead
+   * (e.g. `Object.keys(state.counts)`) returns a new array every read, which
+   * useSyncExternalStore treats as a perpetual change and infinite-loops on. */
+  keys: string[];
+  register: (keys: string[]) => void;
+  unregister: (keys: string[]) => void;
+}
+
+/**
+ * A live registry of every shortcut string currently registered by a mounted
+ * `useKeyboard` call, anywhere in the app. `useKeyboard` itself keeps this in sync;
+ * consumers should only read it via `useActiveShortcuts`, never call `register`/
+ * `unregister` directly -- that would desync it from what's actually dispatching.
+ */
+const useActiveShortcutsStore = create<ActiveShortcutsState>((set) => ({
+  counts: {},
+  keys: [],
+  register: (newKeys) =>
+    set((state) => {
+      const counts = { ...state.counts };
+      for (const key of newKeys) {
+        counts[key] = (counts[key] ?? 0) + 1;
+      }
+      return { counts, keys: Object.keys(counts) };
+    }),
+  unregister: (oldKeys) =>
+    set((state) => {
+      const counts = { ...state.counts };
+      for (const key of oldKeys) {
+        const next = (counts[key] ?? 0) - 1;
+        if (next <= 0) {
+          delete counts[key];
+        } else {
+          counts[key] = next;
+        }
+      }
+      return { counts, keys: Object.keys(counts) };
+    }),
+}));
+
+/**
+ * Every shortcut string currently registered by a mounted `useKeyboard` call,
+ * anywhere in the app -- the ground truth for a help panel that must not drift
+ * from what's actually dispatching. Order is not guaranteed.
+ */
+export function useActiveShortcuts(): string[] {
+  return useActiveShortcutsStore((state) => state.keys);
+}
 
 interface ParsedShortcut {
   ctrl: boolean;
@@ -88,8 +143,12 @@ export function useKeyboard(shortcuts: ShortcutMap): void {
 
     window.addEventListener('keydown', handleKeyDown);
 
+    const keys = Object.keys(shortcuts);
+    useActiveShortcutsStore.getState().register(keys);
+
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
+      useActiveShortcutsStore.getState().unregister(keys);
     };
   }, [shortcuts]);
 }

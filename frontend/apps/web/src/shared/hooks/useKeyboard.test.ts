@@ -2,7 +2,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, cleanup } from '@testing-library/react';
 import { createElement } from 'react';
-import { useKeyboard, type ShortcutMap } from './useKeyboard';
+import { useKeyboard, useActiveShortcuts, type ShortcutMap } from './useKeyboard';
 
 afterEach(() => {
   cleanup();
@@ -252,6 +252,111 @@ describe('useKeyboard', () => {
 
       expect(second).toHaveBeenCalledTimes(1);
       expect(first).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('active shortcuts registry', () => {
+    function HarnessWithReadout({
+      shortcuts,
+      onKeys,
+    }: {
+      shortcuts: ShortcutMap;
+      onKeys: (keys: string[]) => void;
+    }) {
+      useKeyboard(shortcuts);
+      const keys = useActiveShortcuts();
+      onKeys(keys);
+      return null;
+    }
+
+    it('registers its keys while mounted', () => {
+      let keys: string[] = [];
+      render(
+        createElement(HarnessWithReadout, {
+          shortcuts: { 'cmd+k': () => {} },
+          onKeys: (k) => {
+            keys = k;
+          },
+        }),
+      );
+
+      expect(keys).toContain('cmd+k');
+    });
+
+    it('unregisters its keys on unmount', () => {
+      let keysFromB: string[] = [];
+      function A() {
+        useKeyboard({ 'cmd+k': () => {} });
+        return null;
+      }
+      function B() {
+        const keys = useActiveShortcuts();
+        keysFromB = keys;
+        return null;
+      }
+      const { unmount } = render(createElement(A));
+      render(createElement(B));
+      expect(keysFromB).toContain('cmd+k');
+
+      unmount();
+      render(createElement(B));
+
+      expect(keysFromB).not.toContain('cmd+k');
+    });
+
+    it('reflects shortcuts from multiple simultaneously-mounted useKeyboard consumers', () => {
+      let keys: string[] = [];
+      function Reader() {
+        keys = useActiveShortcuts();
+        return null;
+      }
+      function ConsumerA() {
+        useKeyboard({ 'cmd+k': () => {} });
+        return null;
+      }
+      function ConsumerB() {
+        useKeyboard({ e: () => {}, 'shift+#': () => {} });
+        return null;
+      }
+      render(
+        createElement('div', null, [
+          createElement(ConsumerA, { key: 'a' }),
+          createElement(ConsumerB, { key: 'b' }),
+          createElement(Reader, { key: 'r' }),
+        ]),
+      );
+
+      expect(keys.sort()).toEqual(['cmd+k', 'e', 'shift+#'].sort());
+    });
+
+    it('keeps a shared key registered while at least one consumer still holds it (reference counting)', () => {
+      let keysFromReader: string[] = [];
+      function Reader() {
+        keysFromReader = useActiveShortcuts();
+        return null;
+      }
+      function ConsumerA() {
+        useKeyboard({ 'cmd+k': () => {} });
+        return null;
+      }
+      function ConsumerB() {
+        useKeyboard({ 'cmd+k': () => {} });
+        return null;
+      }
+      const { rerender } = render(
+        createElement('div', null, [
+          createElement(ConsumerA, { key: 'a' }),
+          createElement(ConsumerB, { key: 'b' }),
+        ]),
+      );
+      render(createElement(Reader));
+      expect(keysFromReader).toContain('cmd+k');
+
+      // Unmount only ConsumerA -- ConsumerB still holds 'cmd+k'.
+      rerender(createElement('div', null, [createElement(ConsumerB, { key: 'b' })]));
+      render(createElement(Reader));
+
+      expect(keysFromReader).toContain('cmd+k');
     });
   });
 });
