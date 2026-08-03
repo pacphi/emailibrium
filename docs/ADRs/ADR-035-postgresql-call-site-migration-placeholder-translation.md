@@ -62,6 +62,16 @@ Discovered mid-phase, after `content/jobs.rs` had already shipped through `adapt
 
 **Action taken:** `content/jobs.rs`'s five affected call sites (`dequeue`, `mark_completed`, `mark_failed`, `cancel`, `resume_abandoned`) were fixed to hand-write the Postgres arm. Every subsequent call site touching a TEXT-shaped timestamp column follows this pattern from the start rather than reaching for `adapt()`.
 
+### 2.6 A third timestamp shape: plain `TIMESTAMP` (no timezone) decodes as `NaiveDateTime`, not `DateTime<Utc>`
+
+Two timestamp-column shapes were already known by this point — TEXT-with-`datetime('now')`-default (§2.5) and genuine `TIMESTAMPTZ` (bind/decode `DateTime<Utc>` directly, e.g. `rules.created_at`). `vectors/consent.rs`'s `ai_consent.consented_at`/`revoked_at` and `ai_audit_log.timestamp` are a **third** shape: plain `TIMESTAMP` — a real temporal column, but with no timezone — in *both* dialects (`migrations/{sqlite,postgres}/002_ai_consent.sql`).
+
+Confirmed via a throwaway sqlx example: **encoding** a `DateTime<Utc>` bind into a `TIMESTAMP` column works fine on Postgres (an assignment cast from `timestamptz` drops the offset, converting to the session's timezone) — but **decoding** a `TIMESTAMP` column into `DateTime<Utc>` fails outright: `ColumnDecode { ... Rust type DateTime<Utc> (as SQL type TIMESTAMPTZ) is not compatible with SQL type TIMESTAMP }`. This is the identical asymmetry already seen with `emails.received_at` in `cleanup/repository/adapters.rs` (ADR-035's `EmailQueryRow`), just discovered independently here.
+
+**Fix:** the SQLite decode arm keeps `DateTime<Utc>` (sqlx-sqlite's chrono support isn't picky about this); the Postgres decode arm uses `NaiveDateTime` and converts via `.and_utc()`. Binds stay `DateTime<Utc>`/`Utc::now()` unchanged on both arms — only the read side needs the different type. Applied in `vectors/consent.rs`'s `get_all_consent()`/`get_audit_log()`.
+
+**Rule of thumb going forward:** before writing a decode type for any datetime column, check the actual migration DDL for that column, in both dialects — three shapes are now confirmed to exist in this codebase (TEXT, TIMESTAMP, TIMESTAMPTZ) and each decodes differently on Postgres. Never assume from the SQLite side alone.
+
 ## 3. Consequences
 
 **Positive**

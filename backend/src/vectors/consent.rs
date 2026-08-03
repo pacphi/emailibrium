@@ -5,12 +5,12 @@
 
 use std::sync::Arc;
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDateTime, Utc};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info};
 
 use super::error::VectorError;
-use crate::db::Database;
+use crate::db::{audited_sql, Database};
 
 // ---------------------------------------------------------------------------
 // Types
@@ -48,6 +48,37 @@ pub struct AuditPage {
     pub total: i64,
 }
 
+/// ai_consent row, SQLite decode (consented_at/revoked_at as DateTime<Utc>).
+type ConsentRowSqlite = (String, DateTime<Utc>, Option<DateTime<Utc>>, String);
+/// ai_consent row, Postgres decode — TIMESTAMP (no tz) needs NaiveDateTime (ADR-035).
+type ConsentRowPostgres = (String, NaiveDateTime, Option<NaiveDateTime>, String);
+
+/// ai_audit_log row, SQLite decode.
+type AuditRowSqlite = (
+    i32,
+    DateTime<Utc>,
+    String,
+    String,
+    String,
+    Option<i64>,
+    Option<i64>,
+    Option<String>,
+    Option<i64>,
+);
+/// ai_audit_log row, Postgres decode — id/token counts/latency are INTEGER/INT4 (i32),
+/// timestamp is TIMESTAMP (no tz, decodes as NaiveDateTime) — ADR-035.
+type AuditRowPostgres = (
+    i32,
+    NaiveDateTime,
+    String,
+    String,
+    String,
+    Option<i32>,
+    Option<i32>,
+    Option<String>,
+    Option<i32>,
+);
+
 // ---------------------------------------------------------------------------
 // ConsentManager
 // ---------------------------------------------------------------------------
@@ -70,19 +101,36 @@ impl ConsentManager {
     ) -> Result<(), VectorError> {
         info!(provider = provider, "Granting AI consent");
 
-        sqlx::query(
+        // ai_consent.consented_at is TIMESTAMP (no tz) in both dialects. Binding a
+        // DateTime<Utc> into it works fine on both backends (Postgres accepts the
+        // timestamptz->timestamp assignment cast) — it's only the DECODE direction
+        // that needs NaiveDateTime, per get_all_consent() below (ADR-035).
+        let sql = self.db.adapt(
             "INSERT INTO ai_consent (provider, consented_at, acknowledgment) \
              VALUES (?, ?, ?) \
              ON CONFLICT(provider) DO UPDATE SET \
                 consented_at = excluded.consented_at, \
                 revoked_at = NULL, \
                 acknowledgment = excluded.acknowledgment",
-        )
-        .bind(provider)
-        .bind(Utc::now())
-        .bind(acknowledgment)
-        .execute(self.db.pool())
-        .await?;
+        );
+        match self.db.as_ref() {
+            Database::Sqlite(pool) => {
+                sqlx::query(audited_sql(&sql))
+                    .bind(provider)
+                    .bind(Utc::now())
+                    .bind(acknowledgment)
+                    .execute(pool)
+                    .await?;
+            }
+            Database::Postgres(pool) => {
+                sqlx::query(audited_sql(&sql))
+                    .bind(provider)
+                    .bind(Utc::now())
+                    .bind(acknowledgment)
+                    .execute(pool)
+                    .await?;
+            }
+        }
 
         Ok(())
     }
@@ -91,15 +139,25 @@ impl ConsentManager {
     pub async fn revoke_consent(&self, provider: &str) -> Result<(), VectorError> {
         info!(provider = provider, "Revoking AI consent");
 
-        let result = sqlx::query(
+        let sql = self.db.adapt(
             "UPDATE ai_consent SET revoked_at = ? WHERE provider = ? AND revoked_at IS NULL",
-        )
-        .bind(Utc::now())
-        .bind(provider)
-        .execute(self.db.pool())
-        .await?;
+        );
+        let affected = match self.db.as_ref() {
+            Database::Sqlite(pool) => sqlx::query(audited_sql(&sql))
+                .bind(Utc::now())
+                .bind(provider)
+                .execute(pool)
+                .await?
+                .rows_affected(),
+            Database::Postgres(pool) => sqlx::query(audited_sql(&sql))
+                .bind(Utc::now())
+                .bind(provider)
+                .execute(pool)
+                .await?
+                .rows_affected(),
+        };
 
-        if result.rows_affected() == 0 {
+        if affected == 0 {
             return Err(VectorError::ConfigError(format!(
                 "No active consent found for provider '{provider}'"
             )));
@@ -110,35 +168,63 @@ impl ConsentManager {
 
     /// Check whether active (non-revoked) consent exists for a provider.
     pub async fn has_consent(&self, provider: &str) -> Result<bool, VectorError> {
-        let row: (i64,) = sqlx::query_as(
-            "SELECT COUNT(*) FROM ai_consent WHERE provider = ? AND revoked_at IS NULL",
-        )
-        .bind(provider)
-        .fetch_one(self.db.pool())
-        .await?;
+        let sql = self
+            .db
+            .adapt("SELECT COUNT(*) FROM ai_consent WHERE provider = ? AND revoked_at IS NULL");
+        let row: (i64,) = match self.db.as_ref() {
+            Database::Sqlite(pool) => {
+                sqlx::query_as(audited_sql(&sql))
+                    .bind(provider)
+                    .fetch_one(pool)
+                    .await?
+            }
+            Database::Postgres(pool) => {
+                sqlx::query_as(audited_sql(&sql))
+                    .bind(provider)
+                    .fetch_one(pool)
+                    .await?
+            }
+        };
 
         Ok(row.0 > 0)
     }
 
     /// Get all consent records.
     pub async fn get_all_consent(&self) -> Result<Vec<ConsentRecord>, VectorError> {
-        let rows = sqlx::query_as::<_, (String, DateTime<Utc>, Option<DateTime<Utc>>, String)>(
-            "SELECT provider, consented_at, revoked_at, acknowledgment FROM ai_consent ORDER BY consented_at DESC",
-        )
-        .fetch_all(self.db.pool())
-        .await?;
+        let sql = "SELECT provider, consented_at, revoked_at, acknowledgment \
+                   FROM ai_consent ORDER BY consented_at DESC";
+        let records = match self.db.as_ref() {
+            Database::Sqlite(pool) => {
+                let rows: Vec<ConsentRowSqlite> = sqlx::query_as(sql).fetch_all(pool).await?;
+                rows.into_iter()
+                    .map(
+                        |(provider, consented_at, revoked_at, acknowledgment)| ConsentRecord {
+                            provider,
+                            consented_at,
+                            revoked_at,
+                            acknowledgment,
+                        },
+                    )
+                    .collect()
+            }
+            Database::Postgres(pool) => {
+                // consented_at/revoked_at are TIMESTAMP (no tz) — decode as NaiveDateTime,
+                // not DateTime<Utc>, then widen (ADR-035).
+                let rows: Vec<ConsentRowPostgres> = sqlx::query_as(sql).fetch_all(pool).await?;
+                rows.into_iter()
+                    .map(
+                        |(provider, consented_at, revoked_at, acknowledgment)| ConsentRecord {
+                            provider,
+                            consented_at: consented_at.and_utc(),
+                            revoked_at: revoked_at.map(|dt| dt.and_utc()),
+                            acknowledgment,
+                        },
+                    )
+                    .collect()
+            }
+        };
 
-        Ok(rows
-            .into_iter()
-            .map(
-                |(provider, consented_at, revoked_at, acknowledgment)| ConsentRecord {
-                    provider,
-                    consented_at,
-                    revoked_at,
-                    acknowledgment,
-                },
-            )
-            .collect())
+        Ok(records)
     }
 
     /// Log a cloud API call to the audit table.
@@ -150,21 +236,39 @@ impl ConsentManager {
             "Logging cloud AI call"
         );
 
-        sqlx::query(
+        let sql = self.db.adapt(
             "INSERT INTO ai_audit_log \
              (timestamp, provider, model, endpoint, input_token_count, output_token_count, input_hash, latency_ms) \
              VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        )
-        .bind(entry.timestamp)
-        .bind(&entry.provider)
-        .bind(&entry.model)
-        .bind(&entry.endpoint)
-        .bind(entry.input_token_count)
-        .bind(entry.output_token_count)
-        .bind(&entry.input_hash)
-        .bind(entry.latency_ms)
-        .execute(self.db.pool())
-        .await?;
+        );
+        match self.db.as_ref() {
+            Database::Sqlite(pool) => {
+                sqlx::query(audited_sql(&sql))
+                    .bind(entry.timestamp)
+                    .bind(&entry.provider)
+                    .bind(&entry.model)
+                    .bind(&entry.endpoint)
+                    .bind(entry.input_token_count)
+                    .bind(entry.output_token_count)
+                    .bind(&entry.input_hash)
+                    .bind(entry.latency_ms)
+                    .execute(pool)
+                    .await?;
+            }
+            Database::Postgres(pool) => {
+                sqlx::query(audited_sql(&sql))
+                    .bind(entry.timestamp)
+                    .bind(&entry.provider)
+                    .bind(&entry.model)
+                    .bind(&entry.endpoint)
+                    .bind(entry.input_token_count)
+                    .bind(entry.output_token_count)
+                    .bind(&entry.input_hash)
+                    .bind(entry.latency_ms)
+                    .execute(pool)
+                    .await?;
+            }
+        }
 
         Ok(())
     }
@@ -174,51 +278,89 @@ impl ConsentManager {
         let offset = (page.saturating_sub(1)) as i64 * per_page as i64;
         let limit = per_page as i64;
 
-        let (total,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM ai_audit_log")
-            .fetch_one(self.db.pool())
-            .await?;
+        let count_sql = "SELECT COUNT(*) FROM ai_audit_log";
+        let (total,): (i64,) = match self.db.as_ref() {
+            Database::Sqlite(pool) => sqlx::query_as(count_sql).fetch_one(pool).await?,
+            Database::Postgres(pool) => sqlx::query_as(count_sql).fetch_one(pool).await?,
+        };
 
-        let rows = sqlx::query_as::<
-            _,
-            (
-                i64,
-                DateTime<Utc>,
-                String,
-                String,
-                String,
-                Option<i64>,
-                Option<i64>,
-                Option<String>,
-                Option<i64>,
-            ),
-        >(
+        let sql = self.db.adapt(
             "SELECT id, timestamp, provider, model, endpoint, \
                     input_token_count, output_token_count, input_hash, latency_ms \
              FROM ai_audit_log ORDER BY timestamp DESC LIMIT ? OFFSET ?",
-        )
-        .bind(limit)
-        .bind(offset)
-        .fetch_all(self.db.pool())
-        .await?;
-
-        let entries = rows
-            .into_iter()
-            .map(
-                |(id, timestamp, provider, model, endpoint, input_tc, output_tc, hash, latency)| {
-                    AuditEntry {
-                        id: Some(id),
-                        timestamp,
-                        provider,
-                        model,
-                        endpoint,
-                        input_token_count: input_tc,
-                        output_token_count: output_tc,
-                        input_hash: hash,
-                        latency_ms: latency,
-                    }
-                },
-            )
-            .collect();
+        );
+        // id is INTEGER/INT4 in both dialects — i32, not i64 (ADR-035).
+        let entries: Vec<AuditEntry> = match self.db.as_ref() {
+            Database::Sqlite(pool) => {
+                let rows: Vec<AuditRowSqlite> = sqlx::query_as(audited_sql(&sql))
+                    .bind(limit)
+                    .bind(offset)
+                    .fetch_all(pool)
+                    .await?;
+                rows.into_iter()
+                    .map(
+                        |(
+                            id,
+                            timestamp,
+                            provider,
+                            model,
+                            endpoint,
+                            input_tc,
+                            output_tc,
+                            hash,
+                            latency,
+                        )| {
+                            AuditEntry {
+                                id: Some(id as i64),
+                                timestamp,
+                                provider,
+                                model,
+                                endpoint,
+                                input_token_count: input_tc,
+                                output_token_count: output_tc,
+                                input_hash: hash,
+                                latency_ms: latency,
+                            }
+                        },
+                    )
+                    .collect()
+            }
+            Database::Postgres(pool) => {
+                // input_token_count/output_token_count/latency_ms are also INTEGER/INT4.
+                let rows: Vec<AuditRowPostgres> = sqlx::query_as(audited_sql(&sql))
+                    .bind(limit)
+                    .bind(offset)
+                    .fetch_all(pool)
+                    .await?;
+                rows.into_iter()
+                    .map(
+                        |(
+                            id,
+                            timestamp,
+                            provider,
+                            model,
+                            endpoint,
+                            input_tc,
+                            output_tc,
+                            hash,
+                            latency,
+                        )| {
+                            AuditEntry {
+                                id: Some(id as i64),
+                                timestamp: timestamp.and_utc(),
+                                provider,
+                                model,
+                                endpoint,
+                                input_token_count: input_tc.map(|v| v as i64),
+                                output_token_count: output_tc.map(|v| v as i64),
+                                input_hash: hash,
+                                latency_ms: latency.map(|v| v as i64),
+                            }
+                        },
+                    )
+                    .collect()
+            }
+        };
 
         Ok(AuditPage {
             entries,
