@@ -486,13 +486,13 @@ async fn main() -> anyhow::Result<()> {
     );
 
     let cleanup_plan_repo = Arc::new(cleanup::repository::SqliteCleanupPlanRepo::new(
-        db.pool().clone(),
+        (*db).clone(),
     ));
     // Apply orchestrator (Phase C). Email providers map starts empty;
     // production wiring will populate per-account `EmailProvider` instances
     // after OAuth resolution. The unsubscribe service is shared.
     let cleanup_apply_job_repo = Arc::new(cleanup::repository::SqliteCleanupApplyJobRepo::new(
-        db.pool().clone(),
+        (*db).clone(),
     ));
     let cleanup_email_repo = Arc::new(cleanup::repository::SqlxEmailRepository {
         pool: db.pool().clone(),

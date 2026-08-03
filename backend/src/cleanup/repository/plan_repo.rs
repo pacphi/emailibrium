@@ -6,13 +6,13 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use sqlx::{Row, SqlitePool};
 
 use crate::cleanup::domain::operation::{
     AccountStateEtag, OperationStatus, PlanStatus, PlannedOperation, Provider,
 };
 use crate::cleanup::domain::plan::{CleanupPlan, CleanupPlanSummary, PlanId};
 use crate::cleanup::domain::ports::RepoError;
+use crate::db::{audited_sql, Database};
 
 /// On-disk envelope for the `totals_json` column. Carries `PlanTotals`
 /// alongside `account_providers` (Item #4) inside the same TEXT blob to
@@ -110,95 +110,181 @@ pub trait CleanupPlanRepository: Send + Sync {
 }
 
 pub struct SqliteCleanupPlanRepo {
-    pool: SqlitePool,
+    db: Database,
 }
 
 impl SqliteCleanupPlanRepo {
-    pub fn new(pool: SqlitePool) -> Self {
-        Self { pool }
+    pub fn new(db: Database) -> Self {
+        Self { db }
     }
 }
 
 #[async_trait]
 impl CleanupPlanRepository for SqliteCleanupPlanRepo {
     async fn save(&self, plan: &CleanupPlan) -> Result<(), RepoError> {
-        let mut tx = self.pool.begin().await?;
-        // Plan envelope
-        sqlx::query(
-            r#"INSERT OR REPLACE INTO cleanup_plans
-               (id, user_id, created_at, valid_until, plan_hash, status,
-                totals_json, risk_json, warnings_json)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
-        )
-        .bind(plan.id.as_bytes().to_vec())
-        .bind(plan.user_id.as_bytes().to_vec())
-        .bind(plan.created_at.timestamp_millis())
-        .bind(plan.valid_until.timestamp_millis())
-        .bind(plan.plan_hash.to_vec())
-        .bind(plan.status.as_str())
-        .bind(
-            serde_json::to_string(&PersistedTotals {
-                totals: &plan.totals,
-                account_providers: &plan.account_providers,
-            })
-            .map_err(|e| RepoError::Internal(e.to_string()))?,
-        )
-        .bind(serde_json::to_string(&plan.risk).map_err(|e| RepoError::Internal(e.to_string()))?)
-        .bind(
-            serde_json::to_string(&plan.warnings)
-                .map_err(|e| RepoError::Internal(e.to_string()))?,
-        )
-        .execute(&mut *tx)
-        .await?;
+        // SQLite's `INSERT OR REPLACE` has no direct PostgreSQL keyword-for-keyword
+        // equivalent — PostgreSQL's upsert is `INSERT ... ON CONFLICT (id) DO UPDATE SET ...`.
+        // The two are written out separately per backend (not through `Database::adapt`,
+        // which only handles placeholder/`datetime('now')` translation — a genuinely
+        // different SQL clause needs genuinely different SQL text, per ADR-035 §2.3).
+        let totals_json = serde_json::to_string(&PersistedTotals {
+            totals: &plan.totals,
+            account_providers: &plan.account_providers,
+        })
+        .map_err(|e| RepoError::Internal(e.to_string()))?;
+        let risk_json =
+            serde_json::to_string(&plan.risk).map_err(|e| RepoError::Internal(e.to_string()))?;
+        let warnings_json = serde_json::to_string(&plan.warnings)
+            .map_err(|e| RepoError::Internal(e.to_string()))?;
 
-        // Account etags
-        sqlx::query("DELETE FROM cleanup_plan_account_etags WHERE plan_id = ?")
-            .bind(plan.id.as_bytes().to_vec())
-            .execute(&mut *tx)
-            .await?;
-        for (account_id, etag) in &plan.account_state_etags {
-            let kind = etag.kind_str();
-            let value =
-                serde_json::to_string(etag).map_err(|e| RepoError::Internal(e.to_string()))?;
-            sqlx::query(
-                r#"INSERT INTO cleanup_plan_account_etags
-                   (plan_id, account_id, etag_kind, etag_value)
-                   VALUES (?, ?, ?, ?)"#,
-            )
-            .bind(plan.id.as_bytes().to_vec())
-            .bind(account_id.as_bytes().to_vec())
-            .bind(kind)
-            .bind(value)
-            .execute(&mut *tx)
-            .await?;
+        let delete_etags_sql = self
+            .db
+            .adapt("DELETE FROM cleanup_plan_account_etags WHERE plan_id = ?");
+        let insert_etag_sql = self.db.adapt(
+            r#"INSERT INTO cleanup_plan_account_etags
+               (plan_id, account_id, etag_kind, etag_value)
+               VALUES (?, ?, ?, ?)"#,
+        );
+        let delete_ops_sql = self
+            .db
+            .adapt("DELETE FROM cleanup_plan_operations WHERE plan_id = ?");
+        let insert_op_sql = self.db.adapt(
+            r#"INSERT INTO cleanup_plan_operations
+               (plan_id, seq, op_kind, account_id, email_id, action, source_kind,
+                risk, status, payload_json)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
+        );
+
+        match &self.db {
+            Database::Sqlite(pool) => {
+                let mut tx = pool.begin().await?;
+                sqlx::query(
+                    r#"INSERT OR REPLACE INTO cleanup_plans
+                       (id, user_id, created_at, valid_until, plan_hash, status,
+                        totals_json, risk_json, warnings_json)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
+                )
+                .bind(plan.id.as_bytes().to_vec())
+                .bind(plan.user_id.as_bytes().to_vec())
+                .bind(plan.created_at.timestamp_millis())
+                .bind(plan.valid_until.timestamp_millis())
+                .bind(plan.plan_hash.to_vec())
+                .bind(plan.status.as_str())
+                .bind(&totals_json)
+                .bind(&risk_json)
+                .bind(&warnings_json)
+                .execute(&mut *tx)
+                .await?;
+
+                sqlx::query(audited_sql(&delete_etags_sql))
+                    .bind(plan.id.as_bytes().to_vec())
+                    .execute(&mut *tx)
+                    .await?;
+                for (account_id, etag) in &plan.account_state_etags {
+                    let kind = etag.kind_str();
+                    let value = serde_json::to_string(etag)
+                        .map_err(|e| RepoError::Internal(e.to_string()))?;
+                    sqlx::query(audited_sql(&insert_etag_sql))
+                        .bind(plan.id.as_bytes().to_vec())
+                        .bind(account_id.as_bytes().to_vec())
+                        .bind(kind)
+                        .bind(value)
+                        .execute(&mut *tx)
+                        .await?;
+                }
+
+                sqlx::query(audited_sql(&delete_ops_sql))
+                    .bind(plan.id.as_bytes().to_vec())
+                    .execute(&mut *tx)
+                    .await?;
+                for op in &plan.operations {
+                    insert_operation(&mut *tx, &insert_op_sql, plan.id, op).await?;
+                }
+
+                tx.commit().await?;
+            }
+            Database::Postgres(pool) => {
+                let mut tx = pool.begin().await?;
+                let sql = self.db.adapt(
+                    r#"INSERT INTO cleanup_plans
+                       (id, user_id, created_at, valid_until, plan_hash, status,
+                        totals_json, risk_json, warnings_json)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                       ON CONFLICT (id) DO UPDATE SET
+                         user_id = EXCLUDED.user_id, created_at = EXCLUDED.created_at,
+                         valid_until = EXCLUDED.valid_until, plan_hash = EXCLUDED.plan_hash,
+                         status = EXCLUDED.status, totals_json = EXCLUDED.totals_json,
+                         risk_json = EXCLUDED.risk_json, warnings_json = EXCLUDED.warnings_json"#,
+                );
+                sqlx::query(audited_sql(&sql))
+                    .bind(plan.id.as_bytes().to_vec())
+                    .bind(plan.user_id.as_bytes().to_vec())
+                    .bind(plan.created_at.timestamp_millis())
+                    .bind(plan.valid_until.timestamp_millis())
+                    .bind(plan.plan_hash.to_vec())
+                    .bind(plan.status.as_str())
+                    .bind(&totals_json)
+                    .bind(&risk_json)
+                    .bind(&warnings_json)
+                    .execute(&mut *tx)
+                    .await?;
+
+                sqlx::query(audited_sql(&delete_etags_sql))
+                    .bind(plan.id.as_bytes().to_vec())
+                    .execute(&mut *tx)
+                    .await?;
+                for (account_id, etag) in &plan.account_state_etags {
+                    let kind = etag.kind_str();
+                    let value = serde_json::to_string(etag)
+                        .map_err(|e| RepoError::Internal(e.to_string()))?;
+                    sqlx::query(audited_sql(&insert_etag_sql))
+                        .bind(plan.id.as_bytes().to_vec())
+                        .bind(account_id.as_bytes().to_vec())
+                        .bind(kind)
+                        .bind(value)
+                        .execute(&mut *tx)
+                        .await?;
+                }
+
+                sqlx::query(audited_sql(&delete_ops_sql))
+                    .bind(plan.id.as_bytes().to_vec())
+                    .execute(&mut *tx)
+                    .await?;
+                for op in &plan.operations {
+                    insert_operation(&mut *tx, &insert_op_sql, plan.id, op).await?;
+                }
+
+                tx.commit().await?;
+            }
         }
-
-        // Operations
-        sqlx::query("DELETE FROM cleanup_plan_operations WHERE plan_id = ?")
-            .bind(plan.id.as_bytes().to_vec())
-            .execute(&mut *tx)
-            .await?;
-        for op in &plan.operations {
-            insert_operation(&mut tx, plan.id, op).await?;
-        }
-
-        tx.commit().await?;
         Ok(())
     }
 
     async fn load(&self, user_id: &str, id: PlanId) -> Result<Option<CleanupPlan>, RepoError> {
         // Phase A: simplified loader — only the envelope + ops in seq order.
         // Phase C will optimise.
-        let row: Option<(Vec<u8>, i64, i64, Vec<u8>, String, String, String, String)> =
-            sqlx::query_as(
-                r#"SELECT user_id, created_at, valid_until, plan_hash, status,
+        let sql = self.db.adapt(
+            r#"SELECT user_id, created_at, valid_until, plan_hash, status,
                           totals_json, risk_json, warnings_json
                    FROM cleanup_plans WHERE id = ? AND user_id = ?"#,
-            )
-            .bind(id.as_bytes().to_vec())
-            .bind(user_id.as_bytes().to_vec())
-            .fetch_optional(&self.pool)
-            .await?;
+        );
+        let row: Option<(Vec<u8>, i64, i64, Vec<u8>, String, String, String, String)> =
+            match &self.db {
+                Database::Sqlite(pool) => {
+                    sqlx::query_as(audited_sql(&sql))
+                        .bind(id.as_bytes().to_vec())
+                        .bind(user_id.as_bytes().to_vec())
+                        .fetch_optional(pool)
+                        .await?
+                }
+                Database::Postgres(pool) => {
+                    sqlx::query_as(audited_sql(&sql))
+                        .bind(id.as_bytes().to_vec())
+                        .bind(user_id.as_bytes().to_vec())
+                        .fetch_optional(pool)
+                        .await?
+                }
+            };
         let Some((_uid, created_ms, valid_ms, hash_bytes, status_s, totals_s, risk_s, warn_s)) =
             row
         else {
@@ -221,13 +307,24 @@ impl CleanupPlanRepository for SqliteCleanupPlanRepo {
             serde_json::from_str(&warn_s).map_err(|e| RepoError::Internal(e.to_string()))?;
 
         // Etags
-        let etag_rows: Vec<(Vec<u8>, String, Option<String>)> = sqlx::query_as(
+        let etag_sql = self.db.adapt(
             r#"SELECT account_id, etag_kind, etag_value
                FROM cleanup_plan_account_etags WHERE plan_id = ?"#,
-        )
-        .bind(id.as_bytes().to_vec())
-        .fetch_all(&self.pool)
-        .await?;
+        );
+        let etag_rows: Vec<(Vec<u8>, String, Option<String>)> = match &self.db {
+            Database::Sqlite(pool) => {
+                sqlx::query_as(audited_sql(&etag_sql))
+                    .bind(id.as_bytes().to_vec())
+                    .fetch_all(pool)
+                    .await?
+            }
+            Database::Postgres(pool) => {
+                sqlx::query_as(audited_sql(&etag_sql))
+                    .bind(id.as_bytes().to_vec())
+                    .fetch_all(pool)
+                    .await?
+            }
+        };
         let mut etags = std::collections::BTreeMap::new();
         for (acct_b, _kind, val_opt) in etag_rows {
             let acct = String::from_utf8(acct_b).unwrap_or_default();
@@ -273,31 +370,56 @@ impl CleanupPlanRepository for SqliteCleanupPlanRepo {
         let limit = limit.clamp(1, 100) as i64;
         let rows: Vec<(Vec<u8>, i64, i64, String, String, String, String)> = match status {
             Some(s) => {
-                sqlx::query_as(
+                let sql = self.db.adapt(
                     r#"SELECT id, created_at, valid_until, status,
                           totals_json, risk_json, warnings_json
                    FROM cleanup_plans
                    WHERE user_id = ? AND status = ?
                    ORDER BY created_at DESC LIMIT ?"#,
-                )
-                .bind(user_id.as_bytes().to_vec())
-                .bind(s.as_str())
-                .bind(limit)
-                .fetch_all(&self.pool)
-                .await?
+                );
+                match &self.db {
+                    Database::Sqlite(pool) => {
+                        sqlx::query_as(audited_sql(&sql))
+                            .bind(user_id.as_bytes().to_vec())
+                            .bind(s.as_str())
+                            .bind(limit)
+                            .fetch_all(pool)
+                            .await?
+                    }
+                    Database::Postgres(pool) => {
+                        sqlx::query_as(audited_sql(&sql))
+                            .bind(user_id.as_bytes().to_vec())
+                            .bind(s.as_str())
+                            .bind(limit)
+                            .fetch_all(pool)
+                            .await?
+                    }
+                }
             }
             None => {
-                sqlx::query_as(
+                let sql = self.db.adapt(
                     r#"SELECT id, created_at, valid_until, status,
                           totals_json, risk_json, warnings_json
                    FROM cleanup_plans
                    WHERE user_id = ?
                    ORDER BY created_at DESC LIMIT ?"#,
-                )
-                .bind(user_id.as_bytes().to_vec())
-                .bind(limit)
-                .fetch_all(&self.pool)
-                .await?
+                );
+                match &self.db {
+                    Database::Sqlite(pool) => {
+                        sqlx::query_as(audited_sql(&sql))
+                            .bind(user_id.as_bytes().to_vec())
+                            .bind(limit)
+                            .fetch_all(pool)
+                            .await?
+                    }
+                    Database::Postgres(pool) => {
+                        sqlx::query_as(audited_sql(&sql))
+                            .bind(user_id.as_bytes().to_vec())
+                            .bind(limit)
+                            .fetch_all(pool)
+                            .await?
+                    }
+                }
             }
         };
         let mut out = Vec::with_capacity(rows.len());
@@ -354,33 +476,46 @@ impl CleanupPlanRepository for SqliteCleanupPlanRepo {
             sql.push_str(" AND action = ?");
         }
         sql.push_str(" ORDER BY seq ASC LIMIT ?");
+        // Adapt placeholders (and datetime('now'), unused here) for the connected backend
+        // before the audited-SQL guard, same as every other dynamic query in this file.
+        let sql = self.db.adapt(&sql);
 
-        let mut q = sqlx::query(crate::db::audited_sql(&sql))
-            .bind(id.as_bytes().to_vec())
-            .bind(cursor_i);
-        if let Some(ref a) = filter.account_id {
-            // account_id is stored as BLOB (bytes); bind as bytes so SQLite
-            // type comparison succeeds (TEXT != BLOB even for equal content).
-            q = q.bind(a.as_bytes().to_vec());
-        }
-        if let Some(ref r) = filter.risk {
-            q = q.bind(r);
-        }
-        if let Some(ref act) = filter.action {
-            q = q.bind(act);
-        }
-        q = q.bind(limit);
-
-        let rows = q
-            .fetch_all(&self.pool)
-            .await
-            .or_else(|_| Ok::<_, RepoError>(Vec::new()))?;
+        // (seq, payload) — a portable decode target across both backends (see ADR-035).
+        // seq is i32 because the `seq` column is INTEGER/INT4 in both dialects (a real
+        // Postgres 4-byte int, unlike SQLite's dynamically-8-byte INTEGER) — decoding it
+        // as i64 fails at runtime against Postgres with a ColumnDecode type mismatch.
+        // Replaces the raw Row::get() this dynamic-filter query used to need.
+        let rows: Vec<(i32, String)> = {
+            macro_rules! run_query {
+                ($pool:expr) => {{
+                    let mut q = sqlx::query_as(audited_sql(&sql))
+                        .bind(id.as_bytes().to_vec())
+                        .bind(cursor_i);
+                    if let Some(ref a) = filter.account_id {
+                        // account_id is stored as BLOB/BYTEA (bytes); bind as bytes so the
+                        // comparison succeeds against the byte column, not a TEXT one.
+                        q = q.bind(a.as_bytes().to_vec());
+                    }
+                    if let Some(ref r) = filter.risk {
+                        q = q.bind(r);
+                    }
+                    if let Some(ref act) = filter.action {
+                        q = q.bind(act);
+                    }
+                    q = q.bind(limit);
+                    q.fetch_all($pool).await
+                }};
+            }
+            let result = match &self.db {
+                Database::Sqlite(pool) => run_query!(pool),
+                Database::Postgres(pool) => run_query!(pool),
+            };
+            result?
+        };
 
         let mut ops = Vec::with_capacity(rows.len());
         let mut last_seq: Option<u64> = cursor;
-        for r in &rows {
-            let seq: i64 = r.get("seq");
-            let payload: String = r.get("payload");
+        for (seq, payload) in rows {
             if payload.is_empty() {
                 continue;
             }
@@ -398,22 +533,32 @@ impl CleanupPlanRepository for SqliteCleanupPlanRepo {
         source_kind: &str,
         n: u32,
     ) -> Result<Vec<String>, RepoError> {
-        let row = sqlx::query(
+        let sql = self.db.adapt(
             r#"SELECT sample_ids_json
                FROM cleanup_plan_operations
                WHERE plan_id = ? AND op_kind = 'predicate' AND source_kind = ?
                LIMIT 1"#,
-        )
-        .bind(id.as_bytes().to_vec())
-        .bind(source_kind)
-        .fetch_optional(&self.pool)
-        .await?;
-
-        let Some(r) = row else {
-            return Ok(Vec::new());
+        );
+        let row: Option<(Option<String>,)> = match &self.db {
+            Database::Sqlite(pool) => {
+                sqlx::query_as(audited_sql(&sql))
+                    .bind(id.as_bytes().to_vec())
+                    .bind(source_kind)
+                    .fetch_optional(pool)
+                    .await?
+            }
+            Database::Postgres(pool) => {
+                sqlx::query_as(audited_sql(&sql))
+                    .bind(id.as_bytes().to_vec())
+                    .bind(source_kind)
+                    .fetch_optional(pool)
+                    .await?
+            }
         };
 
-        let json_s: Option<String> = r.get("sample_ids_json");
+        let Some((json_s,)) = row else {
+            return Ok(Vec::new());
+        };
         let all_ids: Vec<String> = json_s
             .as_deref()
             .and_then(|s| serde_json::from_str(s).ok())
@@ -428,19 +573,42 @@ impl CleanupPlanRepository for SqliteCleanupPlanRepo {
         account_id: &str,
         new_rows: Vec<PlannedOperation>,
     ) -> Result<(), RepoError> {
-        let mut tx = self.pool.begin().await?;
-        sqlx::query(
+        let delete_sql = self.db.adapt(
             r#"DELETE FROM cleanup_plan_operations
                WHERE plan_id = ? AND account_id = ?"#,
-        )
-        .bind(id.as_bytes().to_vec())
-        .bind(account_id.as_bytes().to_vec())
-        .execute(&mut *tx)
-        .await?;
-        for op in &new_rows {
-            insert_operation(&mut tx, id, op).await?;
+        );
+        let insert_op_sql = self.db.adapt(
+            r#"INSERT INTO cleanup_plan_operations
+               (plan_id, seq, op_kind, account_id, email_id, action, source_kind,
+                risk, status, payload_json)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
+        );
+        match &self.db {
+            Database::Sqlite(pool) => {
+                let mut tx = pool.begin().await?;
+                sqlx::query(audited_sql(&delete_sql))
+                    .bind(id.as_bytes().to_vec())
+                    .bind(account_id.as_bytes().to_vec())
+                    .execute(&mut *tx)
+                    .await?;
+                for op in &new_rows {
+                    insert_operation(&mut *tx, &insert_op_sql, id, op).await?;
+                }
+                tx.commit().await?;
+            }
+            Database::Postgres(pool) => {
+                let mut tx = pool.begin().await?;
+                sqlx::query(audited_sql(&delete_sql))
+                    .bind(id.as_bytes().to_vec())
+                    .bind(account_id.as_bytes().to_vec())
+                    .execute(&mut *tx)
+                    .await?;
+                for op in &new_rows {
+                    insert_operation(&mut *tx, &insert_op_sql, id, op).await?;
+                }
+                tx.commit().await?;
+            }
         }
-        tx.commit().await?;
         Ok(())
     }
 
@@ -451,21 +619,45 @@ impl CleanupPlanRepository for SqliteCleanupPlanRepo {
         status: OperationStatus,
         ts: DateTime<Utc>,
     ) -> Result<(), RepoError> {
-        // Keep payload_json in sync so list_operations returns current status
-        // without a separate column merge. json_set is available in SQLite ≥ 3.9.
-        sqlx::query(
-            r#"UPDATE cleanup_plan_operations
-               SET status = ?, applied_at = ?,
-                   payload_json = json_set(payload_json, '$.status', ?)
-               WHERE plan_id = ? AND seq = ?"#,
-        )
-        .bind(status.as_str())
-        .bind(ts.timestamp_millis())
-        .bind(status.as_str())
-        .bind(id.as_bytes().to_vec())
-        .bind(seq as i64)
-        .execute(&self.pool)
-        .await?;
+        // Keep payload_json in sync so list_operations returns current status without a
+        // separate column merge. SQLite's json_set() and Postgres's jsonb_set() have genuinely
+        // different signatures (path syntax, and payload_json is TEXT so Postgres needs an
+        // explicit ::jsonb/::text cast pair) — not a case Database::adapt's mechanical
+        // placeholder/datetime translation covers, so each backend gets its own SQL text here
+        // (ADR-035 §2.3: hand-duplication remains the right call where translation isn't
+        // mechanically sufficient).
+        match &self.db {
+            Database::Sqlite(pool) => {
+                sqlx::query(
+                    r#"UPDATE cleanup_plan_operations
+                       SET status = ?, applied_at = ?,
+                           payload_json = json_set(payload_json, '$.status', ?)
+                       WHERE plan_id = ? AND seq = ?"#,
+                )
+                .bind(status.as_str())
+                .bind(ts.timestamp_millis())
+                .bind(status.as_str())
+                .bind(id.as_bytes().to_vec())
+                .bind(seq as i64)
+                .execute(pool)
+                .await?;
+            }
+            Database::Postgres(pool) => {
+                sqlx::query(
+                    r#"UPDATE cleanup_plan_operations
+                       SET status = $1, applied_at = $2,
+                           payload_json = jsonb_set(payload_json::jsonb, '{status}', to_jsonb($3::text))::text
+                       WHERE plan_id = $4 AND seq = $5"#,
+                )
+                .bind(status.as_str())
+                .bind(ts.timestamp_millis())
+                .bind(status.as_str())
+                .bind(id.as_bytes().to_vec())
+                .bind(seq as i64)
+                .execute(pool)
+                .await?;
+            }
+        }
         Ok(())
     }
 
@@ -475,18 +667,37 @@ impl CleanupPlanRepository for SqliteCleanupPlanRepo {
         seq: u64,
         status: crate::cleanup::domain::operation::PredicateStatus,
     ) -> Result<(), RepoError> {
-        sqlx::query(
-            r#"UPDATE cleanup_plan_operations
-               SET status = ?,
-                   payload_json = json_set(payload_json, '$.status', ?)
-               WHERE plan_id = ? AND seq = ? AND op_kind = 'predicate'"#,
-        )
-        .bind(status.as_str())
-        .bind(status.as_str())
-        .bind(id.as_bytes().to_vec())
-        .bind(seq as i64)
-        .execute(&self.pool)
-        .await?;
+        // See update_operation_status's doc for why json_set/jsonb_set get separate SQL text.
+        match &self.db {
+            Database::Sqlite(pool) => {
+                sqlx::query(
+                    r#"UPDATE cleanup_plan_operations
+                       SET status = ?,
+                           payload_json = json_set(payload_json, '$.status', ?)
+                       WHERE plan_id = ? AND seq = ? AND op_kind = 'predicate'"#,
+                )
+                .bind(status.as_str())
+                .bind(status.as_str())
+                .bind(id.as_bytes().to_vec())
+                .bind(seq as i64)
+                .execute(pool)
+                .await?;
+            }
+            Database::Postgres(pool) => {
+                sqlx::query(
+                    r#"UPDATE cleanup_plan_operations
+                       SET status = $1,
+                           payload_json = jsonb_set(payload_json::jsonb, '{status}', to_jsonb($2::text))::text
+                       WHERE plan_id = $3 AND seq = $4 AND op_kind = 'predicate'"#,
+                )
+                .bind(status.as_str())
+                .bind(status.as_str())
+                .bind(id.as_bytes().to_vec())
+                .bind(seq as i64)
+                .execute(pool)
+                .await?;
+            }
+        }
         Ok(())
     }
 
@@ -498,56 +709,144 @@ impl CleanupPlanRepository for SqliteCleanupPlanRepo {
         if rows.is_empty() {
             return Ok(());
         }
-        let mut tx = self.pool.begin().await?;
-        for op in &rows {
-            insert_operation(&mut tx, id, op).await?;
+        let sql = self.db.adapt(
+            r#"INSERT INTO cleanup_plan_operations
+               (plan_id, seq, op_kind, account_id, email_id, action, source_kind,
+                risk, status, payload_json)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
+        );
+        match &self.db {
+            Database::Sqlite(pool) => {
+                let mut tx = pool.begin().await?;
+                for op in &rows {
+                    insert_operation(&mut *tx, &sql, id, op).await?;
+                }
+                tx.commit().await?;
+            }
+            Database::Postgres(pool) => {
+                let mut tx = pool.begin().await?;
+                for op in &rows {
+                    insert_operation(&mut *tx, &sql, id, op).await?;
+                }
+                tx.commit().await?;
+            }
         }
-        tx.commit().await?;
         Ok(())
     }
 
     async fn max_seq(&self, id: PlanId) -> Result<u64, RepoError> {
-        let row: Option<(Option<i64>,)> =
-            sqlx::query_as(r#"SELECT MAX(seq) FROM cleanup_plan_operations WHERE plan_id = ?"#)
-                .bind(id.as_bytes().to_vec())
-                .fetch_optional(&self.pool)
-                .await?;
+        let sql = self
+            .db
+            .adapt(r#"SELECT MAX(seq) FROM cleanup_plan_operations WHERE plan_id = ?"#);
+        // MAX() over an INTEGER/INT4 `seq` column returns that same width — i32, not i64
+        // (same real-4-byte-int gotcha as list_operations' seq decode above).
+        let row: Option<(Option<i32>,)> = match &self.db {
+            Database::Sqlite(pool) => {
+                sqlx::query_as(audited_sql(&sql))
+                    .bind(id.as_bytes().to_vec())
+                    .fetch_optional(pool)
+                    .await?
+            }
+            Database::Postgres(pool) => {
+                sqlx::query_as(audited_sql(&sql))
+                    .bind(id.as_bytes().to_vec())
+                    .fetch_optional(pool)
+                    .await?
+            }
+        };
         Ok(row.and_then(|(m,)| m).map(|v| v.max(0) as u64).unwrap_or(0))
     }
 
     async fn cancel(&self, id: PlanId) -> Result<(), RepoError> {
-        sqlx::query("UPDATE cleanup_plans SET status = 'cancelled' WHERE id = ?")
-            .bind(id.as_bytes().to_vec())
-            .execute(&self.pool)
-            .await?;
+        let sql = self
+            .db
+            .adapt("UPDATE cleanup_plans SET status = 'cancelled' WHERE id = ?");
+        match &self.db {
+            Database::Sqlite(pool) => {
+                sqlx::query(audited_sql(&sql))
+                    .bind(id.as_bytes().to_vec())
+                    .execute(pool)
+                    .await?;
+            }
+            Database::Postgres(pool) => {
+                sqlx::query(audited_sql(&sql))
+                    .bind(id.as_bytes().to_vec())
+                    .execute(pool)
+                    .await?;
+            }
+        }
         Ok(())
     }
 
     async fn expire_due(&self, now: DateTime<Utc>) -> Result<u32, RepoError> {
-        let r = sqlx::query(
+        let sql = self.db.adapt(
             r#"UPDATE cleanup_plans SET status = 'expired'
                WHERE valid_until < ? AND status IN ('ready', 'draft')"#,
-        )
-        .bind(now.timestamp_millis())
-        .execute(&self.pool)
-        .await?;
-        Ok(r.rows_affected() as u32)
+        );
+        let affected = match &self.db {
+            Database::Sqlite(pool) => {
+                sqlx::query(audited_sql(&sql))
+                    .bind(now.timestamp_millis())
+                    .execute(pool)
+                    .await?
+                    .rows_affected()
+            }
+            Database::Postgres(pool) => {
+                sqlx::query(audited_sql(&sql))
+                    .bind(now.timestamp_millis())
+                    .execute(pool)
+                    .await?
+                    .rows_affected()
+            }
+        };
+        Ok(affected as u32)
     }
 
     async fn purge_older_than(&self, cutoff: DateTime<Utc>) -> Result<u32, RepoError> {
-        let r = sqlx::query("DELETE FROM cleanup_plans WHERE valid_until < ?")
-            .bind(cutoff.timestamp_millis())
-            .execute(&self.pool)
-            .await?;
-        Ok(r.rows_affected() as u32)
+        let sql = self
+            .db
+            .adapt("DELETE FROM cleanup_plans WHERE valid_until < ?");
+        let affected = match &self.db {
+            Database::Sqlite(pool) => {
+                sqlx::query(audited_sql(&sql))
+                    .bind(cutoff.timestamp_millis())
+                    .execute(pool)
+                    .await?
+                    .rows_affected()
+            }
+            Database::Postgres(pool) => {
+                sqlx::query(audited_sql(&sql))
+                    .bind(cutoff.timestamp_millis())
+                    .execute(pool)
+                    .await?
+                    .rows_affected()
+            }
+        };
+        Ok(affected as u32)
     }
 }
 
-async fn insert_operation(
-    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+/// Insert one operation row. Generic over the sqlx backend (`DB`) so this logic — parsing a
+/// [`PlannedOperation`] into columns — is written once and works against either a SQLite or a
+/// PostgreSQL transaction; only the transaction lifecycle (`begin`/`commit`) and the SQL text
+/// itself (pre-adapted by the caller via `Database::adapt`, since a generic function has no
+/// enum variant to dispatch on) differ per backend — see ADR-035.
+async fn insert_operation<'e, DB, E>(
+    exec: E,
+    sql: &str,
     plan_id: PlanId,
     op: &PlannedOperation,
-) -> Result<(), RepoError> {
+) -> Result<(), RepoError>
+where
+    DB: sqlx::Database,
+    E: sqlx::Executor<'e, Database = DB>,
+    DB::Arguments: sqlx::IntoArguments<DB>,
+    for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> Vec<u8>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> Option<Vec<u8>>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> String: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+{
     let payload = serde_json::to_string(op).map_err(|e| RepoError::Internal(e.to_string()))?;
     let (seq, op_kind, account_id, email_id_opt, risk_s, status_s, action_s, source_kind) = match op
     {
@@ -572,24 +871,19 @@ async fn insert_operation(
             source_kind_str(&p.source),
         ),
     };
-    sqlx::query(
-        r#"INSERT INTO cleanup_plan_operations
-           (plan_id, seq, op_kind, account_id, email_id, action, source_kind,
-            risk, status, payload_json)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
-    )
-    .bind(plan_id.as_bytes().to_vec())
-    .bind(seq)
-    .bind(op_kind)
-    .bind(account_id.as_bytes().to_vec())
-    .bind(email_id_opt.map(|s| s.as_bytes().to_vec()))
-    .bind(action_s)
-    .bind(source_kind)
-    .bind(risk_s)
-    .bind(status_s)
-    .bind(payload)
-    .execute(&mut **tx)
-    .await?;
+    sqlx::query(audited_sql(sql))
+        .bind(plan_id.as_bytes().to_vec())
+        .bind(seq)
+        .bind(op_kind)
+        .bind(account_id.as_bytes().to_vec())
+        .bind(email_id_opt.map(|s| s.as_bytes().to_vec()))
+        .bind(action_s)
+        .bind(source_kind)
+        .bind(risk_s)
+        .bind(status_s)
+        .bind(payload)
+        .execute(exec)
+        .await?;
     Ok(())
 }
 
@@ -620,7 +914,7 @@ mod tests {
     use sqlx::sqlite::SqlitePoolOptions;
     use uuid::Uuid;
 
-    async fn fresh_pool() -> SqlitePool {
+    async fn fresh_pool() -> Database {
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
             .connect(":memory:")
@@ -648,7 +942,7 @@ mod tests {
                     .expect("migrate");
             }
         }
-        pool
+        Database::Sqlite(pool)
     }
 
     fn sample_plan(user_id: &str) -> CleanupPlan {
