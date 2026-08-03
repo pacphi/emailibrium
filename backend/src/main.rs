@@ -509,9 +509,8 @@ async fn main() -> anyhow::Result<()> {
         cleanup_rule_eval,
         cleanup_email_repo,
     ));
-    let cleanup_audit_writer: Arc<dyn cleanup::audit::CleanupAuditWriter> = Arc::new(
-        cleanup::audit::SqliteCleanupAuditWriter::new(db.pool().clone()),
-    );
+    let cleanup_audit_writer: Arc<dyn cleanup::audit::CleanupAuditWriter> =
+        Arc::new(cleanup::audit::SqliteCleanupAuditWriter::new((*db).clone()));
     let cleanup_telemetry = Arc::new(cleanup::telemetry::TelemetryEmitter::new());
     // Item #1: build OAuth-derived EmailProvider factory. Gmail/Outlook
     // configs are sourced from the same OAuth config the rest of the app

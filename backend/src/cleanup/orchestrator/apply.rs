@@ -991,8 +991,9 @@ mod tests {
             Arc::new(StubRules) as Arc<dyn crate::cleanup::domain::ports::RuleEvaluator>,
             Arc::new(StubEmailRepo) as Arc<dyn EmailRepository>,
         ));
-        let audit: Arc<dyn CleanupAuditWriter> =
-            Arc::new(SqliteCleanupAuditWriter::new(pool.clone()));
+        let audit: Arc<dyn CleanupAuditWriter> = Arc::new(SqliteCleanupAuditWriter::new(
+            crate::db::Database::Sqlite(pool.clone()),
+        ));
         let orch = Arc::new(
             ApplyOrchestrator::new(
                 plan_repo.clone() as Arc<dyn CleanupPlanRepository>,

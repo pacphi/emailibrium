@@ -27,7 +27,6 @@
 use async_trait::async_trait;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
-use sqlx::SqlitePool;
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -35,6 +34,7 @@ use crate::cleanup::domain::operation::{
     ErrorCode, PlanAction, PlanSource, PlannedOperation, PlannedOperationRow, SkipReason,
 };
 use crate::cleanup::domain::plan::{JobId, PlanId};
+use crate::db::{audited_sql, Database};
 
 // ---------------------------------------------------------------------------
 // Types
@@ -216,12 +216,12 @@ pub trait CleanupAuditWriter: Send + Sync {
 }
 
 pub struct SqliteCleanupAuditWriter {
-    pool: SqlitePool,
+    db: Database,
 }
 
 impl SqliteCleanupAuditWriter {
-    pub fn new(pool: SqlitePool) -> Self {
-        Self { pool }
+    pub fn new(db: Database) -> Self {
+        Self { db }
     }
 }
 
@@ -237,42 +237,84 @@ impl CleanupAuditWriter for SqliteCleanupAuditWriter {
             Some(e) => (Some(e.code.as_str()), Some(e.message.as_str())),
             None => (None, None),
         };
-
-        sqlx::query(
-            "INSERT OR IGNORE INTO cleanup_audit_log
-             (timestamp, plan_id, job_id, user_id, account_id, seq, op_kind,
-              action_type, source_type, outcome, skip_reason, error_code, error_message)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        )
-        .bind(entry.timestamp_ms)
-        .bind(plan_id_b)
-        .bind(job_id_b)
-        .bind(user_id_b)
-        .bind(account_id_b)
-        .bind(entry.seq as i64)
-        .bind(entry.op_kind)
-        .bind(&entry.action_type)
-        .bind(&entry.source_type)
-        .bind(entry.outcome.as_str())
-        .bind(skip)
-        .bind(err_code)
-        .bind(err_msg)
-        .execute(&self.pool)
-        .await?;
+        // seq is bound as i32 to match the actual INTEGER/INT4 `seq` column (see ADR-035's
+        // note on real-4-byte-int columns). SQLite's `INSERT OR IGNORE` has no Postgres
+        // equivalent — Postgres uses `ON CONFLICT (...) DO NOTHING` against the same
+        // UNIQUE(plan_id, job_id, seq, outcome) constraint (ADR-035 §2.3).
+        match &self.db {
+            Database::Sqlite(pool) => {
+                sqlx::query(
+                    "INSERT OR IGNORE INTO cleanup_audit_log
+                     (timestamp, plan_id, job_id, user_id, account_id, seq, op_kind,
+                      action_type, source_type, outcome, skip_reason, error_code, error_message)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                )
+                .bind(entry.timestamp_ms)
+                .bind(plan_id_b)
+                .bind(job_id_b)
+                .bind(user_id_b)
+                .bind(account_id_b)
+                .bind(entry.seq as i32)
+                .bind(entry.op_kind)
+                .bind(&entry.action_type)
+                .bind(&entry.source_type)
+                .bind(entry.outcome.as_str())
+                .bind(skip)
+                .bind(err_code)
+                .bind(err_msg)
+                .execute(pool)
+                .await?;
+            }
+            Database::Postgres(pool) => {
+                sqlx::query(
+                    "INSERT INTO cleanup_audit_log
+                     (timestamp, plan_id, job_id, user_id, account_id, seq, op_kind,
+                      action_type, source_type, outcome, skip_reason, error_code, error_message)
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+                     ON CONFLICT (plan_id, job_id, seq, outcome) DO NOTHING",
+                )
+                .bind(entry.timestamp_ms)
+                .bind(plan_id_b)
+                .bind(job_id_b)
+                .bind(user_id_b)
+                .bind(account_id_b)
+                .bind(entry.seq as i32)
+                .bind(entry.op_kind)
+                .bind(&entry.action_type)
+                .bind(&entry.source_type)
+                .bind(entry.outcome.as_str())
+                .bind(skip)
+                .bind(err_code)
+                .bind(err_msg)
+                .execute(pool)
+                .await?;
+            }
+        }
         Ok(())
     }
 
     async fn list_for_plan(&self, plan_id: PlanId) -> Result<Vec<CleanupAuditEntry>, AuditError> {
-        let rows: Vec<AuditRow> = sqlx::query_as::<_, AuditRow>(
+        let sql = self.db.adapt(
             "SELECT timestamp, plan_id, job_id, user_id, account_id, seq, op_kind,
                     action_type, source_type, outcome, skip_reason, error_code, error_message
              FROM cleanup_audit_log
              WHERE plan_id = ?
              ORDER BY timestamp ASC, seq ASC",
-        )
-        .bind(plan_id.as_bytes().as_slice())
-        .fetch_all(&self.pool)
-        .await?;
+        );
+        let rows: Vec<AuditRow> = match &self.db {
+            Database::Sqlite(pool) => {
+                sqlx::query_as::<_, AuditRow>(audited_sql(&sql))
+                    .bind(plan_id.as_bytes().as_slice())
+                    .fetch_all(pool)
+                    .await?
+            }
+            Database::Postgres(pool) => {
+                sqlx::query_as::<_, AuditRow>(audited_sql(&sql))
+                    .bind(plan_id.as_bytes().as_slice())
+                    .fetch_all(pool)
+                    .await?
+            }
+        };
         rows.into_iter().map(|r| r.try_into()).collect()
     }
 
@@ -281,18 +323,30 @@ impl CleanupAuditWriter for SqliteCleanupAuditWriter {
         user_id: &str,
         limit: u32,
     ) -> Result<Vec<CleanupAuditEntry>, AuditError> {
-        let rows: Vec<AuditRow> = sqlx::query_as::<_, AuditRow>(
+        let sql = self.db.adapt(
             "SELECT timestamp, plan_id, job_id, user_id, account_id, seq, op_kind,
                     action_type, source_type, outcome, skip_reason, error_code, error_message
              FROM cleanup_audit_log
              WHERE user_id = ?
              ORDER BY timestamp DESC
              LIMIT ?",
-        )
-        .bind(user_id.as_bytes())
-        .bind(limit as i64)
-        .fetch_all(&self.pool)
-        .await?;
+        );
+        let rows: Vec<AuditRow> = match &self.db {
+            Database::Sqlite(pool) => {
+                sqlx::query_as::<_, AuditRow>(audited_sql(&sql))
+                    .bind(user_id.as_bytes())
+                    .bind(limit as i64)
+                    .fetch_all(pool)
+                    .await?
+            }
+            Database::Postgres(pool) => {
+                sqlx::query_as::<_, AuditRow>(audited_sql(&sql))
+                    .bind(user_id.as_bytes())
+                    .bind(limit as i64)
+                    .fetch_all(pool)
+                    .await?
+            }
+        };
         rows.into_iter().map(|r| r.try_into()).collect()
     }
 }
@@ -304,7 +358,8 @@ struct AuditRow {
     job_id: Vec<u8>,
     user_id: Vec<u8>,
     account_id: Vec<u8>,
-    seq: i64,
+    // seq is INTEGER/INT4 in both dialects — i32, not i64 (see ADR-035).
+    seq: i32,
     op_kind: String,
     action_type: String,
     source_type: String,
@@ -403,6 +458,7 @@ mod tests {
         MoveKind, OperationStatus, PlanAction, PlanSource, PlannedOperationRow, RiskLevel,
     };
     use sqlx::sqlite::SqlitePoolOptions;
+    use sqlx::SqlitePool;
 
     async fn fresh_pool() -> SqlitePool {
         let pool = SqlitePoolOptions::new()
@@ -468,7 +524,7 @@ mod tests {
     #[tokio::test]
     async fn audit_write_then_list_for_plan() {
         let pool = fresh_pool().await;
-        let writer = SqliteCleanupAuditWriter::new(pool);
+        let writer = SqliteCleanupAuditWriter::new(Database::Sqlite(pool));
         let plan_id = Uuid::now_v7();
         let job_id = Uuid::now_v7();
 
@@ -497,7 +553,7 @@ mod tests {
     #[tokio::test]
     async fn audit_write_idempotent_on_duplicate_seq() {
         let pool = fresh_pool().await;
-        let writer = SqliteCleanupAuditWriter::new(pool);
+        let writer = SqliteCleanupAuditWriter::new(Database::Sqlite(pool));
         let plan_id = Uuid::now_v7();
         let job_id = Uuid::now_v7();
         let row = sample_row(7);
@@ -547,7 +603,7 @@ mod tests {
         // Compile-time + runtime guard: the entry struct + the SELECT we
         // issue must not surface email_id, body, target name, etc.
         let pool = fresh_pool().await;
-        let writer = SqliteCleanupAuditWriter::new(pool.clone());
+        let writer = SqliteCleanupAuditWriter::new(Database::Sqlite(pool.clone()));
         let plan_id = Uuid::now_v7();
         let job_id = Uuid::now_v7();
         let row = PlannedOperationRow {
@@ -615,7 +671,7 @@ mod tests {
     #[tokio::test]
     async fn audit_records_skip_reason() {
         let pool = fresh_pool().await;
-        let writer = SqliteCleanupAuditWriter::new(pool);
+        let writer = SqliteCleanupAuditWriter::new(Database::Sqlite(pool));
         let plan_id = Uuid::now_v7();
         let job_id = Uuid::now_v7();
 
@@ -638,7 +694,7 @@ mod tests {
     #[tokio::test]
     async fn audit_action_type_camelcase() {
         let pool = fresh_pool().await;
-        let writer = SqliteCleanupAuditWriter::new(pool);
+        let writer = SqliteCleanupAuditWriter::new(Database::Sqlite(pool));
         let plan_id = Uuid::now_v7();
         let job_id = Uuid::now_v7();
 
