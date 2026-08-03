@@ -3,18 +3,11 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, cleanup, act } from '@testing-library/react';
 import { createElement } from 'react';
 import { useEmailShortcuts } from '../useEmailShortcuts';
+import { press } from '@/shared/test-utils/press';
 
 afterEach(() => {
   cleanup();
 });
-
-function press(key: string, modifiers: Partial<KeyboardEventInit> = {}) {
-  act(() => {
-    document.body.dispatchEvent(
-      new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, ...modifiers }),
-    );
-  });
-}
 
 interface MountOverrides {
   selectedEmailId?: string | null;

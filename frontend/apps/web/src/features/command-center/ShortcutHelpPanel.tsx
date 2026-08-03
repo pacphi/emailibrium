@@ -1,5 +1,6 @@
+import { useMemo } from 'react';
 import { X } from 'lucide-react';
-import { useActiveShortcuts } from '@/shared/hooks';
+import { useActiveShortcuts, splitShortcut } from '@/shared/hooks';
 import { useShortcutHelpStore } from './hooks/useShortcutHelp';
 
 // Friendly label for each known shortcut key. The SET of shortcuts shown is always
@@ -32,9 +33,8 @@ const MODIFIER_SYMBOLS: Record<string, string> = {
 
 /** e.g. "cmd+shift+a" -> "⌘+⇧+A", "shift+#" -> "⇧+#" */
 export function formatShortcutKey(shortcut: string): string {
-  const parts = shortcut.split('+');
-  const key = parts[parts.length - 1] ?? '';
-  const modifiers = parts.slice(0, -1).map((m) => MODIFIER_SYMBOLS[m] ?? m);
+  const { modifierTokens, key } = splitShortcut(shortcut);
+  const modifiers = modifierTokens.map((m) => MODIFIER_SYMBOLS[m] ?? m);
   const keyDisplay =
     key.length === 1 ? key.toUpperCase() : key.charAt(0).toUpperCase() + key.slice(1);
   return [...modifiers, keyDisplay].join('+');
@@ -67,10 +67,9 @@ export function ShortcutHelpPanel() {
   const isOpen = useShortcutHelpStore((s) => s.isOpen);
   const close = useShortcutHelpStore((s) => s.close);
   const activeKeys = useActiveShortcuts();
+  const rows = useMemo(() => buildShortcutRows(activeKeys), [activeKeys]);
 
   if (!isOpen) return null;
-
-  const rows = buildShortcutRows(activeKeys);
 
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center pt-[20vh]">

@@ -1,20 +1,8 @@
-import { create } from 'zustand';
 import { useMemo } from 'react';
-import { useKeyboard, type ShortcutMap } from '@/shared/hooks';
+import { useKeyboard, metaOrCtrl, type ShortcutMap } from '@/shared/hooks';
+import { createToggleStore } from '@/shared/stores/createToggleStore';
 
-interface CommandPaletteState {
-  isOpen: boolean;
-  open: () => void;
-  close: () => void;
-  toggle: () => void;
-}
-
-export const useCommandPaletteStore = create<CommandPaletteState>((set) => ({
-  isOpen: false,
-  open: () => set({ isOpen: true }),
-  close: () => set({ isOpen: false }),
-  toggle: () => set((state) => ({ isOpen: !state.isOpen })),
-}));
+export const useCommandPaletteStore = createToggleStore();
 
 /**
  * Hook that manages command palette open/close state and registers
@@ -31,10 +19,7 @@ export function useCommandPalette() {
   const { isOpen, open, close, toggle } = useCommandPaletteStore();
 
   const shortcuts = useMemo<ShortcutMap>(() => {
-    const map: ShortcutMap = {
-      'cmd+k': toggle,
-      'ctrl+k': toggle,
-    };
+    const map: ShortcutMap = metaOrCtrl('k', toggle);
     // Only register `escape` while open. useKeyboard calls preventDefault/stopPropagation on
     // any matched key, so an always-registered entry would swallow every bare Escape press on
     // this route even while closed -- the original raw listener only acted (and preventDefault'd)

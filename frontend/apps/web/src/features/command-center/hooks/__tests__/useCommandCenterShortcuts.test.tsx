@@ -1,25 +1,14 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { render, cleanup, act } from '@testing-library/react';
+import { render, cleanup } from '@testing-library/react';
 import { createElement } from 'react';
 import { useCommandCenterShortcuts } from '../useCommandCenterShortcuts';
 import { useShortcutHelpStore } from '../useShortcutHelp';
+import { press } from '@/shared/test-utils/press';
 
 afterEach(() => {
   cleanup();
 });
-
-// act()-wrapped so a state change from one press (e.g. opening the help panel, which
-// changes the `escape` registration) is flushed before a subsequent press in the same
-// test relies on it -- a raw, unwrapped dispatchEvent can otherwise read a stale
-// shortcuts map from before React re-ran the registering effect.
-function press(key: string, modifiers: Partial<KeyboardEventInit> = {}) {
-  act(() => {
-    document.body.dispatchEvent(
-      new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, ...modifiers }),
-    );
-  });
-}
 
 function mount() {
   function Harness() {
