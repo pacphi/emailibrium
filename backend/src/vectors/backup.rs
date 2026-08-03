@@ -271,10 +271,12 @@ mod tests {
             .await
             .unwrap();
 
-        sqlx::query(include_str!("../../migrations/sqlite/001_initial_schema.sql"))
-            .execute(&pool)
-            .await
-            .unwrap();
+        sqlx::query(include_str!(
+            "../../migrations/sqlite/001_initial_schema.sql"
+        ))
+        .execute(&pool)
+        .await
+        .unwrap();
 
         Database::Sqlite(pool)
     }

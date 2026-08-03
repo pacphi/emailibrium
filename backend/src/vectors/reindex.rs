@@ -150,10 +150,12 @@ mod tests {
     async fn test_db() -> Database {
         let db = Database::connect("sqlite::memory:").await.unwrap();
         // Run the initial schema migration.
-        sqlx::query(include_str!("../../migrations/sqlite/001_initial_schema.sql"))
-            .execute(db.pool())
-            .await
-            .unwrap();
+        sqlx::query(include_str!(
+            "../../migrations/sqlite/001_initial_schema.sql"
+        ))
+        .execute(db.pool())
+        .await
+        .unwrap();
         // Run the ai_metadata migration.
         sqlx::query(include_str!("../../migrations/sqlite/003_ai_metadata.sql"))
             .execute(db.pool())

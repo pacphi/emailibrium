@@ -828,10 +828,12 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        sqlx::raw_sql(include_str!("../../migrations/sqlite/028_imap_accounts.sql"))
-            .execute(&pool)
-            .await
-            .unwrap();
+        sqlx::raw_sql(include_str!(
+            "../../migrations/sqlite/028_imap_accounts.sql"
+        ))
+        .execute(&pool)
+        .await
+        .unwrap();
 
         let key = crate::vectors::encryption::derive_key("test-password", TOKEN_KEY_SALT).unwrap();
         let mgr = OAuthManager {
