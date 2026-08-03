@@ -10,6 +10,7 @@ import { groupByDomain } from './utils/groupBySender';
 import { ThreadView } from './ThreadView';
 import { ComposeEmail } from './ComposeEmail';
 import { MoveDialog } from './MoveDialog';
+import { useEmailShortcuts, type ReplyOpenSignal } from './hooks/useEmailShortcuts';
 import { useQuery } from '@tanstack/react-query';
 import { getAllLabels, getEnrichedCategories, getEmailCounts } from '@emailibrium/api';
 import {
@@ -62,6 +63,7 @@ export function EmailClient() {
   const [selectedEmailId, setSelectedEmailId] = useState<string | null>(null);
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
   const [isComposeOpen, setIsComposeOpen] = useState(false);
+  const [replyOpenSignal, setReplyOpenSignal] = useState<ReplyOpenSignal | null>(null);
   const [mobilePanel, setMobilePanel] = useState<'sidebar' | 'list' | 'thread'>('list');
   const [filter, setFilter] = useState<
     'all' | 'read' | 'unread' | 'starred' | 'sent' | 'spam' | 'trash'
@@ -593,6 +595,15 @@ export function EmailClient() {
     [selectedEmailId, forwardMutation],
   );
 
+  const handleCompose = useCallback(() => setIsComposeOpen(true), []);
+  const handleOpenReply = useCallback((signal: ReplyOpenSignal) => setReplyOpenSignal(signal), []);
+  const handleReplyOpenSignalConsumed = useCallback(() => setReplyOpenSignal(null), []);
+  useEmailShortcuts({
+    selectedEmailId,
+    onCompose: handleCompose,
+    onOpenReply: handleOpenReply,
+  });
+
   const handleBackToList = useCallback(() => {
     setSelectedEmailId(null);
     setMobilePanel('list');
@@ -684,7 +695,7 @@ export function EmailClient() {
             </h2>
             <button
               type="button"
-              onClick={() => setIsComposeOpen(true)}
+              onClick={handleCompose}
               className="flex items-center gap-1 rounded-md bg-indigo-600 px-2.5 py-1 text-xs font-medium text-white transition-colors hover:bg-indigo-700"
               aria-label="Compose new email"
             >
@@ -936,6 +947,8 @@ export function EmailClient() {
           onSendReply={handleSendReply}
           onSendForward={handleSendForward}
           isSendingReply={replyMutation.isPending || forwardMutation.isPending}
+          replyOpenSignal={replyOpenSignal}
+          onReplyOpenSignalConsumed={handleReplyOpenSignalConsumed}
           onSpam={handleThreadSpam}
           onRestore={handleThreadRestore}
           onPermanentDelete={handleThreadPermanentDelete}

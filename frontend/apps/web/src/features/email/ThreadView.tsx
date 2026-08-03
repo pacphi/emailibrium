@@ -4,6 +4,7 @@ import type { EmailThread } from '@emailibrium/types';
 import { MessageBubble } from './MessageBubble';
 import { EmailActions, type EmailViewContext } from './EmailActions';
 import { ReplyBox } from './ReplyBox';
+import type { ReplyOpenSignal } from './hooks/useEmailShortcuts';
 
 interface ThreadViewProps {
   thread: EmailThread | undefined;
@@ -22,6 +23,9 @@ interface ThreadViewProps {
   onSpam?: () => void;
   onRestore?: () => void;
   onPermanentDelete?: () => void;
+  /** Passed straight through to ReplyBox -- see its own docs. */
+  replyOpenSignal?: ReplyOpenSignal | null;
+  onReplyOpenSignalConsumed?: () => void;
 }
 
 export function ThreadView({
@@ -41,6 +45,8 @@ export function ThreadView({
   onSpam,
   onRestore,
   onPermanentDelete,
+  replyOpenSignal,
+  onReplyOpenSignalConsumed,
 }: ThreadViewProps) {
   if (isLoading) {
     return (
@@ -129,6 +135,8 @@ export function ThreadView({
           onSendReply={onSendReply}
           onSendForward={onSendForward}
           isSending={isSendingReply}
+          openSignal={replyOpenSignal}
+          onOpenSignalConsumed={onReplyOpenSignalConsumed}
         />
       )}
     </div>

@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { X, Send, Save } from 'lucide-react';
 import { nanoid } from 'nanoid';
 import ReactMarkdown from 'react-markdown';
@@ -30,8 +30,20 @@ export function ComposeEmail({ isOpen, onClose, accounts, prefill }: ComposeEmai
   const [showPreview, setShowPreview] = useState(false);
   const [showCcBcc, setShowCcBcc] = useState(!!prefill?.cc);
   const [files, setFiles] = useState<UploadedFile[]>([]);
+  const toInputRef = useRef<HTMLInputElement>(null);
 
   const sendMutation = useSendEmail();
+
+  // Autofocus the To field on open -- also keeps keyboard focus inside the modal, so the
+  // shared useKeyboard shortcuts elsewhere (c/r/f) are correctly suppressed by its
+  // editable-field guard while composing, instead of leaking through to whatever was
+  // mounted behind the overlay. Matches the same pattern CommandPalette uses for its
+  // search input.
+  useEffect(() => {
+    if (isOpen && toInputRef.current) {
+      toInputRef.current.focus();
+    }
+  }, [isOpen]);
 
   const handleAddFiles = useCallback((newFiles: File[]) => {
     setFiles((prev) => [
@@ -132,6 +144,7 @@ export function ComposeEmail({ isOpen, onClose, accounts, prefill }: ComposeEmai
               </label>
               <input
                 id="compose-to"
+                ref={toInputRef}
                 type="text"
                 value={to}
                 onChange={(e) => setTo(e.target.value)}
