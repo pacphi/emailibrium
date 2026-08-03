@@ -1,62 +1,69 @@
 # pipeline.yml — QUEUED plan, parked by autopilot:plan on 2026-08-01.
 #
-# NOT ACTIVE. `docs-accuracy-audit` is still in flight, and there is only ever ONE active
-# .autopilot/pipeline.yml. This file lives in the git-ignored .autopilot/queued/ dir until a
-# human promotes it (mv into place + seed ledger record 0 + commit — see the autopilot
-# plugin's docs/lifecycle.md).
+# NOT ACTIVE. `docs-accuracy-audit` is still in flight (phases 0-2 of 7 shipped at parking
+# time; phase 3 in progress on branch autopilot/docs-accuracy-audit/phase-3), and there is
+# only ever ONE active .autopilot/pipeline.yml. This file lives in the git-ignored
+# .autopilot/queued/ dir until a human promotes it (mv into place + seed ledger record 0 +
+# commit — see the autopilot plugin's docs/lifecycle.md).
 #
-# This pipeline's footprint (frontend/apps/web/src/**, docs/user-guide.md) is disjoint from
-# both docs-accuracy-audit's remaining phases and the queued postgres-support pipeline
-# (backend/**, CI, deployment/config docs), so ordering between the two queued plans doesn't
-# matter — promote whichever the user wants to run first.
+# ORDERING: promote this after docs-accuracy-audit finishes (or sooner, at the user's
+# discretion — this pipeline's touches are backend Rust + CI + two docs files, disjoint
+# from docs-accuracy-audit's docs/api/**, docs/audit/**, docs/ADRs/**, docs/DDDs/**
+# footprint, so running them concurrently on separate branches would not collide on files,
+# though only one can be the *active* .autopilot/pipeline.yml at a time under the current
+# one-pipeline-at-a-time lifecycle).
 
-feature_id: "keyboard-shortcuts"
-goal: "Implement, test, and ship the keyboard shortcuts that docs-accuracy-audit phase 1 removed from docs.md as aspirational-but-unbuilt, alongside the shortcuts already implemented and documented, as one reconciled set."
+feature_id: "postgres-support"
+goal: "Make PostgreSQL a real, working, CI-verified second database backend — not just a docker-compose service and an aspirational doc claim."
 spec: |
   Motivating evidence gathered while scoping (2026-08-01):
 
-    * The docs-accuracy-audit pipeline's phase 1 diff to docs/user-guide.md (or
-      docs/user-interface-overview.md) removed a Keyboard Shortcuts table row set that did not
-      match any real implementation: `C` (compose), `R` (reply), `F` (forward), `E` (archive),
-      `#` (delete), `J`/`K` (next/prev in list — since superseded by arrow-key nav), `Cmd+Shift+A`
-      (select all), `Cmd+,` (open settings), `?` (show shortcut help). What survived the
-      correction — because it's real — is `Cmd+K` (command palette), `Escape`, `↓`/`↑` (list
-      nav), `Cmd+Enter` (send reply), `Enter`/`Shift+Enter` (chat box). The corrected doc now
-      states explicitly: "Other actions (compose, reply, forward, archive, delete, search focus,
-      select-all, open settings) are click/tap-only today — there is no keyboard shortcut for
-      them yet."
-    * `frontend/apps/web/src/shared/hooks/useKeyboard.ts` already exists: a complete,
-      well-designed shortcut-registration hook (`ShortcutMap` — string like `"cmd+shift+p"` to
-      handler; auto preventDefault/stopPropagation; skips non-modifier shortcuts while an
-      input/textarea/contenteditable is focused). It is exported from the shared hooks barrel
-      (`apps/web/src/shared/hooks/index.ts`, `apps/web/src/shared/index.ts`) but has **zero call
-      sites** anywhere in the app and zero test coverage — built, then apparently never wired up,
-      which is likely exactly how the doc drifted ahead of the implementation in the first place.
-    * The two shortcuts that DO work today are wired ad hoc, not through that hook:
-      `apps/web/src/features/command-center/hooks/useCommandPalette.ts` has its own raw
-      `document.addEventListener('keydown', ...)` checking `(event.metaKey || event.ctrlKey) &&
-      event.key === 'k'`; `apps/web/src/features/email/EmailList.tsx` has a local
-      `React.KeyboardEvent` handler for list navigation. Neither goes through useKeyboard.
-    * Relevant existing feature surfaces the new shortcuts need to call into:
-      apps/web/src/features/email/ComposeEmail.tsx (compose), ReplyBox.tsx (reply),
-      EmailList.tsx (archive/delete/select-all state), MoveDialog.tsx.
+    * `backend/Cargo.toml` line 37 enables sqlx features `["runtime-tokio", "sqlite", "chrono",
+      "uuid"]` — no `postgres` feature. `backend/src/db/mod.rs` is built directly on
+      `sqlx::sqlite::{SqlitePool, SqlitePoolOptions}`; `Database::connect` unconditionally
+      opens a SQLite pool regardless of the URL scheme passed in.
+    * `docker-compose.yml` (lines 124+) runs a `postgres:16-alpine` service unconditionally
+      alongside the backend, and the backend's `depends_on: postgres: condition:
+      service_healthy` — the service is live infrastructure the backend never actually talks
+      to.
+    * `.github/workflows/smoke.yml` line 51 writes a `postgres://emailibrium:...@postgres:5432/
+      emailibrium` value into the `database_url` secret file — apparently intending to smoke-
+      test against Postgres. It never reaches the app: `backend/entrypoint.sh` resolves
+      `/run/secrets/database_url` into the env var `DATABASE_URL` (uppercased basename, no
+      prefix), but `backend/src/vectors/config.rs` line 102 loads config via
+      `Env::prefixed("EMAILIBRIUM_")` — so the app only ever reads `EMAILIBRIUM_DATABASE_URL`
+      and silently falls back to the config default `sqlite:emailibrium.db?mode=rwc`
+      (`backend/config.yaml` line 10). The smoke test has been exercising SQLite the entire
+      time, believing it was testing Postgres.
+    * 22 files under `backend/src/` reference `SqlitePool` directly (`grep -rl SqlitePool
+      backend/src | wc -l`) — the call-site surface that needs to work against either backend.
+    * 29 migrations exist (`backend/migrations/001..029`); 6 use SQLite-only syntax
+      (`AUTOINCREMENT`, `PRAGMA`, etc. — `grep -rli 'AUTOINCREMENT|PRAGMA|INTEGER PRIMARY
+      KEY|json_extract|strftime' backend/migrations`) that has no direct Postgres equivalent
+      and needs porting.
+    * Zero `sqlx::query!`/`sqlx::query_as!` compile-time-checked macro usages exist in
+      `backend/src` (`grep -rn 'sqlx::query!\|sqlx::query_as!' backend/src | wc -l` = 0) — all
+      queries are the runtime `query`/`query_as` + `.bind(...)` form, which is materially
+      easier to make backend-agnostic than compile-time-checked SQL would have been.
+    * This was surfaced because `docs/deployment-guide.md`'s Database Strategy section
+      (corrected under the `docs-accuracy-audit` pipeline, phase 2) now accurately says
+      PostgreSQL is "planned, not implemented" — which read as new/wrong to the user because
+      they believed production Postgres support already existed. This pipeline makes that
+      belief true instead of correcting the doc a second time.
 
-  Scope: implement the 8 removed-from-docs shortcuts for real (C, R, F, E, #, Cmd+Shift+A,
-  Cmd+,, ?) — J/K is intentionally NOT restored, since arrow-key nav already superseded it and
-  restoring a second nav binding would be a regression, not parity. Consolidate the 2 already-
-  working shortcuts onto the same useKeyboard registry so there is one dispatch mechanism and
-  one source of truth for the docs table going forward, instead of two ad hoc listeners plus a
-  new one for each addition.
+  Non-goals: no new database features, no ORM swap, no change to the SQLite happy path's
+  behavior or performance. This is additive backend capability, gated by URL scheme
+  (`postgres://` vs `sqlite:`), landing alongside the existing default.
 
 references:
-  prd: ""
-  plan: ""
+  prd:     ""
+  plan:    ""
   adr_dir: "docs/ADRs"
   ddd_dir: "docs/DDDs"
-  extra: ["docs/user-guide.md"]
+  extra:   ["docker-compose.yml", ".github/workflows/smoke.yml"]
 
 trunk: main
-base: develop
+base:  develop
 
 autonomy: pr_ci
 
@@ -64,98 +71,98 @@ fix_budget: 5
 max_parallel: 1
 requeue_budget: 2
 
-# Plain UI feature work — no auth/merge/security logic, no generated-edit execution. Every
-# phase still gets the mandatory Tier-3 adversarial review regardless of this list being empty.
-risk_phases: []
+# 2 (call-site migration touches ~22 files across the whole backend — wide blast radius) and
+# 3 (CI + entrypoint secret-plumbing change — merge-adjacent, and the exact class of "green
+# build, broken runtime" gap the smoke.yml workflow itself was built to catch, per its own
+# header comment).
+risk_phases: [2, 3]
 
 court: auto
 
 phases:
   - id: 0
-    goal: "One shortcut-dispatch mechanism exists and is proven: useKeyboard is wired into the app shell, both currently-working shortcuts are migrated onto it with no behavior change, and the hook itself finally has test coverage."
-    track: "keyboard-shortcuts"
+    goal: "A Postgres-capable connection layer exists behind a backend-selecting abstraction, with the design decision recorded as an ADR, and the SQLite path is provably unchanged."
+    track: "database"
     deliverables:
-      - "useKeyboard mounted once at the app-shell/layout level as the single global shortcut registry (not per-feature ad hoc listeners)."
-      - "Cmd+K (apps/web/src/features/command-center/hooks/useCommandPalette.ts) migrated from its raw document listener onto the registry."
-      - "↓/↑ list navigation (apps/web/src/features/email/EmailList.tsx) migrated onto the registry where feasible without breaking list-item-focus semantics."
-      - "apps/web/src/shared/hooks/useKeyboard.test.ts — first-ever test coverage for the hook (modifier matching, editable-field guard, cleanup on unmount)."
+      - "sqlx `postgres` feature enabled in backend/Cargo.toml alongside the existing `sqlite` feature."
+      - "A `Database` abstraction in backend/src/db/mod.rs (enum-of-pools or trait object) whose `connect(url)` picks Sqlite vs Postgres by URL scheme, replacing the current unconditional `SqlitePoolOptions` call."
+      - "docs/ADRs/ADR-033-postgresql-backend-support.md recording the dual-backend decision: why URL-scheme dispatch, why runtime (not compile-time-checked) queries, what stays SQLite-only (if anything)."
     definition_of_done:
-      - "cmd: pnpm --filter web test -- useKeyboard passes"
-      - "cmd: pnpm --filter web test passes (full suite — existing Cmd+K and list-nav behavior tests, if any, still pass unchanged)"
-      - "cmd: pnpm --filter web typecheck passes"
-      - "prose: apps/web/src/features/command-center/hooks/useCommandPalette.ts no longer contains its own document.addEventListener('keydown', ...) block"
-    conventions: "Match apps/web/src/shared/hooks/useKeyboard.ts's existing JSDoc and ShortcutMap conventions; follow the repo's existing Vitest + Testing Library patterns for hook tests."
+      - "cmd: cd backend && cargo build --features vectors passes with the postgres feature enabled"
+      - "cmd: cd backend && cargo test passes (existing SQLite-path tests unaffected)"
+      - "grep: postgres in backend/Cargo.toml (the sqlx features line)"
+      - "prose: backend/src/db/mod.rs no longer imports sqlx::sqlite::{SqlitePool, SqlitePoolOptions} directly at the connect() call site — it goes through the new abstraction"
+      - "prose: docs/ADRs/ADR-033-postgresql-backend-support.md exists and documents the URL-scheme dispatch decision"
+    conventions: "Match backend/src/db/mod.rs's existing doc-comment style (see the audited_sql() block); keep the abstraction minimal — this phase is plumbing, not the migration of the 22 call sites (that's phase 2)."
     depends_on: []
-    touches:
-      [
-        "frontend/apps/web/src/shared/hooks/**",
-        "frontend/apps/web/src/features/command-center/**",
-        "frontend/apps/web/src/features/email/EmailList.tsx",
-      ]
+    touches: ["backend/Cargo.toml", "backend/src/db/mod.rs", "docs/ADRs/ADR-033-postgresql-backend-support.md"]
     adrs: []
     ddd: []
 
   - id: 1
-    goal: "C, R, and F work: compose, reply, and forward are keyboard-accessible."
-    track: "keyboard-shortcuts"
+    goal: "All 29 migrations run clean against a real PostgreSQL 16 instance, producing a schema equivalent to the SQLite one."
+    track: "database"
     deliverables:
-      - "`C` opens compose (global, not scoped to a focused email) — wires into ComposeEmail.tsx's existing open path."
-      - "`R` opens reply on the currently focused/open email — wires into ReplyBox.tsx."
-      - "`F` opens forward on the currently focused/open email."
+      - "The 6 SQLite-specific migrations (AUTOINCREMENT/PRAGMA/etc.) ported to Postgres-compatible SQL, via whatever dual-migration strategy phase 0's ADR settled on (parallel per-backend migration dirs, or portable SQL where feasible)."
+      - "Database::run_migrations() (backend/src/db/mod.rs) picks the correct migration set for the connected backend."
     definition_of_done:
-      - "cmd: pnpm --filter web test passes, including new tests asserting each of C/R/F triggers its action and is a no-op with nothing focused where that applies"
-      - "cmd: pnpm --filter web typecheck passes"
-      - "prose: all three are registered through the phase-0 useKeyboard instance, not a new ad hoc listener"
-    conventions: "Reuse the existing compose/reply/forward trigger functions already called by the click-driven UI — the shortcut is a second entry point into the same action, not a new implementation of it."
+      - "cmd: a throwaway postgres:16-alpine container (e.g. via docker run or docker compose) accepts `sqlx::migrate!` cleanly end to end for all 29 migrations"
+      - "grep:absent: AUTOINCREMENT|PRAGMA in the Postgres-targeted migration SQL"
+      - "cmd: cd backend && cargo test db:: passes"
+      - "prose: the migration-set-selection logic is documented at the call site in backend/src/db/mod.rs"
+    conventions: "Follow the existing migrations/ numbering and header-comment conventions (see 028_imap_accounts.sql for the current house style)."
     depends_on: [0]
-    touches: ["frontend/apps/web/src/features/email/**", "frontend/apps/web/src/features/chat/**"]
-    adrs: []
+    touches: ["backend/migrations/**", "backend/src/db/mod.rs"]
+    adrs: ["ADR-033-postgresql-backend-support"]
     ddd: []
 
   - id: 2
-    goal: "E, #, and Cmd+Shift+A work: archive, delete, and select-all are keyboard-accessible."
-    track: "keyboard-shortcuts"
+    goal: "Every backend call site that talks to the database works against either backend through the phase-0 abstraction — no code path still assumes SqlitePool."
+    track: "database"
     deliverables:
-      - "`E` archives the currently focused email."
-      - "`#` deletes the currently focused email."
-      - "`Cmd+Shift+A` selects all emails in the current view."
+      - "The 22 files currently importing/using SqlitePool directly migrated onto the Database abstraction from phase 0."
+      - "Any query that relied on SQLite-specific SQL syntax (not just the migrations) ported or branched per backend."
     definition_of_done:
-      - "cmd: pnpm --filter web test passes, including new tests asserting archive/delete fire the same mutation the click UI fires, and select-all selects every currently-visible row"
-      - "cmd: pnpm --filter web typecheck passes"
-    conventions: "Reuse EmailList.tsx's existing archive/delete/select-all handlers — same pattern as phase 1."
+      - "cmd: cd backend && cargo build --features vectors passes"
+      - "cmd: cd backend && cargo test passes"
+      - "cmd: cd backend && cargo clippy --all-targets --features vectors -- -D warnings passes"
+      - "grep:absent: SqlitePool in backend/src (outside the phase-0 abstraction's own internals in backend/src/db/mod.rs)"
+    conventions: "Mechanical, file-by-file migration — no behavior change intended. Match the existing bind-parameter and error-handling patterns already in each file."
     depends_on: [0]
-    touches: ["frontend/apps/web/src/features/email/**"]
-    adrs: []
+    touches: ["backend/src/**/*.rs"]
+    adrs: ["ADR-033-postgresql-backend-support"]
     ddd: []
 
   - id: 3
-    goal: "Cmd+, and ? work: settings is keyboard-accessible, and a help surface documents the live shortcut set."
-    track: "keyboard-shortcuts"
+    goal: "CI actually proves PostgreSQL works — the entrypoint secret-plumbing bug that made smoke.yml silently test SQLite while believing it tested Postgres is fixed, and a dedicated CI job runs the backend suite against a live Postgres service."
+    track: "ci"
     deliverables:
-      - "`Cmd+,` opens/navigates to settings."
-      - "`?` opens a keyboard-shortcut help panel/modal that enumerates the full live set (ideally rendered FROM the useKeyboard registry's own shortcut map, so it can't drift from reality the way the docs table did)."
+      - "backend/entrypoint.sh (or the compose secret name) fixed so the postgres:// URL smoke.yml already writes actually reaches EMAILIBRIUM_DATABASE_URL."
+      - "A new job in .github/workflows/ci.yml running the backend test suite against a live postgres:16-alpine service container (mirroring the sqlite-path job)."
+      - "smoke.yml updated/verified to assert it is genuinely exercising Postgres post-fix (e.g. a diagnostic log line or health-endpoint field naming the active backend)."
     definition_of_done:
-      - "cmd: pnpm --filter web test passes, including new tests asserting Cmd+, navigates to settings and ? opens the help surface"
-      - "cmd: pnpm --filter web typecheck passes"
-      - "prose: the help panel's shortcut list is sourced from the same registry the hook dispatches from, not a hand-maintained duplicate"
-    conventions: "New help component should match the existing CommandPalette.tsx's modal/overlay styling conventions."
-    depends_on: [0]
-    touches: ["frontend/apps/web/src/features/command-center/**"]
-    adrs: []
+      - "cmd: cd backend && EMAILIBRIUM_DATABASE_URL=postgres://... cargo test passes locally against a throwaway postgres container (documented reproduction command)"
+      - "grep: EMAILIBRIUM_DATABASE_URL in backend/entrypoint.sh (or wherever the fix lands)"
+      - "prose: .github/workflows/ci.yml contains a postgres service-container job running the backend suite"
+      - "prose: the CI job referenced above is green on the phase's own PR (remote CI is the authority per orchestrate's invariants — this line is verified by the gate reading real check results, not asserted)"
+    conventions: "Match ci.yml's existing job structure and docker.yml/smoke.yml's service-container + healthcheck conventions."
+    depends_on: [1, 2]
+    touches: [".github/workflows/ci.yml", ".github/workflows/smoke.yml", "backend/entrypoint.sh"]
+    adrs: ["ADR-033-postgresql-backend-support"]
     ddd: []
 
   - id: 4
-    goal: "docs/user-guide.md's Keyboard Shortcuts table is complete and accurate again — this time verifiably, not just by inspection."
+    goal: "The operator docs describe PostgreSQL support accurately now that it's real, closing the loop the docs-accuracy-audit pipeline opened."
     track: "docs"
     deliverables:
-      - "docs/user-guide.md Keyboard Shortcuts table rewritten to list the full reconciled set: the pre-existing Cmd+K/Escape/↓↑/Cmd+Enter/Enter/Shift+Enter rows plus the 7 newly-real rows from phases 1-3 (C, R, F, E, #, Cmd+Shift+A, Cmd+,, ?) — J/K deliberately omitted (superseded by arrow nav, not restored)."
-      - "A small verification script (in the spirit of docs-accuracy-audit's scripts/audit/extract-routes.sh) comparing the runtime shortcut registry's keys against the doc table, so this table can be checked instead of trusted."
+      - "docs/deployment-guide.md Database Strategy section rewritten: remove the 'SQLite is currently the only database...' language, document real Postgres setup + the actual multi-user/HA guidance now that it applies."
+      - "docs/configuration-reference.md's EMAILIBRIUM_DATABASE_URL entry updated with a working postgres:// example."
     definition_of_done:
-      - "prose: every shortcut key present in the phase-0..3 useKeyboard registrations has a corresponding row in docs/user-guide.md's table, and vice versa — verified by the verification script's output, not by eye"
-      - "cmd: just lint (or the docs-only subset: markdownlint) passes"
-      - "grep:absent: click/tap-only today in the Keyboard Shortcuts section of docs/user-guide.md (the caveat this pipeline makes obsolete)"
-    conventions: "Match the existing table formatting docs-accuracy-audit's phase 1 already established in this file."
-    depends_on: [1, 2, 3]
-    touches: ["docs/user-guide.md", "scripts/audit/**"]
-    adrs: []
+      - "grep:absent: planned, not implemented in docs/deployment-guide.md (the specific phrase this pipeline makes obsolete)"
+      - "cmd: just lint (or the docs-only subset: markdownlint + lychee) passes"
+      - "prose: docs/deployment-guide.md's Database Strategy table reflects PostgreSQL as an available option with accurate operational notes"
+    conventions: "Match docs-accuracy-audit's phase-2 prose style in these same two files — this phase is a direct continuation of that edit, now describing working code instead of documenting its absence."
+    depends_on: [3]
+    touches: ["docs/deployment-guide.md", "docs/configuration-reference.md"]
+    adrs: ["ADR-033-postgresql-backend-support"]
     ddd: []
