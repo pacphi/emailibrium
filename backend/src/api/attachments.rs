@@ -92,7 +92,7 @@ async fn get_email_message_id(
     let row: Option<(Option<String>,)> =
         sqlx::query_as("SELECT message_id FROM emails WHERE id = ?1")
             .bind(email_id)
-            .fetch_optional(&state.db.pool)
+            .fetch_optional(state.db.pool())
             .await
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     match row {
@@ -146,7 +146,7 @@ async fn lazy_fetch_attachment(
     sqlx::query("UPDATE attachments SET fetch_status = 'fetched', storage_path = ?1 WHERE id = ?2")
         .bind(&path)
         .bind(att_id)
-        .execute(&state.db.pool)
+        .execute(state.db.pool())
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -240,7 +240,7 @@ async fn list_attachments(
 
     let rows = sqlx::query(sql)
         .bind(&email_id)
-        .fetch_all(&state.db.pool)
+        .fetch_all(state.db.pool())
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -274,7 +274,7 @@ async fn download_attachment(
     )
     .bind(&att_id)
     .bind(&email_id)
-    .fetch_optional(&state.db.pool)
+    .fetch_optional(state.db.pool())
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
     .ok_or_else(|| (StatusCode::NOT_FOUND, "Attachment not found".to_string()))?;
@@ -342,7 +342,7 @@ async fn download_all_zip(
          FROM attachments WHERE email_id = ?1 AND is_inline = FALSE ORDER BY filename",
     )
     .bind(&email_id)
-    .fetch_all(&state.db.pool)
+    .fetch_all(state.db.pool())
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 

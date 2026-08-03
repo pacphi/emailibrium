@@ -158,7 +158,7 @@ impl EvaluationEngine {
                 metrics_b TEXT NOT NULL DEFAULT '{}'
             )",
         )
-        .execute(&self.db.pool)
+        .execute(self.db.pool())
         .await?;
 
         sqlx::query(
@@ -173,11 +173,11 @@ impl EvaluationEngine {
                 ndcg REAL
             )",
         )
-        .execute(&self.db.pool)
+        .execute(self.db.pool())
         .await?;
 
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_ab_results_test ON ab_test_results(test_id)")
-            .execute(&self.db.pool)
+            .execute(self.db.pool())
             .await?;
 
         Ok(())
@@ -221,7 +221,7 @@ impl EvaluationEngine {
         .bind(&vb_json)
         .bind(traffic_split)
         .bind(test.created_at)
-        .execute(&self.db.pool)
+        .execute(self.db.pool())
         .await?;
 
         // Store in memory.
@@ -294,7 +294,7 @@ impl EvaluationEngine {
         .bind(precision)
         .bind(recall)
         .bind(ndcg)
-        .execute(&self.db.pool)
+        .execute(self.db.pool())
         .await?;
 
         debug!(
@@ -330,7 +330,7 @@ impl EvaluationEngine {
         sqlx::query("UPDATE ab_tests SET status = 'concluded', concluded_at = ? WHERE test_id = ?")
             .bind(test.concluded_at)
             .bind(test_id)
-            .execute(&self.db.pool)
+            .execute(self.db.pool())
             .await?;
 
         // Generate recommendation.

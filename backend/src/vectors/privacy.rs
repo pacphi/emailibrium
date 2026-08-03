@@ -165,7 +165,7 @@ impl PrivacyService {
                 created_at DATETIME DEFAULT (datetime('now'))
             )",
         )
-        .execute(&self.db.pool)
+        .execute(self.db.pool())
         .await?;
 
         sqlx::query(
@@ -179,21 +179,21 @@ impl PrivacyService {
                 created_at DATETIME DEFAULT (datetime('now'))
             )",
         )
-        .execute(&self.db.pool)
+        .execute(self.db.pool())
         .await?;
 
         sqlx::query(
             "CREATE INDEX IF NOT EXISTS idx_privacy_audit_event \
              ON privacy_audit_log(event_type)",
         )
-        .execute(&self.db.pool)
+        .execute(self.db.pool())
         .await?;
 
         sqlx::query(
             "CREATE INDEX IF NOT EXISTS idx_privacy_audit_created \
              ON privacy_audit_log(created_at)",
         )
-        .execute(&self.db.pool)
+        .execute(self.db.pool())
         .await?;
 
         Ok(())
@@ -231,7 +231,7 @@ impl PrivacyService {
         .bind(ip_address)
         .bind(user_agent)
         .bind(now)
-        .execute(&self.db.pool)
+        .execute(self.db.pool())
         .await?;
 
         // Also update the effective consent state: if a previous record for the
@@ -244,7 +244,7 @@ impl PrivacyService {
             .bind(now)
             .bind(consent_type)
             .bind(&id)
-            .execute(&self.db.pool)
+            .execute(self.db.pool())
             .await?;
         }
 
@@ -293,7 +293,7 @@ impl PrivacyService {
              LIMIT 1",
         )
         .bind(consent_type)
-        .fetch_optional(&self.db.pool)
+        .fetch_optional(self.db.pool())
         .await?;
 
         Ok(row.map(
@@ -324,7 +324,7 @@ impl PrivacyService {
                      AND d.created_at = latest.max_created \
              ORDER BY d.consent_type",
         )
-        .fetch_all(&self.db.pool)
+        .fetch_all(self.db.pool())
         .await?;
 
         Ok(rows
@@ -363,7 +363,7 @@ impl PrivacyService {
         .bind(&event.resource_id)
         .bind(&event.actor)
         .bind(&details_json)
-        .execute(&self.db.pool)
+        .execute(self.db.pool())
         .await?;
 
         Ok(())
@@ -379,7 +379,7 @@ impl PrivacyService {
         let limit = per_page as i64;
 
         let (total,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM privacy_audit_log")
-            .fetch_one(&self.db.pool)
+            .fetch_one(self.db.pool())
             .await?;
 
         let rows: Vec<AuditRow> = sqlx::query_as(
@@ -390,7 +390,7 @@ impl PrivacyService {
         )
         .bind(limit)
         .bind(offset)
-        .fetch_all(&self.db.pool)
+        .fetch_all(self.db.pool())
         .await?;
 
         let entries = rows
@@ -441,7 +441,7 @@ impl PrivacyService {
             "SELECT id, from_addr, subject, received_at, category \
                  FROM emails ORDER BY received_at DESC",
         )
-        .fetch_all(&self.db.pool)
+        .fetch_all(self.db.pool())
         .await?;
 
         let emails: Vec<ExportedEmail> = email_rows
@@ -464,7 +464,7 @@ impl PrivacyService {
         let ai_consents: Vec<(String, String, Option<String>, String)> = sqlx::query_as(
             "SELECT provider, consented_at, revoked_at, acknowledgment FROM ai_consent",
         )
-        .fetch_all(&self.db.pool)
+        .fetch_all(self.db.pool())
         .await
         .unwrap_or_default();
 
@@ -506,43 +506,43 @@ impl PrivacyService {
 
         // Count before deletion.
         let (email_count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM emails")
-            .fetch_one(&self.db.pool)
+            .fetch_one(self.db.pool())
             .await
             .unwrap_or((0,));
 
         let (vector_count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM vector_store")
-            .fetch_one(&self.db.pool)
+            .fetch_one(self.db.pool())
             .await
             .unwrap_or((0,));
 
         let (consent_count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM consent_decisions")
-            .fetch_one(&self.db.pool)
+            .fetch_one(self.db.pool())
             .await
             .unwrap_or((0,));
 
         let (audit_count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM privacy_audit_log")
-            .fetch_one(&self.db.pool)
+            .fetch_one(self.db.pool())
             .await
             .unwrap_or((0,));
 
         // Delete user data (emails, vectors, consent).
         sqlx::query("DELETE FROM emails")
-            .execute(&self.db.pool)
+            .execute(self.db.pool())
             .await
             .ok();
 
         sqlx::query("DELETE FROM vector_store")
-            .execute(&self.db.pool)
+            .execute(self.db.pool())
             .await
             .ok();
 
         sqlx::query("DELETE FROM consent_decisions")
-            .execute(&self.db.pool)
+            .execute(self.db.pool())
             .await
             .ok();
 
         sqlx::query("DELETE FROM ai_consent")
-            .execute(&self.db.pool)
+            .execute(self.db.pool())
             .await
             .ok();
 
@@ -566,28 +566,28 @@ impl PrivacyService {
 
     async fn build_audit_summary(&self) -> Result<AuditSummary, VectorError> {
         let (total,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM privacy_audit_log")
-            .fetch_one(&self.db.pool)
+            .fetch_one(self.db.pool())
             .await
             .unwrap_or((0,));
 
         let (data_access,): (i64,) = sqlx::query_as(
             "SELECT COUNT(*) FROM privacy_audit_log WHERE event_type = 'data_access'",
         )
-        .fetch_one(&self.db.pool)
+        .fetch_one(self.db.pool())
         .await
         .unwrap_or((0,));
 
         let (data_export,): (i64,) = sqlx::query_as(
             "SELECT COUNT(*) FROM privacy_audit_log WHERE event_type = 'data_export'",
         )
-        .fetch_one(&self.db.pool)
+        .fetch_one(self.db.pool())
         .await
         .unwrap_or((0,));
 
         let (consent_change,): (i64,) = sqlx::query_as(
             "SELECT COUNT(*) FROM privacy_audit_log WHERE event_type = 'consent_change'",
         )
-        .fetch_one(&self.db.pool)
+        .fetch_one(self.db.pool())
         .await
         .unwrap_or((0,));
 
@@ -627,7 +627,7 @@ mod tests {
 
         // Create tables needed for tests.
         sqlx::query(include_str!("../../migrations/001_initial_schema.sql"))
-            .execute(&db.pool)
+            .execute(db.pool())
             .await
             .unwrap();
 
@@ -639,7 +639,7 @@ mod tests {
                 acknowledgment TEXT NOT NULL
             )",
         )
-        .execute(&db.pool)
+        .execute(db.pool())
         .await
         .unwrap();
 

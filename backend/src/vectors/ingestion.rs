@@ -540,7 +540,7 @@ impl IngestionPipeline {
                    LIMIT 1"#,
         )
         .bind(account_id)
-        .fetch_optional(&self.db.pool)
+        .fetch_optional(self.db.pool())
         .await
         .map_err(VectorError::DatabaseError)?;
 
@@ -564,7 +564,7 @@ impl IngestionPipeline {
                WHERE id = ?"#,
         )
         .bind(&cp_id)
-        .execute(&self.db.pool)
+        .execute(self.db.pool())
         .await
         .map_err(VectorError::DatabaseError)?;
 
@@ -646,7 +646,7 @@ impl IngestionPipeline {
                LIMIT 1"#,
         )
         .bind(account_id)
-        .fetch_optional(&self.db.pool)
+        .fetch_optional(self.db.pool())
         .await
         .map_err(VectorError::DatabaseError)?;
 
@@ -1266,7 +1266,7 @@ impl IngestionPipelineHandle {
                 "SELECT COUNT(*) FROM emails WHERE account_id = ? AND category_method = 'pending_backfill'",
             )
             .bind(&account_id)
-            .fetch_one(&db.pool)
+            .fetch_one(db.pool())
             .await
             .unwrap_or(0i64) as u64;
 
@@ -1295,7 +1295,7 @@ impl IngestionPipelineHandle {
                 )
                 .bind(&account_id)
                 .bind(batch_size as i64)
-                .fetch_all(&db.pool)
+                .fetch_all(db.pool())
                 .await;
 
                 let batch = match rows {
@@ -1376,7 +1376,7 @@ impl IngestionPipelineHandle {
                             .bind(cat_result.confidence)
                             .bind(&cat_result.method)
                             .bind(email_id)
-                            .execute(&db.pool)
+                            .execute(db.pool())
                             .await;
 
                             if let Err(err) = update_result {
@@ -1461,7 +1461,7 @@ impl IngestionPipelineHandle {
                ORDER BY received_at DESC"#,
         )
         .bind(account_id)
-        .fetch_all(&self.db.pool)
+        .fetch_all(self.db.pool())
         .await
         .map_err(VectorError::DatabaseError)?;
 
@@ -1497,7 +1497,7 @@ impl IngestionPipelineHandle {
         .bind(confidence)
         .bind(method)
         .bind(email_id)
-        .execute(&self.db.pool)
+        .execute(self.db.pool())
         .await
         .map_err(VectorError::DatabaseError)?;
         Ok(())
@@ -1572,7 +1572,7 @@ impl IngestionPipelineHandle {
         .bind(failed)
         .bind(last_processed_id)
         .bind(error_msg)
-        .execute(&self.db.pool)
+        .execute(self.db.pool())
         .await;
 
         if let Err(err) = result {
@@ -1622,7 +1622,7 @@ async fn update_embedding_status_standalone(
     .bind(vector_id)
     .bind(model)
     .bind(email_id)
-    .execute(&db.pool)
+    .execute(db.pool())
     .await
     .map_err(VectorError::DatabaseError)?;
     Ok(())
@@ -1640,7 +1640,7 @@ async fn update_thread_key_standalone(
     sqlx::query(r#"UPDATE emails SET thread_key = ? WHERE id = ?"#)
         .bind(thread_key)
         .bind(email_id)
-        .execute(&db.pool)
+        .execute(db.pool())
         .await
         .map_err(VectorError::DatabaseError)?;
     Ok(())
@@ -1718,7 +1718,7 @@ mod tests {
             .bind(&subject)
             .bind(&from_addr)
             .bind(&body_text)
-            .execute(&db.pool)
+            .execute(db.pool())
             .await
             .unwrap();
         }
@@ -1808,7 +1808,7 @@ mod tests {
         // Verify DB was updated
         let row: (String,) =
             sqlx::query_as("SELECT embedding_status FROM emails WHERE id = 'email-0'")
-                .fetch_one(&db.pool)
+                .fetch_one(db.pool())
                 .await
                 .unwrap();
         assert_eq!(row.0, "embedded");
@@ -1833,7 +1833,7 @@ mod tests {
         // Verify DB category was updated
         let row: (Option<String>,) =
             sqlx::query_as("SELECT category FROM emails WHERE id = 'email-0'")
-                .fetch_one(&db.pool)
+                .fetch_one(db.pool())
                 .await
                 .unwrap();
         assert!(row.0.is_some());

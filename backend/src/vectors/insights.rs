@@ -192,7 +192,7 @@ impl InsightEngine {
         let own_addresses: Vec<(String,)> = sqlx::query_as(
             "SELECT DISTINCT email_address FROM connected_accounts WHERE status = 'connected'",
         )
-        .fetch_all(&self.db.pool)
+        .fetch_all(self.db.pool())
         .await
         .unwrap_or_default();
 
@@ -212,7 +212,7 @@ impl InsightEngine {
                HAVING cnt >= 3
                ORDER BY cnt DESC"#,
         )
-        .fetch_all(&self.db.pool)
+        .fetch_all(self.db.pool())
         .await
         .map_err(VectorError::DatabaseError)?;
 
@@ -237,7 +237,7 @@ impl InsightEngine {
                    ORDER BY received_at ASC"#,
             )
             .bind(sender)
-            .fetch_all(&self.db.pool)
+            .fetch_all(self.db.pool())
             .await
             .map_err(VectorError::DatabaseError)?;
 
@@ -260,7 +260,7 @@ impl InsightEngine {
                    LIMIT 1"#,
             )
             .bind(sender)
-            .fetch_optional(&self.db.pool)
+            .fetch_optional(self.db.pool())
             .await
             .map_err(VectorError::DatabaseError)?;
 
@@ -294,7 +294,7 @@ impl InsightEngine {
                  / NULLIF(COUNT(*), 0), 0.0) as read_rate FROM emails WHERE from_addr = ?",
             )
             .bind(sender)
-            .fetch_one(&self.db.pool)
+            .fetch_one(self.db.pool())
             .await
             .map_err(VectorError::DatabaseError)?;
 
@@ -331,7 +331,7 @@ impl InsightEngine {
                HAVING cnt >= 2
                ORDER BY cnt DESC"#,
         )
-        .fetch_all(&self.db.pool)
+        .fetch_all(self.db.pool())
         .await
         .map_err(VectorError::DatabaseError)?;
 
@@ -356,7 +356,7 @@ impl InsightEngine {
                    LIMIT 1"#,
             )
             .bind(from_addr)
-            .fetch_optional(&self.db.pool)
+            .fetch_optional(self.db.pool())
             .await
             .map_err(VectorError::DatabaseError)?;
 
@@ -379,7 +379,7 @@ impl InsightEngine {
     pub async fn generate_report(&self) -> Result<InboxReport, VectorError> {
         // Total emails
         let total_row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM emails")
-            .fetch_one(&self.db.pool)
+            .fetch_one(self.db.pool())
             .await
             .map_err(VectorError::DatabaseError)?;
         let total_emails = total_row.0 as u64;
@@ -391,7 +391,7 @@ impl InsightEngine {
                GROUP BY category
                ORDER BY cnt DESC"#,
         )
-        .fetch_all(&self.db.pool)
+        .fetch_all(self.db.pool())
         .await
         .map_err(VectorError::DatabaseError)?;
 
@@ -413,7 +413,7 @@ impl InsightEngine {
                ORDER BY cnt DESC
                LIMIT 10"#,
         )
-        .fetch_all(&self.db.pool)
+        .fetch_all(self.db.pool())
         .await
         .map_err(VectorError::DatabaseError)?;
 
@@ -433,7 +433,7 @@ impl InsightEngine {
                    HAVING COUNT(*) >= 3
                )"#,
         )
-        .fetch_one(&self.db.pool)
+        .fetch_one(self.db.pool())
         .await
         .map_err(VectorError::DatabaseError)?;
         let subscription_count = sub_row.0 as u64;
@@ -446,7 +446,7 @@ impl InsightEngine {
             "SELECT COALESCE(CAST(COUNT(CASE WHEN is_read THEN 1 END) AS FLOAT) \
              / NULLIF(COUNT(*), 0), 0.0) as read_rate FROM emails",
         )
-        .fetch_one(&self.db.pool)
+        .fetch_one(self.db.pool())
         .await
         .map_err(VectorError::DatabaseError)?;
         let read_rate = read_rate_row.0;
@@ -610,7 +610,7 @@ mod tests {
     async fn test_db() -> Database {
         let db = Database::connect("sqlite::memory:").await.unwrap();
         sqlx::query(include_str!("../../migrations/001_initial_schema.sql"))
-            .execute(&db.pool)
+            .execute(db.pool())
             .await
             .unwrap();
         // Add unsubscribe header columns (migration 018).
@@ -619,7 +619,7 @@ mod tests {
             .map(|s| s.trim())
             .filter(|s| !s.is_empty())
         {
-            sqlx::query(stmt).execute(&db.pool).await.unwrap();
+            sqlx::query(stmt).execute(db.pool()).await.unwrap();
         }
         db
     }
@@ -657,7 +657,7 @@ mod tests {
             .bind(sender)
             .bind(body_text)
             .bind(&received_str)
-            .execute(&db.pool)
+            .execute(db.pool())
             .await
             .unwrap();
         }

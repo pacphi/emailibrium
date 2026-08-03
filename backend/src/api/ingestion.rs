@@ -238,7 +238,7 @@ pub async fn sync_emails_from_provider(
     let sync_row: Option<(Option<String>,)> =
         sqlx::query_as("SELECT history_id FROM sync_state WHERE account_id = ?")
             .bind(account_id)
-            .fetch_optional(&state.db.pool)
+            .fetch_optional(state.db.pool())
             .await
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -276,7 +276,7 @@ pub async fn sync_emails_from_provider(
                 );
                 let _ = sqlx::query("UPDATE sync_state SET history_id = NULL WHERE account_id = ?")
                     .bind(account_id)
-                    .execute(&state.db.pool)
+                    .execute(state.db.pool())
                     .await;
             }
         }
@@ -292,7 +292,7 @@ pub async fn sync_emails_from_provider(
     // Load enabled rules once for the whole sync run so we can apply them
     // to each email as it arrives, avoiding stragglers.
     let enabled_rules: Vec<crate::rules::types::Rule> =
-        crate::rules::rule_engine::RuleEngine::load_rules(&state.db.pool)
+        crate::rules::rule_engine::RuleEngine::load_rules(state.db.pool())
             .await
             .unwrap_or_default()
             .into_iter()
@@ -353,7 +353,7 @@ pub async fn sync_emails_from_provider(
         for msg in &page.messages {
             let n = upsert_email(state, account_id, provider_str, msg).await;
             if n > 0 && !enabled_rules.is_empty() {
-                crate::rules::executor::apply_rules_to_email(&state.db.pool, msg, &enabled_rules)
+                crate::rules::executor::apply_rules_to_email(state.db.pool(), msg, &enabled_rules)
                     .await;
             }
             inserted += n;
@@ -400,7 +400,7 @@ pub async fn sync_emails_from_provider(
         .bind(inserted as i64)
         .bind(hid)
         .bind(account_id)
-        .execute(&state.db.pool)
+        .execute(state.db.pool())
         .await;
     } else {
         let _ = sqlx::query(
@@ -409,7 +409,7 @@ pub async fn sync_emails_from_provider(
         )
         .bind(inserted as i64)
         .bind(account_id)
-        .execute(&state.db.pool)
+        .execute(state.db.pool())
         .await;
     }
 
@@ -547,7 +547,7 @@ async fn incremental_sync_delta(
             )
             .bind(new_hid)
             .bind(account_id)
-            .execute(&state.db.pool)
+            .execute(state.db.pool())
             .await;
         }
         return Ok(0);
@@ -555,7 +555,7 @@ async fn incremental_sync_delta(
 
     // Load enabled rules once so actions can be applied to each arriving email.
     let enabled_rules: Vec<crate::rules::types::Rule> =
-        crate::rules::rule_engine::RuleEngine::load_rules(&state.db.pool)
+        crate::rules::rule_engine::RuleEngine::load_rules(state.db.pool())
             .await
             .unwrap_or_default()
             .into_iter()
@@ -570,7 +570,7 @@ async fn incremental_sync_delta(
                 let n = upsert_email(state, account_id, provider_str, &msg).await;
                 if n > 0 && !enabled_rules.is_empty() {
                     crate::rules::executor::apply_rules_to_email(
-                        &state.db.pool,
+                        state.db.pool(),
                         &msg,
                         &enabled_rules,
                     )
@@ -589,7 +589,7 @@ async fn incremental_sync_delta(
     let now_iso = chrono::Utc::now().to_rfc3339();
     for msg_id in deleted_ids {
         if let Err(e) = crate::db::update_email_state(
-            &state.db.pool,
+            state.db.pool(),
             msg_id,
             true,
             false,
@@ -614,7 +614,7 @@ async fn incremental_sync_delta(
 
         if has_added("TRASH") {
             let _ = crate::db::update_email_state(
-                &state.db.pool,
+                state.db.pool(),
                 &lc.message_id,
                 true,
                 false,
@@ -624,7 +624,7 @@ async fn incremental_sync_delta(
             .await;
         } else if has_removed("TRASH") {
             let _ = crate::db::update_email_state(
-                &state.db.pool,
+                state.db.pool(),
                 &lc.message_id,
                 false,
                 false,
@@ -636,7 +636,7 @@ async fn incremental_sync_delta(
 
         if has_added("SPAM") {
             let _ = crate::db::update_email_state(
-                &state.db.pool,
+                state.db.pool(),
                 &lc.message_id,
                 false,
                 true,
@@ -646,7 +646,7 @@ async fn incremental_sync_delta(
             .await;
         } else if has_removed("SPAM") {
             let _ = crate::db::update_email_state(
-                &state.db.pool,
+                state.db.pool(),
                 &lc.message_id,
                 false,
                 false,
@@ -666,7 +666,7 @@ async fn incremental_sync_delta(
         .bind(inserted as i64)
         .bind(new_hid)
         .bind(account_id)
-        .execute(&state.db.pool)
+        .execute(state.db.pool())
         .await;
     }
 
@@ -734,7 +734,7 @@ async fn upsert_email(
     .bind(folder)
     .bind(&msg.list_unsubscribe)
     .bind(&msg.list_unsubscribe_post)
-    .execute(&state.db.pool)
+    .execute(state.db.pool())
     .await;
 
     match result {
@@ -1135,7 +1135,7 @@ async fn embedding_status(
         "SELECT COALESCE(embedding_status, 'pending') as status, COUNT(*) as cnt \
          FROM emails GROUP BY embedding_status",
     )
-    .fetch_all(&state.db.pool)
+    .fetch_all(state.db.pool())
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 

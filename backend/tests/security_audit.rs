@@ -310,7 +310,7 @@ async fn test_vector_backup_encrypted() {
         .await
         .unwrap();
 
-    let db = Arc::new(Database { pool });
+    let db = Arc::new(Database::Sqlite(pool));
 
     // Create an encrypted vector store.
     let inner: Arc<dyn VectorStoreBackend> = Arc::new(InMemoryVectorStore::new());
@@ -332,7 +332,7 @@ async fn test_vector_backup_encrypted() {
     let row: (Vec<u8>,) =
         sqlx::query_as("SELECT vector_data FROM vector_backups WHERE vector_id = ?1")
             .bind(&vector_id)
-            .fetch_one(&db.pool)
+            .fetch_one(db.pool())
             .await
             .unwrap();
 

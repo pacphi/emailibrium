@@ -122,7 +122,7 @@ async fn list_clusters(
                 query = query.bind(id);
             }
             query
-                .fetch_all(&state.db.pool)
+                .fetch_all(state.db.pool())
                 .await
                 .unwrap_or_default()
                 .into_iter()

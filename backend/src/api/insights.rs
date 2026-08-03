@@ -143,7 +143,7 @@ async fn temporal_insights(
          FROM emails WHERE received_at >= DATE('now', '-90 days') \
          GROUP BY DATE(received_at) ORDER BY date ASC",
     )
-    .fetch_all(&state.db.pool)
+    .fetch_all(state.db.pool())
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
     .into_iter()
@@ -156,7 +156,7 @@ async fn temporal_insights(
          COUNT(*) as count FROM emails WHERE received_at >= DATE('now', '-90 days') \
          GROUP BY date, category ORDER BY date ASC",
     )
-    .fetch_all(&state.db.pool)
+    .fetch_all(state.db.pool())
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
     .into_iter()
@@ -172,7 +172,7 @@ async fn temporal_insights(
         "SELECT CAST(STRFTIME('%w', received_at) AS INTEGER) as day, COUNT(*) as count \
          FROM emails GROUP BY day ORDER BY day ASC",
     )
-    .fetch_all(&state.db.pool)
+    .fetch_all(state.db.pool())
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
     .into_iter()
@@ -184,7 +184,7 @@ async fn temporal_insights(
         "SELECT CAST(STRFTIME('%H', received_at) AS INTEGER) as hour, COUNT(*) as count \
          FROM emails GROUP BY hour ORDER BY hour ASC",
     )
-    .fetch_all(&state.db.pool)
+    .fetch_all(state.db.pool())
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
     .into_iter()
@@ -214,7 +214,7 @@ async fn topic_clusters(
          WHERE COALESCE(is_spam, 0) = 0 AND COALESCE(is_trash, 0) = 0 \
          GROUP BY cat ORDER BY cnt DESC",
     )
-    .fetch_all(&state.db.pool)
+    .fetch_all(state.db.pool())
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -229,7 +229,7 @@ async fn topic_clusters(
              GROUP BY from_addr ORDER BY COUNT(*) DESC LIMIT 3",
         )
         .bind(&category)
-        .fetch_all(&state.db.pool)
+        .fetch_all(state.db.pool())
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -241,7 +241,7 @@ async fn topic_clusters(
              ORDER BY received_at DESC LIMIT 3",
         )
         .bind(&category)
-        .fetch_all(&state.db.pool)
+        .fetch_all(state.db.pool())
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 

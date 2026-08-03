@@ -348,7 +348,7 @@ impl RagPipeline {
         }
 
         let rows: Vec<EmailRow> = query
-            .fetch_all(&self.db.pool)
+            .fetch_all(self.db.pool())
             .await
             .map_err(|e| VectorError::EmbeddingFailed(format!("RAG email fetch failed: {e}")))?;
 

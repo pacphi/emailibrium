@@ -92,7 +92,7 @@ impl VectorBackupService {
         .bind(&metadata_json)
         .bind(now)
         .bind(now)
-        .execute(&self.db.pool)
+        .execute(self.db.pool())
         .await?;
 
         Ok(())
@@ -153,7 +153,7 @@ impl VectorBackupService {
              FROM vector_backups WHERE vector_id = ?1",
         )
         .bind(vector_id)
-        .fetch_optional(&self.db.pool)
+        .fetch_optional(self.db.pool())
         .await?;
 
         match row {
@@ -168,7 +168,7 @@ impl VectorBackupService {
             "SELECT vector_id, email_id, collection, dimensions, vector_data, metadata_json \
              FROM vector_backups",
         )
-        .fetch_all(&self.db.pool)
+        .fetch_all(self.db.pool())
         .await?;
 
         let mut docs = Vec::with_capacity(rows.len());
@@ -182,7 +182,7 @@ impl VectorBackupService {
     pub async fn delete_backup(&self, vector_id: &str) -> Result<(), VectorError> {
         sqlx::query("DELETE FROM vector_backups WHERE vector_id = ?1")
             .bind(vector_id)
-            .execute(&self.db.pool)
+            .execute(self.db.pool())
             .await?;
 
         Ok(())
@@ -276,7 +276,7 @@ mod tests {
             .await
             .unwrap();
 
-        Database { pool }
+        Database::Sqlite(pool)
     }
 
     /// Create a test vector document.

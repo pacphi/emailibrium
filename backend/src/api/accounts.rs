@@ -521,20 +521,20 @@ async fn disconnect_account(
         "SELECT vector_id FROM emails WHERE account_id = ?1 AND vector_id IS NOT NULL",
     )
     .bind(&id)
-    .fetch_all(&state.db.pool)
+    .fetch_all(state.db.pool())
     .await
     .unwrap_or_default();
 
     let emails_deleted = sqlx::query("DELETE FROM emails WHERE account_id = ?1")
         .bind(&id)
-        .execute(&state.db.pool)
+        .execute(state.db.pool())
         .await
         .map(|r| r.rows_affected())
         .unwrap_or(0);
 
     let _ = sqlx::query("DELETE FROM sync_state WHERE account_id = ?1")
         .bind(&id)
-        .execute(&state.db.pool)
+        .execute(state.db.pool())
         .await;
 
     // 2. Batch-delete vectors (async, non-blocking to the user).

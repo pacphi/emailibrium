@@ -858,7 +858,7 @@ impl HybridSearch {
         )
         .bind(&fts_query)
         .bind(limit_i64)
-        .fetch_all(&self.db.pool)
+        .fetch_all(self.db.pool())
         .await?;
 
         Ok(rows
@@ -913,7 +913,7 @@ impl HybridSearch {
         }
         q = q.bind(limit_i64);
 
-        let rows: Vec<(String,)> = q.fetch_all(&self.db.pool).await?;
+        let rows: Vec<(String,)> = q.fetch_all(self.db.pool()).await?;
 
         // Assign descending rank scores (1.0 for first, decaying).
         let total = rows.len() as f32;
@@ -1074,7 +1074,7 @@ impl HybridSearch {
             }
         }
 
-        let result = query.fetch_all(&self.db.pool).await?;
+        let result = query.fetch_all(self.db.pool()).await?;
         Ok(result)
     }
 }
@@ -1478,7 +1478,7 @@ mod tests {
             )
             "#,
         )
-        .execute(&db.pool)
+        .execute(db.pool())
         .await
         .unwrap();
 
@@ -1497,7 +1497,7 @@ mod tests {
             )
             "#,
         )
-        .execute(&db.pool)
+        .execute(db.pool())
         .await
         .unwrap();
 
@@ -1509,7 +1509,7 @@ mod tests {
             END
             "#,
         )
-        .execute(&db.pool)
+        .execute(db.pool())
         .await
         .unwrap();
 
@@ -1521,7 +1521,7 @@ mod tests {
             END
             "#,
         )
-        .execute(&db.pool)
+        .execute(db.pool())
         .await
         .unwrap();
 
@@ -1535,7 +1535,7 @@ mod tests {
             END
             "#,
         )
-        .execute(&db.pool)
+        .execute(db.pool())
         .await
         .unwrap();
 
@@ -1557,7 +1557,7 @@ mod tests {
             .bind(subject)
             .bind(from_addr)
             .bind(body)
-            .execute(&hs.db.pool)
+            .execute(hs.db.pool())
             .await
             .unwrap();
     }
@@ -2030,7 +2030,7 @@ mod tests {
                 is_read BOOLEAN DEFAULT FALSE
             )",
         )
-        .execute(&db.pool)
+        .execute(db.pool())
         .await
         .unwrap();
 
@@ -2069,13 +2069,13 @@ mod tests {
         sqlx::query("INSERT INTO emails (id, subject) VALUES (?, ?)")
             .bind("aligned")
             .bind("Budget Report")
-            .execute(&db.pool)
+            .execute(db.pool())
             .await
             .unwrap();
         sqlx::query("INSERT INTO emails (id, subject) VALUES (?, ?)")
             .bind("other")
             .bind("Cat Pictures")
-            .execute(&db.pool)
+            .execute(db.pool())
             .await
             .unwrap();
 
@@ -2129,7 +2129,7 @@ mod tests {
                 is_read BOOLEAN DEFAULT FALSE
             )",
         )
-        .execute(&db.pool)
+        .execute(db.pool())
         .await
         .unwrap();
 
@@ -2174,13 +2174,13 @@ mod tests {
         sqlx::query("INSERT INTO emails (id, subject) VALUES (?, ?)")
             .bind("email_hit")
             .bind("Budget Review")
-            .execute(&db.pool)
+            .execute(db.pool())
             .await
             .unwrap();
         sqlx::query("INSERT INTO emails (id, subject) VALUES (?, ?)")
             .bind("attachment_hit")
             .bind("Attachment Budget")
-            .execute(&db.pool)
+            .execute(db.pool())
             .await
             .unwrap();
 

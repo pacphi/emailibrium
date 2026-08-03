@@ -297,7 +297,7 @@ impl VectorService {
         if store_count == 0 {
             let (embedded_in_db,): (i64,) =
                 sqlx::query_as("SELECT COUNT(*) FROM emails WHERE embedding_status = 'embedded'")
-                    .fetch_one(&db.pool)
+                    .fetch_one(db.pool())
                     .await
                     .unwrap_or((0,));
 
@@ -305,7 +305,7 @@ impl VectorService {
                 let reset = sqlx::query(
                     "UPDATE emails SET embedding_status = 'pending' WHERE embedding_status = 'embedded'",
                 )
-                .execute(&db.pool)
+                .execute(db.pool())
                 .await
                 .map(|r| r.rows_affected())
                 .unwrap_or(0);

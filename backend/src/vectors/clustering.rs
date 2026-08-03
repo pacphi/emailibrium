@@ -1486,7 +1486,7 @@ impl ClusterEngine {
 
         // Also clear from SQLite so stale clusters don't reload on restart.
         sqlx::query("DELETE FROM topic_clusters")
-            .execute(&self.db.pool)
+            .execute(self.db.pool())
             .await?;
 
         tracing::info!("Cleared all clusters (memory + SQLite)");
@@ -1511,7 +1511,7 @@ impl ClusterEngine {
     /// (DELETE + INSERT) inside a transaction for atomicity.
     pub async fn persist_clusters(&self) -> Result<(), VectorError> {
         let clusters = self.clusters.read().await;
-        let pool = &self.db.pool;
+        let pool = self.db.pool();
 
         let mut tx = pool.begin().await?;
 
@@ -1561,7 +1561,7 @@ impl ClusterEngine {
     /// Load clusters from SQLite into the in-memory RwLock. Called on startup.
     #[allow(clippy::type_complexity)]
     pub async fn load_persisted_clusters(&self) -> Result<usize, VectorError> {
-        let pool = &self.db.pool;
+        let pool = self.db.pool();
 
         // Check if the table exists (migration may not have run yet).
         let table_exists: (i64,) = sqlx::query_as(

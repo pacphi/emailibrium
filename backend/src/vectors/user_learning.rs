@@ -153,13 +153,13 @@ impl UserLearningStore {
                 PRIMARY KEY (user_id, category)
             )",
         )
-        .execute(&self.db.pool)
+        .execute(self.db.pool())
         .await?;
 
         sqlx::query(
             "CREATE INDEX IF NOT EXISTS idx_user_learning_user ON user_learning_models(user_id)",
         )
-        .execute(&self.db.pool)
+        .execute(self.db.pool())
         .await?;
 
         Ok(())
@@ -262,7 +262,7 @@ impl UserLearningStore {
              FROM user_learning_models WHERE user_id = ?",
         )
         .bind(user_id)
-        .fetch_all(&self.db.pool)
+        .fetch_all(self.db.pool())
         .await?;
 
         if rows.is_empty() {
@@ -334,7 +334,7 @@ impl UserLearningStore {
         .bind(&offset_json)
         .bind(offset.feedback_count as i64)
         .bind(offset.updated_at)
-        .execute(&self.db.pool)
+        .execute(self.db.pool())
         .await?;
 
         Ok(())
@@ -344,7 +344,7 @@ impl UserLearningStore {
     pub async fn list_users(&self) -> Result<Vec<String>, VectorError> {
         let rows: Vec<(String,)> =
             sqlx::query_as("SELECT DISTINCT user_id FROM user_learning_models ORDER BY user_id")
-                .fetch_all(&self.db.pool)
+                .fetch_all(self.db.pool())
                 .await?;
 
         Ok(rows.into_iter().map(|(uid,)| uid).collect())
