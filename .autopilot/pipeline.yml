@@ -67,11 +67,13 @@ fix_budget: 5
 max_parallel: 1
 requeue_budget: 2
 
-# 2 (call-site migration touches ~22 files across the whole backend — wide blast radius) and
+# 2 (call-site migration touches ~22 files across the whole backend — wide blast radius),
 # 3 (CI + entrypoint secret-plumbing change — merge-adjacent, and the exact class of "green
 # build, broken runtime" gap the smoke.yml workflow itself was built to catch, per its own
-# header comment).
-risk_phases: [2, 3]
+# header comment), and 5 (adopts a new compiled Postgres extension (ruvector-postgres) plus
+# hand-written term/document-frequency maintenance queries feeding a SQL scoring function —
+# new attack surface + new place to get query construction wrong, per ADR-034).
+risk_phases: [2, 3, 5]
 
 court: auto
 
@@ -98,20 +100,22 @@ phases:
     ddd: []
 
   - id: 1
-    goal: "All 29 migrations run clean against a real PostgreSQL 16 instance, producing a schema equivalent to the SQLite one."
+    goal: "All migrations except the 3 FTS5-only ones run clean against a real PostgreSQL 16 instance, via parallel per-backend migration directories, producing a relationally-equivalent schema. Full-text search parity is explicitly out of scope here (ADR-034 — lands in phase 3)."
     track: "database"
     deliverables:
-      - "The 6 SQLite-specific migrations (AUTOINCREMENT/PRAGMA/etc.) ported to Postgres-compatible SQL, via whatever dual-migration strategy phase 0's ADR settled on (parallel per-backend migration dirs, or portable SQL where feasible)."
-      - "Database::run_migrations() (backend/src/db/mod.rs) picks the correct migration set for the connected backend."
+      - "backend/migrations/ split into backend/migrations/sqlite/ (the existing 29 files, moved verbatim — zero content change) and backend/migrations/postgres/ (26 files: every migration except 005_fts5_search.sql, 019_fts5_add_from_name.sql, 020_fts5_bm25_weights.sql, ported to Postgres dialect: AUTOINCREMENT -> GENERATED ALWAYS AS IDENTITY, BLOB -> BYTEA, DATETIME -> TIMESTAMP, datetime('now') -> now(), same numbering/filenames as their sqlite/ counterparts)."
+      - "Database::run_migrations() (backend/src/db/mod.rs) picks the correct migrations directory (two separate sqlx::migrate! embedded migrators, one per backend) based on the connected variant."
+      - "ADR-034 (already written) is referenced at the call site explaining why Postgres has no FTS-equivalent migrations yet."
     definition_of_done:
-      - "cmd: a throwaway postgres:16-alpine container (e.g. via docker run or docker compose) accepts `sqlx::migrate!` cleanly end to end for all 29 migrations"
-      - "grep:absent: AUTOINCREMENT|PRAGMA in the Postgres-targeted migration SQL"
+      - "cmd: a throwaway postgres:16-alpine container (docker run) accepts `sqlx::migrate!` cleanly end to end for all 26 Postgres-targeted migrations"
+      - "grep:absent: AUTOINCREMENT|BLOB\\b|\\bDATETIME\\b in backend/migrations/postgres/**/*.sql"
       - "cmd: cd backend && cargo test db:: passes"
-      - "prose: the migration-set-selection logic is documented at the call site in backend/src/db/mod.rs"
-    conventions: "Follow the existing migrations/ numbering and header-comment conventions (see 028_imap_accounts.sql for the current house style)."
+      - "cmd: cd backend && cargo build --features vectors passes (both migrators compile in)"
+      - "prose: the migration-set-selection logic is documented at the call site in backend/src/db/mod.rs, citing ADR-034 for the FTS exclusion"
+    conventions: "Follow the existing migrations/ numbering and header-comment conventions (see 028_imap_accounts.sql for the current house style). Postgres files keep the same filename/number as their sqlite/ counterpart so the two directories stay easy to diff side by side."
     depends_on: [0]
     touches: ["backend/migrations/**", "backend/src/db/mod.rs"]
-    adrs: ["ADR-033-postgresql-backend-support"]
+    adrs: ["ADR-033-postgresql-backend-support", "ADR-034-postgresql-fulltext-search-ruvector-bm25"]
     ddd: []
 
   - id: 2
@@ -162,13 +166,34 @@ phases:
       - "docs/deployment-guide.md Database Strategy section rewritten: remove the 'SQLite is currently the only database...' language, document real Postgres setup + the actual multi-user/HA guidance now that it applies."
       - "docs/deployment-guide.md gains a per-mode subsection or table covering all four ways emailibrium is actually run — native (`just dev` / `just dev-llm`), `just docker-up-dev`, and `just docker-up` — each row/entry stating the exact one-line toggle (the `EMAILIBRIUM_DATABASE_URL` value and/or the compose `--profile postgres` flag from phase 3) to run that mode against SQLite vs PostgreSQL. This is the single place a user checks instead of re-deriving it from config.yaml + docker-compose.yml + the ADR."
       - "docs/configuration-reference.md's EMAILIBRIUM_DATABASE_URL entry updated with a working postgres:// example."
+      - "docs/deployment-guide.md's Postgres section explicitly notes the interim full-text-search gap (no keyword search on Postgres until phase 5 ships ruvector-postgres BM25 — semantic/vector search is unaffected), citing ADR-034, so this is a documented tradeoff rather than a surprise a user discovers themselves."
     definition_of_done:
       - "grep:absent: planned, not implemented in docs/deployment-guide.md (the specific phrase this pipeline makes obsolete)"
       - "cmd: just lint (or the docs-only subset: markdownlint + lychee) passes"
       - "prose: docs/deployment-guide.md's Database Strategy table reflects PostgreSQL as an available option with accurate operational notes"
       - "prose: docs/deployment-guide.md explicitly documents the SQLite-vs-Postgres toggle for each of native dev, docker dev, and docker prod modes, consistent with what phase 3 actually shipped (not a generic restatement of the ADR)"
+      - "prose: docs/deployment-guide.md documents the full-text-search gap on Postgres until phase 5, citing ADR-034"
     conventions: "Match docs-accuracy-audit's phase-2 prose style in these same two files — this phase is a direct continuation of that edit, now describing working code instead of documenting its absence."
     depends_on: [3]
     touches: ["docs/deployment-guide.md", "docs/configuration-reference.md"]
-    adrs: ["ADR-033-postgresql-backend-support"]
+    adrs: ["ADR-033-postgresql-backend-support", "ADR-034-postgresql-fulltext-search-ruvector-bm25"]
+    ddd: []
+
+  - id: 5
+    goal: "PostgreSQL full-text search reaches real BM25 parity with SQLite FTS5 via ruvector-postgres, per ADR-034 — Postgres deployments get the same keyword-search capability as SQLite, not just relational-schema parity."
+    track: "database"
+    deliverables:
+      - "docker-compose.yml's postgres service (profile-gated in phase 3) switched to a ruvector-postgres image (Ruvnet's prebuilt Docker Hub image, or a project-built equivalent if that proves impractical) with `CREATE EXTENSION ruvector;` applied via a Postgres-only migration/init step."
+      - "A term/document-frequency maintenance path for the emails table (subject, from_name, from_addr, body_text, labels) — the Postgres-side equivalent of FTS5's content-sync triggers from migrations 005/019 — feeding ruvector_bm25_score(). Approximate the existing 6-column BM25 weight vector from ADR-029 (subject x10, from_name x5, from_addr x3, body_text x1, labels x2) as closely as ruvector-postgres's scoring function allows; document any unavoidable divergence."
+      - "The backend's existing hybrid search code path (ADR-001) queries ruvector_bm25_score() for the keyword-ranking half when connected to Postgres, instead of the SQLite FTS5 query it uses today — same hybrid fusion logic, different keyword-scoring backend."
+      - "docs/deployment-guide.md's interim full-text-search gap note (phase 4) updated to describe the shipped capability instead of the gap."
+    definition_of_done:
+      - "cmd: a throwaway ruvector-postgres container (docker run) accepts CREATE EXTENSION ruvector and the new migration/init step cleanly"
+      - "cmd: cd backend && EMAILIBRIUM_DATABASE_URL=postgres://... cargo test passes, including new tests proving keyword search against a live ruvector-postgres instance returns emails ranked by BM25 relevance (mirroring the existing FTS5 test intent)"
+      - "grep:absent: the interim full-text-search gap language in docs/deployment-guide.md (the phrase phase 4 introduced and this phase makes obsolete)"
+      - "prose: the term/document-frequency maintenance path is documented at its call site, citing ADR-034 and noting where its BM25 weighting diverges (if at all) from the SQLite FTS5 weight vector"
+    conventions: "Match ADR-034's decision exactly — do not substitute tsvector or a different extension without a fresh ADR. Match the existing hybrid-search code's structure in the vectors/ module (ADR-001) rather than building a parallel search path."
+    depends_on: [1, 3]
+    touches: ["docker-compose.yml", "docker-compose.dev.yml", "backend/migrations/postgres/**", "backend/src/vectors/**", "docs/deployment-guide.md"]
+    adrs: ["ADR-034-postgresql-fulltext-search-ruvector-bm25", "ADR-001", "ADR-029"]
     ddd: []
