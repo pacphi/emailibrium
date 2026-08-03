@@ -103,7 +103,7 @@ phases:
     goal: "All migrations except the 3 FTS5-only ones run clean against a real PostgreSQL 16 instance, via parallel per-backend migration directories, producing a relationally-equivalent schema. Full-text search parity is explicitly out of scope here (ADR-034 — lands in phase 3)."
     track: "database"
     deliverables:
-      - "backend/migrations/ split into backend/migrations/sqlite/ (the existing 29 files, moved verbatim — zero content change) and backend/migrations/postgres/ (26 files: every migration except 005_fts5_search.sql, 019_fts5_add_from_name.sql, 020_fts5_bm25_weights.sql, ported to Postgres dialect: AUTOINCREMENT -> GENERATED ALWAYS AS IDENTITY, BLOB -> BYTEA, DATETIME -> TIMESTAMP, datetime('now') -> now(), same numbering/filenames as their sqlite/ counterparts)."
+      - "backend/migrations/ split into backend/migrations/sqlite/ (the existing 29 files, moved verbatim — zero content change) and backend/migrations/postgres/ (26 files: every migration except 005_fts5_search.sql, 019_fts5_add_from_name.sql, 020_fts5_bm25_weights.sql, ported to Postgres dialect: AUTOINCREMENT -> GENERATED ALWAYS AS IDENTITY, BLOB -> BYTEA, DATETIME -> TIMESTAMPTZ, datetime('now') -> now(), same numbering/filenames as their sqlite/ counterparts)."
       - "Database::run_migrations() (backend/src/db/mod.rs) picks the correct migrations directory (two separate sqlx::migrate! embedded migrators, one per backend) based on the connected variant."
       - "ADR-034 (already written) is referenced at the call site explaining why Postgres has no FTS-equivalent migrations yet."
     definition_of_done:

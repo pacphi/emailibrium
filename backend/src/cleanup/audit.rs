@@ -418,9 +418,9 @@ mod tests {
             // include_str! requires literal paths.
             let raw = match path {
                 "../../../migrations/024_cleanup_planning.sql" => {
-                    include_str!("../../migrations/024_cleanup_planning.sql")
+                    include_str!("../../migrations/sqlite/024_cleanup_planning.sql")
                 }
-                _ => include_str!("../../migrations/025_cleanup_audit_log.sql"),
+                _ => include_str!("../../migrations/sqlite/025_cleanup_audit_log.sql"),
             };
             let cleaned: String = raw
                 .lines()

@@ -818,7 +818,7 @@ mod tests {
             .await
             .unwrap();
         // Apply migrations as raw multi-statement scripts.
-        sqlx::raw_sql(include_str!("../../migrations/004_accounts.sql"))
+        sqlx::raw_sql(include_str!("../../migrations/sqlite/004_accounts.sql"))
             .execute(&pool)
             .await
             .unwrap();
@@ -828,7 +828,7 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        sqlx::raw_sql(include_str!("../../migrations/028_imap_accounts.sql"))
+        sqlx::raw_sql(include_str!("../../migrations/sqlite/028_imap_accounts.sql"))
             .execute(&pool)
             .await
             .unwrap();

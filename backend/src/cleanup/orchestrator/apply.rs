@@ -952,8 +952,8 @@ mod tests {
             .await
             .expect("connect");
         for raw in [
-            include_str!("../../../migrations/024_cleanup_planning.sql"),
-            include_str!("../../../migrations/025_cleanup_audit_log.sql"),
+            include_str!("../../../migrations/sqlite/024_cleanup_planning.sql"),
+            include_str!("../../../migrations/sqlite/025_cleanup_audit_log.sql"),
         ] {
             let cleaned: String = raw
                 .lines()

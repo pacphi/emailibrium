@@ -609,12 +609,12 @@ mod tests {
 
     async fn test_db() -> Database {
         let db = Database::connect("sqlite::memory:").await.unwrap();
-        sqlx::query(include_str!("../../migrations/001_initial_schema.sql"))
+        sqlx::query(include_str!("../../migrations/sqlite/001_initial_schema.sql"))
             .execute(db.pool())
             .await
             .unwrap();
         // Add unsubscribe header columns (migration 018).
-        for stmt in include_str!("../../migrations/018_unsubscribe_headers.sql")
+        for stmt in include_str!("../../migrations/sqlite/018_unsubscribe_headers.sql")
             .split(';')
             .map(|s| s.trim())
             .filter(|s| !s.is_empty())

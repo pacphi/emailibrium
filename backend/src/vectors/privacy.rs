@@ -626,7 +626,7 @@ mod tests {
             .expect("in-memory DB");
 
         // Create tables needed for tests.
-        sqlx::query(include_str!("../../migrations/001_initial_schema.sql"))
+        sqlx::query(include_str!("../../migrations/sqlite/001_initial_schema.sql"))
             .execute(db.pool())
             .await
             .unwrap();

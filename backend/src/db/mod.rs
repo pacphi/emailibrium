@@ -42,23 +42,25 @@ impl Database {
 
     /// Run all pending migrations for the connected backend.
     ///
-    /// A later phase ports the SQLite-only migrations to PostgreSQL-compatible SQL; until then
-    /// this fails against a real PostgreSQL connection (early migrations use SQLite-specific
-    /// syntax). The SQLite path is unaffected.
+    /// Each backend has its own migration directory (`migrations/sqlite/`,
+    /// `migrations/postgres/`) rather than one shared, dialect-straddling set — see ADR-033
+    /// §2.3 for why. The two directories carry the same relational schema under matching
+    /// filenames/numbers, with one deliberate exception: `migrations/postgres/` omits the 3
+    /// SQLite FTS5 migrations (005/019/020), since PostgreSQL has no FTS5 equivalent — full-text
+    /// search there is a separate, later capability (ADR-034), not part of this phase's schema
+    /// port. Connecting to PostgreSQL and running migrations works end to end for everything
+    /// except full-text search.
     pub async fn run_migrations(&self) -> Result<(), sqlx::Error> {
         match self {
-            Self::Sqlite(pool) => sqlx::migrate!("./migrations").run(pool).await?,
-            Self::Postgres(pool) => sqlx::migrate!("./migrations").run(pool).await?,
+            Self::Sqlite(pool) => sqlx::migrate!("./migrations/sqlite").run(pool).await?,
+            Self::Postgres(pool) => sqlx::migrate!("./migrations/postgres").run(pool).await?,
         }
         Ok(())
     }
 
     /// The SQLite pool, for call sites not yet migrated onto this enum directly (see the module
-    /// doc and ADR-033). Panics if connected to PostgreSQL. Unreachable in production today: a
-    /// `postgres://` `EMAILIBRIUM_DATABASE_URL` fails earlier and more cleanly, at
-    /// `run_migrations()` above, since the migration set isn't PostgreSQL-portable yet (ADR-033
-    /// §2.3). A later phase makes both — migrations, then this accessor's remaining callers —
-    /// safe for PostgreSQL.
+    /// doc and ADR-033). Panics if connected to PostgreSQL — a later phase migrates these
+    /// remaining callers onto the enum so this accessor can be removed.
     pub fn pool(&self) -> &SqlitePool {
         match self {
             Self::Sqlite(pool) => pool,
