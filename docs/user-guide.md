@@ -197,17 +197,35 @@ Rules are evaluated during ingestion and can also be applied retroactively to ex
 
 ## Keyboard Shortcuts
 
-| Shortcut      | Action                         |
-| ------------- | ------------------------------ |
-| `Cmd+K`       | Open command palette           |
-| `Escape`      | Close modal / palette / panel  |
-| `↓` / `↑`     | Navigate the email list        |
-| `Cmd+Enter`   | Send reply (in the reply box)  |
-| `Enter`       | Send message (in the Chat box) |
-| `Shift+Enter` | New line (in the Chat box)     |
+| Shortcut                       | Action                         |
+| ------------------------------ | ------------------------------ |
+| `Cmd+K` / `Ctrl+K`             | Open command palette           |
+| `Escape`                       | Close modal / palette / panel  |
+| `↓` / `↑`                      | Navigate the email list        |
+| `C`                            | Compose new email              |
+| `R`                            | Reply to email                 |
+| `F`                            | Forward email                  |
+| `E`                            | Archive email                  |
+| `Shift+#`                      | Delete email                   |
+| `Cmd+Shift+A` / `Ctrl+Shift+A` | Select all emails              |
+| `Cmd+,` / `Ctrl+,`             | Open settings                  |
+| `Shift+?`                      | Show keyboard shortcuts        |
+| `Cmd+Enter`                    | Send reply (in the reply box)  |
+| `Enter`                        | Send message (in the Chat box) |
+| `Shift+Enter`                  | New line (in the Chat box)     |
 
-Other actions (compose, reply, forward, archive, delete, search focus, select-all,
-open settings) are click/tap-only today — there is no keyboard shortcut for them yet.
+`C`/`R`/`F`/`E`/`Shift+#`/`Shift+?` are suppressed while typing in any text field, so typing those
+characters in an email body, reply, or search box behaves normally — `Cmd+Shift+A`, `Cmd+,`,
+`Ctrl+Shift+A`, and `Ctrl+,` are not suppressed (same category as `Cmd+K`), since a shortcut with
+Cmd/Ctrl held is assumed deliberate regardless of focus. `J`/`K` list navigation was considered but
+deliberately not restored — `↓`/`↑` already supersede it. The command palette (`Cmd+K`) and
+shortcut help panel (`Shift+?`) are available on the Command Center page; search-box focus (in the
+email list's filter bar) remains mouse/tap-only, since no shortcut moves focus there yet.
+
+This table is verified against the app's actual registered shortcuts by
+`bash scripts/audit/extract-shortcuts.sh`, which prints every shortcut key the frontend actually
+dispatches (grounded in `frontend/apps/web/src/shared/hooks/useKeyboard.ts`), so it can be
+checked instead of trusted.
 
 ## Tips and Best Practices
 
