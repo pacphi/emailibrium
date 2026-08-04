@@ -9,6 +9,8 @@ use std::borrow::Cow;
 use sqlx::postgres::{PgPool, PgPoolOptions};
 use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
 
+pub mod entities;
+
 /// Database connection pool, dispatched to SQLite or PostgreSQL by the connection URL's scheme
 /// (`sqlite:...` vs `postgres://...` / `postgresql://...`) — see ADR-033.
 ///
@@ -58,6 +60,25 @@ impl Database {
             Self::Postgres(pool) => sqlx::migrate!("./migrations/postgres").run(pool).await?,
         }
         Ok(())
+    }
+
+    /// A SeaORM handle over the SAME underlying pool this enum already holds (ADR-036).
+    ///
+    /// `sea_orm::DatabaseConnection` is itself a backend-dispatching wrapper, so this match
+    /// is the one place application code still branches on the backend — the composition-root
+    /// wrap proven by the ADR-036 spike (Q2): legacy sqlx call sites and SeaORM share the
+    /// identical pool during the incremental port, so there is no second pool to configure,
+    /// exhaust, or keep consistent. Cloning the returned handle is cheap (it wraps the pool,
+    /// itself a cheap-clone handle); repositories hold their own clone.
+    pub fn sea_orm(&self) -> sea_orm::DatabaseConnection {
+        match self {
+            Self::Sqlite(pool) => {
+                sea_orm::SqlxSqliteConnector::from_sqlx_sqlite_pool(pool.clone())
+            }
+            Self::Postgres(pool) => {
+                sea_orm::SqlxPostgresConnector::from_sqlx_postgres_pool(pool.clone())
+            }
+        }
     }
 
     /// The SQLite pool, for call sites not yet migrated onto this enum directly (see the module

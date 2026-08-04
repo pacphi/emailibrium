@@ -1,10 +1,22 @@
-//! `CleanupPlanRepository` trait + `SqliteCleanupPlanRepo` impl.
+//! `CleanupPlanRepository` trait + `SeaOrmCleanupPlanRepo` impl.
+//!
+//! Repository bodies are single-code-path SeaORM (ADR-036): the entities in
+//! `crate::db::entities` own per-backend encode/decode, upserts go through
+//! `OnConflict`, transactions through `TransactionTrait`, and the former SQL-side
+//! `json_set`/`jsonb_set` payload sync is a read-modify-write inside a
+//! transaction (ADR-036 §2.4). There is no per-backend dispatch here — the same
+//! bodies run against SQLite and PostgreSQL.
 //!
 //! See migration `024_cleanup_planning.sql` for schema. JSON-typed columns are
 //! stored as plaintext TEXT (see migration header for the encryption-debt note).
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use sea_orm::sea_query::{Expr, OnConflict};
+use sea_orm::{
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, DatabaseConnection,
+    EntityTrait, FromQueryResult, QueryFilter, QueryOrder, QuerySelect, TransactionTrait,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::cleanup::domain::operation::{
@@ -12,7 +24,9 @@ use crate::cleanup::domain::operation::{
 };
 use crate::cleanup::domain::plan::{CleanupPlan, CleanupPlanSummary, PlanId};
 use crate::cleanup::domain::ports::RepoError;
-use crate::db::{audited_sql, Database};
+use crate::db::entities::{
+    cleanup_plan_account_etags as etags, cleanup_plan_operations as ops, cleanup_plans as plans,
+};
 
 /// On-disk envelope for the `totals_json` column. Carries `PlanTotals`
 /// alongside `account_providers` (Item #4) inside the same TEXT blob to
@@ -109,24 +123,19 @@ pub trait CleanupPlanRepository: Send + Sync {
     async fn purge_older_than(&self, cutoff: DateTime<Utc>) -> Result<u32, RepoError>;
 }
 
-pub struct SqliteCleanupPlanRepo {
-    db: Database,
+pub struct SeaOrmCleanupPlanRepo {
+    conn: DatabaseConnection,
 }
 
-impl SqliteCleanupPlanRepo {
-    pub fn new(db: Database) -> Self {
-        Self { db }
+impl SeaOrmCleanupPlanRepo {
+    pub fn new(conn: DatabaseConnection) -> Self {
+        Self { conn }
     }
 }
 
 #[async_trait]
-impl CleanupPlanRepository for SqliteCleanupPlanRepo {
+impl CleanupPlanRepository for SeaOrmCleanupPlanRepo {
     async fn save(&self, plan: &CleanupPlan) -> Result<(), RepoError> {
-        // SQLite's `INSERT OR REPLACE` has no direct PostgreSQL keyword-for-keyword
-        // equivalent — PostgreSQL's upsert is `INSERT ... ON CONFLICT (id) DO UPDATE SET ...`.
-        // The two are written out separately per backend (not through `Database::adapt`,
-        // which only handles placeholder/`datetime('now')` translation — a genuinely
-        // different SQL clause needs genuinely different SQL text, per ADR-035 §2.3).
         let totals_json = serde_json::to_string(&PersistedTotals {
             totals: &plan.totals,
             account_providers: &plan.account_providers,
@@ -137,204 +146,111 @@ impl CleanupPlanRepository for SqliteCleanupPlanRepo {
         let warnings_json = serde_json::to_string(&plan.warnings)
             .map_err(|e| RepoError::Internal(e.to_string()))?;
 
-        let delete_etags_sql = self
-            .db
-            .adapt("DELETE FROM cleanup_plan_account_etags WHERE plan_id = ?");
-        let insert_etag_sql = self.db.adapt(
-            r#"INSERT INTO cleanup_plan_account_etags
-               (plan_id, account_id, etag_kind, etag_value)
-               VALUES (?, ?, ?, ?)"#,
-        );
-        let delete_ops_sql = self
-            .db
-            .adapt("DELETE FROM cleanup_plan_operations WHERE plan_id = ?");
-        let insert_op_sql = self.db.adapt(
-            r#"INSERT INTO cleanup_plan_operations
-               (plan_id, seq, op_kind, account_id, email_id, action, source_kind,
-                risk, status, payload_json)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
-        );
+        let txn = self.conn.begin().await?;
 
-        match &self.db {
-            Database::Sqlite(pool) => {
-                let mut tx = pool.begin().await?;
-                sqlx::query(
-                    r#"INSERT OR REPLACE INTO cleanup_plans
-                       (id, user_id, created_at, valid_until, plan_hash, status,
-                        totals_json, risk_json, warnings_json)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
-                )
-                .bind(plan.id.as_bytes().to_vec())
-                .bind(plan.user_id.as_bytes().to_vec())
-                .bind(plan.created_at.timestamp_millis())
-                .bind(plan.valid_until.timestamp_millis())
-                .bind(plan.plan_hash.to_vec())
-                .bind(plan.status.as_str())
-                .bind(&totals_json)
-                .bind(&risk_json)
-                .bind(&warnings_json)
-                .execute(&mut *tx)
-                .await?;
+        // Upsert the envelope: `ON CONFLICT (id) DO UPDATE`, one code path for
+        // both backends (formerly SQLite `INSERT OR REPLACE` + a hand-written
+        // PostgreSQL upsert — ADR-035 §2.3's divergence class, now library-owned).
+        let envelope = plans::ActiveModel {
+            id: Set(plan.id.as_bytes().to_vec()),
+            user_id: Set(plan.user_id.as_bytes().to_vec()),
+            created_at: Set(plan.created_at.timestamp_millis()),
+            valid_until: Set(plan.valid_until.timestamp_millis()),
+            plan_hash: Set(plan.plan_hash.to_vec()),
+            status: Set(plan.status.as_str().to_owned()),
+            totals_json: Set(totals_json),
+            risk_json: Set(risk_json),
+            warnings_json: Set(warnings_json),
+        };
+        plans::Entity::insert(envelope)
+            .on_conflict(
+                OnConflict::column(plans::Column::Id)
+                    .update_columns([
+                        plans::Column::UserId,
+                        plans::Column::CreatedAt,
+                        plans::Column::ValidUntil,
+                        plans::Column::PlanHash,
+                        plans::Column::Status,
+                        plans::Column::TotalsJson,
+                        plans::Column::RiskJson,
+                        plans::Column::WarningsJson,
+                    ])
+                    .to_owned(),
+            )
+            .exec(&txn)
+            .await?;
 
-                sqlx::query(audited_sql(&delete_etags_sql))
-                    .bind(plan.id.as_bytes().to_vec())
-                    .execute(&mut *tx)
-                    .await?;
-                for (account_id, etag) in &plan.account_state_etags {
-                    let kind = etag.kind_str();
-                    let value = serde_json::to_string(etag)
-                        .map_err(|e| RepoError::Internal(e.to_string()))?;
-                    sqlx::query(audited_sql(&insert_etag_sql))
-                        .bind(plan.id.as_bytes().to_vec())
-                        .bind(account_id.as_bytes().to_vec())
-                        .bind(kind)
-                        .bind(value)
-                        .execute(&mut *tx)
-                        .await?;
-                }
-
-                sqlx::query(audited_sql(&delete_ops_sql))
-                    .bind(plan.id.as_bytes().to_vec())
-                    .execute(&mut *tx)
-                    .await?;
-                for op in &plan.operations {
-                    insert_operation(&mut *tx, &insert_op_sql, plan.id, op).await?;
-                }
-
-                tx.commit().await?;
+        etags::Entity::delete_many()
+            .filter(etags::Column::PlanId.eq(plan.id.as_bytes().to_vec()))
+            .exec(&txn)
+            .await?;
+        for (account_id, etag) in &plan.account_state_etags {
+            let value =
+                serde_json::to_string(etag).map_err(|e| RepoError::Internal(e.to_string()))?;
+            etags::ActiveModel {
+                plan_id: Set(plan.id.as_bytes().to_vec()),
+                account_id: Set(account_id.as_bytes().to_vec()),
+                etag_kind: Set(etag.kind_str().to_owned()),
+                etag_value: Set(Some(value)),
             }
-            Database::Postgres(pool) => {
-                let mut tx = pool.begin().await?;
-                let sql = self.db.adapt(
-                    r#"INSERT INTO cleanup_plans
-                       (id, user_id, created_at, valid_until, plan_hash, status,
-                        totals_json, risk_json, warnings_json)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                       ON CONFLICT (id) DO UPDATE SET
-                         user_id = EXCLUDED.user_id, created_at = EXCLUDED.created_at,
-                         valid_until = EXCLUDED.valid_until, plan_hash = EXCLUDED.plan_hash,
-                         status = EXCLUDED.status, totals_json = EXCLUDED.totals_json,
-                         risk_json = EXCLUDED.risk_json, warnings_json = EXCLUDED.warnings_json"#,
-                );
-                sqlx::query(audited_sql(&sql))
-                    .bind(plan.id.as_bytes().to_vec())
-                    .bind(plan.user_id.as_bytes().to_vec())
-                    .bind(plan.created_at.timestamp_millis())
-                    .bind(plan.valid_until.timestamp_millis())
-                    .bind(plan.plan_hash.to_vec())
-                    .bind(plan.status.as_str())
-                    .bind(&totals_json)
-                    .bind(&risk_json)
-                    .bind(&warnings_json)
-                    .execute(&mut *tx)
-                    .await?;
-
-                sqlx::query(audited_sql(&delete_etags_sql))
-                    .bind(plan.id.as_bytes().to_vec())
-                    .execute(&mut *tx)
-                    .await?;
-                for (account_id, etag) in &plan.account_state_etags {
-                    let kind = etag.kind_str();
-                    let value = serde_json::to_string(etag)
-                        .map_err(|e| RepoError::Internal(e.to_string()))?;
-                    sqlx::query(audited_sql(&insert_etag_sql))
-                        .bind(plan.id.as_bytes().to_vec())
-                        .bind(account_id.as_bytes().to_vec())
-                        .bind(kind)
-                        .bind(value)
-                        .execute(&mut *tx)
-                        .await?;
-                }
-
-                sqlx::query(audited_sql(&delete_ops_sql))
-                    .bind(plan.id.as_bytes().to_vec())
-                    .execute(&mut *tx)
-                    .await?;
-                for op in &plan.operations {
-                    insert_operation(&mut *tx, &insert_op_sql, plan.id, op).await?;
-                }
-
-                tx.commit().await?;
-            }
+            .insert(&txn)
+            .await?;
         }
+
+        ops::Entity::delete_many()
+            .filter(ops::Column::PlanId.eq(plan.id.as_bytes().to_vec()))
+            .exec(&txn)
+            .await?;
+        for op in &plan.operations {
+            insert_operation(&txn, plan.id, op).await?;
+        }
+
+        txn.commit().await?;
         Ok(())
     }
 
     async fn load(&self, user_id: &str, id: PlanId) -> Result<Option<CleanupPlan>, RepoError> {
         // Phase A: simplified loader — only the envelope + ops in seq order.
         // Phase C will optimise.
-        let sql = self.db.adapt(
-            r#"SELECT user_id, created_at, valid_until, plan_hash, status,
-                          totals_json, risk_json, warnings_json
-                   FROM cleanup_plans WHERE id = ? AND user_id = ?"#,
-        );
-        let row: Option<(Vec<u8>, i64, i64, Vec<u8>, String, String, String, String)> =
-            match &self.db {
-                Database::Sqlite(pool) => {
-                    sqlx::query_as(audited_sql(&sql))
-                        .bind(id.as_bytes().to_vec())
-                        .bind(user_id.as_bytes().to_vec())
-                        .fetch_optional(pool)
-                        .await?
-                }
-                Database::Postgres(pool) => {
-                    sqlx::query_as(audited_sql(&sql))
-                        .bind(id.as_bytes().to_vec())
-                        .bind(user_id.as_bytes().to_vec())
-                        .fetch_optional(pool)
-                        .await?
-                }
-            };
-        let Some((_uid, created_ms, valid_ms, hash_bytes, status_s, totals_s, risk_s, warn_s)) =
-            row
-        else {
+        let row = plans::Entity::find_by_id(id.as_bytes().to_vec())
+            .filter(plans::Column::UserId.eq(user_id.as_bytes().to_vec()))
+            .one(&self.conn)
+            .await?;
+        let Some(envelope) = row else {
             return Ok(None);
         };
 
         let mut plan_hash = [0u8; 32];
-        if hash_bytes.len() == 32 {
-            plan_hash.copy_from_slice(&hash_bytes);
+        if envelope.plan_hash.len() == 32 {
+            plan_hash.copy_from_slice(&envelope.plan_hash);
         }
 
-        let status = PlanStatus::from_str_opt(&status_s)
-            .ok_or_else(|| RepoError::Internal(format!("bad plan status: {status_s}")))?;
-        let persisted: PersistedTotalsOwned =
-            serde_json::from_str(&totals_s).map_err(|e| RepoError::Internal(e.to_string()))?;
+        let status = PlanStatus::from_str_opt(&envelope.status)
+            .ok_or_else(|| RepoError::Internal(format!("bad plan status: {}", envelope.status)))?;
+        let persisted: PersistedTotalsOwned = serde_json::from_str(&envelope.totals_json)
+            .map_err(|e| RepoError::Internal(e.to_string()))?;
         let totals = persisted.totals;
         let account_providers = persisted.account_providers;
-        let risk = serde_json::from_str(&risk_s).map_err(|e| RepoError::Internal(e.to_string()))?;
-        let warnings =
-            serde_json::from_str(&warn_s).map_err(|e| RepoError::Internal(e.to_string()))?;
+        let risk = serde_json::from_str(&envelope.risk_json)
+            .map_err(|e| RepoError::Internal(e.to_string()))?;
+        let warnings = serde_json::from_str(&envelope.warnings_json)
+            .map_err(|e| RepoError::Internal(e.to_string()))?;
 
         // Etags
-        let etag_sql = self.db.adapt(
-            r#"SELECT account_id, etag_kind, etag_value
-               FROM cleanup_plan_account_etags WHERE plan_id = ?"#,
-        );
-        let etag_rows: Vec<(Vec<u8>, String, Option<String>)> = match &self.db {
-            Database::Sqlite(pool) => {
-                sqlx::query_as(audited_sql(&etag_sql))
-                    .bind(id.as_bytes().to_vec())
-                    .fetch_all(pool)
-                    .await?
-            }
-            Database::Postgres(pool) => {
-                sqlx::query_as(audited_sql(&etag_sql))
-                    .bind(id.as_bytes().to_vec())
-                    .fetch_all(pool)
-                    .await?
-            }
-        };
-        let mut etags = std::collections::BTreeMap::new();
-        for (acct_b, _kind, val_opt) in etag_rows {
-            let acct = String::from_utf8(acct_b).unwrap_or_default();
-            let etag: AccountStateEtag = match val_opt {
+        let etag_rows = etags::Entity::find()
+            .filter(etags::Column::PlanId.eq(id.as_bytes().to_vec()))
+            .all(&self.conn)
+            .await?;
+        let mut account_state_etags = std::collections::BTreeMap::new();
+        for row in etag_rows {
+            let acct = String::from_utf8(row.account_id).unwrap_or_default();
+            let etag: AccountStateEtag = match row.etag_value {
                 Some(s) => {
                     serde_json::from_str(&s).map_err(|e| RepoError::Internal(e.to_string()))?
                 }
                 None => AccountStateEtag::None,
             };
-            etags.insert(acct, etag);
+            account_state_etags.insert(acct, etag);
         }
 
         // Operations (full list; Phase B will paginate)
@@ -342,16 +258,18 @@ impl CleanupPlanRepository for SqliteCleanupPlanRepo {
             .list_operations(id, OpsFilter::default(), None, u32::MAX)
             .await?;
 
-        let account_ids: Vec<String> = etags.keys().cloned().collect();
+        let account_ids: Vec<String> = account_state_etags.keys().cloned().collect();
 
         Ok(Some(CleanupPlan {
             id,
             user_id: user_id.to_string(),
             account_ids,
-            created_at: DateTime::from_timestamp_millis(created_ms).unwrap_or_else(Utc::now),
-            valid_until: DateTime::from_timestamp_millis(valid_ms).unwrap_or_else(Utc::now),
+            created_at: DateTime::from_timestamp_millis(envelope.created_at)
+                .unwrap_or_else(Utc::now),
+            valid_until: DateTime::from_timestamp_millis(envelope.valid_until)
+                .unwrap_or_else(Utc::now),
             plan_hash,
-            account_state_etags: etags,
+            account_state_etags,
             account_providers,
             status,
             totals,
@@ -367,78 +285,37 @@ impl CleanupPlanRepository for SqliteCleanupPlanRepo {
         status: Option<PlanStatus>,
         limit: u32,
     ) -> Result<Vec<CleanupPlanSummary>, RepoError> {
-        let limit = limit.clamp(1, 100) as i64;
-        let rows: Vec<(Vec<u8>, i64, i64, String, String, String, String)> = match status {
-            Some(s) => {
-                let sql = self.db.adapt(
-                    r#"SELECT id, created_at, valid_until, status,
-                          totals_json, risk_json, warnings_json
-                   FROM cleanup_plans
-                   WHERE user_id = ? AND status = ?
-                   ORDER BY created_at DESC LIMIT ?"#,
-                );
-                match &self.db {
-                    Database::Sqlite(pool) => {
-                        sqlx::query_as(audited_sql(&sql))
-                            .bind(user_id.as_bytes().to_vec())
-                            .bind(s.as_str())
-                            .bind(limit)
-                            .fetch_all(pool)
-                            .await?
-                    }
-                    Database::Postgres(pool) => {
-                        sqlx::query_as(audited_sql(&sql))
-                            .bind(user_id.as_bytes().to_vec())
-                            .bind(s.as_str())
-                            .bind(limit)
-                            .fetch_all(pool)
-                            .await?
-                    }
-                }
-            }
-            None => {
-                let sql = self.db.adapt(
-                    r#"SELECT id, created_at, valid_until, status,
-                          totals_json, risk_json, warnings_json
-                   FROM cleanup_plans
-                   WHERE user_id = ?
-                   ORDER BY created_at DESC LIMIT ?"#,
-                );
-                match &self.db {
-                    Database::Sqlite(pool) => {
-                        sqlx::query_as(audited_sql(&sql))
-                            .bind(user_id.as_bytes().to_vec())
-                            .bind(limit)
-                            .fetch_all(pool)
-                            .await?
-                    }
-                    Database::Postgres(pool) => {
-                        sqlx::query_as(audited_sql(&sql))
-                            .bind(user_id.as_bytes().to_vec())
-                            .bind(limit)
-                            .fetch_all(pool)
-                            .await?
-                    }
-                }
-            }
-        };
+        let limit = u64::from(limit.clamp(1, 100));
+        let mut query = plans::Entity::find()
+            .filter(plans::Column::UserId.eq(user_id.as_bytes().to_vec()));
+        if let Some(s) = status {
+            query = query.filter(plans::Column::Status.eq(s.as_str()));
+        }
+        let rows = query
+            .order_by_desc(plans::Column::CreatedAt)
+            .limit(limit)
+            .all(&self.conn)
+            .await?;
+
         let mut out = Vec::with_capacity(rows.len());
-        for (id_b, created, valid, status_s, totals_s, risk_s, warn_s) in rows {
+        for row in rows {
             let id =
-                uuid::Uuid::from_slice(&id_b).map_err(|e| RepoError::Internal(e.to_string()))?;
-            let totals = serde_json::from_str::<PersistedTotalsOwned>(&totals_s)
+                uuid::Uuid::from_slice(&row.id).map_err(|e| RepoError::Internal(e.to_string()))?;
+            let totals = serde_json::from_str::<PersistedTotalsOwned>(&row.totals_json)
                 .map_err(|e| RepoError::Internal(e.to_string()))?
                 .totals;
-            let risk =
-                serde_json::from_str(&risk_s).map_err(|e| RepoError::Internal(e.to_string()))?;
-            let warnings: Vec<serde_json::Value> =
-                serde_json::from_str(&warn_s).map_err(|e| RepoError::Internal(e.to_string()))?;
+            let risk = serde_json::from_str(&row.risk_json)
+                .map_err(|e| RepoError::Internal(e.to_string()))?;
+            let warnings: Vec<serde_json::Value> = serde_json::from_str(&row.warnings_json)
+                .map_err(|e| RepoError::Internal(e.to_string()))?;
             out.push(CleanupPlanSummary {
                 id,
-                created_at: DateTime::from_timestamp_millis(created).unwrap_or_else(Utc::now),
-                valid_until: DateTime::from_timestamp_millis(valid).unwrap_or_else(Utc::now),
-                status: PlanStatus::from_str_opt(&status_s)
-                    .ok_or_else(|| RepoError::Internal(format!("bad status: {status_s}")))?,
+                created_at: DateTime::from_timestamp_millis(row.created_at)
+                    .unwrap_or_else(Utc::now),
+                valid_until: DateTime::from_timestamp_millis(row.valid_until)
+                    .unwrap_or_else(Utc::now),
+                status: PlanStatus::from_str_opt(&row.status)
+                    .ok_or_else(|| RepoError::Internal(format!("bad status: {}", row.status)))?,
                 totals,
                 risk,
                 warnings_count: warnings.len() as u64,
@@ -454,77 +331,49 @@ impl CleanupPlanRepository for SqliteCleanupPlanRepo {
         cursor: Option<u64>,
         limit: u32,
     ) -> Result<(Vec<PlannedOperation>, Option<u64>), RepoError> {
-        let limit = limit.clamp(1, 1000) as i64;
-        let cursor_i = cursor.map(|c| c as i64).unwrap_or(0);
+        let limit = u64::from(limit.clamp(1, 1000));
+        // The seq column is INTEGER/INT4; a cursor beyond i32 can match nothing,
+        // which saturating to i32::MAX preserves.
+        let cursor_seq = cursor
+            .map(|c| i32::try_from(c).unwrap_or(i32::MAX))
+            .unwrap_or(0);
 
-        // Build the SQL filter clauses dynamically based on which filters are set.
-        // SQLite supports `? IS NULL OR col = ?` style but sqlx requires explicit
-        // parameter binding; dynamic SQL is cleaner and avoids double-binding.
-        let mut sql = String::from(
-            "SELECT seq, COALESCE(payload_json, '') AS payload \
-             FROM cleanup_plan_operations \
-             WHERE plan_id = ? AND seq > ?",
-        );
-        if filter.account_id.is_some() {
-            sql.push_str(" AND account_id = ?");
+        // Optional filters compose on the typed query builder — the dynamic-SQL
+        // string assembly (and its placeholder bookkeeping) is gone.
+        let mut query = ops::Entity::find()
+            .filter(ops::Column::PlanId.eq(id.as_bytes().to_vec()))
+            .filter(ops::Column::Seq.gt(cursor_seq));
+        if let Some(ref account) = filter.account_id {
+            // account_id is stored as BLOB/BYTEA (bytes); compare as bytes so the
+            // filter matches the byte column, not a TEXT one.
+            query = query.filter(ops::Column::AccountId.eq(account.as_bytes().to_vec()));
         }
-        if filter.risk.is_some() {
-            sql.push_str(" AND risk = ?");
+        if let Some(ref risk) = filter.risk {
+            query = query.filter(ops::Column::Risk.eq(risk.as_str()));
         }
-        if filter.action.is_some() {
-            // action column stores the PlanAction discriminant string.
-            sql.push_str(" AND action = ?");
+        if let Some(ref action) = filter.action {
+            // action column stores the JSON-serialized PlanAction.
+            query = query.filter(ops::Column::Action.eq(action.as_str()));
         }
-        sql.push_str(" ORDER BY seq ASC LIMIT ?");
-        // Adapt placeholders (and datetime('now'), unused here) for the connected backend
-        // before the audited-SQL guard, same as every other dynamic query in this file.
-        let sql = self.db.adapt(&sql);
+        let rows = query
+            .order_by_asc(ops::Column::Seq)
+            .limit(limit)
+            .all(&self.conn)
+            .await?;
 
-        // (seq, payload) — a portable decode target across both backends (see ADR-035).
-        // seq is i32 because the `seq` column is INTEGER/INT4 in both dialects (a real
-        // Postgres 4-byte int, unlike SQLite's dynamically-8-byte INTEGER) — decoding it
-        // as i64 fails at runtime against Postgres with a ColumnDecode type mismatch.
-        // Replaces the raw Row::get() this dynamic-filter query used to need.
-        let rows: Vec<(i32, String)> = {
-            macro_rules! run_query {
-                ($pool:expr) => {{
-                    let mut q = sqlx::query_as(audited_sql(&sql))
-                        .bind(id.as_bytes().to_vec())
-                        .bind(cursor_i);
-                    if let Some(ref a) = filter.account_id {
-                        // account_id is stored as BLOB/BYTEA (bytes); bind as bytes so the
-                        // comparison succeeds against the byte column, not a TEXT one.
-                        q = q.bind(a.as_bytes().to_vec());
-                    }
-                    if let Some(ref r) = filter.risk {
-                        q = q.bind(r);
-                    }
-                    if let Some(ref act) = filter.action {
-                        q = q.bind(act);
-                    }
-                    q = q.bind(limit);
-                    q.fetch_all($pool).await
-                }};
-            }
-            let result = match &self.db {
-                Database::Sqlite(pool) => run_query!(pool),
-                Database::Postgres(pool) => run_query!(pool),
-            };
-            result?
-        };
-
-        let mut ops = Vec::with_capacity(rows.len());
+        let mut operations = Vec::with_capacity(rows.len());
         let mut last_seq: Option<u64> = cursor;
-        for (seq, payload) in rows {
+        for row in rows {
+            let payload = row.payload_json.unwrap_or_default();
             if payload.is_empty() {
                 continue;
             }
             if let Ok(op) = serde_json::from_str::<PlannedOperation>(&payload) {
-                ops.push(op);
+                operations.push(op);
             }
-            last_seq = Some(seq as u64);
+            last_seq = Some(row.seq as u64);
         }
-        Ok((ops, last_seq))
+        Ok((operations, last_seq))
     }
 
     async fn sample_operations(
@@ -533,33 +382,18 @@ impl CleanupPlanRepository for SqliteCleanupPlanRepo {
         source_kind: &str,
         n: u32,
     ) -> Result<Vec<String>, RepoError> {
-        let sql = self.db.adapt(
-            r#"SELECT sample_ids_json
-               FROM cleanup_plan_operations
-               WHERE plan_id = ? AND op_kind = 'predicate' AND source_kind = ?
-               LIMIT 1"#,
-        );
-        let row: Option<(Option<String>,)> = match &self.db {
-            Database::Sqlite(pool) => {
-                sqlx::query_as(audited_sql(&sql))
-                    .bind(id.as_bytes().to_vec())
-                    .bind(source_kind)
-                    .fetch_optional(pool)
-                    .await?
-            }
-            Database::Postgres(pool) => {
-                sqlx::query_as(audited_sql(&sql))
-                    .bind(id.as_bytes().to_vec())
-                    .bind(source_kind)
-                    .fetch_optional(pool)
-                    .await?
-            }
-        };
+        let row = ops::Entity::find()
+            .filter(ops::Column::PlanId.eq(id.as_bytes().to_vec()))
+            .filter(ops::Column::OpKind.eq("predicate"))
+            .filter(ops::Column::SourceKind.eq(source_kind))
+            .one(&self.conn)
+            .await?;
 
-        let Some((json_s,)) = row else {
+        let Some(row) = row else {
             return Ok(Vec::new());
         };
-        let all_ids: Vec<String> = json_s
+        let all_ids: Vec<String> = row
+            .sample_ids_json
             .as_deref()
             .and_then(|s| serde_json::from_str(s).ok())
             .unwrap_or_default();
@@ -573,42 +407,16 @@ impl CleanupPlanRepository for SqliteCleanupPlanRepo {
         account_id: &str,
         new_rows: Vec<PlannedOperation>,
     ) -> Result<(), RepoError> {
-        let delete_sql = self.db.adapt(
-            r#"DELETE FROM cleanup_plan_operations
-               WHERE plan_id = ? AND account_id = ?"#,
-        );
-        let insert_op_sql = self.db.adapt(
-            r#"INSERT INTO cleanup_plan_operations
-               (plan_id, seq, op_kind, account_id, email_id, action, source_kind,
-                risk, status, payload_json)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
-        );
-        match &self.db {
-            Database::Sqlite(pool) => {
-                let mut tx = pool.begin().await?;
-                sqlx::query(audited_sql(&delete_sql))
-                    .bind(id.as_bytes().to_vec())
-                    .bind(account_id.as_bytes().to_vec())
-                    .execute(&mut *tx)
-                    .await?;
-                for op in &new_rows {
-                    insert_operation(&mut *tx, &insert_op_sql, id, op).await?;
-                }
-                tx.commit().await?;
-            }
-            Database::Postgres(pool) => {
-                let mut tx = pool.begin().await?;
-                sqlx::query(audited_sql(&delete_sql))
-                    .bind(id.as_bytes().to_vec())
-                    .bind(account_id.as_bytes().to_vec())
-                    .execute(&mut *tx)
-                    .await?;
-                for op in &new_rows {
-                    insert_operation(&mut *tx, &insert_op_sql, id, op).await?;
-                }
-                tx.commit().await?;
-            }
+        let txn = self.conn.begin().await?;
+        ops::Entity::delete_many()
+            .filter(ops::Column::PlanId.eq(id.as_bytes().to_vec()))
+            .filter(ops::Column::AccountId.eq(account_id.as_bytes().to_vec()))
+            .exec(&txn)
+            .await?;
+        for op in &new_rows {
+            insert_operation(&txn, id, op).await?;
         }
+        txn.commit().await?;
         Ok(())
     }
 
@@ -619,45 +427,30 @@ impl CleanupPlanRepository for SqliteCleanupPlanRepo {
         status: OperationStatus,
         ts: DateTime<Utc>,
     ) -> Result<(), RepoError> {
-        // Keep payload_json in sync so list_operations returns current status without a
-        // separate column merge. SQLite's json_set() and Postgres's jsonb_set() have genuinely
-        // different signatures (path syntax, and payload_json is TEXT so Postgres needs an
-        // explicit ::jsonb/::text cast pair) — not a case Database::adapt's mechanical
-        // placeholder/datetime translation covers, so each backend gets its own SQL text here
-        // (ADR-035 §2.3: hand-duplication remains the right call where translation isn't
-        // mechanically sufficient).
-        match &self.db {
-            Database::Sqlite(pool) => {
-                sqlx::query(
-                    r#"UPDATE cleanup_plan_operations
-                       SET status = ?, applied_at = ?,
-                           payload_json = json_set(payload_json, '$.status', ?)
-                       WHERE plan_id = ? AND seq = ?"#,
-                )
-                .bind(status.as_str())
-                .bind(ts.timestamp_millis())
-                .bind(status.as_str())
-                .bind(id.as_bytes().to_vec())
-                .bind(seq as i64)
-                .execute(pool)
-                .await?;
-            }
-            Database::Postgres(pool) => {
-                sqlx::query(
-                    r#"UPDATE cleanup_plan_operations
-                       SET status = $1, applied_at = $2,
-                           payload_json = jsonb_set(payload_json::jsonb, '{status}', to_jsonb($3::text))::text
-                       WHERE plan_id = $4 AND seq = $5"#,
-                )
-                .bind(status.as_str())
-                .bind(ts.timestamp_millis())
-                .bind(status.as_str())
-                .bind(id.as_bytes().to_vec())
-                .bind(seq as i64)
-                .execute(pool)
-                .await?;
-            }
-        }
+        // A seq beyond i32 cannot exist in the INTEGER/INT4 column — nothing to
+        // update, mirroring the old UPDATE's zero-rows-affected no-op.
+        let Ok(seq) = i32::try_from(seq) else {
+            return Ok(());
+        };
+        // Keep payload_json's top-level `status` in sync so list_operations
+        // returns current status without a separate column merge. Formerly
+        // SQLite json_set / PostgreSQL jsonb_set with per-backend SQL text; now
+        // a read-modify-write in one transaction, one code path (ADR-036 §2.4).
+        let txn = self.conn.begin().await?;
+        let Some(row) = ops::Entity::find_by_id((id.as_bytes().to_vec(), seq))
+            .one(&txn)
+            .await?
+        else {
+            txn.commit().await?;
+            return Ok(());
+        };
+        let payload = payload_with_status(row.payload_json.as_deref(), status.as_str())?;
+        let mut active: ops::ActiveModel = row.into();
+        active.status = Set(status.as_str().to_owned());
+        active.applied_at = Set(Some(ts.timestamp_millis()));
+        active.payload_json = Set(payload);
+        active.update(&txn).await?;
+        txn.commit().await?;
         Ok(())
     }
 
@@ -667,37 +460,33 @@ impl CleanupPlanRepository for SqliteCleanupPlanRepo {
         seq: u64,
         status: crate::cleanup::domain::operation::PredicateStatus,
     ) -> Result<(), RepoError> {
-        // See update_operation_status's doc for why json_set/jsonb_set get separate SQL text.
-        match &self.db {
-            Database::Sqlite(pool) => {
-                sqlx::query(
-                    r#"UPDATE cleanup_plan_operations
-                       SET status = ?,
-                           payload_json = json_set(payload_json, '$.status', ?)
-                       WHERE plan_id = ? AND seq = ? AND op_kind = 'predicate'"#,
-                )
-                .bind(status.as_str())
-                .bind(status.as_str())
-                .bind(id.as_bytes().to_vec())
-                .bind(seq as i64)
-                .execute(pool)
-                .await?;
-            }
-            Database::Postgres(pool) => {
-                sqlx::query(
-                    r#"UPDATE cleanup_plan_operations
-                       SET status = $1,
-                           payload_json = jsonb_set(payload_json::jsonb, '{status}', to_jsonb($2::text))::text
-                       WHERE plan_id = $3 AND seq = $4 AND op_kind = 'predicate'"#,
-                )
-                .bind(status.as_str())
-                .bind(status.as_str())
-                .bind(id.as_bytes().to_vec())
-                .bind(seq as i64)
-                .execute(pool)
-                .await?;
-            }
+        let Ok(seq) = i32::try_from(seq) else {
+            return Ok(());
+        };
+        let txn = self.conn.begin().await?;
+        let Some(row) = ops::Entity::find_by_id((id.as_bytes().to_vec(), seq))
+            .one(&txn)
+            .await?
+        else {
+            txn.commit().await?;
+            return Ok(());
+        };
+        // The old SQL's `AND op_kind = 'predicate'` guard: a materialized row is
+        // silently left untouched.
+        if row.op_kind != "predicate" {
+            txn.commit().await?;
+            return Ok(());
         }
+        // `status.as_str()` goes into the payload verbatim, exactly as json_set
+        // did — including "partially_applied", which diverges from the camelCase
+        // the payload's serde round-trip expects. Pre-existing behavior,
+        // recorded in the phase parking-lot rather than silently changed here.
+        let payload = payload_with_status(row.payload_json.as_deref(), status.as_str())?;
+        let mut active: ops::ActiveModel = row.into();
+        active.status = Set(status.as_str().to_owned());
+        active.payload_json = Set(payload);
+        active.update(&txn).await?;
+        txn.commit().await?;
         Ok(())
     }
 
@@ -709,141 +498,97 @@ impl CleanupPlanRepository for SqliteCleanupPlanRepo {
         if rows.is_empty() {
             return Ok(());
         }
-        let sql = self.db.adapt(
-            r#"INSERT INTO cleanup_plan_operations
-               (plan_id, seq, op_kind, account_id, email_id, action, source_kind,
-                risk, status, payload_json)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
-        );
-        match &self.db {
-            Database::Sqlite(pool) => {
-                let mut tx = pool.begin().await?;
-                for op in &rows {
-                    insert_operation(&mut *tx, &sql, id, op).await?;
-                }
-                tx.commit().await?;
-            }
-            Database::Postgres(pool) => {
-                let mut tx = pool.begin().await?;
-                for op in &rows {
-                    insert_operation(&mut *tx, &sql, id, op).await?;
-                }
-                tx.commit().await?;
-            }
+        let txn = self.conn.begin().await?;
+        for op in &rows {
+            insert_operation(&txn, id, op).await?;
         }
+        txn.commit().await?;
         Ok(())
     }
 
     async fn max_seq(&self, id: PlanId) -> Result<u64, RepoError> {
-        let sql = self
-            .db
-            .adapt(r#"SELECT MAX(seq) FROM cleanup_plan_operations WHERE plan_id = ?"#);
-        // MAX() over an INTEGER/INT4 `seq` column returns that same width — i32, not i64
-        // (same real-4-byte-int gotcha as list_operations' seq decode above).
-        let row: Option<(Option<i32>,)> = match &self.db {
-            Database::Sqlite(pool) => {
-                sqlx::query_as(audited_sql(&sql))
-                    .bind(id.as_bytes().to_vec())
-                    .fetch_optional(pool)
-                    .await?
-            }
-            Database::Postgres(pool) => {
-                sqlx::query_as(audited_sql(&sql))
-                    .bind(id.as_bytes().to_vec())
-                    .fetch_optional(pool)
-                    .await?
-            }
-        };
-        Ok(row.and_then(|(m,)| m).map(|v| v.max(0) as u64).unwrap_or(0))
+        // MAX() over the INTEGER/INT4 seq column decodes as i32 on both backends
+        // — the entity's declared width, not a hand-picked one (ADR-035's width
+        // class, now library-owned).
+        #[derive(FromQueryResult)]
+        struct MaxSeqRow {
+            max_seq: Option<i32>,
+        }
+        let row = ops::Entity::find()
+            .select_only()
+            .column_as(ops::Column::Seq.max(), "max_seq")
+            .filter(ops::Column::PlanId.eq(id.as_bytes().to_vec()))
+            .into_model::<MaxSeqRow>()
+            .one(&self.conn)
+            .await?;
+        Ok(row
+            .and_then(|r| r.max_seq)
+            .map(|v| v.max(0) as u64)
+            .unwrap_or(0))
     }
 
     async fn cancel(&self, id: PlanId) -> Result<(), RepoError> {
-        let sql = self
-            .db
-            .adapt("UPDATE cleanup_plans SET status = 'cancelled' WHERE id = ?");
-        match &self.db {
-            Database::Sqlite(pool) => {
-                sqlx::query(audited_sql(&sql))
-                    .bind(id.as_bytes().to_vec())
-                    .execute(pool)
-                    .await?;
-            }
-            Database::Postgres(pool) => {
-                sqlx::query(audited_sql(&sql))
-                    .bind(id.as_bytes().to_vec())
-                    .execute(pool)
-                    .await?;
-            }
-        }
+        plans::Entity::update_many()
+            .col_expr(plans::Column::Status, Expr::value("cancelled"))
+            .filter(plans::Column::Id.eq(id.as_bytes().to_vec()))
+            .exec(&self.conn)
+            .await?;
         Ok(())
     }
 
     async fn expire_due(&self, now: DateTime<Utc>) -> Result<u32, RepoError> {
-        let sql = self.db.adapt(
-            r#"UPDATE cleanup_plans SET status = 'expired'
-               WHERE valid_until < ? AND status IN ('ready', 'draft')"#,
-        );
-        let affected = match &self.db {
-            Database::Sqlite(pool) => sqlx::query(audited_sql(&sql))
-                .bind(now.timestamp_millis())
-                .execute(pool)
-                .await?
-                .rows_affected(),
-            Database::Postgres(pool) => sqlx::query(audited_sql(&sql))
-                .bind(now.timestamp_millis())
-                .execute(pool)
-                .await?
-                .rows_affected(),
-        };
-        Ok(affected as u32)
+        let res = plans::Entity::update_many()
+            .col_expr(plans::Column::Status, Expr::value("expired"))
+            .filter(plans::Column::ValidUntil.lt(now.timestamp_millis()))
+            .filter(plans::Column::Status.is_in(["ready", "draft"]))
+            .exec(&self.conn)
+            .await?;
+        Ok(res.rows_affected as u32)
     }
 
     async fn purge_older_than(&self, cutoff: DateTime<Utc>) -> Result<u32, RepoError> {
-        let sql = self
-            .db
-            .adapt("DELETE FROM cleanup_plans WHERE valid_until < ?");
-        let affected = match &self.db {
-            Database::Sqlite(pool) => sqlx::query(audited_sql(&sql))
-                .bind(cutoff.timestamp_millis())
-                .execute(pool)
-                .await?
-                .rows_affected(),
-            Database::Postgres(pool) => sqlx::query(audited_sql(&sql))
-                .bind(cutoff.timestamp_millis())
-                .execute(pool)
-                .await?
-                .rows_affected(),
-        };
-        Ok(affected as u32)
+        let res = plans::Entity::delete_many()
+            .filter(plans::Column::ValidUntil.lt(cutoff.timestamp_millis()))
+            .exec(&self.conn)
+            .await?;
+        Ok(res.rows_affected as u32)
     }
 }
 
-/// Insert one operation row. Generic over the sqlx backend (`DB`) so this logic — parsing a
-/// [`PlannedOperation`] into columns — is written once and works against either a SQLite or a
-/// PostgreSQL transaction; only the transaction lifecycle (`begin`/`commit`) and the SQL text
-/// itself (pre-adapted by the caller via `Database::adapt`, since a generic function has no
-/// enum variant to dispatch on) differ per backend — see ADR-035.
-async fn insert_operation<'e, DB, E>(
-    exec: E,
-    sql: &str,
+/// Sync the top-level `status` key inside a serialized payload JSON object — the
+/// read-modify-write replacement for SQLite `json_set` / PostgreSQL `jsonb_set`
+/// (ADR-036 §2.4). `None` payloads stay `None` (as `json_set(NULL, …)` returned
+/// NULL); non-object JSON is left unchanged; malformed JSON is an error (as the
+/// SQL functions would have raised).
+fn payload_with_status(payload: Option<&str>, status: &str) -> Result<Option<String>, RepoError> {
+    let Some(raw) = payload else {
+        return Ok(None);
+    };
+    let mut value: serde_json::Value = serde_json::from_str(raw)
+        .map_err(|e| RepoError::Internal(format!("malformed payload_json: {e}")))?;
+    if let serde_json::Value::Object(ref mut map) = value {
+        map.insert(
+            "status".to_owned(),
+            serde_json::Value::String(status.to_owned()),
+        );
+    }
+    Ok(Some(value.to_string()))
+}
+
+/// Insert one operation row. Generic over [`ConnectionTrait`] so this logic —
+/// parsing a [`PlannedOperation`] into columns — is written once and runs
+/// against a live connection or an open transaction, on either backend
+/// (ADR-036 spike Q11).
+async fn insert_operation<C: ConnectionTrait>(
+    conn: &C,
     plan_id: PlanId,
     op: &PlannedOperation,
-) -> Result<(), RepoError>
-where
-    DB: sqlx::Database,
-    E: sqlx::Executor<'e, Database = DB>,
-    DB::Arguments: sqlx::IntoArguments<DB>,
-    for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    for<'q> Vec<u8>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    for<'q> Option<Vec<u8>>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    for<'q> String: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-{
+) -> Result<(), RepoError> {
     let payload = serde_json::to_string(op).map_err(|e| RepoError::Internal(e.to_string()))?;
     let (seq, op_kind, account_id, email_id_opt, risk_s, status_s, action_s, source_kind) = match op
     {
         PlannedOperation::Materialized(r) => (
-            r.seq as i64,
+            r.seq as i32,
             "materialized",
             r.account_id.clone(),
             r.email_id.clone(),
@@ -853,7 +598,7 @@ where
             source_kind_str(&r.source),
         ),
         PlannedOperation::Predicate(p) => (
-            p.seq as i64,
+            p.seq as i32,
             "predicate",
             p.account_id.clone(),
             None,
@@ -863,19 +608,21 @@ where
             source_kind_str(&p.source),
         ),
     };
-    sqlx::query(audited_sql(sql))
-        .bind(plan_id.as_bytes().to_vec())
-        .bind(seq)
-        .bind(op_kind)
-        .bind(account_id.as_bytes().to_vec())
-        .bind(email_id_opt.map(|s| s.as_bytes().to_vec()))
-        .bind(action_s)
-        .bind(source_kind)
-        .bind(risk_s)
-        .bind(status_s)
-        .bind(payload)
-        .execute(exec)
-        .await?;
+    ops::ActiveModel {
+        plan_id: Set(plan_id.as_bytes().to_vec()),
+        seq: Set(seq),
+        op_kind: Set(op_kind.to_owned()),
+        account_id: Set(account_id.as_bytes().to_vec()),
+        email_id: Set(email_id_opt.map(|s| s.as_bytes().to_vec())),
+        action: Set(action_s),
+        source_kind: Set(source_kind.to_owned()),
+        risk: Set(risk_s),
+        status: Set(status_s),
+        payload_json: Set(Some(payload)),
+        ..Default::default()
+    }
+    .insert(conn)
+    .await?;
     Ok(())
 }
 
@@ -891,7 +638,8 @@ fn source_kind_str(s: &crate::cleanup::domain::operation::PlanSource) -> &'stati
 }
 
 // ---------------------------------------------------------------------------
-// Integration test: repo round-trip against an in-memory SQLite pool
+// Integration tests: repo round-trip against an in-memory SQLite pool, plus an
+// env-gated full-trait round trip against live PostgreSQL.
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
@@ -903,11 +651,12 @@ mod tests {
         RiskLevel,
     };
     use crate::cleanup::domain::plan::{CleanupPlan, PlanTotals, RiskRollup};
+    use crate::db::Database;
     use chrono::{Duration, Utc};
     use sqlx::sqlite::SqlitePoolOptions;
     use uuid::Uuid;
 
-    async fn fresh_pool() -> Database {
+    async fn fresh_conn() -> DatabaseConnection {
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
             .connect(":memory:")
@@ -935,7 +684,7 @@ mod tests {
                     .expect("migrate");
             }
         }
-        Database::Sqlite(pool)
+        Database::Sqlite(pool).sea_orm()
     }
 
     fn sample_plan(user_id: &str) -> CleanupPlan {
@@ -984,8 +733,7 @@ mod tests {
 
     #[tokio::test]
     async fn plan_envelope_carries_per_account_provider() {
-        let pool = fresh_pool().await;
-        let repo = SqliteCleanupPlanRepo::new(pool);
+        let repo = SeaOrmCleanupPlanRepo::new(fresh_conn().await);
         let user = "user-providers";
         let mut plan = sample_plan(user);
         plan.account_providers
@@ -1002,8 +750,7 @@ mod tests {
 
     #[tokio::test]
     async fn save_load_round_trip() {
-        let pool = fresh_pool().await;
-        let repo = SqliteCleanupPlanRepo::new(pool);
+        let repo = SeaOrmCleanupPlanRepo::new(fresh_conn().await);
         let user = "user-1";
         let plan = sample_plan(user);
         let plan_id = plan.id;
@@ -1023,8 +770,7 @@ mod tests {
 
     #[tokio::test]
     async fn list_by_user_filters_by_status() {
-        let pool = fresh_pool().await;
-        let repo = SqliteCleanupPlanRepo::new(pool);
+        let repo = SeaOrmCleanupPlanRepo::new(fresh_conn().await);
         let user = "user-2";
         let p1 = sample_plan(user);
         let p2 = sample_plan(user);
@@ -1045,8 +791,7 @@ mod tests {
 
     #[tokio::test]
     async fn cancel_transitions_status() {
-        let pool = fresh_pool().await;
-        let repo = SqliteCleanupPlanRepo::new(pool);
+        let repo = SeaOrmCleanupPlanRepo::new(fresh_conn().await);
         let user = "user-3";
         let plan = sample_plan(user);
         let plan_id = plan.id;
@@ -1058,8 +803,7 @@ mod tests {
 
     #[tokio::test]
     async fn list_operations_paginates_by_seq() {
-        let pool = fresh_pool().await;
-        let repo = SqliteCleanupPlanRepo::new(pool);
+        let repo = SeaOrmCleanupPlanRepo::new(fresh_conn().await);
         let user = "user-4";
         let mut plan = sample_plan(user);
         // Add a second op with seq=2.
@@ -1123,8 +867,7 @@ mod tests {
 
     #[tokio::test]
     async fn update_operation_status_syncs_payload_status_only() {
-        let pool = fresh_pool().await;
-        let repo = SqliteCleanupPlanRepo::new(pool);
+        let repo = SeaOrmCleanupPlanRepo::new(fresh_conn().await);
         let user = "user-upd-status";
         let plan = sample_plan(user);
         let plan_id = plan.id;
@@ -1153,8 +896,7 @@ mod tests {
 
     #[tokio::test]
     async fn update_predicate_status_skips_materialized_rows() {
-        let pool = fresh_pool().await;
-        let repo = SqliteCleanupPlanRepo::new(pool);
+        let repo = SeaOrmCleanupPlanRepo::new(fresh_conn().await);
         let user = "user-pred-skip";
         let mut plan = sample_plan(user);
         plan.operations.push(sample_predicate(2, vec!["e7".into()]));
@@ -1187,8 +929,7 @@ mod tests {
 
     #[tokio::test]
     async fn max_seq_zero_on_empty_plan_and_max_otherwise() {
-        let pool = fresh_pool().await;
-        let repo = SqliteCleanupPlanRepo::new(pool);
+        let repo = SeaOrmCleanupPlanRepo::new(fresh_conn().await);
         let user = "user-max-seq";
         let mut plan = sample_plan(user);
         plan.operations.push(sample_predicate(7, vec![]));
@@ -1209,8 +950,7 @@ mod tests {
         // only live inside payload_json), so sample_operations() returns empty
         // for plans persisted through this repo. Latent gap recorded in the
         // phase's parking-lot — the port must preserve, not silently fix, it.
-        let pool = fresh_pool().await;
-        let repo = SqliteCleanupPlanRepo::new(pool);
+        let repo = SeaOrmCleanupPlanRepo::new(fresh_conn().await);
         let user = "user-sample-ops";
         let mut plan = sample_plan(user);
         plan.operations
@@ -1227,8 +967,7 @@ mod tests {
 
     #[tokio::test]
     async fn expire_due_expires_only_overdue_ready_or_draft() {
-        let pool = fresh_pool().await;
-        let repo = SqliteCleanupPlanRepo::new(pool);
+        let repo = SeaOrmCleanupPlanRepo::new(fresh_conn().await);
         let now = Utc::now();
 
         let user_a = "user-expire-a";
@@ -1252,8 +991,7 @@ mod tests {
 
     #[tokio::test]
     async fn purge_older_than_deletes_only_older_plans() {
-        let pool = fresh_pool().await;
-        let repo = SqliteCleanupPlanRepo::new(pool);
+        let repo = SeaOrmCleanupPlanRepo::new(fresh_conn().await);
         let now = Utc::now();
 
         let user_a = "user-purge-a";
@@ -1278,8 +1016,7 @@ mod tests {
 
     #[tokio::test]
     async fn replace_account_rows_swaps_only_target_account() {
-        let pool = fresh_pool().await;
-        let repo = SqliteCleanupPlanRepo::new(pool);
+        let repo = SeaOrmCleanupPlanRepo::new(fresh_conn().await);
         let user = "user-replace";
         let mut plan = sample_plan(user);
         plan.operations
@@ -1330,8 +1067,7 @@ mod tests {
 
     #[tokio::test]
     async fn append_operations_appends_without_touching_existing_rows() {
-        let pool = fresh_pool().await;
-        let repo = SqliteCleanupPlanRepo::new(pool);
+        let repo = SeaOrmCleanupPlanRepo::new(fresh_conn().await);
         let user = "user-append";
         let plan = sample_plan(user);
         let plan_id = plan.id;
@@ -1369,8 +1105,7 @@ mod tests {
 
     #[tokio::test]
     async fn list_operations_filters_by_account_risk_and_action() {
-        let pool = fresh_pool().await;
-        let repo = SqliteCleanupPlanRepo::new(pool);
+        let repo = SeaOrmCleanupPlanRepo::new(fresh_conn().await);
         let user = "user-filters";
         let mut plan = sample_plan(user);
         plan.operations
@@ -1432,5 +1167,186 @@ mod tests {
             .await
             .expect("list");
         assert!(no_match.0.is_empty());
+    }
+
+    /// Full-trait verification against a live PostgreSQL instance — the
+    /// ADR-036 exemplar proof (postgres-support pipeline, phase 2 DoD). Skips
+    /// (trivially passing) when `EMAILIBRIUM_TEST_PG_URL` is unset so the
+    /// default suite needs no infrastructure. Reproduction:
+    ///
+    /// ```sh
+    /// docker run -d --rm --name emailibrium-pg-test -p 55433:5432 \
+    ///   -e POSTGRES_PASSWORD=test -e POSTGRES_DB=emailibrium_test postgres:16-alpine
+    /// EMAILIBRIUM_TEST_PG_URL='postgres://postgres:test@localhost:55433/emailibrium_test' \
+    ///   cargo test cleanup::repository -- --nocapture
+    /// docker rm -f emailibrium-pg-test
+    /// ```
+    #[tokio::test]
+    async fn postgres_full_trait_round_trip() {
+        let Ok(url) = std::env::var("EMAILIBRIUM_TEST_PG_URL") else {
+            eprintln!("skipping postgres_full_trait_round_trip: EMAILIBRIUM_TEST_PG_URL unset");
+            return;
+        };
+        let db = Database::connect(&url).await.expect("pg connect");
+        db.run_migrations().await.expect("pg migrations");
+        let repo = SeaOrmCleanupPlanRepo::new(db.sea_orm());
+
+        // Unique users so reruns against a persistent database stay clean.
+        let user = format!("pg-user-{}", Uuid::new_v4());
+        let mut plan = sample_plan(&user);
+        plan.operations.push(sample_predicate(2, vec!["e7".into()]));
+        let plan_id = plan.id;
+
+        // save: insert, then upsert over the same PK.
+        repo.save(&plan).await.expect("save");
+        repo.save(&plan).await.expect("upsert");
+
+        let loaded = repo
+            .load(&user, plan_id)
+            .await
+            .expect("load")
+            .expect("present");
+        assert_eq!(loaded.operations.len(), 2);
+        assert_eq!(loaded.account_state_etags.len(), 1);
+
+        let summaries = repo
+            .list_by_user(&user, Some(PlanStatus::Ready), 10)
+            .await
+            .expect("list_by_user");
+        assert_eq!(summaries.len(), 1);
+
+        // Cursor pagination + filters.
+        let (page, cursor) = repo
+            .list_operations(plan_id, OpsFilter::default(), None, 1)
+            .await
+            .expect("page 1");
+        assert_eq!(page.len(), 1);
+        let (rest, _) = repo
+            .list_operations(plan_id, OpsFilter::default(), cursor, 10)
+            .await
+            .expect("page 2");
+        assert_eq!(rest.len(), 1);
+        let (by_account, _) = repo
+            .list_operations(
+                plan_id,
+                OpsFilter {
+                    account_id: Some("acct-a".into()),
+                    ..OpsFilter::default()
+                },
+                None,
+                10,
+            )
+            .await
+            .expect("filtered");
+        assert_eq!(by_account.len(), 2);
+
+        // sample_operations: empty per pinned behavior (save never writes
+        // sample_ids_json).
+        assert!(repo
+            .sample_operations(plan_id, "manual", 5)
+            .await
+            .expect("sample")
+            .is_empty());
+
+        // append + max_seq.
+        repo.append_operations(
+            plan_id,
+            vec![PlannedOperation::Materialized(PlannedOperationRow {
+                seq: 5,
+                account_id: "acct-a".into(),
+                email_id: Some("e5".into()),
+                action: PlanAction::Archive,
+                source: PlanSource::Manual,
+                target: None,
+                reverse_op: None,
+                risk: RiskLevel::Low,
+                status: OperationStatus::Pending,
+                skip_reason: None,
+                applied_at: None,
+                error: None,
+            })],
+        )
+        .await
+        .expect("append");
+        assert_eq!(repo.max_seq(plan_id).await.expect("max_seq"), 5);
+
+        // Status updates: payload sync (formerly json_set/jsonb_set).
+        repo.update_operation_status(plan_id, 1, OperationStatus::Applied, Utc::now())
+            .await
+            .expect("update op status");
+        repo.update_predicate_status(plan_id, 2, PredicateStatus::Expanded)
+            .await
+            .expect("update predicate status");
+        let (ops, _) = repo
+            .list_operations(plan_id, OpsFilter::default(), None, 10)
+            .await
+            .expect("list");
+        match &ops[0] {
+            PlannedOperation::Materialized(r) => assert_eq!(r.status, OperationStatus::Applied),
+            other => panic!("expected materialized row, got {other:?}"),
+        }
+        match &ops[1] {
+            PlannedOperation::Predicate(p) => assert_eq!(p.status, PredicateStatus::Expanded),
+            other => panic!("expected predicate row, got {other:?}"),
+        }
+
+        // replace_account_rows (all rows are acct-a).
+        repo.replace_account_rows(
+            plan_id,
+            "acct-a",
+            vec![PlannedOperation::Materialized(PlannedOperationRow {
+                seq: 9,
+                account_id: "acct-a".into(),
+                email_id: Some("e9".into()),
+                action: PlanAction::Archive,
+                source: PlanSource::Manual,
+                target: None,
+                reverse_op: None,
+                risk: RiskLevel::Low,
+                status: OperationStatus::Pending,
+                skip_reason: None,
+                applied_at: None,
+                error: None,
+            })],
+        )
+        .await
+        .expect("replace");
+        assert_eq!(repo.max_seq(plan_id).await.expect("max_seq"), 9);
+
+        // cancel.
+        repo.cancel(plan_id).await.expect("cancel");
+        assert_eq!(
+            repo.load(&user, plan_id)
+                .await
+                .expect("load")
+                .unwrap()
+                .status,
+            PlanStatus::Cancelled
+        );
+
+        // expire_due + purge_older_than: assert on our own plans only — the
+        // shared database may hold rows from other runs (counts are >=, never ==).
+        let user2 = format!("pg-user-{}", Uuid::new_v4());
+        let mut overdue = sample_plan(&user2);
+        overdue.valid_until = Utc::now() - Duration::hours(1);
+        let overdue_id = overdue.id;
+        repo.save(&overdue).await.expect("save overdue");
+        let expired = repo.expire_due(Utc::now()).await.expect("expire");
+        assert!(expired >= 1);
+        assert_eq!(
+            repo.load(&user2, overdue_id)
+                .await
+                .expect("load")
+                .unwrap()
+                .status,
+            PlanStatus::Expired
+        );
+
+        let purged = repo
+            .purge_older_than(Utc::now() - Duration::minutes(30))
+            .await
+            .expect("purge");
+        assert!(purged >= 1);
+        assert!(repo.load(&user2, overdue_id).await.expect("load").is_none());
     }
 }
