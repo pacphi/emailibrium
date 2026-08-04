@@ -2,52 +2,32 @@
 //!
 //! Manages consent decisions, privacy audit logs, user data export (GDPR
 //! Article 20), and right to erasure (GDPR Article 17).
+//!
+//! Single-code-path SeaORM (ADR-036): the `consent_decisions`,
+//! `privacy_audit_log`, `emails` and `ai_consent` entities own encode/decode per
+//! backend, so every statement below is one query that runs unchanged against
+//! SQLite and PostgreSQL. Two hand-rolled things are gone with the port: the
+//! `parse_datetime()` helper this file applied to `TIMESTAMPTZ` columns it read
+//! back as `String` (ADR-035 §2.6's decode class, now library-owned), and the
+//! runtime `CREATE TABLE` DDL that duplicated — and could silently diverge from
+//! — migration 010.
 
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
+use sea_orm::sea_query::{Expr, NullOrdering};
+use sea_orm::ActiveValue::Set;
+use sea_orm::{
+    ColumnTrait, DatabaseConnection, DbErr, EntityTrait, Order, PaginatorTrait, QueryFilter,
+    QueryOrder, QuerySelect,
+};
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 use uuid::Uuid;
 
 use super::error::VectorError;
+use crate::db::entities::{ai_consent, consent_decisions, emails, privacy_audit_log};
 use crate::db::Database;
-
-// ---------------------------------------------------------------------------
-// SQLx row type aliases (clippy::type_complexity)
-// ---------------------------------------------------------------------------
-
-/// Row from consent_decisions query.
-type ConsentRow = (
-    String,
-    String,
-    i32,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-    String,
-);
-
-/// Row from privacy_audit_log query.
-type AuditRow = (
-    i64,
-    String,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-    String,
-);
-
-/// Row from emails query for data export.
-type EmailExportRow = (
-    String,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-);
 
 // ---------------------------------------------------------------------------
 // Types
@@ -143,59 +123,24 @@ pub struct ErasureReport {
 /// GDPR-compliant privacy service for consent management, audit logging,
 /// data export, and erasure.
 pub struct PrivacyService {
-    db: Arc<Database>,
+    conn: DatabaseConnection,
 }
 
 impl PrivacyService {
     pub fn new(db: Arc<Database>) -> Self {
-        Self { db }
+        Self { conn: db.sea_orm() }
     }
 
-    /// Ensure the GDPR consent and audit tables exist.
+    /// Retained no-op: migrations own this schema.
+    ///
+    /// Migration 010 creates `consent_decisions` and `privacy_audit_log` for both
+    /// backends. The runtime `CREATE TABLE` this used to run was SQLite-shaped DDL
+    /// (`DATETIME` columns, `AUTOINCREMENT`, `datetime('now')` defaults) that
+    /// PostgreSQL either rejects or silently interprets differently — a second
+    /// schema definition free to drift from the migration it duplicated. ADR-036
+    /// keeps one source of truth. The signature stays until `vectors/mod.rs` is
+    /// ported and its call site drops.
     pub async fn ensure_tables(&self) -> Result<(), VectorError> {
-        sqlx::query(
-            "CREATE TABLE IF NOT EXISTS consent_decisions (
-                id TEXT PRIMARY KEY,
-                consent_type TEXT NOT NULL,
-                granted INTEGER NOT NULL DEFAULT 0,
-                granted_at DATETIME,
-                revoked_at DATETIME,
-                ip_address TEXT,
-                user_agent TEXT,
-                created_at DATETIME DEFAULT (datetime('now'))
-            )",
-        )
-        .execute(self.db.pool())
-        .await?;
-
-        sqlx::query(
-            "CREATE TABLE IF NOT EXISTS privacy_audit_log (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                event_type TEXT NOT NULL,
-                resource_type TEXT,
-                resource_id TEXT,
-                actor TEXT DEFAULT 'user',
-                details TEXT,
-                created_at DATETIME DEFAULT (datetime('now'))
-            )",
-        )
-        .execute(self.db.pool())
-        .await?;
-
-        sqlx::query(
-            "CREATE INDEX IF NOT EXISTS idx_privacy_audit_event \
-             ON privacy_audit_log(event_type)",
-        )
-        .execute(self.db.pool())
-        .await?;
-
-        sqlx::query(
-            "CREATE INDEX IF NOT EXISTS idx_privacy_audit_created \
-             ON privacy_audit_log(created_at)",
-        )
-        .execute(self.db.pool())
-        .await?;
-
         Ok(())
     }
 
@@ -218,34 +163,33 @@ impl PrivacyService {
             (None, Some(now))
         };
 
-        sqlx::query(
-            "INSERT INTO consent_decisions \
-             (id, consent_type, granted, granted_at, revoked_at, ip_address, user_agent, created_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        )
-        .bind(&id)
-        .bind(consent_type)
-        .bind(granted as i32)
-        .bind(granted_at)
-        .bind(revoked_at)
-        .bind(ip_address)
-        .bind(user_agent)
-        .bind(now)
-        .execute(self.db.pool())
-        .await?;
+        consent_decisions::Entity::insert(consent_decisions::ActiveModel {
+            id: Set(id.clone()),
+            consent_type: Set(consent_type.to_owned()),
+            // INTEGER 0/1 flag, not BOOLEAN — the entity mirrors the DDL.
+            granted: Set(granted as i32),
+            granted_at: Set(granted_at),
+            revoked_at: Set(revoked_at),
+            ip_address: Set(ip_address.map(String::from)),
+            user_agent: Set(user_agent.map(String::from)),
+            created_at: Set(Some(now)),
+        })
+        .exec_without_returning(&self.conn)
+        .await
+        .map_err(|e| db_error("record consent", e))?;
 
         // Also update the effective consent state: if a previous record for the
         // same type exists, mark it as superseded via revoked_at.
         if granted {
-            sqlx::query(
-                "UPDATE consent_decisions SET revoked_at = ? \
-                 WHERE consent_type = ? AND id != ? AND granted = 1 AND revoked_at IS NULL",
-            )
-            .bind(now)
-            .bind(consent_type)
-            .bind(&id)
-            .execute(self.db.pool())
-            .await?;
+            consent_decisions::Entity::update_many()
+                .col_expr(consent_decisions::Column::RevokedAt, Expr::value(now))
+                .filter(consent_decisions::Column::ConsentType.eq(consent_type))
+                .filter(consent_decisions::Column::Id.ne(id.as_str()))
+                .filter(consent_decisions::Column::Granted.eq(1))
+                .filter(consent_decisions::Column::RevokedAt.is_null())
+                .exec(&self.conn)
+                .await
+                .map_err(|e| db_error("supersede consent", e))?;
         }
 
         // Log the consent change in the privacy audit log.
@@ -284,64 +228,55 @@ impl PrivacyService {
         &self,
         consent_type: &str,
     ) -> Result<Option<ConsentDecision>, VectorError> {
-        let row: Option<ConsentRow> = sqlx::query_as(
-            "SELECT id, consent_type, granted, granted_at, revoked_at, \
-                    ip_address, user_agent, created_at \
-             FROM consent_decisions \
-             WHERE consent_type = ? \
-             ORDER BY created_at DESC \
-             LIMIT 1",
-        )
-        .bind(consent_type)
-        .fetch_optional(self.db.pool())
-        .await?;
+        let row = consent_decisions::Entity::find()
+            .filter(consent_decisions::Column::ConsentType.eq(consent_type))
+            // NULLS LAST is explicit because the two backends disagree on the
+            // default: SQLite sorts NULLs last under DESC, PostgreSQL first. Every
+            // row `record_consent` writes has a `created_at`, so this only matters
+            // for rows written before that was true — pinning it keeps "latest"
+            // meaning the same thing on both.
+            .order_by_with_nulls(
+                consent_decisions::Column::CreatedAt,
+                Order::Desc,
+                NullOrdering::Last,
+            )
+            .one(&self.conn)
+            .await
+            .map_err(|e| db_error("get consent", e))?;
 
-        Ok(row.map(
-            |(id, ct, granted, granted_at, revoked_at, ip, ua, created)| ConsentDecision {
-                id,
-                consent_type: ct,
-                granted: granted != 0,
-                granted_at: granted_at.and_then(|s| parse_datetime(&s)),
-                revoked_at: revoked_at.and_then(|s| parse_datetime(&s)),
-                ip_address: ip,
-                user_agent: ua,
-                created_at: parse_datetime(&created).unwrap_or_else(Utc::now),
-            },
-        ))
+        Ok(row.map(to_consent_decision))
     }
 
     /// List all current consent decisions (latest per type).
     pub async fn list_consents(&self) -> Result<Vec<ConsentDecision>, VectorError> {
-        let rows: Vec<ConsentRow> = sqlx::query_as(
-            "SELECT d.id, d.consent_type, d.granted, d.granted_at, d.revoked_at, \
-                    d.ip_address, d.user_agent, d.created_at \
-             FROM consent_decisions d \
-             INNER JOIN ( \
-                 SELECT consent_type, MAX(created_at) AS max_created \
-                 FROM consent_decisions \
-                 GROUP BY consent_type \
-             ) latest ON d.consent_type = latest.consent_type \
-                     AND d.created_at = latest.max_created \
-             ORDER BY d.consent_type",
-        )
-        .fetch_all(self.db.pool())
-        .await?;
-
-        Ok(rows
-            .into_iter()
-            .map(
-                |(id, ct, granted, granted_at, revoked_at, ip, ua, created)| ConsentDecision {
-                    id,
-                    consent_type: ct,
-                    granted: granted != 0,
-                    granted_at: granted_at.and_then(|s| parse_datetime(&s)),
-                    revoked_at: revoked_at.and_then(|s| parse_datetime(&s)),
-                    ip_address: ip,
-                    user_agent: ua,
-                    created_at: parse_datetime(&created).unwrap_or_else(Utc::now),
-                },
+        // The correlated `MAX(created_at)` self-join this replaces needed no
+        // escape hatch: "latest per type" is one ordered read plus a first-per-key
+        // scan, and the scan is strictly better defined than the join was — the
+        // join emitted *every* row tied on `created_at` (duplicate types) and
+        // dropped a type entirely when its rows had a NULL `created_at`
+        // (`created_at = NULL` is never true). The table holds one row per consent
+        // action, so reading it whole is not a scale concern.
+        let rows = consent_decisions::Entity::find()
+            .order_by_asc(consent_decisions::Column::ConsentType)
+            .order_by_with_nulls(
+                consent_decisions::Column::CreatedAt,
+                Order::Desc,
+                NullOrdering::Last,
             )
-            .collect())
+            .all(&self.conn)
+            .await
+            .map_err(|e| db_error("list consents", e))?;
+
+        let mut latest = Vec::new();
+        let mut seen: Option<String> = None;
+        for model in rows {
+            if seen.as_deref() != Some(model.consent_type.as_str()) {
+                seen = Some(model.consent_type.clone());
+                latest.push(to_consent_decision(model));
+            }
+        }
+
+        Ok(latest)
     }
 
     // -- Audit logging -----------------------------------------------------
@@ -353,18 +288,19 @@ impl PrivacyService {
             .as_ref()
             .map(|d| serde_json::to_string(d).unwrap_or_default());
 
-        sqlx::query(
-            "INSERT INTO privacy_audit_log \
-             (event_type, resource_type, resource_id, actor, details) \
-             VALUES (?, ?, ?, ?, ?)",
-        )
-        .bind(&event.event_type)
-        .bind(&event.resource_type)
-        .bind(&event.resource_id)
-        .bind(&event.actor)
-        .bind(&details_json)
-        .execute(self.db.pool())
-        .await?;
+        privacy_audit_log::Entity::insert(privacy_audit_log::ActiveModel {
+            event_type: Set(event.event_type),
+            resource_type: Set(event.resource_type),
+            resource_id: Set(event.resource_id),
+            actor: Set(Some(event.actor)),
+            details: Set(details_json),
+            // `id` is generated by the DB (AUTOINCREMENT / GENERATED AS IDENTITY)
+            // and `created_at` takes the column default, as before the port.
+            ..Default::default()
+        })
+        .exec_without_returning(&self.conn)
+        .await
+        .map_err(|e| db_error("log privacy event", e))?;
 
         Ok(())
     }
@@ -375,39 +311,38 @@ impl PrivacyService {
         page: u32,
         per_page: u32,
     ) -> Result<PrivacyAuditPage, VectorError> {
-        let offset = (page.saturating_sub(1)) as i64 * per_page as i64;
-        let limit = per_page as i64;
+        let offset = u64::from(page.saturating_sub(1)) * u64::from(per_page);
 
-        let (total,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM privacy_audit_log")
-            .fetch_one(self.db.pool())
-            .await?;
+        let total = privacy_audit_log::Entity::find()
+            .count(&self.conn)
+            .await
+            .map_err(|e| db_error("count privacy audit log", e))? as i64;
 
-        let rows: Vec<AuditRow> = sqlx::query_as(
-            "SELECT id, event_type, resource_type, resource_id, actor, details, created_at \
-             FROM privacy_audit_log \
-             ORDER BY created_at DESC \
-             LIMIT ? OFFSET ?",
-        )
-        .bind(limit)
-        .bind(offset)
-        .fetch_all(self.db.pool())
-        .await?;
+        let rows = privacy_audit_log::Entity::find()
+            .order_by_with_nulls(
+                privacy_audit_log::Column::CreatedAt,
+                Order::Desc,
+                NullOrdering::Last,
+            )
+            .limit(u64::from(per_page))
+            .offset(offset)
+            .all(&self.conn)
+            .await
+            .map_err(|e| db_error("read privacy audit log", e))?;
 
         let entries = rows
             .into_iter()
-            .map(
-                |(id, event_type, resource_type, resource_id, actor, details, created_at)| {
-                    PrivacyAuditEntry {
-                        id,
-                        event_type,
-                        resource_type,
-                        resource_id,
-                        actor: actor.unwrap_or_else(|| "user".to_string()),
-                        details: details.and_then(|d| serde_json::from_str(&d).ok()),
-                        created_at: parse_datetime(&created_at).unwrap_or_else(Utc::now),
-                    }
-                },
-            )
+            .map(|m| PrivacyAuditEntry {
+                // `id` is INTEGER/INT4 in both dialects (i32); the public entry
+                // type keeps its i64 width.
+                id: i64::from(m.id),
+                event_type: m.event_type,
+                resource_type: m.resource_type,
+                resource_id: m.resource_id,
+                actor: m.actor.unwrap_or_else(|| "user".to_string()),
+                details: m.details.and_then(|d| serde_json::from_str(&d).ok()),
+                created_at: m.created_at.unwrap_or_else(Utc::now),
+            })
             .collect();
 
         Ok(PrivacyAuditPage {
@@ -436,23 +371,40 @@ impl PrivacyService {
 
         let consent_decisions = self.list_consents().await?;
 
-        // Export emails.
-        let email_rows: Vec<EmailExportRow> = sqlx::query_as(
-            "SELECT id, from_addr, subject, received_at, category \
-                 FROM emails ORDER BY received_at DESC",
-        )
-        .fetch_all(self.db.pool())
-        .await?;
+        // Export emails. `received_at` is plain TIMESTAMP (no zone) — it decodes
+        // as NaiveDateTime and is rendered as RFC3339 UTC, the settled policy for
+        // every timestamp this codebase hands to a client.
+        let email_rows: Vec<(
+            String,
+            String,
+            String,
+            chrono::NaiveDateTime,
+            Option<String>,
+        )> = emails::Entity::find()
+            .select_only()
+            .column(emails::Column::Id)
+            .column(emails::Column::FromAddr)
+            .column(emails::Column::Subject)
+            .column(emails::Column::ReceivedAt)
+            .column(emails::Column::Category)
+            .order_by_desc(emails::Column::ReceivedAt)
+            .into_tuple()
+            .all(&self.conn)
+            .await
+            .map_err(|e| db_error("export emails", e))?;
 
         let emails: Vec<ExportedEmail> = email_rows
             .into_iter()
             .map(
                 |(id, from_addr, subject, received_at, category)| ExportedEmail {
                     id,
-                    from_addr: from_addr.unwrap_or_default(),
-                    subject: subject.unwrap_or_default(),
-                    received_at: received_at.unwrap_or_default(),
-                    category,
+                    from_addr,
+                    subject,
+                    received_at: format_timestamp(received_at),
+                    // NULL category reads as the column's own default rather
+                    // than erroring the whole batch (the lenient unification
+                    // this phase settled on).
+                    category: Some(category.unwrap_or_else(|| "Uncategorized".to_string())),
                 },
             )
             .collect();
@@ -460,21 +412,20 @@ impl PrivacyService {
         // Collect audit summary.
         let audit_summary = self.build_audit_summary().await?;
 
-        // Settings (export any user-facing settings from ai_consent).
-        let ai_consents: Vec<(String, String, Option<String>, String)> = sqlx::query_as(
-            "SELECT provider, consented_at, revoked_at, acknowledgment FROM ai_consent",
-        )
-        .fetch_all(self.db.pool())
-        .await
-        .unwrap_or_default();
+        // Settings (export any user-facing settings from ai_consent). A missing
+        // table stays non-fatal, as before the port.
+        let ai_consents = ai_consent::Entity::find()
+            .all(&self.conn)
+            .await
+            .unwrap_or_default();
 
         let settings = serde_json::json!({
-            "ai_consent": ai_consents.iter().map(|(p, c, r, a)| {
+            "ai_consent": ai_consents.iter().map(|c| {
                 serde_json::json!({
-                    "provider": p,
-                    "consented_at": c,
-                    "revoked_at": r,
-                    "acknowledgment": a,
+                    "provider": c.provider,
+                    "consented_at": format_timestamp(c.consented_at),
+                    "revoked_at": c.revoked_at.map(format_timestamp),
+                    "acknowledgment": c.acknowledgment,
                 })
             }).collect::<Vec<_>>(),
         });
@@ -504,51 +455,32 @@ impl PrivacyService {
         })
         .await?;
 
-        // Count before deletion.
-        let (email_count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM emails")
-            .fetch_one(self.db.pool())
+        // Count before deletion. Counting stays best-effort (a failure reports 0
+        // rather than aborting the erasure), as before the port.
+        let email_count = emails::Entity::find().count(&self.conn).await.unwrap_or(0) as i64;
+        let consent_count = consent_decisions::Entity::find()
+            .count(&self.conn)
             .await
-            .unwrap_or((0,));
-
-        let (vector_count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM vector_store")
-            .fetch_one(self.db.pool())
+            .unwrap_or(0) as i64;
+        let audit_count = privacy_audit_log::Entity::find()
+            .count(&self.conn)
             .await
-            .unwrap_or((0,));
+            .unwrap_or(0) as i64;
 
-        let (consent_count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM consent_decisions")
-            .fetch_one(self.db.pool())
-            .await
-            .unwrap_or((0,));
-
-        let (audit_count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM privacy_audit_log")
-            .fetch_one(self.db.pool())
-            .await
-            .unwrap_or((0,));
-
-        // Delete user data (emails, vectors, consent).
-        sqlx::query("DELETE FROM emails")
-            .execute(self.db.pool())
+        // Delete user data (emails, consent). Deletes stay best-effort for the
+        // same reason the counts are.
+        emails::Entity::delete_many().exec(&self.conn).await.ok();
+        consent_decisions::Entity::delete_many()
+            .exec(&self.conn)
             .await
             .ok();
-
-        sqlx::query("DELETE FROM vector_store")
-            .execute(self.db.pool())
-            .await
-            .ok();
-
-        sqlx::query("DELETE FROM consent_decisions")
-            .execute(self.db.pool())
-            .await
-            .ok();
-
-        sqlx::query("DELETE FROM ai_consent")
-            .execute(self.db.pool())
+        ai_consent::Entity::delete_many()
+            .exec(&self.conn)
             .await
             .ok();
 
         info!(
             emails = email_count,
-            vectors = vector_count,
             consents = consent_count,
             "GDPR erasure completed — audit log retained"
         );
@@ -556,7 +488,14 @@ impl PrivacyService {
         Ok(ErasureReport {
             erased_at: Utc::now(),
             emails_deleted: email_count as u64,
-            vectors_deleted: vector_count as u64,
+            // `vector_store` is a phantom table: no migration in either dialect
+            // creates it. The COUNT and DELETE that used to target it always
+            // errored, and both were written to swallow the error — so the
+            // reported figure was always 0 and nothing was ever deleted. The
+            // statements are gone; the observable result is unchanged. Vectors
+            // live in RuVector (ADR-003), which erasure reaches through its own
+            // service, not through SQL.
+            vectors_deleted: 0,
             consent_records_deleted: consent_count as u64,
             audit_entries_retained: audit_count as u64,
         })
@@ -565,51 +504,49 @@ impl PrivacyService {
     // -- Helpers -----------------------------------------------------------
 
     async fn build_audit_summary(&self) -> Result<AuditSummary, VectorError> {
-        let (total,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM privacy_audit_log")
-            .fetch_one(self.db.pool())
-            .await
-            .unwrap_or((0,));
-
-        let (data_access,): (i64,) = sqlx::query_as(
-            "SELECT COUNT(*) FROM privacy_audit_log WHERE event_type = 'data_access'",
-        )
-        .fetch_one(self.db.pool())
-        .await
-        .unwrap_or((0,));
-
-        let (data_export,): (i64,) = sqlx::query_as(
-            "SELECT COUNT(*) FROM privacy_audit_log WHERE event_type = 'data_export'",
-        )
-        .fetch_one(self.db.pool())
-        .await
-        .unwrap_or((0,));
-
-        let (consent_change,): (i64,) = sqlx::query_as(
-            "SELECT COUNT(*) FROM privacy_audit_log WHERE event_type = 'consent_change'",
-        )
-        .fetch_one(self.db.pool())
-        .await
-        .unwrap_or((0,));
+        let count_of = |event_type: Option<&'static str>| {
+            let mut query = privacy_audit_log::Entity::find();
+            if let Some(event_type) = event_type {
+                query = query.filter(privacy_audit_log::Column::EventType.eq(event_type));
+            }
+            query.count(&self.conn)
+        };
 
         Ok(AuditSummary {
-            total_events: total,
-            data_access_count: data_access,
-            data_export_count: data_export,
-            consent_change_count: consent_change,
+            total_events: count_of(None).await.unwrap_or(0) as i64,
+            data_access_count: count_of(Some("data_access")).await.unwrap_or(0) as i64,
+            data_export_count: count_of(Some("data_export")).await.unwrap_or(0) as i64,
+            consent_change_count: count_of(Some("consent_change")).await.unwrap_or(0) as i64,
         })
     }
 }
 
-/// Parse a datetime string into a DateTime<Utc>, trying RFC3339 then SQLite format.
-fn parse_datetime(s: &str) -> Option<DateTime<Utc>> {
-    chrono::DateTime::parse_from_rfc3339(s)
-        .map(|dt| dt.with_timezone(&Utc))
-        .ok()
-        .or_else(|| {
-            chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S")
-                .map(|ndt| ndt.and_utc())
-                .ok()
-        })
+fn to_consent_decision(model: consent_decisions::Model) -> ConsentDecision {
+    ConsentDecision {
+        id: model.id,
+        consent_type: model.consent_type,
+        granted: model.granted != 0,
+        granted_at: model.granted_at,
+        revoked_at: model.revoked_at,
+        ip_address: model.ip_address,
+        user_agent: model.user_agent,
+        created_at: model.created_at.unwrap_or_else(Utc::now),
+    }
+}
+
+/// Render a no-zone `TIMESTAMP` column as RFC3339 UTC for export payloads.
+fn format_timestamp(ts: chrono::NaiveDateTime) -> String {
+    ts.and_utc().to_rfc3339()
+}
+
+/// Map a SeaORM error onto this module's error type.
+///
+/// `VectorError` has no `DbErr` variant yet (`DatabaseError` wraps a
+/// `sqlx::Error`, and SeaORM only ever hands back an `Arc`-shared one), so the
+/// operation name is prefixed to keep the message diagnosable. Callers map every
+/// variant here to the same HTTP status, so this is a message-shape change only.
+fn db_error(operation: &str, err: DbErr) -> VectorError {
+    VectorError::StoreFailed(format!("{operation}: {err}"))
 }
 
 // ---------------------------------------------------------------------------
@@ -619,34 +556,46 @@ fn parse_datetime(s: &str) -> Option<DateTime<Utc>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sea_orm::ConnectionTrait;
+    use sqlx::sqlite::SqlitePoolOptions;
 
+    /// In-memory SQLite carrying the migrations this module's entities span:
+    /// 001 (`emails`), 002 (`ai_consent`) and 010 (`consent_decisions`,
+    /// `privacy_audit_log`). Replaying the real migrations is what replaced the
+    /// runtime DDL `ensure_tables()` used to run — tests and production now agree
+    /// on one schema definition.
     async fn setup_db() -> Arc<Database> {
-        let db = Database::connect("sqlite::memory:")
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect(":memory:")
             .await
-            .expect("in-memory DB");
-
-        // Create tables needed for tests.
-        sqlx::query(include_str!(
-            "../../migrations/sqlite/001_initial_schema.sql"
-        ))
-        .execute(db.pool())
-        .await
-        .unwrap();
-
-        sqlx::query(
-            "CREATE TABLE IF NOT EXISTS ai_consent (
-                provider TEXT PRIMARY KEY,
-                consented_at TEXT NOT NULL,
-                revoked_at TEXT,
-                acknowledgment TEXT NOT NULL
-            )",
-        )
-        .execute(db.pool())
-        .await
-        .unwrap();
-
-        let svc = PrivacyService::new(Arc::new(db.clone()));
-        svc.ensure_tables().await.unwrap();
+            .expect("connect");
+        let db = Database::Sqlite(pool);
+        let conn = db.sea_orm();
+        for raw in [
+            include_str!("../../migrations/sqlite/001_initial_schema.sql"),
+            include_str!("../../migrations/sqlite/002_ai_consent.sql"),
+            include_str!("../../migrations/sqlite/010_gdpr_consent.sql"),
+        ] {
+            // Strip line comments before splitting on ';'.
+            let cleaned: String = raw
+                .lines()
+                .map(|l| {
+                    if let Some(idx) = l.find("--") {
+                        &l[..idx]
+                    } else {
+                        l
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            for stmt in cleaned.split(';') {
+                let s = stmt.trim();
+                if !s.is_empty() {
+                    conn.execute_unprepared(s).await.expect("migrate");
+                }
+            }
+        }
 
         Arc::new(db)
     }
@@ -773,5 +722,50 @@ mod tests {
         // have revoked_at set.
         let latest = svc.get_consent("cloud_ai").await.unwrap().unwrap();
         assert!(latest.granted);
+    }
+
+    /// `consent_decisions`' timestamps are TIMESTAMPTZ: what goes in as a
+    /// `DateTime<Utc>` comes back as the same instant, not a re-parsed string.
+    /// The pre-port code read these columns as `String` and hand-parsed them,
+    /// which silently yielded `Utc::now()` whenever the shape didn't match.
+    #[tokio::test]
+    async fn test_consent_timestamps_round_trip_as_utc() {
+        let db = setup_db().await;
+        let svc = PrivacyService::new(db);
+
+        let before = Utc::now();
+        let written = svc
+            .record_consent("cloud_ai", true, None, None)
+            .await
+            .unwrap();
+        let after = Utc::now();
+
+        let read_back = svc.get_consent("cloud_ai").await.unwrap().unwrap();
+        let granted_at = read_back.granted_at.expect("granted_at persisted");
+
+        assert_eq!(granted_at, written.granted_at.unwrap());
+        assert!(granted_at >= before && granted_at <= after);
+        assert!(read_back.created_at >= before && read_back.created_at <= after);
+        assert!(read_back.revoked_at.is_none());
+    }
+
+    /// Erasure clears emails and consent while the audit log survives — and the
+    /// vector count is the phantom-table 0 the pre-port code also always reported.
+    #[tokio::test]
+    async fn test_erase_user_data_retains_audit_log() {
+        let db = setup_db().await;
+        let svc = PrivacyService::new(db);
+
+        svc.record_consent("cloud_ai", true, None, None)
+            .await
+            .unwrap();
+
+        let report = svc.erase_user_data().await.unwrap();
+        assert_eq!(report.consent_records_deleted, 1);
+        assert_eq!(report.vectors_deleted, 0);
+        assert!(report.audit_entries_retained >= 2); // consent_change + data_delete
+
+        assert!(svc.list_consents().await.unwrap().is_empty());
+        assert!(svc.get_audit_log(1, 10).await.unwrap().total >= 2);
     }
 }

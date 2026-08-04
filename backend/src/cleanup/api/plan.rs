@@ -33,10 +33,12 @@ use crate::cleanup::domain::plan::{CleanupPlan, PlanId, WizardSelections};
 use crate::cleanup::domain::ports::{
     AccountStateProvider, ClusterRepository, EmailRepository, RuleEvaluator, SubscriptionRepository,
 };
-use crate::cleanup::repository::{
-    CleanupPlanRepository, OpsFilter, SqlxAccountStateProvider, SqlxClusterRepository,
-    SqlxEmailRepository, SqlxRuleEvaluator, SqlxSubscriptionRepository,
+use crate::cleanup::repository::adapters::{
+    SeaOrmAccountStateProvider, SeaOrmClusterRepository, SeaOrmEmailRepository,
+    SeaOrmRuleEvaluator, SeaOrmSubscriptionRepository,
 };
+use crate::cleanup::repository::{CleanupPlanRepository, OpsFilter};
+use crate::db::entities::connected_accounts;
 use crate::AppState;
 
 pub fn routes() -> Router<AppState> {
@@ -76,44 +78,50 @@ fn err(code: StatusCode, error: &str, message: &str) -> (StatusCode, Json<ErrorB
     )
 }
 
-async fn build_plan_builder(state: &AppState) -> Result<PlanBuilder, sqlx::Error> {
+/// `(id, provider)` projection of a `connected_accounts` row.
+#[derive(sea_orm::FromQueryResult)]
+struct AccountProviderRow {
+    id: String,
+    provider: String,
+}
+
+async fn build_plan_builder(state: &AppState) -> Result<PlanBuilder, sea_orm::DbErr> {
+    use sea_orm::{EntityTrait, QuerySelect};
+
     let db = (*state.db).clone();
 
-    // Load per-account providers once so the closure is sync.
-    let sql = db.adapt("SELECT id, provider FROM connected_accounts");
-    let rows: Vec<(String, String)> = match &db {
-        crate::db::Database::Sqlite(pool) => {
-            sqlx::query_as(crate::db::audited_sql(&sql))
-                .fetch_all(pool)
-                .await?
-        }
-        crate::db::Database::Postgres(pool) => {
-            sqlx::query_as(crate::db::audited_sql(&sql))
-                .fetch_all(pool)
-                .await?
-        }
-    };
+    // Load per-account providers once so the closure is sync. One typed
+    // projection for both backends (ADR-036), read through the SeaORM handle
+    // `AppState` already carries.
+    let rows = connected_accounts::Entity::find()
+        .select_only()
+        .column(connected_accounts::Column::Id)
+        .column(connected_accounts::Column::Provider)
+        .into_model::<AccountProviderRow>()
+        .all(&state.orm)
+        .await?;
     let provider_map: Arc<HashMap<String, Provider>> = Arc::new(
         rows.into_iter()
-            .map(|(id, prov)| {
-                let p = match prov.as_str() {
+            .map(|row| {
+                let p = match row.provider.as_str() {
                     "outlook" => Provider::Outlook,
                     "imap" => Provider::Imap,
                     "pop3" => Provider::Pop3,
                     _ => Provider::Gmail,
                 };
-                (id, p)
+                (row.id, p)
             })
             .collect(),
     );
 
     Ok(PlanBuilder {
-        emails: Arc::new(SqlxEmailRepository { db: db.clone() }) as Arc<dyn EmailRepository>,
-        subs: Arc::new(SqlxSubscriptionRepository { db: db.clone() })
+        emails: Arc::new(SeaOrmEmailRepository { db: db.clone() }) as Arc<dyn EmailRepository>,
+        subs: Arc::new(SeaOrmSubscriptionRepository { db: db.clone() })
             as Arc<dyn SubscriptionRepository>,
-        clusters: Arc::new(SqlxClusterRepository { db: db.clone() }) as Arc<dyn ClusterRepository>,
-        rules: Arc::new(SqlxRuleEvaluator { db: db.clone() }) as Arc<dyn RuleEvaluator>,
-        accounts: Arc::new(SqlxAccountStateProvider { db }) as Arc<dyn AccountStateProvider>,
+        clusters: Arc::new(SeaOrmClusterRepository { db: db.clone() })
+            as Arc<dyn ClusterRepository>,
+        rules: Arc::new(SeaOrmRuleEvaluator { db: db.clone() }) as Arc<dyn RuleEvaluator>,
+        accounts: Arc::new(SeaOrmAccountStateProvider { db }) as Arc<dyn AccountStateProvider>,
         classifier: Arc::new(RiskClassifier::new()),
         provider_for: Arc::new(move |account_id: &str| {
             *provider_map.get(account_id).unwrap_or(&Provider::Gmail)

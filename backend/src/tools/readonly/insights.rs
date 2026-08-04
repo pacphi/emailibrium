@@ -304,13 +304,24 @@ pub async fn fetch_insights(ctx: &ToolContext) -> Result<InsightsSummary, ToolEr
             .or_insert(0) += 1;
     }
 
+    // Fold the NULL group into the literal-'Uncategorized' group before
+    // emitting: migration 001's DEFAULT means live data holds BOTH, and a
+    // plain per-group map would emit two entries sharing one label (found by
+    // the api/insights.rs port; same class as its COALESCE-grouping note).
+    let mut folded: Vec<(String, i64)> = Vec::with_capacity(categories.len());
+    for (label, count) in categories {
+        let label = label.unwrap_or_else(|| "Uncategorized".to_string());
+        match folded.iter_mut().find(|(l, _)| *l == label) {
+            Some((_, c)) => *c += count,
+            None => folded.push((label, count)),
+        }
+    }
+    folded.sort_by(|a, b| b.1.cmp(&a.1));
+
     Ok(InsightsSummary {
-        categories: categories
+        categories: folded
             .into_iter()
-            .map(|(label, count)| CategoryCount {
-                category: label.unwrap_or_else(|| "Uncategorized".to_string()),
-                count,
-            })
+            .map(|(category, count)| CategoryCount { category, count })
             .collect(),
         top_senders: senders
             .into_iter()
