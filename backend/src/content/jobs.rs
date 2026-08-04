@@ -11,14 +11,23 @@
 //! Jobs are enqueued by the ingestion pipeline and processed by background
 //! workers. Results are written back to the database.
 //!
-//! The `JobQueue` provides a SQLite-persistent job queue backed by the
+//! The `JobQueue` provides a persistent job queue backed by the
 //! `background_jobs` table (see migration 005). It uses apalis's in-memory
-//! storage for fast dispatch and persists state to SQLite for durability.
+//! storage for fast dispatch and persists state to the connected database for
+//! durability.
 
+use chrono::Utc;
+use sea_orm::sea_query::{Expr, ExprTrait};
+use sea_orm::ActiveValue::Set;
+use sea_orm::{
+    ColumnTrait, DatabaseConnection, DbErr, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder,
+    QuerySelect,
+};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
+use crate::db::entities::background_jobs as jobs;
 use crate::db::Database;
 
 /// Job to extract content from a raw email asynchronously.
@@ -142,11 +151,11 @@ impl std::fmt::Display for JobType {
 
 /// A persisted job record from the `background_jobs` table.
 ///
-/// `priority`/`attempts`/`max_retries` are `i32` to match the `INTEGER` column type in both
-/// backends' migrations — PostgreSQL's `INTEGER` is a real 4-byte type (unlike SQLite's
-/// dynamically-8-byte one), so binding/decoding these as `i64` compiles but fails at runtime
-/// against Postgres (`ColumnDecode: i64/INT8 incompatible with INT4`) — caught only by testing
-/// against a live Postgres instance, not by `cargo build`/`cargo test` (ADR-035).
+/// `priority`/`attempts`/`max_retries` are `i32` because the `background_jobs` entity declares
+/// them that way, matching the `INTEGER` column type in both backends' migrations —
+/// PostgreSQL's `INTEGER` is a real 4-byte type, unlike SQLite's dynamically-8-byte one
+/// (ADR-035). The entity, not this struct, is what makes that width per-backend correct
+/// (ADR-036).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JobRecord {
     pub id: String,
@@ -161,63 +170,56 @@ pub struct JobRecord {
     pub updated_at: String,
 }
 
-/// Row tuple returned when querying the `background_jobs` table. See [`JobRecord`]'s doc for
-/// why `priority`/`attempts`/`max_retries` are `i32`, not `i64`.
-type JobRow = (
-    String,
-    String,
-    String,
-    String,
-    i32,
-    i32,
-    i32,
-    Option<String>,
-    String,
-    String,
-);
+/// A UTC `'YYYY-MM-DD HH:MM:SS'` timestamp for the TEXT-typed temporal columns.
+///
+/// `updated_at`/`completed_at` are TEXT in both dialects (ADR-035 §2.5), so the value is
+/// formatted in Rust and bound as a string — byte-equivalent to what the two hand-written
+/// arms this port replaced produced (`datetime('now')` on SQLite,
+/// `to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')` on PostgreSQL).
+fn now_text() -> String {
+    Utc::now().format("%Y-%m-%d %H:%M:%S").to_string()
+}
 
-/// SQLite-backed job queue for background processing (ADR-006, item #28).
+/// Job queue for background processing (ADR-006, item #28).
 ///
 /// Provides enqueue/dequeue/update operations against the `background_jobs`
 /// table created by migration 005. Workers poll this queue to process jobs.
 ///
 /// This queue uses apalis's `MemoryStorage` pattern conceptually but persists
-/// directly to SQLite for durability across restarts.
+/// to the connected database for durability across restarts. Every query runs
+/// through SeaORM, so SQLite and PostgreSQL share one code path (ADR-036).
 #[derive(Clone)]
 pub struct JobQueue {
-    db: Database,
+    conn: DatabaseConnection,
 }
 
 impl JobQueue {
     /// Create a new job queue backed by the given database connection.
     pub fn new(db: Database) -> Self {
-        Self { db }
+        Self { conn: db.sea_orm() }
     }
 
     /// Enqueue a content extraction job.
     pub async fn enqueue_content_extraction(
         &self,
         job: &ContentExtractionJob,
-    ) -> Result<String, sqlx::Error> {
+    ) -> Result<String, DbErr> {
         self.enqueue(JobType::ContentExtraction, job, job.priority as i32)
             .await
     }
 
     /// Enqueue an embedding job.
-    pub async fn enqueue_embedding(&self, job: &EmbeddingJob) -> Result<String, sqlx::Error> {
+    pub async fn enqueue_embedding(&self, job: &EmbeddingJob) -> Result<String, DbErr> {
         self.enqueue(JobType::Embedding, job, 0).await
     }
 
     /// Enqueue a CLIP embedding job.
-    pub async fn enqueue_clip_embedding(
-        &self,
-        job: &ClipEmbeddingJob,
-    ) -> Result<String, sqlx::Error> {
+    pub async fn enqueue_clip_embedding(&self, job: &ClipEmbeddingJob) -> Result<String, DbErr> {
         self.enqueue(JobType::ClipEmbedding, job, 0).await
     }
 
     /// Enqueue a sync job.
-    pub async fn enqueue_sync(&self, job: &SyncJob) -> Result<String, sqlx::Error> {
+    pub async fn enqueue_sync(&self, job: &SyncJob) -> Result<String, DbErr> {
         self.enqueue(JobType::Sync, job, 0).await
     }
 
@@ -227,34 +229,22 @@ impl JobQueue {
         job_type: JobType,
         payload: &T,
         priority: i32,
-    ) -> Result<String, sqlx::Error> {
+    ) -> Result<String, DbErr> {
         let id = Uuid::new_v4().to_string();
         let payload_json = serde_json::to_string(payload).unwrap_or_else(|_| "{}".to_string());
 
-        let sql = self.db.adapt(
-            r#"INSERT INTO background_jobs (id, job_type, payload, status, priority)
-               VALUES (?, ?, ?, 'pending', ?)"#,
-        );
-        match &self.db {
-            Database::Sqlite(pool) => {
-                sqlx::query(crate::db::audited_sql(&sql))
-                    .bind(&id)
-                    .bind(job_type.as_str())
-                    .bind(&payload_json)
-                    .bind(priority)
-                    .execute(pool)
-                    .await?;
-            }
-            Database::Postgres(pool) => {
-                sqlx::query(crate::db::audited_sql(&sql))
-                    .bind(&id)
-                    .bind(job_type.as_str())
-                    .bind(&payload_json)
-                    .bind(priority)
-                    .execute(pool)
-                    .await?;
-            }
-        }
+        // The unset columns stay out of the INSERT so the table's own DEFAULTs
+        // (attempts, max_retries, created_at, updated_at) still apply.
+        jobs::Entity::insert(jobs::ActiveModel {
+            id: Set(id.clone()),
+            job_type: Set(job_type.as_str().to_owned()),
+            payload: Set(payload_json),
+            status: Set("pending".to_owned()),
+            priority: Set(priority),
+            ..Default::default()
+        })
+        .exec(&self.conn)
+        .await?;
 
         debug!(job_id = %id, job_type = %job_type, "Job enqueued");
         Ok(id)
@@ -264,110 +254,69 @@ impl JobQueue {
     ///
     /// Returns `None` if no pending jobs are available. Uses `SELECT ... LIMIT 1`
     /// with an immediate `UPDATE` to prevent double-processing.
-    pub async fn dequeue(&self, job_type: JobType) -> Result<Option<JobRecord>, sqlx::Error> {
+    pub async fn dequeue(&self, job_type: JobType) -> Result<Option<JobRecord>, DbErr> {
         // Fetch the highest-priority pending job.
-        let select_sql = self.db.adapt(
-            r#"SELECT id, job_type, payload, status, priority, attempts, max_retries,
-                          error_msg, created_at, updated_at
-                   FROM background_jobs
-                   WHERE job_type = ? AND status = 'pending'
-                   ORDER BY priority ASC, created_at ASC
-                   LIMIT 1"#,
-        );
-        let row: Option<JobRow> = match &self.db {
-            Database::Sqlite(pool) => {
-                sqlx::query_as(crate::db::audited_sql(&select_sql))
-                    .bind(job_type.as_str())
-                    .fetch_optional(pool)
-                    .await?
-            }
-            Database::Postgres(pool) => {
-                sqlx::query_as(crate::db::audited_sql(&select_sql))
-                    .bind(job_type.as_str())
-                    .fetch_optional(pool)
-                    .await?
-            }
-        };
+        let row = jobs::Entity::find()
+            .filter(jobs::Column::JobType.eq(job_type.as_str()))
+            .filter(jobs::Column::Status.eq("pending"))
+            .order_by_asc(jobs::Column::Priority)
+            .order_by_asc(jobs::Column::CreatedAt)
+            .one(&self.conn)
+            .await?;
 
         let Some(r) = row else {
             return Ok(None);
         };
 
-        // Mark as running. `updated_at` is TEXT (not TIMESTAMPTZ) in both dialects
-        // (ADR-033), so this does NOT go through `Database::adapt()`'s mechanical
-        // `datetime('now')` -> `now()` substitution: that would assign a timestamptz
-        // value to a TEXT column, and while Postgres accepts the assignment cast, the
-        // resulting string ("2026-08-03 22:31:37.104356+00") is shaped differently
-        // from SQLite's `datetime('now')` output — see ADR-035's note on this. The
-        // Postgres arm instead hand-writes `to_char(...)` to match the exact
-        // 'YYYY-MM-DD HH:MI:SS' shape the migration's own column DEFAULT produces.
-        match &self.db {
-            Database::Sqlite(pool) => {
-                sqlx::query(
-                    r#"UPDATE background_jobs
-                       SET status = 'running', attempts = attempts + 1, updated_at = datetime('now')
-                       WHERE id = ? AND status = 'pending'"#,
-                )
-                .bind(&r.0)
-                .execute(pool)
-                .await?;
-            }
-            Database::Postgres(pool) => {
-                sqlx::query(
-                    r#"UPDATE background_jobs
-                       SET status = 'running', attempts = attempts + 1,
-                           updated_at = to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')
-                       WHERE id = $1 AND status = 'pending'"#,
-                )
-                .bind(&r.0)
-                .execute(pool)
-                .await?;
-            }
-        }
+        // Mark as running. `updated_at` is TEXT in both dialects (ADR-035 §2.5), so the
+        // timestamp is formatted in Rust — see `now_text()`.
+        //
+        // KNOWN CLAIM RACE, preserved deliberately by the SeaORM port: the SELECT above and
+        // this guarded UPDATE are not atomic, and `rows_affected` is ignored. When another
+        // claimer flips the row to 'running' in between, this UPDATE matches zero rows yet
+        // the caller still receives `Some(JobRecord)` — with an `attempts` fabricated below
+        // from the select-time value rather than read back from the row. Pinned by
+        // `dequeue_returns_a_job_it_did_not_claim_when_another_claimer_won`; fixing it is
+        // out of scope here.
+        jobs::Entity::update_many()
+            .col_expr(jobs::Column::Status, Expr::value("running"))
+            .col_expr(
+                jobs::Column::Attempts,
+                Expr::col(jobs::Column::Attempts).add(1),
+            )
+            .col_expr(jobs::Column::UpdatedAt, Expr::value(now_text()))
+            .filter(jobs::Column::Id.eq(r.id.clone()))
+            .filter(jobs::Column::Status.eq("pending"))
+            .exec(&self.conn)
+            .await?;
 
         Ok(Some(JobRecord {
-            id: r.0,
-            job_type: r.1,
-            payload: r.2,
+            id: r.id,
+            job_type: r.job_type,
+            payload: r.payload,
             status: "running".to_string(),
-            priority: r.4,
-            attempts: r.5 + 1,
-            max_retries: r.6,
-            error_msg: r.7,
-            created_at: r.8,
-            updated_at: r.9,
+            priority: r.priority,
+            attempts: r.attempts + 1,
+            max_retries: r.max_retries,
+            error_msg: r.error_msg,
+            created_at: r.created_at,
+            updated_at: r.updated_at,
         }))
     }
 
     /// Mark a job as completed.
-    pub async fn mark_completed(&self, job_id: &str) -> Result<(), sqlx::Error> {
-        // See dequeue()'s comment: completed_at/updated_at are TEXT in both dialects,
-        // so the Postgres arm is hand-written rather than routed through
-        // Database::adapt()'s datetime('now') substitution.
-        match &self.db {
-            Database::Sqlite(pool) => {
-                sqlx::query(
-                    r#"UPDATE background_jobs
-                       SET status = 'completed', completed_at = datetime('now'), updated_at = datetime('now')
-                       WHERE id = ?"#,
-                )
-                .bind(job_id)
-                .execute(pool)
-                .await?;
-            }
-            Database::Postgres(pool) => {
-                sqlx::query(
-                    r#"UPDATE background_jobs
-                       SET status = 'completed',
-                           completed_at = to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS'),
-                           updated_at = to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')
-                       WHERE id = $1"#,
-                )
-                .bind(job_id)
-                .execute(pool)
-                .await?;
-            }
-        }
+    pub async fn mark_completed(&self, job_id: &str) -> Result<(), DbErr> {
+        // completed_at/updated_at are TEXT in both dialects (ADR-035 §2.5) — see `now_text()`.
+        // One value for both columns, matching what a single statement's two `datetime('now')`
+        // calls already produced.
+        let now = now_text();
+        jobs::Entity::update_many()
+            .col_expr(jobs::Column::Status, Expr::value("completed"))
+            .col_expr(jobs::Column::CompletedAt, Expr::value(now.clone()))
+            .col_expr(jobs::Column::UpdatedAt, Expr::value(now))
+            .filter(jobs::Column::Id.eq(job_id))
+            .exec(&self.conn)
+            .await?;
 
         debug!(job_id = %job_id, "Job completed");
         Ok(())
@@ -377,25 +326,17 @@ impl JobQueue {
     ///
     /// If the job has not exceeded `max_retries`, it is reset to pending
     /// for automatic retry.
-    pub async fn mark_failed(&self, job_id: &str, error: &str) -> Result<(), sqlx::Error> {
-        // Check if we should retry.
-        let select_sql = self
-            .db
-            .adapt(r#"SELECT attempts, max_retries FROM background_jobs WHERE id = ?"#);
-        let row: Option<(i32, i32)> = match &self.db {
-            Database::Sqlite(pool) => {
-                sqlx::query_as(crate::db::audited_sql(&select_sql))
-                    .bind(job_id)
-                    .fetch_optional(pool)
-                    .await?
-            }
-            Database::Postgres(pool) => {
-                sqlx::query_as(crate::db::audited_sql(&select_sql))
-                    .bind(job_id)
-                    .fetch_optional(pool)
-                    .await?
-            }
-        };
+    pub async fn mark_failed(&self, job_id: &str, error: &str) -> Result<(), DbErr> {
+        // Check if we should retry. The retry decision stays in Rust, on a plain read —
+        // same read-then-decide shape (and same lost-update window) as before the port.
+        let row: Option<(i32, i32)> = jobs::Entity::find()
+            .filter(jobs::Column::Id.eq(job_id))
+            .select_only()
+            .column(jobs::Column::Attempts)
+            .column(jobs::Column::MaxRetries)
+            .into_tuple()
+            .one(&self.conn)
+            .await?;
 
         let final_status = match row {
             Some((attempts, max_retries)) if attempts < max_retries => {
@@ -408,132 +349,58 @@ impl JobQueue {
             }
         };
 
-        // See dequeue()'s comment: updated_at is TEXT in both dialects, so the
-        // Postgres arm hand-writes to_char(...) instead of going through
-        // Database::adapt()'s datetime('now') substitution.
-        match &self.db {
-            Database::Sqlite(pool) => {
-                sqlx::query(
-                    r#"UPDATE background_jobs
-                       SET status = ?, error_msg = ?, updated_at = datetime('now')
-                       WHERE id = ?"#,
-                )
-                .bind(final_status)
-                .bind(error)
-                .bind(job_id)
-                .execute(pool)
-                .await?;
-            }
-            Database::Postgres(pool) => {
-                sqlx::query(
-                    r#"UPDATE background_jobs
-                       SET status = $1, error_msg = $2,
-                           updated_at = to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')
-                       WHERE id = $3"#,
-                )
-                .bind(final_status)
-                .bind(error)
-                .bind(job_id)
-                .execute(pool)
-                .await?;
-            }
-        }
+        // updated_at is TEXT in both dialects (ADR-035 §2.5) — see `now_text()`.
+        jobs::Entity::update_many()
+            .col_expr(jobs::Column::Status, Expr::value(final_status))
+            .col_expr(jobs::Column::ErrorMsg, Expr::value(error))
+            .col_expr(jobs::Column::UpdatedAt, Expr::value(now_text()))
+            .filter(jobs::Column::Id.eq(job_id))
+            .exec(&self.conn)
+            .await?;
 
         Ok(())
     }
 
     /// Cancel a pending or running job.
-    pub async fn cancel(&self, job_id: &str) -> Result<bool, sqlx::Error> {
-        // See dequeue()'s comment on why this doesn't route through Database::adapt().
-        let affected = match &self.db {
-            Database::Sqlite(pool) => sqlx::query(
-                r#"UPDATE background_jobs
-                   SET status = 'cancelled', updated_at = datetime('now')
-                   WHERE id = ? AND status IN ('pending', 'running')"#,
-            )
-            .bind(job_id)
-            .execute(pool)
+    pub async fn cancel(&self, job_id: &str) -> Result<bool, DbErr> {
+        // updated_at is TEXT in both dialects (ADR-035 §2.5) — see `now_text()`.
+        let affected = jobs::Entity::update_many()
+            .col_expr(jobs::Column::Status, Expr::value("cancelled"))
+            .col_expr(jobs::Column::UpdatedAt, Expr::value(now_text()))
+            .filter(jobs::Column::Id.eq(job_id))
+            .filter(jobs::Column::Status.is_in(["pending", "running"]))
+            .exec(&self.conn)
             .await?
-            .rows_affected(),
-            Database::Postgres(pool) => sqlx::query(
-                r#"UPDATE background_jobs
-                   SET status = 'cancelled',
-                       updated_at = to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')
-                   WHERE id = $1 AND status IN ('pending', 'running')"#,
-            )
-            .bind(job_id)
-            .execute(pool)
-            .await?
-            .rows_affected(),
-        };
+            .rows_affected;
 
         Ok(affected > 0)
     }
 
     /// Count pending jobs, optionally filtered by type.
-    pub async fn pending_count(&self, job_type: Option<JobType>) -> Result<i64, sqlx::Error> {
-        let count: (i64,) = match job_type {
-            Some(jt) => {
-                let sql = self.db.adapt(
-                    "SELECT COUNT(*) FROM background_jobs WHERE status = 'pending' AND job_type = ?",
-                );
-                match &self.db {
-                    Database::Sqlite(pool) => {
-                        sqlx::query_as(crate::db::audited_sql(&sql))
-                            .bind(jt.as_str())
-                            .fetch_one(pool)
-                            .await?
-                    }
-                    Database::Postgres(pool) => {
-                        sqlx::query_as(crate::db::audited_sql(&sql))
-                            .bind(jt.as_str())
-                            .fetch_one(pool)
-                            .await?
-                    }
-                }
-            }
-            None => match &self.db {
-                Database::Sqlite(pool) => {
-                    sqlx::query_as("SELECT COUNT(*) FROM background_jobs WHERE status = 'pending'")
-                        .fetch_one(pool)
-                        .await?
-                }
-                Database::Postgres(pool) => {
-                    sqlx::query_as("SELECT COUNT(*) FROM background_jobs WHERE status = 'pending'")
-                        .fetch_one(pool)
-                        .await?
-                }
-            },
-        };
+    pub async fn pending_count(&self, job_type: Option<JobType>) -> Result<i64, DbErr> {
+        let mut query = jobs::Entity::find().filter(jobs::Column::Status.eq("pending"));
+        if let Some(jt) = job_type {
+            query = query.filter(jobs::Column::JobType.eq(jt.as_str()));
+        }
+        // SeaORM decodes COUNT(*) as u64; the caller's `i64` contract is unchanged.
+        let count = query.count(&self.conn).await?;
 
-        Ok(count.0)
+        Ok(count as i64)
     }
 
     /// Resume abandoned jobs (status = 'running' with no active worker).
     ///
     /// Called on startup to reset jobs that were running when the process
     /// was interrupted.
-    pub async fn resume_abandoned(&self) -> Result<u64, sqlx::Error> {
-        // See dequeue()'s comment on why this doesn't route through Database::adapt().
-        let count = match &self.db {
-            Database::Sqlite(pool) => sqlx::query(
-                r#"UPDATE background_jobs
-                   SET status = 'pending', updated_at = datetime('now')
-                   WHERE status = 'running'"#,
-            )
-            .execute(pool)
+    pub async fn resume_abandoned(&self) -> Result<u64, DbErr> {
+        // updated_at is TEXT in both dialects (ADR-035 §2.5) — see `now_text()`.
+        let count = jobs::Entity::update_many()
+            .col_expr(jobs::Column::Status, Expr::value("pending"))
+            .col_expr(jobs::Column::UpdatedAt, Expr::value(now_text()))
+            .filter(jobs::Column::Status.eq("running"))
+            .exec(&self.conn)
             .await?
-            .rows_affected(),
-            Database::Postgres(pool) => sqlx::query(
-                r#"UPDATE background_jobs
-                   SET status = 'pending',
-                       updated_at = to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')
-                   WHERE status = 'running'"#,
-            )
-            .execute(pool)
-            .await?
-            .rows_affected(),
-        };
+            .rows_affected;
         if count > 0 {
             info!(count, "Resumed abandoned jobs");
         }
@@ -962,5 +829,150 @@ mod tests {
             .unwrap();
         let payload: ContentExtractionJob = serde_json::from_str(&record.payload).unwrap();
         assert_eq!(payload.email_id, "low");
+    }
+
+    /// Pin for the dequeue claim sequence the ADR-036 port carries over as-is:
+    /// the claim UPDATE is guarded on `status = 'pending'` and the returned
+    /// record's `attempts` is the select-time value + 1, which matches the row
+    /// only when the claim is uncontended. The contended interleaving (a rival
+    /// claim between SELECT and UPDATE, where `rows_affected == 0` is ignored
+    /// and both callers get the job) is not deterministically reachable from a
+    /// test; it stays recorded in pl-legacy-enum-file-classes and phase 7's fix
+    /// will flip this pin's shape.
+    #[tokio::test]
+    async fn test_dequeue_claim_syncs_attempts_with_the_row_when_uncontended() {
+        let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+        sqlx::query(
+            r#"CREATE TABLE IF NOT EXISTS background_jobs (
+                id          TEXT PRIMARY KEY,
+                job_type    TEXT NOT NULL,
+                payload     TEXT NOT NULL,
+                status      TEXT NOT NULL DEFAULT 'pending',
+                priority    INTEGER NOT NULL DEFAULT 0,
+                attempts    INTEGER NOT NULL DEFAULT 0,
+                max_retries INTEGER NOT NULL DEFAULT 3,
+                error_msg   TEXT,
+                created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
+                scheduled_at TEXT,
+                completed_at TEXT
+            )"#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let db = Database::Sqlite(pool.clone());
+        let queue = JobQueue::new(db);
+
+        let job = ContentExtractionJob {
+            email_id: "claim-1".to_string(),
+            account_id: "a1".to_string(),
+            priority: 0,
+        };
+        let job_id = queue.enqueue_content_extraction(&job).await.unwrap();
+
+        let record = queue
+            .dequeue(JobType::ContentExtraction)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            record.attempts, 1,
+            "fabricated attempts = select-time 0 + 1"
+        );
+        let (db_status, db_attempts): (String, i32) =
+            sqlx::query_as("SELECT status, attempts FROM background_jobs WHERE id = ?1")
+                .bind(&job_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(db_status, "running");
+        assert_eq!(
+            db_attempts, record.attempts,
+            "uncontended claim: record matches row"
+        );
+
+        // Re-arm the row with a nonzero attempt count: the next claim must
+        // report select-time + 1 again, proving the increment rides the
+        // guarded UPDATE, not the SELECT.
+        sqlx::query("UPDATE background_jobs SET status = 'pending', attempts = 7 WHERE id = ?1")
+            .bind(&job_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let record = queue
+            .dequeue(JobType::ContentExtraction)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(record.attempts, 8);
+        let (db_attempts,): (i32,) =
+            sqlx::query_as("SELECT attempts FROM background_jobs WHERE id = ?1")
+                .bind(&job_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(db_attempts, 8);
+    }
+
+    /// Pin: dequeue's SELECT only considers `status = 'pending'` rows — a row
+    /// already claimed (`running`) is invisible even when it is the oldest.
+    #[tokio::test]
+    async fn test_dequeue_skips_non_pending_rows() {
+        let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+        sqlx::query(
+            r#"CREATE TABLE IF NOT EXISTS background_jobs (
+                id          TEXT PRIMARY KEY,
+                job_type    TEXT NOT NULL,
+                payload     TEXT NOT NULL,
+                status      TEXT NOT NULL DEFAULT 'pending',
+                priority    INTEGER NOT NULL DEFAULT 0,
+                attempts    INTEGER NOT NULL DEFAULT 0,
+                max_retries INTEGER NOT NULL DEFAULT 3,
+                error_msg   TEXT,
+                created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
+                scheduled_at TEXT,
+                completed_at TEXT
+            )"#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let db = Database::Sqlite(pool.clone());
+        let queue = JobQueue::new(db);
+
+        let older = ContentExtractionJob {
+            email_id: "older".to_string(),
+            account_id: "a1".to_string(),
+            priority: 0,
+        };
+        let newer = ContentExtractionJob {
+            email_id: "newer".to_string(),
+            account_id: "a1".to_string(),
+            priority: 0,
+        };
+        let older_id = queue.enqueue_content_extraction(&older).await.unwrap();
+        let newer_id = queue.enqueue_content_extraction(&newer).await.unwrap();
+
+        // Claim the older row out-of-band; dequeue must return the newer one.
+        sqlx::query("UPDATE background_jobs SET status = 'running' WHERE id = ?1")
+            .bind(&older_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let record = queue
+            .dequeue(JobType::ContentExtraction)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(record.id, newer_id);
+
+        // Nothing pending remains.
+        assert!(queue
+            .dequeue(JobType::ContentExtraction)
+            .await
+            .unwrap()
+            .is_none());
     }
 }

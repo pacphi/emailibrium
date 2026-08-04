@@ -5,10 +5,17 @@
 //! Operations are processed FIFO with configurable retry limits.
 
 use chrono::{DateTime, Utc};
+use sea_orm::sea_query::Expr;
+use sea_orm::{
+    ActiveValue::{NotSet, Set},
+    ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder,
+    QuerySelect,
+};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::db::{audited_sql, Database};
+use crate::db::entities::sync_queue;
+use crate::db::Database;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -139,100 +146,50 @@ impl QueuedOperation {
     }
 }
 
-/// Row type for SQLite: `created_at`/`processed_at` are TEXT (SQLite has no native
-/// temporal type; the app writes/reads RFC3339 strings by hand). `retry_count`/
-/// `max_retries` decode as i32, matching the actual INTEGER/INT4 column (ADR-035).
-type QueueRowSqlite = (
-    String,         // id
-    String,         // account_id
-    String,         // operation_type
-    String,         // target_id
-    Option<String>, // payload (JSON)
-    String,         // status
-    i32,            // retry_count
-    i32,            // max_retries
-    String,         // created_at
-    Option<String>, // processed_at
-    Option<String>, // error
-);
-
-/// Row type for PostgreSQL: unlike SQLite, `created_at`/`processed_at` are real
-/// TIMESTAMPTZ columns there (ADR-033's dialect port), so binding/decoding the
-/// RFC3339-string values the SQLite path uses fails outright — Postgres has no
-/// text->timestamptz assignment cast. This arm binds/decodes `DateTime<Utc>`
-/// natively instead (ADR-035).
-type QueueRowPostgres = (
-    String,
-    String,
-    String,
-    String,
-    Option<String>,
-    String,
-    i32,
-    i32,
-    DateTime<Utc>,
-    Option<DateTime<Utc>>,
-    Option<String>,
-);
-
 // ---------------------------------------------------------------------------
 // Service
 // ---------------------------------------------------------------------------
 
 /// Offline operation queue (SQLite or PostgreSQL).
+///
+/// One code path for both backends: the `sync_queue` entity declares the Rust
+/// types and SeaORM owns encode/decode per backend (ADR-036), replacing the
+/// pre-port `QueueRowSqlite`/`QueueRowPostgres` split and its `adapt()` /
+/// `audited_sql()` plumbing.
 pub struct OfflineQueue {
-    db: Database,
+    conn: DatabaseConnection,
 }
 
 impl OfflineQueue {
     /// Create a new offline queue using the provided database handle.
     pub fn new(db: Database) -> Self {
-        Self { db }
+        Self { conn: db.sea_orm() }
     }
 
     /// Enqueue an operation for later execution. Returns the operation ID.
-    pub async fn enqueue(&self, op: &QueuedOperation) -> Result<String, sqlx::Error> {
+    pub async fn enqueue(&self, op: &QueuedOperation) -> Result<String, sea_orm::DbErr> {
         let op_type = op.operation_type.as_str();
         let status = op.status.as_str();
         let payload_str = op.payload.as_ref().map(|v| v.to_string());
 
-        let sql = self.db.adapt(
-            r#"INSERT INTO sync_queue
-                   (id, account_id, operation_type, target_id, payload,
-                    status, retry_count, max_retries, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
-        );
-        match &self.db {
-            Database::Sqlite(pool) => {
-                let created = op.created_at.to_rfc3339();
-                sqlx::query(audited_sql(&sql))
-                    .bind(&op.id)
-                    .bind(&op.account_id)
-                    .bind(op_type)
-                    .bind(&op.target_id)
-                    .bind(&payload_str)
-                    .bind(status)
-                    .bind(op.retry_count as i32)
-                    .bind(op.max_retries as i32)
-                    .bind(&created)
-                    .execute(pool)
-                    .await?;
-            }
-            Database::Postgres(pool) => {
-                sqlx::query(audited_sql(&sql))
-                    .bind(&op.id)
-                    .bind(&op.account_id)
-                    .bind(op_type)
-                    .bind(&op.target_id)
-                    .bind(&payload_str)
-                    .bind(status)
-                    .bind(op.retry_count as i32)
-                    .bind(op.max_retries as i32)
-                    .bind(op.created_at)
-                    .execute(pool)
-                    .await?;
-            }
-        }
+        // `processed_at`/`error` stay `NotSet` so they are omitted from the
+        // INSERT and take their column defaults, exactly as the pre-port
+        // 9-column INSERT did.
+        sync_queue::Entity::insert(sync_queue::ActiveModel {
+            id: Set(op.id.clone()),
+            account_id: Set(op.account_id.clone()),
+            operation_type: Set(op_type.to_owned()),
+            target_id: Set(op.target_id.clone()),
+            payload: Set(payload_str),
+            status: Set(Some(status.to_owned())),
+            retry_count: Set(Some(op.retry_count as i32)),
+            max_retries: Set(Some(op.max_retries as i32)),
+            created_at: Set(Some(op.created_at)),
+            processed_at: NotSet,
+            error: NotSet,
+        })
+        .exec(&self.conn)
+        .await?;
 
         Ok(op.id.clone())
     }
@@ -241,77 +198,39 @@ impl OfflineQueue {
     ///
     /// Atomically marks fetched operations as `processing` to prevent
     /// double-dispatch by concurrent workers.
-    pub async fn dequeue_batch(&self, limit: u32) -> Result<Vec<QueuedOperation>, sqlx::Error> {
-        let sql = self.db.adapt(
-            r#"SELECT id, account_id, operation_type, target_id, payload,
-                      status, retry_count, max_retries, created_at,
-                      processed_at, error
-               FROM sync_queue
-               WHERE status = 'pending'
-               ORDER BY created_at ASC
-               LIMIT ?"#,
-        );
-        let mark_sql = self
-            .db
-            .adapt("UPDATE sync_queue SET status = 'processing' WHERE id = ?");
-        let ops: Vec<QueuedOperation> = match &self.db {
-            Database::Sqlite(pool) => {
-                let rows: Vec<QueueRowSqlite> = sqlx::query_as(audited_sql(&sql))
-                    .bind(limit as i32)
-                    .fetch_all(pool)
-                    .await?;
-                let ops: Vec<QueuedOperation> = rows.into_iter().map(row_to_op_sqlite).collect();
-                for op in &ops {
-                    sqlx::query(audited_sql(&mark_sql))
-                        .bind(&op.id)
-                        .execute(pool)
-                        .await?;
-                }
-                ops
-            }
-            Database::Postgres(pool) => {
-                let rows: Vec<QueueRowPostgres> = sqlx::query_as(audited_sql(&sql))
-                    .bind(limit as i32)
-                    .fetch_all(pool)
-                    .await?;
-                let ops: Vec<QueuedOperation> = rows.into_iter().map(row_to_op_postgres).collect();
-                for op in &ops {
-                    sqlx::query(audited_sql(&mark_sql))
-                        .bind(&op.id)
-                        .execute(pool)
-                        .await?;
-                }
-                ops
-            }
-        };
+    ///
+    /// That atomicity claim is aspirational, not implemented: the SELECT and the
+    /// per-row UPDATEs are separate unguarded statements, so two concurrent
+    /// workers can select the same rows. The SeaORM port preserves the race
+    /// byte-for-byte rather than silently changing semantics; the fix is tracked
+    /// as `pl-legacy-enum-file-classes` / phase 7.
+    pub async fn dequeue_batch(&self, limit: u32) -> Result<Vec<QueuedOperation>, sea_orm::DbErr> {
+        let rows = sync_queue::Entity::find()
+            .filter(sync_queue::Column::Status.eq("pending"))
+            .order_by_asc(sync_queue::Column::CreatedAt)
+            .limit(limit as u64)
+            .all(&self.conn)
+            .await?;
+        let ops: Vec<QueuedOperation> = rows.into_iter().map(model_to_op).collect();
+        for op in &ops {
+            sync_queue::Entity::update_many()
+                .col_expr(sync_queue::Column::Status, Expr::value("processing"))
+                .filter(sync_queue::Column::Id.eq(op.id.as_str()))
+                .exec(&self.conn)
+                .await?;
+        }
 
         Ok(ops)
     }
 
     /// Mark an operation as completed.
-    pub async fn complete(&self, id: &str) -> Result<(), sqlx::Error> {
-        let sql = self.db.adapt(
-            r#"UPDATE sync_queue
-               SET status = 'completed', processed_at = ?
-               WHERE id = ?"#,
-        );
-        match &self.db {
-            Database::Sqlite(pool) => {
-                let now = Utc::now().to_rfc3339();
-                sqlx::query(audited_sql(&sql))
-                    .bind(&now)
-                    .bind(id)
-                    .execute(pool)
-                    .await?;
-            }
-            Database::Postgres(pool) => {
-                sqlx::query(audited_sql(&sql))
-                    .bind(Utc::now())
-                    .bind(id)
-                    .execute(pool)
-                    .await?;
-            }
-        }
+    pub async fn complete(&self, id: &str) -> Result<(), sea_orm::DbErr> {
+        sync_queue::Entity::update_many()
+            .col_expr(sync_queue::Column::Status, Expr::value("completed"))
+            .col_expr(sync_queue::Column::ProcessedAt, Expr::value(Utc::now()))
+            .filter(sync_queue::Column::Id.eq(id))
+            .exec(&self.conn)
+            .await?;
         Ok(())
     }
 
@@ -320,147 +239,77 @@ impl OfflineQueue {
     /// If the retry count has not yet reached `max_retries`, the status
     /// is reset to `pending` so the operation will be retried. Otherwise
     /// it remains in `failed` state.
-    pub async fn fail(&self, id: &str, error: &str) -> Result<(), sqlx::Error> {
-        let select_sql = self
-            .db
-            .adapt("SELECT retry_count, max_retries FROM sync_queue WHERE id = ?");
-        let update_sql = self.db.adapt(
-            r#"UPDATE sync_queue
-               SET status = ?, retry_count = ?, error = ?, processed_at = ?
-               WHERE id = ?"#,
-        );
-
-        match &self.db {
-            Database::Sqlite(pool) => {
-                let row: Option<(i32, i32)> = sqlx::query_as(audited_sql(&select_sql))
-                    .bind(id)
-                    .fetch_optional(pool)
-                    .await?;
-                let (retry_count, max_retries) = row.unwrap_or((0, 3));
-                let new_retry = retry_count + 1;
-                let new_status = if new_retry >= max_retries {
-                    "failed"
-                } else {
-                    "pending"
-                };
-                let now = Utc::now().to_rfc3339();
-                sqlx::query(audited_sql(&update_sql))
-                    .bind(new_status)
-                    .bind(new_retry)
-                    .bind(error)
-                    .bind(&now)
-                    .bind(id)
-                    .execute(pool)
-                    .await?;
-            }
-            Database::Postgres(pool) => {
-                let row: Option<(i32, i32)> = sqlx::query_as(audited_sql(&select_sql))
-                    .bind(id)
-                    .fetch_optional(pool)
-                    .await?;
-                let (retry_count, max_retries) = row.unwrap_or((0, 3));
-                let new_retry = retry_count + 1;
-                let new_status = if new_retry >= max_retries {
-                    "failed"
-                } else {
-                    "pending"
-                };
-                sqlx::query(audited_sql(&update_sql))
-                    .bind(new_status)
-                    .bind(new_retry)
-                    .bind(error)
-                    .bind(Utc::now())
-                    .bind(id)
-                    .execute(pool)
-                    .await?;
-            }
-        }
+    ///
+    /// Same read-compute-write shape as [`Self::dequeue_batch`], and the same
+    /// unguarded race: concurrent `fail` calls for one id can both read the
+    /// pre-increment `retry_count` and lose one increment. Ported as-is; see
+    /// `pl-legacy-enum-file-classes` / phase 7.
+    pub async fn fail(&self, id: &str, error: &str) -> Result<(), sea_orm::DbErr> {
+        let row: Option<(Option<i32>, Option<i32>)> = sync_queue::Entity::find()
+            .select_only()
+            .column(sync_queue::Column::RetryCount)
+            .column(sync_queue::Column::MaxRetries)
+            .filter(sync_queue::Column::Id.eq(id))
+            .into_tuple()
+            .one(&self.conn)
+            .await?;
+        // Absent row falls back to (0, 3) as before; a present row with NULL
+        // counters takes the same column defaults the schema declares.
+        let (retry_count, max_retries) = row
+            .map(|(retry, max)| (retry.unwrap_or(0), max.unwrap_or(3)))
+            .unwrap_or((0, 3));
+        let new_retry = retry_count + 1;
+        let new_status = if new_retry >= max_retries {
+            "failed"
+        } else {
+            "pending"
+        };
+        sync_queue::Entity::update_many()
+            .col_expr(sync_queue::Column::Status, Expr::value(new_status))
+            .col_expr(sync_queue::Column::RetryCount, Expr::value(new_retry))
+            .col_expr(sync_queue::Column::Error, Expr::value(error))
+            .col_expr(sync_queue::Column::ProcessedAt, Expr::value(Utc::now()))
+            .filter(sync_queue::Column::Id.eq(id))
+            .exec(&self.conn)
+            .await?;
 
         Ok(())
     }
 
     /// Mark an operation as having a conflict.
-    pub async fn mark_conflict(&self, id: &str, error: &str) -> Result<(), sqlx::Error> {
-        let sql = self.db.adapt(
-            r#"UPDATE sync_queue
-               SET status = 'conflict', error = ?, processed_at = ?
-               WHERE id = ?"#,
-        );
-        match &self.db {
-            Database::Sqlite(pool) => {
-                let now = Utc::now().to_rfc3339();
-                sqlx::query(audited_sql(&sql))
-                    .bind(error)
-                    .bind(&now)
-                    .bind(id)
-                    .execute(pool)
-                    .await?;
-            }
-            Database::Postgres(pool) => {
-                sqlx::query(audited_sql(&sql))
-                    .bind(error)
-                    .bind(Utc::now())
-                    .bind(id)
-                    .execute(pool)
-                    .await?;
-            }
-        }
+    pub async fn mark_conflict(&self, id: &str, error: &str) -> Result<(), sea_orm::DbErr> {
+        sync_queue::Entity::update_many()
+            .col_expr(sync_queue::Column::Status, Expr::value("conflict"))
+            .col_expr(sync_queue::Column::Error, Expr::value(error))
+            .col_expr(sync_queue::Column::ProcessedAt, Expr::value(Utc::now()))
+            .filter(sync_queue::Column::Id.eq(id))
+            .exec(&self.conn)
+            .await?;
         Ok(())
     }
 
     /// Get pending count for an account.
-    pub async fn pending_count(&self, account_id: &str) -> Result<u64, sqlx::Error> {
-        let sql = self
-            .db
-            .adapt("SELECT COUNT(*) FROM sync_queue WHERE account_id = ? AND status = 'pending'");
-        let row: (i64,) = match &self.db {
-            Database::Sqlite(pool) => {
-                sqlx::query_as(audited_sql(&sql))
-                    .bind(account_id)
-                    .fetch_one(pool)
-                    .await?
-            }
-            Database::Postgres(pool) => {
-                sqlx::query_as(audited_sql(&sql))
-                    .bind(account_id)
-                    .fetch_one(pool)
-                    .await?
-            }
-        };
-        Ok(row.0.max(0) as u64)
+    pub async fn pending_count(&self, account_id: &str) -> Result<u64, sea_orm::DbErr> {
+        sync_queue::Entity::find()
+            .filter(sync_queue::Column::AccountId.eq(account_id))
+            .filter(sync_queue::Column::Status.eq("pending"))
+            .count(&self.conn)
+            .await
     }
 
     /// Get all pending operations for display.
     pub async fn list_pending(
         &self,
         account_id: &str,
-    ) -> Result<Vec<QueuedOperation>, sqlx::Error> {
-        let sql = self.db.adapt(
-            r#"SELECT id, account_id, operation_type, target_id, payload,
-                      status, retry_count, max_retries, created_at,
-                      processed_at, error
-               FROM sync_queue
-               WHERE account_id = ? AND status IN ('pending', 'processing')
-               ORDER BY created_at ASC"#,
-        );
-        let ops = match &self.db {
-            Database::Sqlite(pool) => {
-                let rows: Vec<QueueRowSqlite> = sqlx::query_as(audited_sql(&sql))
-                    .bind(account_id)
-                    .fetch_all(pool)
-                    .await?;
-                rows.into_iter().map(row_to_op_sqlite).collect()
-            }
-            Database::Postgres(pool) => {
-                let rows: Vec<QueueRowPostgres> = sqlx::query_as(audited_sql(&sql))
-                    .bind(account_id)
-                    .fetch_all(pool)
-                    .await?;
-                rows.into_iter().map(row_to_op_postgres).collect()
-            }
-        };
+    ) -> Result<Vec<QueuedOperation>, sea_orm::DbErr> {
+        let rows = sync_queue::Entity::find()
+            .filter(sync_queue::Column::AccountId.eq(account_id))
+            .filter(sync_queue::Column::Status.is_in(["pending", "processing"]))
+            .order_by_asc(sync_queue::Column::CreatedAt)
+            .all(&self.conn)
+            .await?;
 
-        Ok(ops)
+        Ok(rows.into_iter().map(model_to_op).collect())
     }
 }
 
@@ -468,57 +317,40 @@ impl OfflineQueue {
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn row_to_op_sqlite(row: QueueRowSqlite) -> QueuedOperation {
+/// Decode a `sync_queue` entity row into a `QueuedOperation`.
+///
+/// The entity's declared types (not a backend-concrete row tuple) are what make
+/// this portable across SQLite and PostgreSQL — see ADR-036. Every unparseable
+/// or absent value falls back exactly as the pre-port converters did: unknown
+/// operation type -> `Archive`, unknown status -> `Pending`, unreadable
+/// `created_at` -> `Utc::now()`.
+fn model_to_op(row: sync_queue::Model) -> QueuedOperation {
     let operation_type = row
-        .2
+        .operation_type
         .parse::<OperationType>()
         .unwrap_or(OperationType::Archive);
-    let status = row.5.parse::<QueueStatus>().unwrap_or(QueueStatus::Pending);
-    let payload = row.4.as_deref().and_then(|s| serde_json::from_str(s).ok());
-    let created_at = chrono::DateTime::parse_from_rfc3339(&row.8)
-        .map(|dt| dt.with_timezone(&Utc))
-        .unwrap_or_else(|_| Utc::now());
-    let processed_at = row
-        .9
+    let status = row
+        .status
         .as_deref()
-        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-        .map(|dt| dt.with_timezone(&Utc));
+        .and_then(|s| s.parse::<QueueStatus>().ok())
+        .unwrap_or(QueueStatus::Pending);
+    let payload = row
+        .payload
+        .as_deref()
+        .and_then(|s| serde_json::from_str(s).ok());
 
     QueuedOperation {
-        id: row.0,
-        account_id: row.1,
+        id: row.id,
+        account_id: row.account_id,
         operation_type,
-        target_id: row.3,
+        target_id: row.target_id,
         payload,
         status,
-        retry_count: row.6 as u32,
-        max_retries: row.7 as u32,
-        created_at,
-        processed_at,
-        error: row.10,
-    }
-}
-
-fn row_to_op_postgres(row: QueueRowPostgres) -> QueuedOperation {
-    let operation_type = row
-        .2
-        .parse::<OperationType>()
-        .unwrap_or(OperationType::Archive);
-    let status = row.5.parse::<QueueStatus>().unwrap_or(QueueStatus::Pending);
-    let payload = row.4.as_deref().and_then(|s| serde_json::from_str(s).ok());
-
-    QueuedOperation {
-        id: row.0,
-        account_id: row.1,
-        operation_type,
-        target_id: row.3,
-        payload,
-        status,
-        retry_count: row.6 as u32,
-        max_retries: row.7 as u32,
-        created_at: row.8,
-        processed_at: row.9,
-        error: row.10,
+        retry_count: row.retry_count.unwrap_or(0) as u32,
+        max_retries: row.max_retries.unwrap_or(3) as u32,
+        created_at: row.created_at.unwrap_or_else(Utc::now),
+        processed_at: row.processed_at,
+        error: row.error,
     }
 }
 
@@ -557,6 +389,15 @@ mod tests {
     fn make_op(target_id: &str) -> QueuedOperation {
         QueuedOperation::new(
             "acct-1".to_string(),
+            OperationType::Archive,
+            target_id.to_string(),
+            None,
+        )
+    }
+
+    fn make_op_for(account_id: &str, target_id: &str) -> QueuedOperation {
+        QueuedOperation::new(
+            account_id.to_string(),
             OperationType::Archive,
             target_id.to_string(),
             None,
@@ -691,6 +532,84 @@ mod tests {
         let pending = queue.list_pending("acct-1").await.unwrap();
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].target_id, "msg-1");
+    }
+
+    /// Two-account scoping: `list_pending`'s `account_id` filter is the only
+    /// thing keeping one account's queue out of another's view, and a dropped
+    /// filter would otherwise survive the whole suite (phase-2 mutation-court
+    /// finding). Covers both queue-visible statuses — `processing` rows are
+    /// listed too, so the scoping must hold after a dequeue.
+    #[tokio::test]
+    async fn test_list_pending_scopes_to_account() {
+        let pool = test_pool().await;
+        let queue = OfflineQueue::new(Database::Sqlite(pool));
+
+        queue.enqueue(&make_op_for("acct-a", "a-1")).await.unwrap();
+        queue.enqueue(&make_op_for("acct-a", "a-2")).await.unwrap();
+        queue.enqueue(&make_op_for("acct-b", "b-1")).await.unwrap();
+
+        let a = queue.list_pending("acct-a").await.unwrap();
+        assert_eq!(a.len(), 2);
+        assert!(a.iter().all(|op| op.account_id == "acct-a"));
+
+        let b = queue.list_pending("acct-b").await.unwrap();
+        assert_eq!(b.len(), 1);
+        assert_eq!(b[0].target_id, "b-1");
+
+        // After a dequeue flips every row to `processing`, the rows stay
+        // listed and stay scoped.
+        queue.dequeue_batch(10).await.unwrap();
+        let a = queue.list_pending("acct-a").await.unwrap();
+        assert_eq!(a.len(), 2);
+        assert!(a.iter().all(|op| op.account_id == "acct-a"));
+        assert_eq!(queue.list_pending("acct-b").await.unwrap().len(), 1);
+    }
+
+    /// Characterization pin: `dequeue_batch` takes no account and filters only
+    /// on `status = 'pending'`, so it drains every account's operations
+    /// together and one account's backlog can crowd out another's within the
+    /// `limit`. Ported as-is (ADR-036 behavior preservation); recorded here so
+    /// that whoever adds per-account scoping does so deliberately rather than
+    /// by accident.
+    #[tokio::test]
+    async fn test_dequeue_batch_is_not_account_scoped() {
+        let pool = test_pool().await;
+        let queue = OfflineQueue::new(Database::Sqlite(pool));
+
+        queue.enqueue(&make_op_for("acct-a", "a-1")).await.unwrap();
+        queue.enqueue(&make_op_for("acct-b", "b-1")).await.unwrap();
+
+        let batch = queue.dequeue_batch(10).await.unwrap();
+        assert_eq!(batch.len(), 2);
+        assert!(batch.iter().any(|op| op.account_id == "acct-a"));
+        assert!(batch.iter().any(|op| op.account_id == "acct-b"));
+
+        // Both accounts' rows were marked `processing` by the one call.
+        assert_eq!(queue.pending_count("acct-a").await.unwrap(), 0);
+        assert_eq!(queue.pending_count("acct-b").await.unwrap(), 0);
+    }
+
+    /// `complete`, `fail` and `mark_conflict` are keyed by operation id; a
+    /// dropped `WHERE id = ?` would flip every other account's rows too.
+    #[tokio::test]
+    async fn test_terminal_transitions_touch_only_their_own_row() {
+        let pool = test_pool().await;
+        let queue = OfflineQueue::new(Database::Sqlite(pool));
+
+        let a = make_op_for("acct-a", "a-1");
+        let b = make_op_for("acct-b", "b-1");
+        let a_id = queue.enqueue(&a).await.unwrap();
+        queue.enqueue(&b).await.unwrap();
+
+        queue.complete(&a_id).await.unwrap();
+        assert_eq!(queue.pending_count("acct-a").await.unwrap(), 0);
+        assert_eq!(queue.pending_count("acct-b").await.unwrap(), 1);
+
+        let c = make_op_for("acct-a", "a-2");
+        let c_id = queue.enqueue(&c).await.unwrap();
+        queue.mark_conflict(&c_id, "gone upstream").await.unwrap();
+        assert!(queue.list_pending("acct-a").await.unwrap().is_empty());
+        assert_eq!(queue.list_pending("acct-b").await.unwrap().len(), 1);
     }
 
     #[test]
