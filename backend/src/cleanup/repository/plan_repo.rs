@@ -899,7 +899,8 @@ mod tests {
     use super::*;
     use crate::cleanup::domain::operation::{
         AccountStateEtag, OperationStatus, PlanAction, PlanSource, PlanStatus, PlannedOperation,
-        PlannedOperationRow, Provider, RiskLevel,
+        PlannedOperationPredicate, PlannedOperationRow, PredicateKind, PredicateStatus, Provider,
+        RiskLevel,
     };
     use crate::cleanup::domain::plan::{CleanupPlan, PlanTotals, RiskRollup};
     use chrono::{Duration, Utc};
@@ -1094,5 +1095,342 @@ mod tests {
             .expect("list");
         assert_eq!(page2.len(), 1);
         assert_eq!(page2[0].seq(), 2);
+    }
+
+    // -----------------------------------------------------------------------
+    // Behavior pins for the SeaORM port (ADR-036): these were written against
+    // the hand-rolled implementation and must stay green unchanged across the
+    // re-port — they ARE the equivalence contract.
+    // -----------------------------------------------------------------------
+
+    fn sample_predicate(seq: u64, sample_ids: Vec<String>) -> PlannedOperation {
+        PlannedOperation::Predicate(PlannedOperationPredicate {
+            seq,
+            account_id: "acct-a".into(),
+            predicate_kind: PredicateKind::Rule,
+            predicate_id: "rule-1".into(),
+            action: PlanAction::Archive,
+            target: None,
+            source: PlanSource::Manual,
+            projected_count: sample_ids.len() as u64,
+            sample_email_ids: sample_ids,
+            risk: RiskLevel::Low,
+            status: PredicateStatus::Pending,
+            partial_applied_count: 0,
+            error: None,
+        })
+    }
+
+    #[tokio::test]
+    async fn update_operation_status_syncs_payload_status_only() {
+        let pool = fresh_pool().await;
+        let repo = SqliteCleanupPlanRepo::new(pool);
+        let user = "user-upd-status";
+        let plan = sample_plan(user);
+        let plan_id = plan.id;
+        repo.save(&plan).await.expect("save");
+
+        repo.update_operation_status(plan_id, 1, OperationStatus::Applied, Utc::now())
+            .await
+            .expect("update");
+
+        let (ops, _) = repo
+            .list_operations(plan_id, OpsFilter::default(), None, 10)
+            .await
+            .expect("list");
+        assert_eq!(ops.len(), 1);
+        match &ops[0] {
+            PlannedOperation::Materialized(r) => {
+                assert_eq!(r.status, OperationStatus::Applied);
+                // Only the payload's top-level `status` key is synced; `appliedAt`
+                // inside the payload deliberately stays untouched (the applied_at
+                // COLUMN carries the timestamp).
+                assert!(r.applied_at.is_none());
+            }
+            other => panic!("expected materialized row, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn update_predicate_status_skips_materialized_rows() {
+        let pool = fresh_pool().await;
+        let repo = SqliteCleanupPlanRepo::new(pool);
+        let user = "user-pred-skip";
+        let mut plan = sample_plan(user);
+        plan.operations.push(sample_predicate(2, vec!["e7".into()]));
+        let plan_id = plan.id;
+        repo.save(&plan).await.expect("save");
+
+        // seq 1 is materialized — a predicate-status update must not touch it.
+        repo.update_predicate_status(plan_id, 1, PredicateStatus::Expanded)
+            .await
+            .expect("noop update");
+        // seq 2 is the predicate row — this one transitions.
+        repo.update_predicate_status(plan_id, 2, PredicateStatus::Expanded)
+            .await
+            .expect("update");
+
+        let (ops, _) = repo
+            .list_operations(plan_id, OpsFilter::default(), None, 10)
+            .await
+            .expect("list");
+        assert_eq!(ops.len(), 2);
+        match &ops[0] {
+            PlannedOperation::Materialized(r) => assert_eq!(r.status, OperationStatus::Pending),
+            other => panic!("expected materialized row, got {other:?}"),
+        }
+        match &ops[1] {
+            PlannedOperation::Predicate(p) => assert_eq!(p.status, PredicateStatus::Expanded),
+            other => panic!("expected predicate row, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn max_seq_zero_on_empty_plan_and_max_otherwise() {
+        let pool = fresh_pool().await;
+        let repo = SqliteCleanupPlanRepo::new(pool);
+        let user = "user-max-seq";
+        let mut plan = sample_plan(user);
+        plan.operations.push(sample_predicate(7, vec![]));
+        let plan_id = plan.id;
+        repo.save(&plan).await.expect("save");
+        assert_eq!(repo.max_seq(plan_id).await.expect("max"), 7);
+
+        let mut empty = sample_plan("user-max-seq-empty");
+        empty.operations.clear();
+        let empty_id = empty.id;
+        repo.save(&empty).await.expect("save empty");
+        assert_eq!(repo.max_seq(empty_id).await.expect("max"), 0);
+    }
+
+    #[tokio::test]
+    async fn sample_operations_reads_column_save_never_populates() {
+        // Pins CURRENT behavior: save() never writes sample_ids_json (sample ids
+        // only live inside payload_json), so sample_operations() returns empty
+        // for plans persisted through this repo. Latent gap recorded in the
+        // phase's parking-lot — the port must preserve, not silently fix, it.
+        let pool = fresh_pool().await;
+        let repo = SqliteCleanupPlanRepo::new(pool);
+        let user = "user-sample-ops";
+        let mut plan = sample_plan(user);
+        plan.operations
+            .push(sample_predicate(2, vec!["e1".into(), "e2".into(), "e3".into()]));
+        let plan_id = plan.id;
+        repo.save(&plan).await.expect("save");
+
+        let ids = repo
+            .sample_operations(plan_id, "manual", 2)
+            .await
+            .expect("sample");
+        assert!(ids.is_empty());
+    }
+
+    #[tokio::test]
+    async fn expire_due_expires_only_overdue_ready_or_draft() {
+        let pool = fresh_pool().await;
+        let repo = SqliteCleanupPlanRepo::new(pool);
+        let now = Utc::now();
+
+        let user_a = "user-expire-a";
+        let mut overdue = sample_plan(user_a);
+        overdue.valid_until = now - Duration::hours(1);
+        let overdue_id = overdue.id;
+        repo.save(&overdue).await.expect("save overdue");
+
+        let user_b = "user-expire-b";
+        let fresh = sample_plan(user_b);
+        let fresh_id = fresh.id;
+        repo.save(&fresh).await.expect("save fresh");
+
+        let affected = repo.expire_due(now).await.expect("expire");
+        assert_eq!(affected, 1);
+        let overdue_loaded = repo.load(user_a, overdue_id).await.expect("load").unwrap();
+        assert_eq!(overdue_loaded.status, PlanStatus::Expired);
+        let fresh_loaded = repo.load(user_b, fresh_id).await.expect("load").unwrap();
+        assert_eq!(fresh_loaded.status, PlanStatus::Ready);
+    }
+
+    #[tokio::test]
+    async fn purge_older_than_deletes_only_older_plans() {
+        let pool = fresh_pool().await;
+        let repo = SqliteCleanupPlanRepo::new(pool);
+        let now = Utc::now();
+
+        let user_a = "user-purge-a";
+        let mut old = sample_plan(user_a);
+        old.valid_until = now - Duration::hours(2);
+        let old_id = old.id;
+        repo.save(&old).await.expect("save old");
+
+        let user_b = "user-purge-b";
+        let recent = sample_plan(user_b);
+        let recent_id = recent.id;
+        repo.save(&recent).await.expect("save recent");
+
+        let purged = repo
+            .purge_older_than(now - Duration::hours(1))
+            .await
+            .expect("purge");
+        assert_eq!(purged, 1);
+        assert!(repo.load(user_a, old_id).await.expect("load").is_none());
+        assert!(repo.load(user_b, recent_id).await.expect("load").is_some());
+    }
+
+    #[tokio::test]
+    async fn replace_account_rows_swaps_only_target_account() {
+        let pool = fresh_pool().await;
+        let repo = SqliteCleanupPlanRepo::new(pool);
+        let user = "user-replace";
+        let mut plan = sample_plan(user);
+        plan.operations
+            .push(PlannedOperation::Materialized(PlannedOperationRow {
+                seq: 2,
+                account_id: "acct-b".into(),
+                email_id: Some("e2".into()),
+                action: PlanAction::Archive,
+                source: PlanSource::Manual,
+                target: None,
+                reverse_op: None,
+                risk: RiskLevel::Low,
+                status: OperationStatus::Pending,
+                skip_reason: None,
+                applied_at: None,
+                error: None,
+            }));
+        let plan_id = plan.id;
+        repo.save(&plan).await.expect("save");
+
+        let replacement = PlannedOperation::Materialized(PlannedOperationRow {
+            seq: 3,
+            account_id: "acct-a".into(),
+            email_id: Some("e9".into()),
+            action: PlanAction::Archive,
+            source: PlanSource::Manual,
+            target: None,
+            reverse_op: None,
+            risk: RiskLevel::Low,
+            status: OperationStatus::Pending,
+            skip_reason: None,
+            applied_at: None,
+            error: None,
+        });
+        repo.replace_account_rows(plan_id, "acct-a", vec![replacement])
+            .await
+            .expect("replace");
+
+        let (ops, _) = repo
+            .list_operations(plan_id, OpsFilter::default(), None, 10)
+            .await
+            .expect("list");
+        let seqs: Vec<u64> = ops.iter().map(|o| o.seq()).collect();
+        assert_eq!(seqs, vec![2, 3]);
+        assert_eq!(ops[0].account_id(), "acct-b");
+        assert_eq!(ops[1].account_id(), "acct-a");
+    }
+
+    #[tokio::test]
+    async fn append_operations_appends_without_touching_existing_rows() {
+        let pool = fresh_pool().await;
+        let repo = SqliteCleanupPlanRepo::new(pool);
+        let user = "user-append";
+        let plan = sample_plan(user);
+        let plan_id = plan.id;
+        repo.save(&plan).await.expect("save");
+
+        repo.append_operations(plan_id, Vec::new())
+            .await
+            .expect("append empty is a no-op");
+
+        let appended = PlannedOperation::Materialized(PlannedOperationRow {
+            seq: 5,
+            account_id: "acct-a".into(),
+            email_id: Some("e5".into()),
+            action: PlanAction::Archive,
+            source: PlanSource::Manual,
+            target: None,
+            reverse_op: None,
+            risk: RiskLevel::Low,
+            status: OperationStatus::Pending,
+            skip_reason: None,
+            applied_at: None,
+            error: None,
+        });
+        repo.append_operations(plan_id, vec![appended])
+            .await
+            .expect("append");
+
+        let (ops, _) = repo
+            .list_operations(plan_id, OpsFilter::default(), None, 10)
+            .await
+            .expect("list");
+        let seqs: Vec<u64> = ops.iter().map(|o| o.seq()).collect();
+        assert_eq!(seqs, vec![1, 5]);
+    }
+
+    #[tokio::test]
+    async fn list_operations_filters_by_account_risk_and_action() {
+        let pool = fresh_pool().await;
+        let repo = SqliteCleanupPlanRepo::new(pool);
+        let user = "user-filters";
+        let mut plan = sample_plan(user);
+        plan.operations
+            .push(PlannedOperation::Materialized(PlannedOperationRow {
+                seq: 2,
+                account_id: "acct-b".into(),
+                email_id: Some("e2".into()),
+                action: PlanAction::MarkRead,
+                source: PlanSource::Manual,
+                target: None,
+                reverse_op: None,
+                risk: RiskLevel::High,
+                status: OperationStatus::Pending,
+                skip_reason: None,
+                applied_at: None,
+                error: None,
+            }));
+        let plan_id = plan.id;
+        repo.save(&plan).await.expect("save");
+
+        let by_account = repo
+            .list_operations(
+                plan_id,
+                OpsFilter {
+                    account_id: Some("acct-b".into()),
+                    ..OpsFilter::default()
+                },
+                None,
+                10,
+            )
+            .await
+            .expect("list");
+        assert_eq!(by_account.0.iter().map(|o| o.seq()).collect::<Vec<_>>(), [2]);
+
+        let by_risk = repo
+            .list_operations(
+                plan_id,
+                OpsFilter {
+                    risk: Some("high".into()),
+                    ..OpsFilter::default()
+                },
+                None,
+                10,
+            )
+            .await
+            .expect("list");
+        assert_eq!(by_risk.0.iter().map(|o| o.seq()).collect::<Vec<_>>(), [2]);
+
+        let no_match = repo
+            .list_operations(
+                plan_id,
+                OpsFilter {
+                    account_id: Some("acct-zzz".into()),
+                    ..OpsFilter::default()
+                },
+                None,
+                10,
+            )
+            .await
+            .expect("list");
+        assert!(no_match.0.is_empty());
     }
 }

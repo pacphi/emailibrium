@@ -166,7 +166,7 @@ impl Env {
         seed(db.pool()).await;
         let ctx = Arc::new(
             ToolContext::new(db.clone())
-                .with_oauth(Arc::new(OAuthManager::new(db.pool().clone(), None))),
+                .with_oauth(Arc::new(OAuthManager::new((*db).clone(), None))),
         );
         let registry = Arc::new(match limiter {
             Some(l) => ToolRegistry::with_rate_limiter(declarations(), config, l),

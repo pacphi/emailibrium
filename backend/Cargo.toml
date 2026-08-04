@@ -35,6 +35,8 @@ serde_json = "1.0"
 
 # Database
 sqlx = { version = "0.9", features = ["runtime-tokio", "sqlite", "postgres", "chrono", "uuid"] }
+# Dialect layer over the same sqlx pools (ADR-036) — features trimmed to what is used.
+sea-orm = { version = "2.0.1", features = ["sqlx-sqlite", "sqlx-postgres", "runtime-tokio", "with-chrono", "with-uuid", "macros"] }
 
 # Caching
 moka = { version = "0.12", features = ["future"] }
@@ -127,7 +129,6 @@ tempfile = "3"
 tokio-test = "0.4"
 axum-test = "21"
 emailibrium = { path = ".", features = ["test-vectors"] }
-sea-orm = { version = "2.0.1", features = ["sqlx-sqlite", "sqlx-postgres", "runtime-tokio", "with-chrono", "with-uuid", "macros"] }
 
 [[bench]]
 name = "vector_benchmarks"
