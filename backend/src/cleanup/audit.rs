@@ -240,7 +240,9 @@ impl CleanupAuditWriter for SqliteCleanupAuditWriter {
         // seq is bound as i32 to match the actual INTEGER/INT4 `seq` column (see ADR-035's
         // note on real-4-byte-int columns). SQLite's `INSERT OR IGNORE` has no Postgres
         // equivalent — Postgres uses `ON CONFLICT (...) DO NOTHING` against the same
-        // UNIQUE(plan_id, job_id, seq, outcome) constraint (ADR-035 §2.3).
+        // UNIQUE(plan_id, job_id, seq, outcome) constraint — one of ADR-035's
+        // genuinely-different-SQL-text divergence classes that mechanical
+        // translation (its §2.3 algorithm) cannot cover.
         match &self.db {
             Database::Sqlite(pool) => {
                 sqlx::query(

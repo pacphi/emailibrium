@@ -1,9 +1,11 @@
 //! `cleanup_plan_operations` — per-row plan operations (migration 024, ADR-030).
 //!
-//! Partial model: the table carries further predicate-only columns
-//! (`predicate_kind`, `predicate_id`, `projected_count`, …) that no repository
-//! reads or writes as columns today — they travel inside `payload_json`. Add
-//! them here when a call site actually needs them (see `entities/mod.rs`).
+//! Partial model: the table carries further columns no repository reads or
+//! writes as columns today — predicate-only ones (`predicate_kind`,
+//! `predicate_id`, `projected_count`) and row-level ones (`target_*`,
+//! `source_id`, `reverse_op_json`, `skip_reason`, `error`, `partial_applied`);
+//! all travel inside `payload_json`. Add them here when a call site actually
+//! needs them (see `entities/mod.rs`).
 
 use sea_orm::entity::prelude::*;
 

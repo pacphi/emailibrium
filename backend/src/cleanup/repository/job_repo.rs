@@ -257,6 +257,31 @@ mod tests {
         assert_eq!(loaded.state, JobState::Queued);
         assert!(matches!(loaded.risk_max, RiskMax::Low));
         assert_eq!(loaded.counts.pending, 3);
+
+        // The non-default risk ceilings must round-trip too — the encode
+        // mapping and the decode fallback are both load-bearing for the
+        // durable audit record of what ceiling a run used.
+        let mut high = sample_job(plan_id, Utc::now());
+        high.risk_max = RiskMax::High;
+        high.finished_at = Some(Utc::now());
+        repo.create(&high).await.expect("create high");
+        let high_loaded = repo
+            .load(high.job_id)
+            .await
+            .expect("load")
+            .expect("present");
+        assert!(matches!(high_loaded.risk_max, RiskMax::High));
+        assert!(high_loaded.finished_at.is_some());
+
+        let mut medium = sample_job(plan_id, Utc::now());
+        medium.risk_max = RiskMax::Medium;
+        repo.create(&medium).await.expect("create medium");
+        let medium_loaded = repo
+            .load(medium.job_id)
+            .await
+            .expect("load")
+            .expect("present");
+        assert!(matches!(medium_loaded.risk_max, RiskMax::Medium));
     }
 
     #[tokio::test]
@@ -282,6 +307,10 @@ mod tests {
             pending: 0,
             skipped_by_reason: std::collections::BTreeMap::new(),
         };
+        // A bystander job must not be touched by another job's update.
+        let bystander = sample_job(plan_id, Utc::now());
+        repo.create(&bystander).await.expect("create bystander");
+
         repo.update_state(job.job_id, JobState::Finished, counts, Some(finished))
             .await
             .expect("update");
@@ -294,6 +323,15 @@ mod tests {
             loaded.finished_at.map(|t| t.timestamp_millis()),
             Some(finished.timestamp_millis())
         );
+
+        let untouched = repo
+            .load(bystander.job_id)
+            .await
+            .expect("load")
+            .expect("present");
+        assert_eq!(untouched.state, JobState::Queued);
+        assert_eq!(untouched.counts.pending, 3);
+        assert!(untouched.finished_at.is_none());
     }
 
     #[tokio::test]

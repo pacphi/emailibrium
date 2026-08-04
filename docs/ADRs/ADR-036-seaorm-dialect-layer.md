@@ -113,7 +113,8 @@ Total integration friction encountered: two one-line API renames
 - The per-call-site custom dialect code (match-arms, `adapt()`, `audited_sql()`
   wrapping, hand-written per-backend SQL pairs) is deleted rather than completed.
   `Database` shrinks to: URL dispatch, migrations, and one composition-root wrap.
-- ADR-035's divergence classes §2.3 (upserts), §2.5/§2.6 (timestamp handling at
+- ADR-035's divergence classes — upserts (a genuinely-different-SQL-text case
+  its §2.3 translation algorithm cannot cover), §2.5/§2.6 (timestamp handling at
   the decode layer), and the width class become library-owned instead of
   convention-owned ("check the migration DDL before choosing a decode type" is no
   longer a human rule).

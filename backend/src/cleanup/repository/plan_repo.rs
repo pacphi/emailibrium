@@ -2,10 +2,10 @@
 //!
 //! Repository bodies are single-code-path SeaORM (ADR-036): the entities in
 //! `crate::db::entities` own per-backend encode/decode, upserts go through
-//! `OnConflict`, transactions through `TransactionTrait`, and the former SQL-side
-//! SQL JSON-mutation payload sync is a read-modify-write inside a transaction
-//! (ADR-036 §2.4). There is no per-backend dispatch here — the same bodies run
-//! against SQLite and PostgreSQL.
+//! `OnConflict`, transactions through `TransactionTrait`, and the former
+//! SQL-side JSON-mutation payload sync is a read-modify-write inside a
+//! transaction (ADR-036 §2.4). There is no per-backend dispatch here — the same
+//! bodies run against SQLite and PostgreSQL.
 //!
 //! See migration `024_cleanup_planning.sql` for schema. JSON-typed columns are
 //! stored as plaintext TEXT (see migration header for the encryption-debt note).
@@ -150,7 +150,8 @@ impl CleanupPlanRepository for SeaOrmCleanupPlanRepo {
 
         // Upsert the envelope: `ON CONFLICT (id) DO UPDATE`, one code path for
         // both backends (formerly SQLite `INSERT OR REPLACE` + a hand-written
-        // PostgreSQL upsert — ADR-035 §2.3's divergence class, now library-owned).
+        // PostgreSQL upsert — one of ADR-035's genuinely-different-SQL-text
+        // divergence classes, now library-owned).
         let envelope = plans::ActiveModel {
             id: Set(plan.id.as_bytes().to_vec()),
             user_id: Set(plan.user_id.as_bytes().to_vec()),
@@ -569,7 +570,11 @@ impl CleanupPlanRepository for SeaOrmCleanupPlanRepo {
 /// read-modify-write replacement for the backends' SQL JSON-mutation functions
 /// (ADR-036 §2.4). `None` payloads stay `None` (as the SQL sync of a NULL
 /// payload did); non-object JSON is left unchanged; malformed JSON is an error
-/// (as the SQL functions would have raised).
+/// (as the SQL functions would have raised). Note the re-serialization
+/// normalizes object key order (serde_json's map is sorted), so the stored
+/// bytes may differ from the original insert — deserialization is
+/// order-insensitive, but byte-level comparisons of payload_json are not
+/// stable across a status update.
 fn payload_with_status(payload: Option<&str>, status: &str) -> Result<Option<String>, RepoError> {
     let Some(raw) = payload else {
         return Ok(None);
@@ -588,7 +593,7 @@ fn payload_with_status(payload: Option<&str>, status: &str) -> Result<Option<Str
 /// Insert one operation row. Generic over [`ConnectionTrait`] so this logic —
 /// parsing a [`PlannedOperation`] into columns — is written once and runs
 /// against a live connection or an open transaction, on either backend
-/// (ADR-036 spike Q11).
+/// (ADR-036 spike, §3 check #11).
 async fn insert_operation<C: ConnectionTrait>(
     conn: &C,
     plan_id: PlanId,
@@ -729,7 +734,9 @@ mod tests {
             account_ids: vec!["acct-a".into()],
             created_at: now,
             valid_until: now + Duration::minutes(30),
-            plan_hash: [0u8; 32],
+            // Non-zero so a round-trip assertion can tell a real copy from a
+            // defaulted [0u8; 32] (mutation-hardening: the hash copy is load-bearing).
+            plan_hash: [0xAB; 32],
             account_state_etags: etags,
             account_providers: std::collections::BTreeMap::new(),
             status: PlanStatus::Ready,
@@ -779,6 +786,73 @@ mod tests {
         assert_eq!(loaded.status, PlanStatus::Ready);
         assert_eq!(loaded.operations.len(), 1);
         assert_eq!(loaded.account_state_etags.len(), 1);
+        // Timestamps must round-trip into the RIGHT fields (a created_at/
+        // valid_until swap gates apply-expiry on the wrong value) and the hash
+        // must be a real copy, not a default.
+        assert_eq!(
+            loaded.created_at.timestamp_millis(),
+            plan.created_at.timestamp_millis()
+        );
+        assert_eq!(
+            loaded.valid_until.timestamp_millis(),
+            plan.valid_until.timestamp_millis()
+        );
+        assert_eq!(loaded.plan_hash, [0xAB; 32]);
+    }
+
+    #[tokio::test]
+    async fn load_is_scoped_to_the_owning_user() {
+        let repo = SeaOrmCleanupPlanRepo::new(fresh_conn().await);
+        let plan = sample_plan("user-owner");
+        let plan_id = plan.id;
+        repo.save(&plan).await.expect("save");
+
+        // The tenant boundary: another user must not see the plan at all.
+        assert!(repo
+            .load("user-intruder", plan_id)
+            .await
+            .expect("load")
+            .is_none());
+        assert!(repo
+            .load("user-owner", plan_id)
+            .await
+            .expect("load")
+            .is_some());
+    }
+
+    #[tokio::test]
+    async fn save_upserts_in_place_and_touches_only_its_own_plan() {
+        let repo = SeaOrmCleanupPlanRepo::new(fresh_conn().await);
+        let user_a = "user-upsert-a";
+        let user_b = "user-upsert-b";
+        let mut plan_a = sample_plan(user_a);
+        let plan_b = sample_plan(user_b);
+        let a_id = plan_a.id;
+        let b_id = plan_b.id;
+        repo.save(&plan_a).await.expect("save a");
+        repo.save(&plan_b).await.expect("save b");
+
+        // Upsert on the SQLite path: same PK, changed status — updated in
+        // place, no duplicate row.
+        plan_a.status = PlanStatus::Applied;
+        repo.save(&plan_a).await.expect("upsert a");
+        let listed = repo.list_by_user(user_a, None, 100).await.expect("list");
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].status, PlanStatus::Applied);
+
+        // Scoping: plan B's children survived plan A's delete-and-reinsert.
+        let b = repo
+            .load(user_b, b_id)
+            .await
+            .expect("load")
+            .expect("present");
+        assert_eq!(b.operations.len(), 1);
+        assert_eq!(b.account_state_etags.len(), 1);
+        let (a_ops, _) = repo
+            .list_operations(a_id, OpsFilter::default(), None, 100)
+            .await
+            .expect("ops");
+        assert_eq!(a_ops.len(), 1);
     }
 
     #[tokio::test]
@@ -803,15 +877,50 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cancel_transitions_status() {
+    async fn list_by_user_isolates_tenants_and_orders_newest_first() {
+        let repo = SeaOrmCleanupPlanRepo::new(fresh_conn().await);
+        let user_a = "user-iso-a";
+        let user_b = "user-iso-b";
+        let mut older = sample_plan(user_a);
+        older.created_at = Utc::now() - Duration::hours(2);
+        let newer = sample_plan(user_a);
+        let other = sample_plan(user_b);
+        repo.save(&older).await.expect("older");
+        repo.save(&newer).await.expect("newer");
+        repo.save(&other).await.expect("other");
+
+        let a_list = repo.list_by_user(user_a, None, 100).await.expect("list a");
+        assert_eq!(a_list.len(), 2);
+        assert_eq!(a_list[0].id, newer.id);
+        assert_eq!(a_list[1].id, older.id);
+
+        let b_list = repo.list_by_user(user_b, None, 100).await.expect("list b");
+        assert_eq!(b_list.len(), 1);
+        assert_eq!(b_list[0].id, other.id);
+    }
+
+    #[tokio::test]
+    async fn cancel_transitions_status_and_only_the_target_plan() {
         let repo = SeaOrmCleanupPlanRepo::new(fresh_conn().await);
         let user = "user-3";
+        let user_other = "user-3-other";
         let plan = sample_plan(user);
+        let bystander = sample_plan(user_other);
         let plan_id = plan.id;
+        let bystander_id = bystander.id;
         repo.save(&plan).await.expect("save");
+        repo.save(&bystander).await.expect("save bystander");
+
         repo.cancel(plan_id).await.expect("cancel");
+
         let loaded = repo.load(user, plan_id).await.expect("load").unwrap();
         assert_eq!(loaded.status, PlanStatus::Cancelled);
+        let untouched = repo
+            .load(user_other, bystander_id)
+            .await
+            .expect("load")
+            .unwrap();
+        assert_eq!(untouched.status, PlanStatus::Ready);
     }
 
     #[tokio::test]
@@ -880,22 +989,24 @@ mod tests {
 
     #[tokio::test]
     async fn update_operation_status_syncs_payload_status_only() {
-        let repo = SeaOrmCleanupPlanRepo::new(fresh_conn().await);
+        let conn = fresh_conn().await;
+        let repo = SeaOrmCleanupPlanRepo::new(conn.clone());
         let user = "user-upd-status";
         let plan = sample_plan(user);
         let plan_id = plan.id;
         repo.save(&plan).await.expect("save");
 
-        repo.update_operation_status(plan_id, 1, OperationStatus::Applied, Utc::now())
+        let ts = Utc::now();
+        repo.update_operation_status(plan_id, 1, OperationStatus::Applied, ts)
             .await
             .expect("update");
 
-        let (ops, _) = repo
+        let (listed, _) = repo
             .list_operations(plan_id, OpsFilter::default(), None, 10)
             .await
             .expect("list");
-        assert_eq!(ops.len(), 1);
-        match &ops[0] {
+        assert_eq!(listed.len(), 1);
+        match &listed[0] {
             PlannedOperation::Materialized(r) => {
                 assert_eq!(r.status, OperationStatus::Applied);
                 // Only the payload's top-level `status` key is synced; `appliedAt`
@@ -905,6 +1016,19 @@ mod tests {
             }
             other => panic!("expected materialized row, got {other:?}"),
         }
+
+        // The COLUMNS are load-bearing even though list_operations reads the
+        // payload: refresh keeps rows whose applied_at column is set, and the
+        // insert wrote email_id/source_kind for querying. Assert them directly.
+        let row = ops::Entity::find_by_id((plan_id.as_bytes().to_vec(), 1))
+            .one(&conn)
+            .await
+            .expect("query")
+            .expect("row present");
+        assert_eq!(row.status, "applied");
+        assert_eq!(row.applied_at, Some(ts.timestamp_millis()));
+        assert_eq!(row.email_id.as_deref(), Some(b"e1".as_ref()));
+        assert_eq!(row.source_kind, "manual");
     }
 
     #[tokio::test]
@@ -996,12 +1120,23 @@ mod tests {
         let fresh_id = fresh.id;
         repo.save(&fresh).await.expect("save fresh");
 
+        // An overdue but already-terminal plan must keep its status — expiry
+        // only touches 'ready' and 'draft'.
+        let user_c = "user-expire-c";
+        let mut done = sample_plan(user_c);
+        done.status = PlanStatus::Applied;
+        done.valid_until = now - Duration::hours(1);
+        let done_id = done.id;
+        repo.save(&done).await.expect("save applied");
+
         let affected = repo.expire_due(now).await.expect("expire");
         assert_eq!(affected, 1);
         let overdue_loaded = repo.load(user_a, overdue_id).await.expect("load").unwrap();
         assert_eq!(overdue_loaded.status, PlanStatus::Expired);
         let fresh_loaded = repo.load(user_b, fresh_id).await.expect("load").unwrap();
         assert_eq!(fresh_loaded.status, PlanStatus::Ready);
+        let done_loaded = repo.load(user_c, done_id).await.expect("load").unwrap();
+        assert_eq!(done_loaded.status, PlanStatus::Applied);
     }
 
     #[tokio::test]
@@ -1066,6 +1201,12 @@ mod tests {
             applied_at: None,
             error: None,
         });
+        // A second plan with rows on the SAME account: replace must be scoped
+        // by plan, not just by account.
+        let other_plan = sample_plan("user-replace-other");
+        let other_id = other_plan.id;
+        repo.save(&other_plan).await.expect("save other");
+
         repo.replace_account_rows(plan_id, "acct-a", vec![replacement])
             .await
             .expect("replace");
@@ -1078,6 +1219,12 @@ mod tests {
         assert_eq!(seqs, vec![2, 3]);
         assert_eq!(ops[0].account_id(), "acct-b");
         assert_eq!(ops[1].account_id(), "acct-a");
+
+        let (other_ops, _) = repo
+            .list_operations(other_id, OpsFilter::default(), None, 10)
+            .await
+            .expect("list other");
+        assert_eq!(other_ops.len(), 1, "other plan's acct-a row must survive");
     }
 
     #[tokio::test]

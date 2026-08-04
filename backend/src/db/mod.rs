@@ -66,7 +66,7 @@ impl Database {
     ///
     /// `sea_orm::DatabaseConnection` is itself a backend-dispatching wrapper, so this match
     /// is the one place application code still branches on the backend — the composition-root
-    /// wrap proven by the ADR-036 spike (Q2): legacy sqlx call sites and SeaORM share the
+    /// wrap proven by the ADR-036 spike (§3 check #2): legacy sqlx call sites and SeaORM share the
     /// identical pool during the incremental port, so there is no second pool to configure,
     /// exhaust, or keep consistent. Cloning the returned handle is cheap (it wraps the pool,
     /// itself a cheap-clone handle); repositories hold their own clone.
