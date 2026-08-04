@@ -583,15 +583,9 @@ async fn incremental_sync_delta(
     // deleted_at timestamp instead of permanently removing rows.
     let now_iso = chrono::Utc::now().to_rfc3339();
     for msg_id in deleted_ids {
-        if let Err(e) = crate::db::update_email_state(
-            state.db.pool(),
-            msg_id,
-            true,
-            false,
-            "TRASH",
-            Some(&now_iso),
-        )
-        .await
+        if let Err(e) =
+            crate::db::update_email_state(&state.orm, msg_id, true, false, "TRASH", Some(&now_iso))
+                .await
         {
             warn!(email_id = %msg_id, "Failed to soft-delete email during delta sync: {e}");
         }
@@ -609,7 +603,7 @@ async fn incremental_sync_delta(
 
         if has_added("TRASH") {
             let _ = crate::db::update_email_state(
-                state.db.pool(),
+                &state.orm,
                 &lc.message_id,
                 true,
                 false,
@@ -619,7 +613,7 @@ async fn incremental_sync_delta(
             .await;
         } else if has_removed("TRASH") {
             let _ = crate::db::update_email_state(
-                state.db.pool(),
+                &state.orm,
                 &lc.message_id,
                 false,
                 false,
@@ -631,7 +625,7 @@ async fn incremental_sync_delta(
 
         if has_added("SPAM") {
             let _ = crate::db::update_email_state(
-                state.db.pool(),
+                &state.orm,
                 &lc.message_id,
                 false,
                 true,
@@ -641,7 +635,7 @@ async fn incremental_sync_delta(
             .await;
         } else if has_removed("SPAM") {
             let _ = crate::db::update_email_state(
-                state.db.pool(),
+                &state.orm,
                 &lc.message_id,
                 false,
                 false,

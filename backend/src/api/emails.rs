@@ -504,10 +504,9 @@ async fn delete_email(
         }
 
         let now = chrono::Utc::now().to_rfc3339();
-        let rows =
-            crate::db::update_email_state(state.db.pool(), &id, true, false, "TRASH", Some(&now))
-                .await
-                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        let rows = crate::db::update_email_state(&state.orm, &id, true, false, "TRASH", Some(&now))
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
         if rows == 0 {
             return Err((StatusCode::NOT_FOUND, "Email not found".to_string()));
@@ -576,7 +575,7 @@ async fn spam_email(
         }
     }
 
-    let rows = crate::db::update_email_state(state.db.pool(), &id, false, true, "SPAM", None)
+    let rows = crate::db::update_email_state(&state.orm, &id, false, true, "SPAM", None)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -606,7 +605,7 @@ async fn unspam_email(
         }
     }
 
-    let rows = crate::db::update_email_state(state.db.pool(), &id, false, false, "INBOX", None)
+    let rows = crate::db::update_email_state(&state.orm, &id, false, false, "INBOX", None)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -636,7 +635,7 @@ async fn restore_email(
         }
     }
 
-    let rows = crate::db::update_email_state(state.db.pool(), &id, false, false, "INBOX", None)
+    let rows = crate::db::update_email_state(&state.orm, &id, false, false, "INBOX", None)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -811,7 +810,7 @@ async fn move_email(
                 "DRAFT" | "DRAFTS" => (false, false, "DRAFT"),
                 _ => (false, false, "INBOX"),
             };
-            crate::db::update_email_state(state.db.pool(), &id, is_trash, is_spam, folder, None)
+            crate::db::update_email_state(&state.orm, &id, is_trash, is_spam, folder, None)
                 .await
                 .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -849,16 +848,9 @@ async fn move_email(
                 // Derive state from the combined labels.
                 let label_vec: Vec<String> = new_labels.split(',').map(|s| s.to_string()).collect();
                 let (is_trash, is_spam, folder) = crate::db::derive_state_from_labels(&label_vec);
-                crate::db::update_email_state(
-                    state.db.pool(),
-                    &id,
-                    is_trash,
-                    is_spam,
-                    folder,
-                    None,
-                )
-                .await
-                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+                crate::db::update_email_state(&state.orm, &id, is_trash, is_spam, folder, None)
+                    .await
+                    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
             }
         }
     }

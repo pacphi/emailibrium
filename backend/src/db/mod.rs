@@ -217,28 +217,33 @@ pub fn audited_sql(sql: &str) -> sqlx::AssertSqlSafe<String> {
 /// This is the single authoritative function for mutating email folder/state
 /// columns and is called from both the delta-sync path and the API endpoints.
 ///
+/// `is_trash`/`is_spam` are INTEGER 0/1 columns (migration 016), so the bool
+/// arguments are widened to `i32` here — the entity mirrors the DDL (ADR-036).
+///
 /// Returns the number of rows affected (0 if the email was not found).
 pub async fn update_email_state(
-    pool: &SqlitePool,
+    conn: &sea_orm::DatabaseConnection,
     email_id: &str,
     is_trash: bool,
     is_spam: bool,
     folder: &str,
     deleted_at: Option<&str>,
-) -> Result<u64, sqlx::Error> {
-    let result = sqlx::query(
-        "UPDATE emails SET is_trash = ?1, is_spam = ?2, folder = ?3, deleted_at = ?4 \
-         WHERE id = ?5",
-    )
-    .bind(is_trash)
-    .bind(is_spam)
-    .bind(folder)
-    .bind(deleted_at)
-    .bind(email_id)
-    .execute(pool)
-    .await?;
+) -> Result<u64, sea_orm::DbErr> {
+    use sea_orm::sea_query::Expr;
+    use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 
-    Ok(result.rows_affected())
+    use entities::emails;
+
+    let result = emails::Entity::update_many()
+        .col_expr(emails::Column::IsTrash, Expr::value(is_trash as i32))
+        .col_expr(emails::Column::IsSpam, Expr::value(is_spam as i32))
+        .col_expr(emails::Column::Folder, Expr::value(folder))
+        .col_expr(emails::Column::DeletedAt, Expr::value(deleted_at))
+        .filter(emails::Column::Id.eq(email_id))
+        .exec(conn)
+        .await?;
+
+    Ok(result.rows_affected)
 }
 
 /// Derive `(is_trash, is_spam, folder)` from a comma-separated label string.
