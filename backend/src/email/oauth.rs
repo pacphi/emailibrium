@@ -1080,9 +1080,17 @@ mod tests {
 
         // sync_state is scoped by account id: each account sees only its own
         // seeded row, and an unknown id sees none.
-        let sa = mgr.get_sync_state("acct-a").await.unwrap().expect("a state");
+        let sa = mgr
+            .get_sync_state("acct-a")
+            .await
+            .unwrap()
+            .expect("a state");
         assert_eq!(sa.account_id, "acct-a");
-        let sb = mgr.get_sync_state("acct-b").await.unwrap().expect("b state");
+        let sb = mgr
+            .get_sync_state("acct-b")
+            .await
+            .unwrap()
+            .expect("b state");
         assert_eq!(sb.account_id, "acct-b");
         assert!(mgr.get_sync_state("acct-zzz").await.unwrap().is_none());
     }

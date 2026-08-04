@@ -937,11 +937,11 @@ mod tests {
     //
     // Verify that running a multi-account apply writes one audit row per
     // (seq, outcome) for every operation that left Pending. Uses a real
-    // SqliteCleanupAuditWriter against in-memory SQLite.
+    // SeaOrmCleanupAuditWriter against in-memory SQLite.
 
     #[tokio::test]
     async fn audit_rows_written_for_each_apply_outcome() {
-        use crate::cleanup::audit::{AuditOutcome, CleanupAuditWriter, SqliteCleanupAuditWriter};
+        use crate::cleanup::audit::{AuditOutcome, CleanupAuditWriter, SeaOrmCleanupAuditWriter};
         use sqlx::sqlite::SqlitePoolOptions;
 
         // Set up a SQLite pool with migrations 024 + 025 applied so the
@@ -991,7 +991,7 @@ mod tests {
             Arc::new(StubRules) as Arc<dyn crate::cleanup::domain::ports::RuleEvaluator>,
             Arc::new(StubEmailRepo) as Arc<dyn EmailRepository>,
         ));
-        let audit: Arc<dyn CleanupAuditWriter> = Arc::new(SqliteCleanupAuditWriter::new(
+        let audit: Arc<dyn CleanupAuditWriter> = Arc::new(SeaOrmCleanupAuditWriter::new(
             crate::db::Database::Sqlite(pool.clone()),
         ));
         let orch = Arc::new(

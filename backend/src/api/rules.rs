@@ -7,6 +7,15 @@
 //! - DELETE /api/v1/rules/:id      -- delete a rule
 //! - POST   /api/v1/rules/validate -- validate a rule without saving
 //! - POST   /api/v1/rules/test     -- test a rule against a sample email
+//!
+//! Persistence is single-code-path SeaORM (ADR-036): the `rules` and `emails`
+//! entities own per-backend encode/decode, so every query below runs unchanged
+//! against SQLite and PostgreSQL. Rule CRUD itself lives in
+//! `rules::rule_engine`; what this module adds on top are the four queries in
+//! the "Queries" section — match-count reporting, the rule-evaluation corpus,
+//! the manual-run counter write, and the sender histogram behind suggestions.
+
+use std::collections::HashMap;
 
 use axum::{
     extract::{Path, Query, State},
@@ -15,9 +24,14 @@ use axum::{
     Json, Router,
 };
 use chrono::Utc;
+use sea_orm::sea_query::{Asterisk, Expr, ExprTrait, Func};
+use sea_orm::{
+    ColumnTrait, DatabaseConnection, DbErr, EntityTrait, FromQueryResult, QueryFilter, QueryOrder,
+    QuerySelect,
+};
 use serde::{Deserialize, Serialize};
-use sqlx::Row;
 
+use crate::db::entities::{emails, rules};
 use crate::rules::json_parser;
 use crate::rules::rule_engine::RuleEngine;
 use crate::rules::rule_validator::{self, Severity};
@@ -168,6 +182,153 @@ pub struct ErrorResponse {
 }
 
 // ---------------------------------------------------------------------------
+// Queries
+//
+// Each takes a `&DatabaseConnection` rather than `AppState` so the tests at the
+// bottom of this file can drive it directly; the handlers pass `&state.orm`.
+// ---------------------------------------------------------------------------
+
+/// `match_count` per rule id.
+///
+/// The pre-port query read `COALESCE(match_count, 0)` and decoded it as `i64`.
+/// The column is `INTEGER NOT NULL DEFAULT 0` (migration 026), so the COALESCE
+/// never fired, and the `i64` decode was ADR-035's width class waiting to fail
+/// on PostgreSQL, where INTEGER is INT4. The entity's `i32` settles the width;
+/// widening to the response type's `i64` now happens here, in Rust.
+async fn fetch_match_counts(conn: &DatabaseConnection) -> Result<HashMap<String, i64>, DbErr> {
+    let rows: Vec<(String, i32)> = rules::Entity::find()
+        .select_only()
+        .column(rules::Column::Id)
+        .column(rules::Column::MatchCount)
+        .into_tuple()
+        .all(conn)
+        .await?;
+    Ok(rows
+        .into_iter()
+        .map(|(id, count)| (id, i64::from(count)))
+        .collect())
+}
+
+/// One email row as the rule evaluator needs it.
+#[derive(FromQueryResult)]
+struct RuleEmailRow {
+    id: String,
+    /// Only the run path reads this — it resolves the owning account's provider.
+    account_id: String,
+    from_addr: String,
+    to_addrs: String,
+    subject: String,
+    body_text: Option<String>,
+    /// Nullable column, so a NULL reads as "no labels" rather than as an error.
+    /// The pre-port `row.get::<String, _>("labels")` panicked on such a row;
+    /// this matches the reading `rules::executor` already settled on.
+    labels: Option<String>,
+    /// Plain `TIMESTAMP` (no zone) in both dialects, hence `NaiveDateTime` —
+    /// callers re-attach UTC.
+    received_at: chrono::NaiveDateTime,
+}
+
+/// Every active (non-trash, non-spam, non-deleted) email, newest first.
+///
+/// Deliberately unbounded, as before the port: the rule-test count and the
+/// suggestion histogram are both defined over the whole corpus, so a LIMIT here
+/// would silently disagree with what the suggestions panel reports. The rule-test
+/// path ignores `account_id`; sharing one projection with the run path keeps the
+/// two corpora provably identical.
+async fn fetch_active_emails(conn: &DatabaseConnection) -> Result<Vec<RuleEmailRow>, DbErr> {
+    emails::Entity::find()
+        .select_only()
+        .column(emails::Column::Id)
+        .column(emails::Column::AccountId)
+        .column(emails::Column::FromAddr)
+        .column(emails::Column::ToAddrs)
+        .column(emails::Column::Subject)
+        .column(emails::Column::BodyText)
+        .column(emails::Column::Labels)
+        .column(emails::Column::ReceivedAt)
+        .filter(emails::Column::IsTrash.eq(0_i32))
+        .filter(emails::Column::IsSpam.eq(0_i32))
+        .filter(emails::Column::DeletedAt.is_null())
+        .order_by_desc(emails::Column::ReceivedAt)
+        .into_model::<RuleEmailRow>()
+        .all(conn)
+        .await
+}
+
+/// Add `matched` to a rule's `match_count` and stamp `last_run_at`.
+///
+/// Both columns belong to the manual-run path alone (`RuleEngine::save_rule`
+/// leaves them untouched), and the increment stays one atomic UPDATE rather
+/// than becoming a read-modify-write. `last_run_at` used to be bound as a
+/// `to_rfc3339()` String — accepted by SQLite, a bind error against
+/// PostgreSQL's TIMESTAMPTZ; binding the `DateTime<Utc>` the entity declares
+/// fixes that and still encodes as the same RFC3339 text on SQLite (ADR-035's
+/// timestamp class, §2.5/§2.6).
+async fn record_rule_run(
+    conn: &DatabaseConnection,
+    rule_id: &str,
+    matched: i64,
+) -> Result<(), DbErr> {
+    // The column is INTEGER (INT4 on PostgreSQL) while the run counter is i64
+    // for the response shape, so the delta narrows at the bind.
+    let delta = i32::try_from(matched).unwrap_or(i32::MAX);
+    rules::Entity::update_many()
+        .col_expr(
+            rules::Column::MatchCount,
+            Expr::col(rules::Column::MatchCount).add(delta),
+        )
+        .col_expr(rules::Column::LastRunAt, Expr::value(Utc::now()))
+        .filter(rules::Column::Id.eq(rule_id))
+        .exec(conn)
+        .await?;
+    Ok(())
+}
+
+/// A sender and how many active emails it has sent.
+#[derive(FromQueryResult)]
+struct SenderCount {
+    from_addr: String,
+    /// `COUNT(*)` is 8-byte on both backends.
+    cnt: i64,
+}
+
+/// `COUNT(*)`, spelled out at each use site rather than aliased once.
+///
+/// PostgreSQL rejects select-alias references in HAVING, so the expression is
+/// repeated in the SELECT list, the HAVING and the ORDER BY — which is what the
+/// pre-port SQL did too.
+fn count_star() -> Expr {
+    Expr::from(Func::count(Expr::col(Asterisk)))
+}
+
+/// Senders with at least `min_count` active emails, most frequent first.
+async fn fetch_sender_counts(
+    conn: &DatabaseConnection,
+    min_count: i64,
+) -> Result<Vec<SenderCount>, DbErr> {
+    sender_counts_query(min_count)
+        .into_model::<SenderCount>()
+        .all(conn)
+        .await
+}
+
+/// The query behind [`fetch_sender_counts`], split out so a test can assert the
+/// SQL text it produces for PostgreSQL without a live server.
+fn sender_counts_query(min_count: i64) -> sea_orm::Select<emails::Entity> {
+    emails::Entity::find()
+        .select_only()
+        .column(emails::Column::FromAddr)
+        .column_as(count_star(), "cnt")
+        .filter(emails::Column::IsTrash.eq(0_i32))
+        .filter(emails::Column::IsSpam.eq(0_i32))
+        .filter(emails::Column::DeletedAt.is_null())
+        .filter(emails::Column::FromAddr.ne(""))
+        .group_by(emails::Column::FromAddr)
+        .having(count_star().gte(min_count))
+        .order_by_desc(count_star())
+}
+
+// ---------------------------------------------------------------------------
 // Handlers
 // ---------------------------------------------------------------------------
 
@@ -179,15 +340,9 @@ async fn list_rules(
         .await
         .map_err(internal_error)?;
 
-    // Fetch match_count separately (column added in migration 026).
-    let count_rows = sqlx::query("SELECT id, COALESCE(match_count, 0) as mc FROM rules")
-        .fetch_all(state.db.pool())
-        .await
-        .unwrap_or_default();
-    let counts: std::collections::HashMap<String, i64> = count_rows
-        .iter()
-        .map(|r| (r.get::<String, _>("id"), r.get::<i64, _>("mc")))
-        .collect();
+    // Fetch match_count separately (column added in migration 026). A failure
+    // reading it degrades to zeros rather than failing the whole list, as before.
+    let counts = fetch_match_counts(&state.orm).await.unwrap_or_default();
 
     let mut engine = RuleEngine::new();
     engine.set_rules(loaded);
@@ -489,15 +644,7 @@ async fn test_rule(
 
     // Query all active inbox emails for evaluation so the count matches
     // what the suggestions panel reports (both use the same unbounded corpus).
-    let rows = sqlx::query(
-        "SELECT id, from_addr, to_addrs, subject, body_text, labels, received_at \
-         FROM emails \
-         WHERE is_trash = 0 AND is_spam = 0 AND deleted_at IS NULL \
-         ORDER BY received_at DESC",
-    )
-    .fetch_all(state.db.pool())
-    .await
-    .map_err(|e| {
+    let rows = fetch_active_emails(&state.orm).await.map_err(|e| {
         tracing::error!("Failed to fetch emails for rule test: {e}");
         (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -510,14 +657,22 @@ async fn test_rule(
     let mut match_count: i64 = 0;
     let mut sample_matches: Vec<SampleEmailMatch> = Vec::new();
 
-    for row in &rows {
-        let id: String = row.get("id");
-        let from_addr: String = row.get("from_addr");
-        let to_addrs: String = row.get("to_addrs");
-        let subject: String = row.get("subject");
-        let body_text: Option<String> = row.get("body_text");
-        let labels: String = row.get("labels");
-        let received_at: chrono::DateTime<Utc> = row.get("received_at");
+    for row in rows {
+        let RuleEmailRow {
+            id,
+            from_addr,
+            to_addrs,
+            subject,
+            body_text,
+            labels,
+            received_at,
+            ..
+        } = row;
+        let labels = labels.unwrap_or_default();
+        // Re-attach UTC to the entity's naive timestamp: same instant the
+        // pre-port `DateTime<Utc>` decode produced, so the evaluator's date
+        // comparisons and the RFC3339 strings below are unchanged.
+        let received_at = received_at.and_utc();
 
         let email = crate::email::EmailMessage {
             id: id.clone(),
@@ -599,15 +754,7 @@ async fn run_rule(
             )
         })?;
 
-    let rows = sqlx::query(
-        "SELECT id, account_id, from_addr, to_addrs, subject, body_text, labels, received_at \
-         FROM emails \
-         WHERE is_trash = 0 AND is_spam = 0 AND deleted_at IS NULL \
-         ORDER BY received_at DESC",
-    )
-    .fetch_all(state.db.pool())
-    .await
-    .map_err(|e| {
+    let rows = fetch_active_emails(&state.orm).await.map_err(|e| {
         tracing::error!("Failed to fetch emails for rule run: {e}");
         (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -621,15 +768,20 @@ async fn run_rule(
     let mut executed_count: i64 = 0;
     let mut sample_matches: Vec<SampleEmailMatch> = Vec::new();
 
-    for row in &rows {
-        let email_id: String = row.get("id");
-        let account_id: String = row.get("account_id");
-        let from_addr: String = row.get("from_addr");
-        let to_addrs: String = row.get("to_addrs");
-        let subject: String = row.get("subject");
-        let body_text: Option<String> = row.get("body_text");
-        let labels: String = row.get("labels");
-        let received_at: chrono::DateTime<Utc> = row.get("received_at");
+    for row in rows {
+        let RuleEmailRow {
+            id: email_id,
+            account_id,
+            from_addr,
+            to_addrs,
+            subject,
+            body_text,
+            labels,
+            received_at,
+        } = row;
+        let labels = labels.unwrap_or_default();
+        // Re-attach UTC to the entity's naive timestamp — see `test_rule`.
+        let received_at = received_at.and_utc();
 
         let email = crate::email::EmailMessage {
             id: email_id.clone(),
@@ -714,15 +866,9 @@ async fn run_rule(
         }
     }
 
-    // Persist updated match count back to the rule.
-    let now = Utc::now().to_rfc3339();
-    let _ =
-        sqlx::query("UPDATE rules SET match_count = match_count + ?, last_run_at = ? WHERE id = ?")
-            .bind(match_count)
-            .bind(&now)
-            .bind(&rule_id)
-            .execute(state.db.pool())
-            .await;
+    // Persist updated match count back to the rule. Best-effort, as before: a
+    // failed counter write must not fail a run that already touched the mailbox.
+    let _ = record_rule_run(&state.orm, &rule_id, match_count).await;
 
     Ok(Json(RunRuleResponse {
         match_count,
@@ -764,33 +910,23 @@ async fn get_suggestions(
 
     // Fetch all qualifying senders (unbounded) so Rust-side pagination is correct
     // even after filtering out already-covered senders.
-    let rows = sqlx::query(
-        "SELECT from_addr, COUNT(*) as cnt \
-         FROM emails \
-         WHERE is_trash = 0 AND is_spam = 0 AND deleted_at IS NULL AND from_addr != '' \
-         GROUP BY from_addr \
-         HAVING COUNT(*) >= ? \
-         ORDER BY COUNT(*) DESC",
-    )
-    .bind(min_count)
-    .fetch_all(state.db.pool())
-    .await
-    .map_err(|e| {
-        tracing::error!("Failed to query email patterns for suggestions: {e}");
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: "Failed to generate suggestions".to_string(),
-            }),
-        )
-    })?;
+    let rows = fetch_sender_counts(&state.orm, min_count)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to query email patterns for suggestions: {e}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: "Failed to generate suggestions".to_string(),
+                }),
+            )
+        })?;
 
     let now = Utc::now();
     let suggestions: Vec<RuleSuggestion> = rows
-        .iter()
+        .into_iter()
         .filter_map(|row| {
-            let from_addr: String = row.get("from_addr");
-            let cnt: i64 = row.get("cnt");
+            let SenderCount { from_addr, cnt } = row;
 
             if covered
                 .iter()
@@ -882,4 +1018,297 @@ fn internal_error(e: anyhow::Error) -> (StatusCode, Json<ErrorResponse>) {
             error: "Internal server error".to_string(),
         }),
     )
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+//
+// This module had no coverage at all before the SeaORM port (ADR-036), so these
+// pin the four queries the handlers wrap — the handlers themselves need a full
+// `AppState`, which is why the queries take a bare connection. What they assert
+// is derived from the pre-port SQL text: `SELECT id, COALESCE(match_count, 0)`,
+// the `is_trash = 0 AND is_spam = 0 AND deleted_at IS NULL / ORDER BY
+// received_at DESC` corpus, `match_count = match_count + ?` with `last_run_at`,
+// and the `GROUP BY from_addr HAVING COUNT(*) >= ?` histogram.
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::Database;
+    use chrono::{DateTime, Duration, NaiveDateTime};
+    use sea_orm::{ActiveModelTrait, ActiveValue::Set, ConnectionTrait, DbBackend, QueryTrait};
+    use sqlx::sqlite::SqlitePoolOptions;
+
+    /// In-memory SQLite carrying every migration the two entities span: 001
+    /// creates `emails` and 016/018/021/027 add the columns the entity declares;
+    /// 012 creates `rules` and 026 adds `match_count`/`last_run_at`.
+    async fn fresh_db() -> Database {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect(":memory:")
+            .await
+            .expect("connect");
+        let db = Database::Sqlite(pool);
+        let conn = db.sea_orm();
+        for raw in [
+            include_str!("../../migrations/sqlite/001_initial_schema.sql"),
+            include_str!("../../migrations/sqlite/012_rules.sql"),
+            include_str!("../../migrations/sqlite/016_soft_delete_trash_spam.sql"),
+            include_str!("../../migrations/sqlite/018_unsubscribe_headers.sql"),
+            include_str!("../../migrations/sqlite/021_thread_key.sql"),
+            include_str!("../../migrations/sqlite/026_rules_match_count.sql"),
+            include_str!("../../migrations/sqlite/027_is_archived.sql"),
+        ] {
+            // Strip line comments before splitting on ';'.
+            let cleaned: String = raw
+                .lines()
+                .map(|l| {
+                    if let Some(idx) = l.find("--") {
+                        &l[..idx]
+                    } else {
+                        l
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            for stmt in cleaned.split(';') {
+                let s = stmt.trim();
+                if !s.is_empty() {
+                    conn.execute_unprepared(s).await.expect("migrate");
+                }
+            }
+        }
+        db
+    }
+
+    async fn seed_rule(conn: &DatabaseConnection, id: &str, match_count: i32) {
+        rules::ActiveModel {
+            id: Set(id.to_owned()),
+            name: Set(format!("rule {id}")),
+            description: Set(Some(String::new())),
+            conditions_json: Set("[]".to_owned()),
+            actions_json: Set("[]".to_owned()),
+            priority: Set(Some(0)),
+            enabled: Set(Some(1)),
+            created_at: Set(Some(Utc::now())),
+            updated_at: Set(Some(Utc::now())),
+            match_count: Set(match_count),
+            last_run_at: Set(None),
+        }
+        .insert(conn)
+        .await
+        .expect("seed rule");
+    }
+
+    /// Seed one active INBOX email. `labels` is `None` to store SQL NULL.
+    async fn seed_email(
+        conn: &DatabaseConnection,
+        id: &str,
+        from_addr: &str,
+        received_at: DateTime<Utc>,
+        labels: Option<&str>,
+    ) {
+        emails::ActiveModel {
+            id: Set(id.to_owned()),
+            account_id: Set("acct-1".to_owned()),
+            provider: Set("gmail".to_owned()),
+            subject: Set(format!("subject {id}")),
+            from_addr: Set(from_addr.to_owned()),
+            to_addrs: Set("me@example.com".to_owned()),
+            body_text: Set(Some(format!("body {id}"))),
+            received_at: Set(received_at.naive_utc()),
+            labels: Set(labels.map(str::to_owned)),
+            is_read: Set(Some(false)),
+            is_starred: Set(Some(false)),
+            is_spam: Set(0),
+            is_trash: Set(0),
+            folder: Set("INBOX".to_owned()),
+            is_archived: Set(false),
+            ..Default::default()
+        }
+        .insert(conn)
+        .await
+        .expect("seed email");
+    }
+
+    /// Take a seeded email out of the active corpus the way the app does:
+    /// `is_trash`/`is_spam` are INTEGER flags, `deleted_at` is an RFC3339 TEXT.
+    async fn hide_email(
+        conn: &DatabaseConnection,
+        id: &str,
+        is_trash: i32,
+        is_spam: i32,
+        deleted_at: Option<&str>,
+    ) {
+        emails::Entity::update_many()
+            .col_expr(emails::Column::IsTrash, Expr::value(is_trash))
+            .col_expr(emails::Column::IsSpam, Expr::value(is_spam))
+            .col_expr(
+                emails::Column::DeletedAt,
+                Expr::value(deleted_at.map(str::to_owned)),
+            )
+            .filter(emails::Column::Id.eq(id))
+            .exec(conn)
+            .await
+            .expect("hide email");
+    }
+
+    fn at(minute: u32) -> DateTime<Utc> {
+        NaiveDateTime::parse_from_str(
+            &format!("2026-01-02 03:{minute:02}:00"),
+            "%Y-%m-%d %H:%M:%S",
+        )
+        .expect("timestamp")
+        .and_utc()
+    }
+
+    #[tokio::test]
+    async fn match_counts_are_keyed_by_rule_id_and_widened_to_the_response_type() {
+        let db = fresh_db().await;
+        let conn = db.sea_orm();
+        seed_rule(&conn, "r-1", 7).await;
+        seed_rule(&conn, "r-2", 0).await;
+
+        let counts = fetch_match_counts(&conn).await.expect("counts");
+
+        assert_eq!(counts.len(), 2);
+        // i64 is the response type's width; the column is INTEGER (INT4 on
+        // PostgreSQL), which is what the old `r.get::<i64, _>("mc")` got wrong.
+        assert_eq!(counts.get("r-1"), Some(&7_i64));
+        assert_eq!(counts.get("r-2"), Some(&0_i64));
+        assert_eq!(counts.get("absent"), None);
+    }
+
+    #[tokio::test]
+    async fn record_rule_run_increments_match_count_and_stamps_last_run_at() {
+        let db = fresh_db().await;
+        let conn = db.sea_orm();
+        seed_rule(&conn, "r-1", 3).await;
+        seed_rule(&conn, "r-2", 5).await;
+
+        let before = Utc::now() - Duration::seconds(1);
+        record_rule_run(&conn, "r-1", 4).await.expect("record run");
+        let after = Utc::now() + Duration::seconds(1);
+
+        let updated = rules::Entity::find_by_id("r-1")
+            .one(&conn)
+            .await
+            .expect("query")
+            .expect("row present");
+        assert_eq!(updated.match_count, 7, "the increment must accumulate");
+        // The pre-port bind was a `to_rfc3339()` String into a column that is
+        // TIMESTAMPTZ on PostgreSQL; binding the entity's DateTime<Utc> both
+        // fixes that and still round-trips through SQLite's TEXT storage.
+        let last_run = updated.last_run_at.expect("last_run_at stamped");
+        assert!(
+            last_run >= before && last_run <= after,
+            "last_run_at {last_run} outside [{before}, {after}]"
+        );
+
+        let bystander = rules::Entity::find_by_id("r-2")
+            .one(&conn)
+            .await
+            .expect("query")
+            .expect("row present");
+        assert_eq!(bystander.match_count, 5, "only the target rule advances");
+        assert!(bystander.last_run_at.is_none());
+    }
+
+    #[tokio::test]
+    async fn active_email_corpus_excludes_trash_spam_and_soft_deleted_newest_first() {
+        let db = fresh_db().await;
+        let conn = db.sea_orm();
+        seed_email(&conn, "e-old", "a@example.com", at(1), Some("")).await;
+        seed_email(&conn, "e-new", "a@example.com", at(3), Some("")).await;
+        seed_email(&conn, "e-mid", "a@example.com", at(2), Some("")).await;
+        seed_email(&conn, "e-trash", "a@example.com", at(4), Some("")).await;
+        seed_email(&conn, "e-spam", "a@example.com", at(5), Some("")).await;
+        seed_email(&conn, "e-deleted", "a@example.com", at(6), Some("")).await;
+        hide_email(&conn, "e-trash", 1, 0, None).await;
+        hide_email(&conn, "e-spam", 0, 1, None).await;
+        hide_email(&conn, "e-deleted", 0, 0, Some("2026-01-02T04:00:00+00:00")).await;
+
+        let rows = fetch_active_emails(&conn).await.expect("corpus");
+
+        assert_eq!(
+            rows.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
+            ["e-new", "e-mid", "e-old"]
+        );
+    }
+
+    #[tokio::test]
+    async fn active_email_rows_carry_utc_instants_and_read_null_labels_as_empty() {
+        let db = fresh_db().await;
+        let conn = db.sea_orm();
+        seed_email(&conn, "e-1", "sender@example.com", at(7), None).await;
+
+        let rows = fetch_active_emails(&conn).await.expect("corpus");
+        let row = rows.first().expect("one row");
+
+        assert_eq!(row.account_id, "acct-1");
+        assert_eq!(row.from_addr, "sender@example.com");
+        assert_eq!(row.to_addrs, "me@example.com");
+        assert_eq!(row.subject, "subject e-1");
+        assert_eq!(row.body_text.as_deref(), Some("body e-1"));
+        // A NULL `labels` is "no labels", not a decode error — the handlers call
+        // `unwrap_or_default()` and split the empty string into no labels.
+        assert_eq!(row.labels, None);
+        // The naive column re-attached to UTC is the instant that was written,
+        // and the RFC3339 string the API returns is unchanged by the port.
+        assert_eq!(row.received_at.and_utc(), at(7));
+        assert_eq!(
+            row.received_at.and_utc().to_rfc3339(),
+            "2026-01-02T03:07:00+00:00"
+        );
+    }
+
+    #[tokio::test]
+    async fn sender_counts_group_by_sender_honour_the_minimum_and_sort_by_frequency() {
+        let db = fresh_db().await;
+        let conn = db.sea_orm();
+        for (i, sender) in [
+            "loud@example.com",
+            "loud@example.com",
+            "loud@example.com",
+            "quiet@example.com",
+            "quiet@example.com",
+            "rare@example.com",
+        ]
+        .iter()
+        .enumerate()
+        {
+            seed_email(&conn, &format!("e-{i}"), sender, at(i as u32), Some("")).await;
+        }
+        // An empty sender is excluded by `from_addr != ''`, and trashed mail is
+        // not counted even when the sender otherwise qualifies.
+        seed_email(&conn, "e-blank", "", at(10), Some("")).await;
+        seed_email(&conn, "e-blank-2", "", at(11), Some("")).await;
+        seed_email(&conn, "e-hidden", "loud@example.com", at(12), Some("")).await;
+        hide_email(&conn, "e-hidden", 1, 0, None).await;
+
+        let rows = fetch_sender_counts(&conn, 2).await.expect("histogram");
+
+        assert_eq!(
+            rows.iter()
+                .map(|r| (r.from_addr.as_str(), r.cnt))
+                .collect::<Vec<_>>(),
+            [("loud@example.com", 3_i64), ("quiet@example.com", 2_i64)],
+            "below-minimum and blank senders drop out; most frequent first"
+        );
+    }
+
+    #[test]
+    fn sender_counts_query_repeats_count_star_rather_than_naming_the_select_alias() {
+        // PostgreSQL rejects `HAVING cnt >= n` — a select alias is not in scope
+        // there — so the aggregate has to be spelled out again. SQLite accepts
+        // both, which is exactly why this can only be caught by reading the SQL.
+        let sql = sender_counts_query(5)
+            .build(DbBackend::Postgres)
+            .to_string();
+        assert!(sql.contains("COUNT(*) AS \"cnt\""), "{sql}");
+        assert!(sql.contains("HAVING COUNT(*) >= 5"), "{sql}");
+        assert!(sql.contains("ORDER BY COUNT(*) DESC"), "{sql}");
+        assert!(!sql.contains("HAVING \"cnt\""), "{sql}");
+    }
 }
