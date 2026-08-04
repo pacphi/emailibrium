@@ -233,28 +233,6 @@ pub struct DailyCount {
     pub count: i64,
 }
 
-/// A `label`/`count` pair — categories and daily buckets share this shape.
-#[derive(Debug, sqlx::FromRow)]
-struct LabelCountRow {
-    label: String,
-    count: i64,
-}
-
-#[derive(Debug, sqlx::FromRow)]
-struct SenderCountRow {
-    sender: String,
-    count: i64,
-}
-
-#[derive(Debug, sqlx::FromRow)]
-struct RuleRow {
-    id: String,
-    name: String,
-    conditions_json: String,
-    actions_json: String,
-    enabled: i64,
-}
-
 /// Category counts, top senders, and the last seven days of volume.
 ///
 /// The `#[tool]` version dropped query errors on the floor and reported an
@@ -262,54 +240,86 @@ struct RuleRow {
 /// the A5 resource layer can map a failure to `internal_error` instead of
 /// serving a confidently wrong summary.
 pub async fn fetch_insights(ctx: &ToolContext) -> Result<InsightsSummary, ToolError> {
-    let pool = ctx.pool();
+    use sea_orm::sea_query::{Expr, Func};
+    use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect};
 
-    let categories = sqlx::query_as::<_, LabelCountRow>(
-        "SELECT category as label, COUNT(*) as count FROM emails \
-         GROUP BY category ORDER BY count DESC",
-    )
-    .fetch_all(pool)
-    .await
-    .map_err(|e| super::db_error("Category counts", e))?;
+    use crate::db::entities::emails;
 
-    let senders = sqlx::query_as::<_, SenderCountRow>(
-        "SELECT COALESCE(from_name, from_addr) as sender, COUNT(*) as count \
-         FROM emails GROUP BY sender ORDER BY count DESC LIMIT 10",
-    )
-    .fetch_all(pool)
-    .await
-    .map_err(|e| super::db_error("Top senders", e))?;
+    let conn = ctx.conn();
 
-    let daily = sqlx::query_as::<_, LabelCountRow>(
-        "SELECT DATE(received_at) as label, COUNT(*) as count FROM emails \
-         WHERE received_at >= datetime('now', '-7 days') \
-         GROUP BY DATE(received_at) ORDER BY label DESC",
-    )
-    .fetch_all(pool)
-    .await
-    .map_err(|e| super::db_error("Daily volume", e))?;
+    // GROUP BY category. NULL categories read as the column's own default
+    // rather than erroring the whole query (lenient unification).
+    let categories: Vec<(Option<String>, i64)> = emails::Entity::find()
+        .select_only()
+        .column_as(emails::Column::Category, "label")
+        .column_as(Expr::cust("COUNT(*)"), "count")
+        .group_by(emails::Column::Category)
+        .order_by_desc(Expr::cust("COUNT(*)"))
+        .into_tuple()
+        .all(&conn)
+        .await
+        .map_err(|e| super::db_error("Category counts", e))?;
+
+    // COALESCE(from_name, from_addr) grouped — the expression is repeated in
+    // GROUP BY rather than referenced by alias (PostgreSQL rejects
+    // select-alias references there; ADR-035 catalog class).
+    let sender_expr = || {
+        let args: [Expr; 2] = [
+            Expr::col(emails::Column::FromName),
+            Expr::col(emails::Column::FromAddr),
+        ];
+        Func::coalesce(args)
+    };
+    let senders: Vec<(String, i64)> = emails::Entity::find()
+        .select_only()
+        .expr_as(sender_expr(), "sender")
+        .column_as(Expr::cust("COUNT(*)"), "count")
+        .group_by(Expr::expr(sender_expr()))
+        .order_by_desc(Expr::cust("COUNT(*)"))
+        .limit(10)
+        .into_tuple()
+        .all(&conn)
+        .await
+        .map_err(|e| super::db_error("Top senders", e))?;
+
+    // Daily volume: the cutoff is computed in Rust (the old SQL's
+    // `datetime('now', '-7 days')` modifier form is SQLite-only), and the
+    // day-bucketing moved app-side — `DATE(received_at)` returns text on
+    // SQLite but a DATE value on PostgreSQL, so bucketing the decoded
+    // `NaiveDateTime`s in Rust is the one path that yields identical
+    // `YYYY-MM-DD` labels on both backends.
+    let cutoff = chrono::Utc::now().naive_utc() - chrono::Duration::days(7);
+    let stamps: Vec<(chrono::NaiveDateTime,)> = emails::Entity::find()
+        .select_only()
+        .column(emails::Column::ReceivedAt)
+        .filter(emails::Column::ReceivedAt.gte(cutoff))
+        .into_tuple()
+        .all(&conn)
+        .await
+        .map_err(|e| super::db_error("Daily volume", e))?;
+    let mut buckets: std::collections::BTreeMap<String, i64> = std::collections::BTreeMap::new();
+    for (ts,) in stamps {
+        *buckets
+            .entry(ts.format("%Y-%m-%d").to_string())
+            .or_insert(0) += 1;
+    }
 
     Ok(InsightsSummary {
         categories: categories
             .into_iter()
-            .map(|r| CategoryCount {
-                category: r.label,
-                count: r.count,
+            .map(|(label, count)| CategoryCount {
+                category: label.unwrap_or_else(|| "Uncategorized".to_string()),
+                count,
             })
             .collect(),
         top_senders: senders
             .into_iter()
-            .map(|r| SenderCount {
-                sender: r.sender,
-                count: r.count,
-            })
+            .map(|(sender, count)| SenderCount { sender, count })
             .collect(),
-        daily_volume: daily
+        daily_volume: buckets
             .into_iter()
-            .map(|r| DailyCount {
-                date: r.label,
-                count: r.count,
-            })
+            .rev() // ORDER BY label DESC, as before
+            .map(|(date, count)| DailyCount { date, count })
             .collect(),
     })
 }
@@ -324,12 +334,15 @@ pub async fn get_insights(
 
 /// Every configured email rule with its conditions, actions and status.
 pub async fn list_rules(ctx: Arc<ToolContext>, _req: ListRulesRequest) -> Result<Value, ToolError> {
-    let rows = sqlx::query_as::<_, RuleRow>(
-        "SELECT id, name, conditions_json, actions_json, enabled FROM rules ORDER BY name",
-    )
-    .fetch_all(ctx.pool())
-    .await
-    .map_err(|e| super::db_error("Rule listing", e))?;
+    use sea_orm::{EntityTrait, QueryOrder};
+
+    use crate::db::entities::rules;
+
+    let rows = rules::Entity::find()
+        .order_by_asc(rules::Column::Name)
+        .all(&ctx.conn())
+        .await
+        .map_err(|e| super::db_error("Rule listing", e))?;
 
     let items: Vec<Value> = rows
         .iter()
@@ -339,7 +352,10 @@ pub async fn list_rules(ctx: Arc<ToolContext>, _req: ListRulesRequest) -> Result
                 "name": r.name,
                 "conditions": r.conditions_json,
                 "actions": r.actions_json,
-                "is_active": r.enabled != 0,
+                // `enabled` is INTEGER (4-byte on PostgreSQL — the old i64
+                // decode was the ADR-035 width class); NULL reads as the
+                // column's default 1.
+                "is_active": r.enabled.unwrap_or(1) != 0,
             })
         })
         .collect();
