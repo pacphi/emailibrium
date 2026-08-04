@@ -3,9 +3,9 @@
 //! Repository bodies are single-code-path SeaORM (ADR-036): the entities in
 //! `crate::db::entities` own per-backend encode/decode, upserts go through
 //! `OnConflict`, transactions through `TransactionTrait`, and the former SQL-side
-//! `json_set`/`jsonb_set` payload sync is a read-modify-write inside a
-//! transaction (ADR-036 §2.4). There is no per-backend dispatch here — the same
-//! bodies run against SQLite and PostgreSQL.
+//! SQL JSON-mutation payload sync is a read-modify-write inside a transaction
+//! (ADR-036 §2.4). There is no per-backend dispatch here — the same bodies run
+//! against SQLite and PostgreSQL.
 //!
 //! See migration `024_cleanup_planning.sql` for schema. JSON-typed columns are
 //! stored as plaintext TEXT (see migration header for the encryption-debt note).
@@ -433,9 +433,17 @@ impl CleanupPlanRepository for SeaOrmCleanupPlanRepo {
             return Ok(());
         };
         // Keep payload_json's top-level `status` in sync so list_operations
-        // returns current status without a separate column merge. Formerly
-        // SQLite json_set / PostgreSQL jsonb_set with per-backend SQL text; now
+        // returns current status without a separate column merge. Formerly the
+        // backends' SQL JSON-mutation functions with per-backend SQL text; now
         // a read-modify-write in one transaction, one code path (ADR-036 §2.4).
+        //
+        // CONCURRENCY INVARIANT (ADR-036 §2.4): unlike the single UPDATE it
+        // replaced, this read-modify-write has a lost-update window between the
+        // SELECT and the UPDATE. It is safe because each (plan_id, seq) row has
+        // exactly ONE writer — the apply orchestrator spawns one worker per
+        // account and a row's account owns its seq (see orchestrator/apply.rs).
+        // A future call site with concurrent same-row writers must add a row
+        // lock (`lock_exclusive()` — SELECT … FOR UPDATE on PostgreSQL) first.
         let txn = self.conn.begin().await?;
         let Some(row) = ops::Entity::find_by_id((id.as_bytes().to_vec(), seq))
             .one(&txn)
@@ -463,6 +471,8 @@ impl CleanupPlanRepository for SeaOrmCleanupPlanRepo {
         let Ok(seq) = i32::try_from(seq) else {
             return Ok(());
         };
+        // Same single-writer-per-row concurrency invariant as
+        // update_operation_status above (ADR-036 §2.4).
         let txn = self.conn.begin().await?;
         let Some(row) = ops::Entity::find_by_id((id.as_bytes().to_vec(), seq))
             .one(&txn)
@@ -477,10 +487,10 @@ impl CleanupPlanRepository for SeaOrmCleanupPlanRepo {
             txn.commit().await?;
             return Ok(());
         }
-        // `status.as_str()` goes into the payload verbatim, exactly as json_set
-        // did — including "partially_applied", which diverges from the camelCase
-        // the payload's serde round-trip expects. Pre-existing behavior,
-        // recorded in the phase parking-lot rather than silently changed here.
+        // `status.as_str()` goes into the payload verbatim, exactly as the old
+        // SQL-side sync did — including "partially_applied", which diverges from
+        // the camelCase the payload's serde round-trip expects. Pre-existing
+        // behavior, recorded in the phase parking-lot, not silently changed here.
         let payload = payload_with_status(row.payload_json.as_deref(), status.as_str())?;
         let mut active: ops::ActiveModel = row.into();
         active.status = Set(status.as_str().to_owned());
@@ -556,10 +566,10 @@ impl CleanupPlanRepository for SeaOrmCleanupPlanRepo {
 }
 
 /// Sync the top-level `status` key inside a serialized payload JSON object — the
-/// read-modify-write replacement for SQLite `json_set` / PostgreSQL `jsonb_set`
-/// (ADR-036 §2.4). `None` payloads stay `None` (as `json_set(NULL, …)` returned
-/// NULL); non-object JSON is left unchanged; malformed JSON is an error (as the
-/// SQL functions would have raised).
+/// read-modify-write replacement for the backends' SQL JSON-mutation functions
+/// (ADR-036 §2.4). `None` payloads stay `None` (as the SQL sync of a NULL
+/// payload did); non-object JSON is left unchanged; malformed JSON is an error
+/// (as the SQL functions would have raised).
 fn payload_with_status(payload: Option<&str>, status: &str) -> Result<Option<String>, RepoError> {
     let Some(raw) = payload else {
         return Ok(None);
@@ -585,10 +595,14 @@ async fn insert_operation<C: ConnectionTrait>(
     op: &PlannedOperation,
 ) -> Result<(), RepoError> {
     let payload = serde_json::to_string(op).map_err(|e| RepoError::Internal(e.to_string()))?;
-    let (seq, op_kind, account_id, email_id_opt, risk_s, status_s, action_s, source_kind) = match op
-    {
+    // Checked, not `as`: the column is INTEGER/INT4, and silently truncating an
+    // out-of-range seq on INSERT would corrupt ordering — erroring here matches
+    // what PostgreSQL itself would do (same discipline as the read paths'
+    // `i32::try_from`, which no-op instead because nothing can match).
+    let seq = i32::try_from(op.seq())
+        .map_err(|_| RepoError::Internal(format!("op seq {} exceeds INT4 range", op.seq())))?;
+    let (op_kind, account_id, email_id_opt, risk_s, status_s, action_s, source_kind) = match op {
         PlannedOperation::Materialized(r) => (
-            r.seq as i32,
             "materialized",
             r.account_id.clone(),
             r.email_id.clone(),
@@ -598,7 +612,6 @@ async fn insert_operation<C: ConnectionTrait>(
             source_kind_str(&r.source),
         ),
         PlannedOperation::Predicate(p) => (
-            p.seq as i32,
             "predicate",
             p.account_id.clone(),
             None,
@@ -1275,7 +1288,7 @@ mod tests {
         .expect("append");
         assert_eq!(repo.max_seq(plan_id).await.expect("max_seq"), 5);
 
-        // Status updates: payload sync (formerly json_set/jsonb_set).
+        // Status updates: payload sync (formerly SQL-side JSON mutation).
         repo.update_operation_status(plan_id, 1, OperationStatus::Applied, Utc::now())
             .await
             .expect("update op status");

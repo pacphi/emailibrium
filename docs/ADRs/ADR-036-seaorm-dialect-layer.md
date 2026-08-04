@@ -42,6 +42,14 @@ Adopt **SeaORM 2.0** as the dialect layer. Concretely:
    `OnConflict` upserts, dynamic filters, pagination, aggregates: one code path.
 4. **SQL-side JSON mutation is eliminated, not translated**: `json_set`/`jsonb_set`
    call sites become read-modify-write inside a transaction (spike-verified).
+   **Known tradeoff:** the single atomic UPDATE those functions rode in had no
+   lost-update window; the read-modify-write does (plain SELECT, no row lock,
+   READ COMMITTED on PostgreSQL). It is sound under the codebase's actual write
+   topology — each `(plan_id, seq)` row has exactly one writer (one apply worker
+   per account; a row's account owns its seq) — and that invariant is documented
+   at the ported call sites. Any future call site with concurrent same-row
+   writers must take a row lock first (`lock_exclusive()`, i.e. `SELECT … FOR
+UPDATE` on PostgreSQL; SQLite serializes writers anyway).
 5. **A narrow raw-SQL escape hatch remains**, via
    `Statement::from_sql_and_values(conn.get_database_backend(), ...)`, for the
    irreducible cases only: aggregate casts (`AVG(...)::float8`, §2.7) and the
