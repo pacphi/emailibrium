@@ -17,6 +17,8 @@ pub enum RepoError {
     NotFound,
     #[error("sqlx: {0}")]
     Sqlx(#[from] sqlx::Error),
+    #[error("db: {0}")]
+    Db(#[from] sea_orm::DbErr),
     #[error("internal: {0}")]
     Internal(String),
 }

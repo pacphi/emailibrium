@@ -86,9 +86,9 @@ pub struct ApplyOrchestrator {
     pub audit: Arc<dyn CleanupAuditWriter>,
     /// Telemetry emitter (Phase D).
     pub telemetry: Arc<TelemetryEmitter>,
-    /// Optional DB pool — when present, workers update `is_archived` locally
+    /// Optional DB handle — when present, workers update `is_archived` locally
     /// after a successful provider archive so the Archive view stays in sync.
-    pub db: Option<sqlx::SqlitePool>,
+    pub db: Option<crate::db::Database>,
     /// Active jobs keyed by job_id, exposing the broadcast::Sender + cancel token.
     job_channels: Arc<RwLock<HashMap<JobId, JobChannels>>>,
 }
@@ -118,9 +118,9 @@ impl ApplyOrchestrator {
         }
     }
 
-    /// Builder-style setter for the local DB pool (used to sync archive state).
-    pub fn with_db(mut self, pool: sqlx::SqlitePool) -> Self {
-        self.db = Some(pool);
+    /// Builder-style setter for the local DB handle (used to sync archive state).
+    pub fn with_db(mut self, db: crate::db::Database) -> Self {
+        self.db = Some(db);
         self
     }
 
@@ -991,8 +991,9 @@ mod tests {
             Arc::new(StubRules) as Arc<dyn crate::cleanup::domain::ports::RuleEvaluator>,
             Arc::new(StubEmailRepo) as Arc<dyn EmailRepository>,
         ));
-        let audit: Arc<dyn CleanupAuditWriter> =
-            Arc::new(SqliteCleanupAuditWriter::new(pool.clone()));
+        let audit: Arc<dyn CleanupAuditWriter> = Arc::new(SqliteCleanupAuditWriter::new(
+            crate::db::Database::Sqlite(pool.clone()),
+        ));
         let orch = Arc::new(
             ApplyOrchestrator::new(
                 plan_repo.clone() as Arc<dyn CleanupPlanRepository>,

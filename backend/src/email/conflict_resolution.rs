@@ -7,10 +7,10 @@
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use sqlx::SqlitePool;
 use uuid::Uuid;
 
 use super::offline_queue::QueuedOperation;
+use crate::db::{audited_sql, Database};
 
 // ---------------------------------------------------------------------------
 // Types
@@ -78,8 +78,9 @@ pub struct SyncConflict {
     pub created_at: DateTime<Utc>,
 }
 
-/// Row type returned by SQLite queries.
-type ConflictRow = (
+/// Row type for SQLite: `resolved_at`/`created_at` are TEXT (hand-formatted RFC3339
+/// strings; SQLite has no native temporal type).
+type ConflictRowSqlite = (
     String,         // id
     String,         // queue_entry_id
     String,         // local_state (JSON)
@@ -89,25 +90,39 @@ type ConflictRow = (
     String,         // created_at
 );
 
+/// Row type for PostgreSQL: `resolved_at`/`created_at` are real TIMESTAMPTZ columns
+/// there (ADR-033), so they decode/bind as `DateTime<Utc>` natively rather than the
+/// RFC3339-string handling the SQLite path uses — see ADR-035's note on this same
+/// divergence in `offline_queue.rs`.
+type ConflictRowPostgres = (
+    String,
+    String,
+    String,
+    String,
+    Option<String>,
+    Option<DateTime<Utc>>,
+    DateTime<Utc>,
+);
+
 // ---------------------------------------------------------------------------
 // Service
 // ---------------------------------------------------------------------------
 
 /// Resolves and logs conflicts between offline operations and remote state.
 pub struct ConflictResolver {
-    pool: SqlitePool,
+    db: Database,
     strategy: ConflictStrategy,
 }
 
 impl ConflictResolver {
     /// Create a new conflict resolver with the given strategy.
-    pub fn new(pool: SqlitePool, strategy: ConflictStrategy) -> Self {
-        Self { pool, strategy }
+    pub fn new(db: Database, strategy: ConflictStrategy) -> Self {
+        Self { db, strategy }
     }
 
     /// Create a resolver with the default strategy (LastWriterWins).
-    pub fn with_defaults(pool: SqlitePool) -> Self {
-        Self::new(pool, ConflictStrategy::default())
+    pub fn with_defaults(db: Database) -> Self {
+        Self::new(db, ConflictStrategy::default())
     }
 
     /// Get the configured strategy.
@@ -189,28 +204,45 @@ impl ConflictResolver {
         };
 
         // Persist the resolution.
-        let now = Utc::now().to_rfc3339();
         let resolution_str = if resolution == Resolution::ManualPending {
             None
         } else {
             Some(resolution.as_str().to_string())
         };
-        let resolved_at = if resolution == Resolution::ManualPending {
-            None
-        } else {
-            Some(now.clone())
-        };
 
-        sqlx::query(
+        let sql = self.db.adapt(
             r#"UPDATE sync_conflicts
                SET resolution = ?, resolved_at = ?
                WHERE id = ?"#,
-        )
-        .bind(&resolution_str)
-        .bind(&resolved_at)
-        .bind(&conflict.id)
-        .execute(&self.pool)
-        .await?;
+        );
+        match &self.db {
+            Database::Sqlite(pool) => {
+                let resolved_at = if resolution == Resolution::ManualPending {
+                    None
+                } else {
+                    Some(Utc::now().to_rfc3339())
+                };
+                sqlx::query(audited_sql(&sql))
+                    .bind(&resolution_str)
+                    .bind(&resolved_at)
+                    .bind(&conflict.id)
+                    .execute(pool)
+                    .await?;
+            }
+            Database::Postgres(pool) => {
+                let resolved_at = if resolution == Resolution::ManualPending {
+                    None
+                } else {
+                    Some(Utc::now())
+                };
+                sqlx::query(audited_sql(&sql))
+                    .bind(&resolution_str)
+                    .bind(resolved_at)
+                    .bind(&conflict.id)
+                    .execute(pool)
+                    .await?;
+            }
+        }
 
         Ok(resolution)
     }
@@ -219,42 +251,64 @@ impl ConflictResolver {
     pub async fn log_conflict(&self, conflict: &SyncConflict) -> Result<(), sqlx::Error> {
         let local_json = serde_json::to_string(&conflict.local_state).unwrap_or_default();
         let remote_json = serde_json::to_string(&conflict.remote_state).unwrap_or_default();
-        let created = conflict.created_at.to_rfc3339();
         let resolution_str = conflict.resolution.as_ref().map(|r| r.as_str().to_string());
-        let resolved_at = conflict.resolved_at.map(|dt| dt.to_rfc3339());
 
-        sqlx::query(
+        let sql = self.db.adapt(
             r#"INSERT INTO sync_conflicts
                    (id, queue_entry_id, local_state, remote_state,
                     resolution, resolved_at, created_at)
                VALUES (?, ?, ?, ?, ?, ?, ?)"#,
-        )
-        .bind(&conflict.id)
-        .bind(&conflict.queue_entry_id)
-        .bind(&local_json)
-        .bind(&remote_json)
-        .bind(&resolution_str)
-        .bind(&resolved_at)
-        .bind(&created)
-        .execute(&self.pool)
-        .await?;
+        );
+        match &self.db {
+            Database::Sqlite(pool) => {
+                let created = conflict.created_at.to_rfc3339();
+                let resolved_at = conflict.resolved_at.map(|dt| dt.to_rfc3339());
+                sqlx::query(audited_sql(&sql))
+                    .bind(&conflict.id)
+                    .bind(&conflict.queue_entry_id)
+                    .bind(&local_json)
+                    .bind(&remote_json)
+                    .bind(&resolution_str)
+                    .bind(&resolved_at)
+                    .bind(&created)
+                    .execute(pool)
+                    .await?;
+            }
+            Database::Postgres(pool) => {
+                sqlx::query(audited_sql(&sql))
+                    .bind(&conflict.id)
+                    .bind(&conflict.queue_entry_id)
+                    .bind(&local_json)
+                    .bind(&remote_json)
+                    .bind(&resolution_str)
+                    .bind(conflict.resolved_at)
+                    .bind(conflict.created_at)
+                    .execute(pool)
+                    .await?;
+            }
+        }
 
         Ok(())
     }
 
     /// Get unresolved conflicts for user review.
     pub async fn unresolved(&self) -> Result<Vec<SyncConflict>, sqlx::Error> {
-        let rows: Vec<ConflictRow> = sqlx::query_as(
-            r#"SELECT id, queue_entry_id, local_state, remote_state,
+        let sql = r#"SELECT id, queue_entry_id, local_state, remote_state,
                       resolution, resolved_at, created_at
                FROM sync_conflicts
                WHERE resolution IS NULL
-               ORDER BY created_at DESC"#,
-        )
-        .fetch_all(&self.pool)
-        .await?;
-
-        Ok(rows.into_iter().map(row_to_conflict).collect())
+               ORDER BY created_at DESC"#;
+        let out = match &self.db {
+            Database::Sqlite(pool) => {
+                let rows: Vec<ConflictRowSqlite> = sqlx::query_as(sql).fetch_all(pool).await?;
+                rows.into_iter().map(row_to_conflict_sqlite).collect()
+            }
+            Database::Postgres(pool) => {
+                let rows: Vec<ConflictRowPostgres> = sqlx::query_as(sql).fetch_all(pool).await?;
+                rows.into_iter().map(row_to_conflict_postgres).collect()
+            }
+        };
+        Ok(out)
     }
 
     /// Get all conflicts for a specific queue entry.
@@ -262,18 +316,30 @@ impl ConflictResolver {
         &self,
         queue_entry_id: &str,
     ) -> Result<Vec<SyncConflict>, sqlx::Error> {
-        let rows: Vec<ConflictRow> = sqlx::query_as(
+        let sql = self.db.adapt(
             r#"SELECT id, queue_entry_id, local_state, remote_state,
                       resolution, resolved_at, created_at
                FROM sync_conflicts
                WHERE queue_entry_id = ?
                ORDER BY created_at DESC"#,
-        )
-        .bind(queue_entry_id)
-        .fetch_all(&self.pool)
-        .await?;
-
-        Ok(rows.into_iter().map(row_to_conflict).collect())
+        );
+        let out = match &self.db {
+            Database::Sqlite(pool) => {
+                let rows: Vec<ConflictRowSqlite> = sqlx::query_as(audited_sql(&sql))
+                    .bind(queue_entry_id)
+                    .fetch_all(pool)
+                    .await?;
+                rows.into_iter().map(row_to_conflict_sqlite).collect()
+            }
+            Database::Postgres(pool) => {
+                let rows: Vec<ConflictRowPostgres> = sqlx::query_as(audited_sql(&sql))
+                    .bind(queue_entry_id)
+                    .fetch_all(pool)
+                    .await?;
+                rows.into_iter().map(row_to_conflict_postgres).collect()
+            }
+        };
+        Ok(out)
     }
 }
 
@@ -281,7 +347,7 @@ impl ConflictResolver {
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn row_to_conflict(row: ConflictRow) -> SyncConflict {
+fn row_to_conflict_sqlite(row: ConflictRowSqlite) -> SyncConflict {
     let local_state = serde_json::from_str(&row.2).unwrap_or(serde_json::Value::Null);
     let remote_state = serde_json::from_str(&row.3).unwrap_or(serde_json::Value::Null);
     let resolution = row.4.as_deref().and_then(|s| s.parse::<Resolution>().ok());
@@ -305,6 +371,22 @@ fn row_to_conflict(row: ConflictRow) -> SyncConflict {
     }
 }
 
+fn row_to_conflict_postgres(row: ConflictRowPostgres) -> SyncConflict {
+    let local_state = serde_json::from_str(&row.2).unwrap_or(serde_json::Value::Null);
+    let remote_state = serde_json::from_str(&row.3).unwrap_or(serde_json::Value::Null);
+    let resolution = row.4.as_deref().and_then(|s| s.parse::<Resolution>().ok());
+
+    SyncConflict {
+        id: row.0,
+        queue_entry_id: row.1,
+        local_state,
+        remote_state,
+        resolution,
+        resolved_at: row.5,
+        created_at: row.6,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -313,6 +395,7 @@ fn row_to_conflict(row: ConflictRow) -> SyncConflict {
 mod tests {
     use super::*;
     use crate::email::offline_queue::OperationType;
+    use sqlx::SqlitePool;
 
     async fn test_pool() -> SqlitePool {
         let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
@@ -363,7 +446,8 @@ mod tests {
     #[tokio::test]
     async fn test_detect_conflict_with_remote_deleted() {
         let pool = test_pool().await;
-        let resolver = ConflictResolver::new(pool, ConflictStrategy::LastWriterWins);
+        let resolver =
+            ConflictResolver::new(Database::Sqlite(pool), ConflictStrategy::LastWriterWins);
         let op = make_operation();
 
         let remote = serde_json::json!({ "deleted": true });
@@ -375,7 +459,8 @@ mod tests {
     #[tokio::test]
     async fn test_detect_conflict_with_remote_modified() {
         let pool = test_pool().await;
-        let resolver = ConflictResolver::new(pool, ConflictStrategy::LastWriterWins);
+        let resolver =
+            ConflictResolver::new(Database::Sqlite(pool), ConflictStrategy::LastWriterWins);
         let op = make_operation();
 
         // Remote was modified after the operation was queued.
@@ -388,7 +473,8 @@ mod tests {
     #[tokio::test]
     async fn test_no_conflict_when_unchanged() {
         let pool = test_pool().await;
-        let resolver = ConflictResolver::new(pool, ConflictStrategy::LastWriterWins);
+        let resolver =
+            ConflictResolver::new(Database::Sqlite(pool), ConflictStrategy::LastWriterWins);
         let op = make_operation();
 
         let remote = serde_json::json!({ "status": "active" });
@@ -399,7 +485,7 @@ mod tests {
     #[tokio::test]
     async fn test_log_and_retrieve_conflict() {
         let pool = test_pool().await;
-        let resolver = ConflictResolver::new(pool, ConflictStrategy::Manual);
+        let resolver = ConflictResolver::new(Database::Sqlite(pool), ConflictStrategy::Manual);
         let op = make_operation();
 
         let remote = serde_json::json!({ "deleted": true });
@@ -416,7 +502,7 @@ mod tests {
     #[tokio::test]
     async fn test_resolve_local_wins_strategy() {
         let pool = test_pool().await;
-        let resolver = ConflictResolver::new(pool, ConflictStrategy::LocalWins);
+        let resolver = ConflictResolver::new(Database::Sqlite(pool), ConflictStrategy::LocalWins);
         let op = make_operation();
 
         let remote = serde_json::json!({ "deleted": true });
@@ -434,7 +520,7 @@ mod tests {
     #[tokio::test]
     async fn test_resolve_remote_wins_strategy() {
         let pool = test_pool().await;
-        let resolver = ConflictResolver::new(pool, ConflictStrategy::RemoteWins);
+        let resolver = ConflictResolver::new(Database::Sqlite(pool), ConflictStrategy::RemoteWins);
         let op = make_operation();
 
         let remote = serde_json::json!({ "deleted": true });
@@ -448,7 +534,7 @@ mod tests {
     #[tokio::test]
     async fn test_resolve_manual_stays_unresolved() {
         let pool = test_pool().await;
-        let resolver = ConflictResolver::new(pool, ConflictStrategy::Manual);
+        let resolver = ConflictResolver::new(Database::Sqlite(pool), ConflictStrategy::Manual);
         let op = make_operation();
 
         let remote = serde_json::json!({ "deleted": true });
@@ -466,7 +552,8 @@ mod tests {
     #[tokio::test]
     async fn test_last_writer_wins_remote_newer() {
         let pool = test_pool().await;
-        let resolver = ConflictResolver::new(pool, ConflictStrategy::LastWriterWins);
+        let resolver =
+            ConflictResolver::new(Database::Sqlite(pool), ConflictStrategy::LastWriterWins);
         let op = make_operation();
 
         let future_ts = (Utc::now() + chrono::Duration::hours(1)).to_rfc3339();

@@ -292,7 +292,7 @@ pub async fn sync_emails_from_provider(
     // Load enabled rules once for the whole sync run so we can apply them
     // to each email as it arrives, avoiding stragglers.
     let enabled_rules: Vec<crate::rules::types::Rule> =
-        crate::rules::rule_engine::RuleEngine::load_rules(state.db.pool())
+        crate::rules::rule_engine::RuleEngine::load_rules(&state.db)
             .await
             .unwrap_or_default()
             .into_iter()
@@ -353,8 +353,7 @@ pub async fn sync_emails_from_provider(
         for msg in &page.messages {
             let n = upsert_email(state, account_id, provider_str, msg).await;
             if n > 0 && !enabled_rules.is_empty() {
-                crate::rules::executor::apply_rules_to_email(state.db.pool(), msg, &enabled_rules)
-                    .await;
+                crate::rules::executor::apply_rules_to_email(&state.db, msg, &enabled_rules).await;
             }
             inserted += n;
         }
@@ -555,7 +554,7 @@ async fn incremental_sync_delta(
 
     // Load enabled rules once so actions can be applied to each arriving email.
     let enabled_rules: Vec<crate::rules::types::Rule> =
-        crate::rules::rule_engine::RuleEngine::load_rules(state.db.pool())
+        crate::rules::rule_engine::RuleEngine::load_rules(&state.db)
             .await
             .unwrap_or_default()
             .into_iter()
@@ -569,12 +568,8 @@ async fn incremental_sync_delta(
             Ok(msg) => {
                 let n = upsert_email(state, account_id, provider_str, &msg).await;
                 if n > 0 && !enabled_rules.is_empty() {
-                    crate::rules::executor::apply_rules_to_email(
-                        state.db.pool(),
-                        &msg,
-                        &enabled_rules,
-                    )
-                    .await;
+                    crate::rules::executor::apply_rules_to_email(&state.db, &msg, &enabled_rules)
+                        .await;
                 }
                 inserted += n;
             }

@@ -9,10 +9,10 @@ use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
 use base64::Engine;
 use chrono::{DateTime, Duration, Utc};
 use rand::Rng;
-use sqlx::SqlitePool;
 use zeroize::Zeroizing;
 
 use super::types::{AccountStatus, ConnectedAccount, OAuthTokens, ProviderConfig, ProviderKind};
+use crate::db::{audited_sql, Database};
 
 /// Fixed salt for token encryption key derivation (separate from vector encryption).
 const TOKEN_KEY_SALT: &[u8] = b"emailibrium-token-encryption-v1";
@@ -32,26 +32,28 @@ type AccountRow = (
     i32,
 );
 
-/// Row tuple for the sync_state query.
+/// Row tuple for the sync_state query. `emails_synced` is i32, not i64, matching the
+/// actual INTEGER/INT4 column (ADR-035's note on real-4-byte-int columns).
 type SyncStateRow = (
     String,
     Option<String>,
     Option<String>,
     Option<String>,
-    i64,
+    i32,
     i32,
     Option<String>,
     String,
 );
 
 /// Row tuple for the IMAP config query: (imap_host, imap_port, imap_encryption,
-/// smtp_host, smtp_port, encrypted_access_token, email_address).
+/// smtp_host, smtp_port, encrypted_access_token, email_address). `imap_port`/
+/// `smtp_port` are i32, not i64, matching the actual INTEGER/INT4 columns.
 type ImapConfigRow = (
     Option<String>,
-    Option<i64>,
+    Option<i32>,
     Option<String>,
     Option<String>,
-    Option<i64>,
+    Option<i32>,
     Option<Vec<u8>>,
     String,
 );
@@ -89,7 +91,7 @@ pub enum OAuthError {
 
 /// Manages OAuth flows, token storage, and account persistence.
 pub struct OAuthManager {
-    pool: SqlitePool,
+    db: Database,
     encryption_key: Option<Zeroizing<[u8; 32]>>,
     http: reqwest::Client,
 }
@@ -100,12 +102,12 @@ impl OAuthManager {
     /// If `master_password` is provided, tokens are encrypted at rest using
     /// AES-256-GCM with an Argon2id-derived key. If `None`, tokens are stored
     /// as plaintext (development only).
-    pub fn new(pool: SqlitePool, master_password: Option<&str>) -> Self {
+    pub fn new(db: Database, master_password: Option<&str>) -> Self {
         let encryption_key = master_password
             .and_then(|pw| crate::vectors::encryption::derive_key(pw, TOKEN_KEY_SALT).ok());
 
         Self {
-            pool,
+            db,
             encryption_key,
             http: reqwest::Client::new(),
         }
@@ -241,11 +243,23 @@ impl OAuthManager {
         &self,
         email: &str,
     ) -> Result<Option<String>, OAuthError> {
-        let row: Option<(String,)> =
-            sqlx::query_as("SELECT id FROM connected_accounts WHERE email_address = ?1")
-                .bind(email)
-                .fetch_optional(&self.pool)
-                .await?;
+        let sql = self
+            .db
+            .adapt("SELECT id FROM connected_accounts WHERE email_address = ?1");
+        let row: Option<(String,)> = match &self.db {
+            Database::Sqlite(pool) => {
+                sqlx::query_as(audited_sql(&sql))
+                    .bind(email)
+                    .fetch_optional(pool)
+                    .await?
+            }
+            Database::Postgres(pool) => {
+                sqlx::query_as(audited_sql(&sql))
+                    .bind(email)
+                    .fetch_optional(pool)
+                    .await?
+            }
+        };
         Ok(row.map(|(id,)| id))
     }
 
@@ -265,32 +279,70 @@ impl OAuthManager {
             .transpose()?;
         let expires_at = tokens.expires_at.map(|dt| dt.to_rfc3339());
 
-        sqlx::query(
-            "INSERT INTO connected_accounts \
-             (id, provider, email_address, encrypted_access_token, encrypted_refresh_token, \
-              token_expires_at, status) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'connected') \
-             ON CONFLICT(email_address) DO UPDATE SET \
-                encrypted_access_token = ?4, \
-                encrypted_refresh_token = ?5, \
-                token_expires_at = ?6, \
-                status = 'connected', \
-                updated_at = datetime('now')",
-        )
-        .bind(id)
-        .bind(provider.as_str())
-        .bind(email)
-        .bind(&enc_access)
-        .bind(&enc_refresh)
-        .bind(&expires_at)
-        .execute(&self.pool)
-        .await?;
+        // `updated_at` is TEXT (not TIMESTAMPTZ) in both dialects (ADR-033), so the
+        // Postgres arm hand-writes to_char(...) instead of routing `datetime('now')`
+        // through `Database::adapt()` — see ADR-035 §2.5. SQLite's `INSERT OR IGNORE`
+        // for the sync_state row also has no Postgres equivalent — hand-written as
+        // `ON CONFLICT (account_id) DO NOTHING` (ADR-035 §2.3).
+        match &self.db {
+            Database::Sqlite(pool) => {
+                sqlx::query(
+                    "INSERT INTO connected_accounts \
+                     (id, provider, email_address, encrypted_access_token, encrypted_refresh_token, \
+                      token_expires_at, status) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'connected') \
+                     ON CONFLICT(email_address) DO UPDATE SET \
+                        encrypted_access_token = ?4, \
+                        encrypted_refresh_token = ?5, \
+                        token_expires_at = ?6, \
+                        status = 'connected', \
+                        updated_at = datetime('now')",
+                )
+                .bind(id)
+                .bind(provider.as_str())
+                .bind(email)
+                .bind(&enc_access)
+                .bind(&enc_refresh)
+                .bind(&expires_at)
+                .execute(pool)
+                .await?;
 
-        // Ensure sync_state row exists.
-        sqlx::query("INSERT OR IGNORE INTO sync_state (account_id) VALUES (?1)")
-            .bind(id)
-            .execute(&self.pool)
-            .await?;
+                sqlx::query("INSERT OR IGNORE INTO sync_state (account_id) VALUES (?1)")
+                    .bind(id)
+                    .execute(pool)
+                    .await?;
+            }
+            Database::Postgres(pool) => {
+                sqlx::query(
+                    "INSERT INTO connected_accounts \
+                     (id, provider, email_address, encrypted_access_token, encrypted_refresh_token, \
+                      token_expires_at, status) \
+                     VALUES ($1, $2, $3, $4, $5, $6, 'connected') \
+                     ON CONFLICT(email_address) DO UPDATE SET \
+                        encrypted_access_token = $4, \
+                        encrypted_refresh_token = $5, \
+                        token_expires_at = $6, \
+                        status = 'connected', \
+                        updated_at = to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')",
+                )
+                .bind(id)
+                .bind(provider.as_str())
+                .bind(email)
+                .bind(&enc_access)
+                .bind(&enc_refresh)
+                .bind(&expires_at)
+                .execute(pool)
+                .await?;
+
+                sqlx::query(
+                    "INSERT INTO sync_state (account_id) VALUES ($1) \
+                     ON CONFLICT (account_id) DO NOTHING",
+                )
+                .bind(id)
+                .execute(pool)
+                .await?;
+            }
+        }
 
         Ok(())
     }
@@ -314,41 +366,86 @@ impl OAuthManager {
         smtp_port: u16,
     ) -> Result<(), OAuthError> {
         let enc_password = self.encrypt_token(password)?;
+        let imap_port = imap_port as i32;
+        let smtp_port = smtp_port as i32;
 
-        sqlx::query(
-            "INSERT INTO connected_accounts \
-             (id, provider, email_address, encrypted_access_token, status, \
-              imap_host, imap_port, imap_encryption, smtp_host, smtp_port) \
-             VALUES (?1, 'imap', ?2, ?3, 'connected', ?4, ?5, ?6, ?7, ?8) \
-             ON CONFLICT(email_address) DO UPDATE SET \
-                provider = 'imap', \
-                encrypted_access_token = ?3, \
-                encrypted_refresh_token = NULL, \
-                token_expires_at = NULL, \
-                status = 'connected', \
-                imap_host = ?4, \
-                imap_port = ?5, \
-                imap_encryption = ?6, \
-                smtp_host = ?7, \
-                smtp_port = ?8, \
-                updated_at = datetime('now')",
-        )
-        .bind(id)
-        .bind(email)
-        .bind(&enc_password)
-        .bind(imap_host)
-        .bind(imap_port)
-        .bind(encryption.as_str())
-        .bind(smtp_host)
-        .bind(smtp_port)
-        .execute(&self.pool)
-        .await?;
+        // See save_account()'s comment on why updated_at/sync_state are hand-written
+        // per backend rather than routed through Database::adapt().
+        match &self.db {
+            Database::Sqlite(pool) => {
+                sqlx::query(
+                    "INSERT INTO connected_accounts \
+                     (id, provider, email_address, encrypted_access_token, status, \
+                      imap_host, imap_port, imap_encryption, smtp_host, smtp_port) \
+                     VALUES (?1, 'imap', ?2, ?3, 'connected', ?4, ?5, ?6, ?7, ?8) \
+                     ON CONFLICT(email_address) DO UPDATE SET \
+                        provider = 'imap', \
+                        encrypted_access_token = ?3, \
+                        encrypted_refresh_token = NULL, \
+                        token_expires_at = NULL, \
+                        status = 'connected', \
+                        imap_host = ?4, \
+                        imap_port = ?5, \
+                        imap_encryption = ?6, \
+                        smtp_host = ?7, \
+                        smtp_port = ?8, \
+                        updated_at = datetime('now')",
+                )
+                .bind(id)
+                .bind(email)
+                .bind(&enc_password)
+                .bind(imap_host)
+                .bind(imap_port)
+                .bind(encryption.as_str())
+                .bind(smtp_host)
+                .bind(smtp_port)
+                .execute(pool)
+                .await?;
 
-        // Ensure sync_state row exists.
-        sqlx::query("INSERT OR IGNORE INTO sync_state (account_id) VALUES (?1)")
-            .bind(id)
-            .execute(&self.pool)
-            .await?;
+                sqlx::query("INSERT OR IGNORE INTO sync_state (account_id) VALUES (?1)")
+                    .bind(id)
+                    .execute(pool)
+                    .await?;
+            }
+            Database::Postgres(pool) => {
+                sqlx::query(
+                    "INSERT INTO connected_accounts \
+                     (id, provider, email_address, encrypted_access_token, status, \
+                      imap_host, imap_port, imap_encryption, smtp_host, smtp_port) \
+                     VALUES ($1, 'imap', $2, $3, 'connected', $4, $5, $6, $7, $8) \
+                     ON CONFLICT(email_address) DO UPDATE SET \
+                        provider = 'imap', \
+                        encrypted_access_token = $3, \
+                        encrypted_refresh_token = NULL, \
+                        token_expires_at = NULL, \
+                        status = 'connected', \
+                        imap_host = $4, \
+                        imap_port = $5, \
+                        imap_encryption = $6, \
+                        smtp_host = $7, \
+                        smtp_port = $8, \
+                        updated_at = to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')",
+                )
+                .bind(id)
+                .bind(email)
+                .bind(&enc_password)
+                .bind(imap_host)
+                .bind(imap_port)
+                .bind(encryption.as_str())
+                .bind(smtp_host)
+                .bind(smtp_port)
+                .execute(pool)
+                .await?;
+
+                sqlx::query(
+                    "INSERT INTO sync_state (account_id) VALUES ($1) \
+                     ON CONFLICT (account_id) DO NOTHING",
+                )
+                .bind(id)
+                .execute(pool)
+                .await?;
+            }
+        }
 
         Ok(())
     }
@@ -360,15 +457,26 @@ impl OAuthManager {
         &self,
         account_id: &str,
     ) -> Result<super::imap::ImapConfig, OAuthError> {
-        let row: ImapConfigRow = sqlx::query_as(
+        let sql = self.db.adapt(
             "SELECT imap_host, imap_port, imap_encryption, smtp_host, smtp_port, \
                  encrypted_access_token, email_address \
              FROM connected_accounts WHERE id = ?1",
-        )
-        .bind(account_id)
-        .fetch_optional(&self.pool)
-        .await?
-        .ok_or_else(|| OAuthError::AccountNotFound(account_id.to_string()))?;
+        );
+        let row: Option<ImapConfigRow> = match &self.db {
+            Database::Sqlite(pool) => {
+                sqlx::query_as(audited_sql(&sql))
+                    .bind(account_id)
+                    .fetch_optional(pool)
+                    .await?
+            }
+            Database::Postgres(pool) => {
+                sqlx::query_as(audited_sql(&sql))
+                    .bind(account_id)
+                    .fetch_optional(pool)
+                    .await?
+            }
+        };
+        let row = row.ok_or_else(|| OAuthError::AccountNotFound(account_id.to_string()))?;
 
         let host = row.0.ok_or_else(|| {
             OAuthError::ValidationError(format!("Account {account_id} is not an IMAP account"))
@@ -412,22 +520,41 @@ impl OAuthManager {
             .transpose()?;
         let expires_at = tokens.expires_at.map(|dt| dt.to_rfc3339());
 
-        let rows = sqlx::query(
-            "UPDATE connected_accounts SET \
-                encrypted_access_token = ?1, \
-                encrypted_refresh_token = COALESCE(?2, encrypted_refresh_token), \
-                token_expires_at = ?3, \
-                updated_at = datetime('now') \
-             WHERE id = ?4",
-        )
-        .bind(&enc_access)
-        .bind(&enc_refresh)
-        .bind(&expires_at)
-        .bind(account_id)
-        .execute(&self.pool)
-        .await?;
+        // See save_account()'s comment on why updated_at is hand-written per backend.
+        let affected = match &self.db {
+            Database::Sqlite(pool) => sqlx::query(
+                "UPDATE connected_accounts SET \
+                        encrypted_access_token = ?1, \
+                        encrypted_refresh_token = COALESCE(?2, encrypted_refresh_token), \
+                        token_expires_at = ?3, \
+                        updated_at = datetime('now') \
+                     WHERE id = ?4",
+            )
+            .bind(&enc_access)
+            .bind(&enc_refresh)
+            .bind(&expires_at)
+            .bind(account_id)
+            .execute(pool)
+            .await?
+            .rows_affected(),
+            Database::Postgres(pool) => sqlx::query(
+                "UPDATE connected_accounts SET \
+                        encrypted_access_token = $1, \
+                        encrypted_refresh_token = COALESCE($2, encrypted_refresh_token), \
+                        token_expires_at = $3, \
+                        updated_at = to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS') \
+                     WHERE id = $4",
+            )
+            .bind(&enc_access)
+            .bind(&enc_refresh)
+            .bind(&expires_at)
+            .bind(account_id)
+            .execute(pool)
+            .await?
+            .rows_affected(),
+        };
 
-        if rows.rows_affected() == 0 {
+        if affected == 0 {
             return Err(OAuthError::AccountNotFound(account_id.to_string()));
         }
         Ok(())
@@ -435,14 +562,25 @@ impl OAuthManager {
 
     /// Retrieve the decrypted access token for an account, auto-refreshing if expired.
     pub async fn get_access_token(&self, account_id: &str) -> Result<String, OAuthError> {
-        let row: (Vec<u8>, Option<String>) = sqlx::query_as(
+        let sql = self.db.adapt(
             "SELECT encrypted_access_token, token_expires_at \
              FROM connected_accounts WHERE id = ?1",
-        )
-        .bind(account_id)
-        .fetch_optional(&self.pool)
-        .await?
-        .ok_or_else(|| OAuthError::AccountNotFound(account_id.to_string()))?;
+        );
+        let row: Option<(Vec<u8>, Option<String>)> = match &self.db {
+            Database::Sqlite(pool) => {
+                sqlx::query_as(audited_sql(&sql))
+                    .bind(account_id)
+                    .fetch_optional(pool)
+                    .await?
+            }
+            Database::Postgres(pool) => {
+                sqlx::query_as(audited_sql(&sql))
+                    .bind(account_id)
+                    .fetch_optional(pool)
+                    .await?
+            }
+        };
+        let row = row.ok_or_else(|| OAuthError::AccountNotFound(account_id.to_string()))?;
 
         // Check if token is expired (or will expire within 60s).
         let is_expired = row.1.as_deref().is_some_and(|exp| {
@@ -465,12 +603,21 @@ impl OAuthManager {
     async fn try_refresh_token(&self, account_id: &str) -> Option<String> {
         let refresh_token = self.get_refresh_token(account_id).await.ok()??;
 
-        let provider_row: Option<(String,)> =
-            sqlx::query_as("SELECT provider FROM connected_accounts WHERE id = ?1")
+        let sql = self
+            .db
+            .adapt("SELECT provider FROM connected_accounts WHERE id = ?1");
+        let provider_row: Option<(String,)> = match &self.db {
+            Database::Sqlite(pool) => sqlx::query_as(audited_sql(&sql))
                 .bind(account_id)
-                .fetch_optional(&self.pool)
+                .fetch_optional(pool)
                 .await
-                .ok()?;
+                .ok()?,
+            Database::Postgres(pool) => sqlx::query_as(audited_sql(&sql))
+                .bind(account_id)
+                .fetch_optional(pool)
+                .await
+                .ok()?,
+        };
 
         let provider_str = provider_row?.0;
         let (token_url, client_id_env, client_secret_env) = match provider_str.as_str() {
@@ -533,12 +680,24 @@ impl OAuthManager {
 
     /// Retrieve the decrypted refresh token for an account.
     pub async fn get_refresh_token(&self, account_id: &str) -> Result<Option<String>, OAuthError> {
-        let row: (Option<Vec<u8>>,) =
-            sqlx::query_as("SELECT encrypted_refresh_token FROM connected_accounts WHERE id = ?1")
-                .bind(account_id)
-                .fetch_optional(&self.pool)
-                .await?
-                .ok_or_else(|| OAuthError::AccountNotFound(account_id.to_string()))?;
+        let sql = self
+            .db
+            .adapt("SELECT encrypted_refresh_token FROM connected_accounts WHERE id = ?1");
+        let row: Option<(Option<Vec<u8>>,)> = match &self.db {
+            Database::Sqlite(pool) => {
+                sqlx::query_as(audited_sql(&sql))
+                    .bind(account_id)
+                    .fetch_optional(pool)
+                    .await?
+            }
+            Database::Postgres(pool) => {
+                sqlx::query_as(audited_sql(&sql))
+                    .bind(account_id)
+                    .fetch_optional(pool)
+                    .await?
+            }
+        };
+        let row = row.ok_or_else(|| OAuthError::AccountNotFound(account_id.to_string()))?;
 
         match row.0 {
             Some(encrypted) => Ok(Some(self.decrypt_token(&encrypted)?)),
@@ -548,13 +707,13 @@ impl OAuthManager {
 
     /// List all connected accounts (without decrypted tokens).
     pub async fn list_accounts(&self) -> Result<Vec<ConnectedAccount>, OAuthError> {
-        let rows: Vec<AccountRow> = sqlx::query_as(
-            "SELECT id, provider, email_address, status, archive_strategy, \
+        let sql = "SELECT id, provider, email_address, status, archive_strategy, \
                  label_prefix, created_at, updated_at, sync_depth, sync_frequency \
-                 FROM connected_accounts ORDER BY created_at DESC",
-        )
-        .fetch_all(&self.pool)
-        .await?;
+                 FROM connected_accounts ORDER BY created_at DESC";
+        let rows: Vec<AccountRow> = match &self.db {
+            Database::Sqlite(pool) => sqlx::query_as(sql).fetch_all(pool).await?,
+            Database::Postgres(pool) => sqlx::query_as(sql).fetch_all(pool).await?,
+        };
 
         let accounts = rows
             .into_iter()
@@ -633,24 +792,45 @@ impl OAuthManager {
             }
         }
 
-        let rows = sqlx::query(
-            "UPDATE connected_accounts SET \
-                archive_strategy = COALESCE(?1, archive_strategy), \
-                label_prefix = COALESCE(?2, label_prefix), \
-                sync_depth = COALESCE(?3, sync_depth), \
-                sync_frequency = COALESCE(?4, sync_frequency), \
-                updated_at = datetime('now') \
-             WHERE id = ?5",
-        )
-        .bind(archive_strategy)
-        .bind(label_prefix)
-        .bind(sync_depth)
-        .bind(sync_frequency)
-        .bind(account_id)
-        .execute(&self.pool)
-        .await?;
+        // See save_account()'s comment on why updated_at is hand-written per backend.
+        let affected = match &self.db {
+            Database::Sqlite(pool) => sqlx::query(
+                "UPDATE connected_accounts SET \
+                        archive_strategy = COALESCE(?1, archive_strategy), \
+                        label_prefix = COALESCE(?2, label_prefix), \
+                        sync_depth = COALESCE(?3, sync_depth), \
+                        sync_frequency = COALESCE(?4, sync_frequency), \
+                        updated_at = datetime('now') \
+                     WHERE id = ?5",
+            )
+            .bind(archive_strategy)
+            .bind(label_prefix)
+            .bind(sync_depth)
+            .bind(sync_frequency)
+            .bind(account_id)
+            .execute(pool)
+            .await?
+            .rows_affected(),
+            Database::Postgres(pool) => sqlx::query(
+                "UPDATE connected_accounts SET \
+                        archive_strategy = COALESCE($1, archive_strategy), \
+                        label_prefix = COALESCE($2, label_prefix), \
+                        sync_depth = COALESCE($3, sync_depth), \
+                        sync_frequency = COALESCE($4, sync_frequency), \
+                        updated_at = to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS') \
+                     WHERE id = $5",
+            )
+            .bind(archive_strategy)
+            .bind(label_prefix)
+            .bind(sync_depth)
+            .bind(sync_frequency)
+            .bind(account_id)
+            .execute(pool)
+            .await?
+            .rows_affected(),
+        };
 
-        if rows.rows_affected() == 0 {
+        if affected == 0 {
             return Err(OAuthError::AccountNotFound(account_id.to_string()));
         }
         Ok(())
@@ -658,20 +838,37 @@ impl OAuthManager {
 
     /// Disconnect an account (soft-delete: sets status to disconnected, clears tokens).
     pub async fn disconnect_account(&self, account_id: &str) -> Result<(), OAuthError> {
-        let rows = sqlx::query(
-            "UPDATE connected_accounts SET \
-                status = 'disconnected', \
-                encrypted_access_token = NULL, \
-                encrypted_refresh_token = NULL, \
-                token_expires_at = NULL, \
-                updated_at = datetime('now') \
-             WHERE id = ?1",
-        )
-        .bind(account_id)
-        .execute(&self.pool)
-        .await?;
+        // See save_account()'s comment on why updated_at is hand-written per backend.
+        let affected = match &self.db {
+            Database::Sqlite(pool) => sqlx::query(
+                "UPDATE connected_accounts SET \
+                        status = 'disconnected', \
+                        encrypted_access_token = NULL, \
+                        encrypted_refresh_token = NULL, \
+                        token_expires_at = NULL, \
+                        updated_at = datetime('now') \
+                     WHERE id = ?1",
+            )
+            .bind(account_id)
+            .execute(pool)
+            .await?
+            .rows_affected(),
+            Database::Postgres(pool) => sqlx::query(
+                "UPDATE connected_accounts SET \
+                        status = 'disconnected', \
+                        encrypted_access_token = NULL, \
+                        encrypted_refresh_token = NULL, \
+                        token_expires_at = NULL, \
+                        updated_at = to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS') \
+                     WHERE id = $1",
+            )
+            .bind(account_id)
+            .execute(pool)
+            .await?
+            .rows_affected(),
+        };
 
-        if rows.rows_affected() == 0 {
+        if affected == 0 {
             return Err(OAuthError::AccountNotFound(account_id.to_string()));
         }
         Ok(())
@@ -682,14 +879,25 @@ impl OAuthManager {
         &self,
         account_id: &str,
     ) -> Result<Option<super::SyncState>, OAuthError> {
-        let row: Option<SyncStateRow> = sqlx::query_as(
+        let sql = self.db.adapt(
             "SELECT account_id, last_sync_at, history_id, next_page_token, \
              emails_synced, sync_failures, last_error, status \
              FROM sync_state WHERE account_id = ?1",
-        )
-        .bind(account_id)
-        .fetch_optional(&self.pool)
-        .await?;
+        );
+        let row: Option<SyncStateRow> = match &self.db {
+            Database::Sqlite(pool) => {
+                sqlx::query_as(audited_sql(&sql))
+                    .bind(account_id)
+                    .fetch_optional(pool)
+                    .await?
+            }
+            Database::Postgres(pool) => {
+                sqlx::query_as(audited_sql(&sql))
+                    .bind(account_id)
+                    .fetch_optional(pool)
+                    .await?
+            }
+        };
 
         Ok(row.map(|r| {
             let last_sync_at = r.1.as_deref().and_then(|s| {
@@ -774,12 +982,13 @@ impl OAuthManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sqlx::SqlitePool;
 
     #[tokio::test]
     async fn test_encrypt_decrypt_roundtrip_no_key() {
         // Without encryption key, tokens are base64 encoded.
         let mgr = OAuthManager {
-            pool: SqlitePool::connect_lazy("sqlite::memory:").unwrap(),
+            db: Database::Sqlite(SqlitePool::connect_lazy("sqlite::memory:").unwrap()),
             encryption_key: None,
             http: reqwest::Client::new(),
         };
@@ -794,7 +1003,7 @@ mod tests {
     async fn test_encrypt_decrypt_roundtrip_with_key() {
         let key = crate::vectors::encryption::derive_key("test-password", TOKEN_KEY_SALT).unwrap();
         let mgr = OAuthManager {
-            pool: SqlitePool::connect_lazy("sqlite::memory:").unwrap(),
+            db: Database::Sqlite(SqlitePool::connect_lazy("sqlite::memory:").unwrap()),
             encryption_key: Some(key),
             http: reqwest::Client::new(),
         };
@@ -837,7 +1046,7 @@ mod tests {
 
         let key = crate::vectors::encryption::derive_key("test-password", TOKEN_KEY_SALT).unwrap();
         let mgr = OAuthManager {
-            pool,
+            db: Database::Sqlite(pool),
             encryption_key: Some(key),
             http: reqwest::Client::new(),
         };
@@ -881,7 +1090,7 @@ mod tests {
     #[tokio::test]
     async fn test_authorization_url_contains_params() {
         let mgr = OAuthManager {
-            pool: SqlitePool::connect_lazy("sqlite::memory:").unwrap(),
+            db: Database::Sqlite(SqlitePool::connect_lazy("sqlite::memory:").unwrap()),
             encryption_key: None,
             http: reqwest::Client::new(),
         };

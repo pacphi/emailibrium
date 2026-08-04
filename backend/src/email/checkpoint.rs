@@ -7,8 +7,9 @@
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use sqlx::SqlitePool;
 use tracing::warn;
+
+use crate::db::{audited_sql, Database};
 
 // ---------------------------------------------------------------------------
 // Types
@@ -72,14 +73,17 @@ pub struct ProcessingCheckpoint {
     pub updated_at: DateTime<Utc>,
 }
 
-/// Row type returned by SQLite queries.
+/// Portable row decode target across both backends. `total_count`/`processed_count`
+/// decode as i32 (not i64) because the column is INTEGER/INT4 in both dialects — the
+/// same real-4-byte-int gotcha documented in ADR-035; `ProcessingCheckpoint`'s public
+/// fields stay `i64` (a safe widen on the way out).
 type CheckpointRow = (
     String,         // job_id
     String,         // provider
     String,         // account_id
     Option<String>, // last_processed_id
-    Option<i64>,    // total_count
-    i64,            // processed_count
+    Option<i32>,    // total_count
+    i32,            // processed_count
     String,         // state
     Option<String>, // error_message
     String,         // updated_at
@@ -89,30 +93,35 @@ type CheckpointRow = (
 // Service
 // ---------------------------------------------------------------------------
 
-/// Checkpoint service backed by SQLite for crash-recovery state tracking.
+/// Checkpoint service for crash-recovery state tracking (SQLite or PostgreSQL).
 pub struct CheckpointService {
-    pool: SqlitePool,
+    db: Database,
 }
 
 impl CheckpointService {
-    /// Create a new checkpoint service using the provided connection pool.
-    pub fn new(pool: SqlitePool) -> Self {
-        Self { pool }
+    /// Create a new checkpoint service using the provided database handle.
+    pub fn new(db: Database) -> Self {
+        Self { db }
     }
 
     /// Create or update a checkpoint for a job.
     ///
     /// Uses `INSERT ... ON CONFLICT DO UPDATE` (upsert) so callers can
     /// simply call `save_checkpoint` on every progress tick without
-    /// worrying about whether the row already exists.
+    /// worrying about whether the row already exists. Valid upsert syntax in
+    /// both SQLite (3.24+) and PostgreSQL, so this goes through the ordinary
+    /// placeholder-adapting path — only `total_count`/`processed_count`
+    /// narrow to i32 to match the actual INTEGER/INT4 column width.
     pub async fn save_checkpoint(
         &self,
         checkpoint: &ProcessingCheckpoint,
     ) -> Result<(), sqlx::Error> {
         let state_str = checkpoint.state.as_str();
         let updated = Utc::now().to_rfc3339();
+        let total_count = checkpoint.total_count.map(|v| v as i32);
+        let processed_count = checkpoint.processed_count as i32;
 
-        sqlx::query(
+        let sql = self.db.adapt(
             r#"INSERT INTO processing_checkpoints
                    (job_id, provider, account_id, last_processed_id,
                     total_count, processed_count, state, error_message, updated_at)
@@ -124,18 +133,37 @@ impl CheckpointService {
                    state             = excluded.state,
                    error_message     = excluded.error_message,
                    updated_at        = excluded.updated_at"#,
-        )
-        .bind(&checkpoint.job_id)
-        .bind(&checkpoint.provider)
-        .bind(&checkpoint.account_id)
-        .bind(&checkpoint.last_processed_id)
-        .bind(checkpoint.total_count)
-        .bind(checkpoint.processed_count)
-        .bind(state_str)
-        .bind(&checkpoint.error_message)
-        .bind(&updated)
-        .execute(&self.pool)
-        .await?;
+        );
+        match &self.db {
+            Database::Sqlite(pool) => {
+                sqlx::query(audited_sql(&sql))
+                    .bind(&checkpoint.job_id)
+                    .bind(&checkpoint.provider)
+                    .bind(&checkpoint.account_id)
+                    .bind(&checkpoint.last_processed_id)
+                    .bind(total_count)
+                    .bind(processed_count)
+                    .bind(state_str)
+                    .bind(&checkpoint.error_message)
+                    .bind(&updated)
+                    .execute(pool)
+                    .await?;
+            }
+            Database::Postgres(pool) => {
+                sqlx::query(audited_sql(&sql))
+                    .bind(&checkpoint.job_id)
+                    .bind(&checkpoint.provider)
+                    .bind(&checkpoint.account_id)
+                    .bind(&checkpoint.last_processed_id)
+                    .bind(total_count)
+                    .bind(processed_count)
+                    .bind(state_str)
+                    .bind(&checkpoint.error_message)
+                    .bind(&updated)
+                    .execute(pool)
+                    .await?;
+            }
+        }
 
         Ok(())
     }
@@ -145,15 +173,26 @@ impl CheckpointService {
         &self,
         job_id: &str,
     ) -> Result<Option<ProcessingCheckpoint>, sqlx::Error> {
-        let row: Option<CheckpointRow> = sqlx::query_as(
+        let sql = self.db.adapt(
             r#"SELECT job_id, provider, account_id, last_processed_id,
                       total_count, processed_count, state, error_message, updated_at
                FROM processing_checkpoints
                WHERE job_id = ?"#,
-        )
-        .bind(job_id)
-        .fetch_optional(&self.pool)
-        .await?;
+        );
+        let row: Option<CheckpointRow> = match &self.db {
+            Database::Sqlite(pool) => {
+                sqlx::query_as(audited_sql(&sql))
+                    .bind(job_id)
+                    .fetch_optional(pool)
+                    .await?
+            }
+            Database::Postgres(pool) => {
+                sqlx::query_as(audited_sql(&sql))
+                    .bind(job_id)
+                    .fetch_optional(pool)
+                    .await?
+            }
+        };
 
         Ok(row.map(row_to_checkpoint))
     }
@@ -163,15 +202,15 @@ impl CheckpointService {
     /// Returns checkpoints in states `running`, `paused`, `resuming`, or
     /// `failed` — anything that was not cleanly completed.
     pub async fn get_resumable(&self) -> Result<Vec<ProcessingCheckpoint>, sqlx::Error> {
-        let rows: Vec<CheckpointRow> = sqlx::query_as(
-            r#"SELECT job_id, provider, account_id, last_processed_id,
+        let sql = r#"SELECT job_id, provider, account_id, last_processed_id,
                       total_count, processed_count, state, error_message, updated_at
                FROM processing_checkpoints
                WHERE state IN ('running', 'paused', 'resuming', 'failed')
-               ORDER BY updated_at DESC"#,
-        )
-        .fetch_all(&self.pool)
-        .await?;
+               ORDER BY updated_at DESC"#;
+        let rows: Vec<CheckpointRow> = match &self.db {
+            Database::Sqlite(pool) => sqlx::query_as(sql).fetch_all(pool).await?,
+            Database::Postgres(pool) => sqlx::query_as(sql).fetch_all(pool).await?,
+        };
 
         Ok(rows.into_iter().map(row_to_checkpoint).collect())
     }
@@ -179,48 +218,99 @@ impl CheckpointService {
     /// Mark a job as completed.
     pub async fn complete(&self, job_id: &str) -> Result<(), sqlx::Error> {
         let now = Utc::now().to_rfc3339();
-        sqlx::query(
+        let sql = self.db.adapt(
             r#"UPDATE processing_checkpoints
                SET state = 'completed', updated_at = ?
                WHERE job_id = ?"#,
-        )
-        .bind(&now)
-        .bind(job_id)
-        .execute(&self.pool)
-        .await?;
+        );
+        match &self.db {
+            Database::Sqlite(pool) => {
+                sqlx::query(audited_sql(&sql))
+                    .bind(&now)
+                    .bind(job_id)
+                    .execute(pool)
+                    .await?;
+            }
+            Database::Postgres(pool) => {
+                sqlx::query(audited_sql(&sql))
+                    .bind(&now)
+                    .bind(job_id)
+                    .execute(pool)
+                    .await?;
+            }
+        }
         Ok(())
     }
 
     /// Mark a job as failed with error info.
     pub async fn fail(&self, job_id: &str, error: &str) -> Result<(), sqlx::Error> {
         let now = Utc::now().to_rfc3339();
-        sqlx::query(
+        let sql = self.db.adapt(
             r#"UPDATE processing_checkpoints
                SET state = 'failed', error_message = ?, updated_at = ?
                WHERE job_id = ?"#,
-        )
-        .bind(error)
-        .bind(&now)
-        .bind(job_id)
-        .execute(&self.pool)
-        .await?;
+        );
+        match &self.db {
+            Database::Sqlite(pool) => {
+                sqlx::query(audited_sql(&sql))
+                    .bind(error)
+                    .bind(&now)
+                    .bind(job_id)
+                    .execute(pool)
+                    .await?;
+            }
+            Database::Postgres(pool) => {
+                sqlx::query(audited_sql(&sql))
+                    .bind(error)
+                    .bind(&now)
+                    .bind(job_id)
+                    .execute(pool)
+                    .await?;
+            }
+        }
         Ok(())
     }
 
     /// Clean up old completed checkpoints.
     ///
     /// Removes completed checkpoints older than `retention_days` days.
-    /// Returns the number of rows deleted.
+    /// Returns the number of rows deleted. SQLite's `datetime('now', ? || '
+    /// days')` modifier syntax has no Postgres equivalent — Postgres computes
+    /// the cutoff via `now() - make_interval(days => ?)` instead (ADR-035
+    /// §2.3). `updated_at` is TEXT storing a `'YYYY-MM-DD HH:MM:SS'`-shaped
+    /// string (no 'T', no offset — matching SQLite's own `datetime()` output,
+    /// NOT the RFC3339 strings the app itself writes via `save_checkpoint`),
+    /// so the Postgres cutoff is formatted identically via `to_char(...)`
+    /// rather than the app's usual RFC3339 shape — deliberately reproducing
+    /// SQLite's existing format quirk (and its narrow same-day lexicographic
+    /// edge case) rather than silently fixing unrelated pre-existing behavior
+    /// during a dialect port.
     pub async fn cleanup_old(&self, retention_days: u32) -> Result<u64, sqlx::Error> {
-        let result = sqlx::query(
-            r#"DELETE FROM processing_checkpoints
-               WHERE state = 'completed'
-                 AND updated_at < datetime('now', ? || ' days')"#,
-        )
-        .bind(-(retention_days as i64))
-        .execute(&self.pool)
-        .await?;
-        Ok(result.rows_affected())
+        let affected = match &self.db {
+            Database::Sqlite(pool) => {
+                sqlx::query(
+                    r#"DELETE FROM processing_checkpoints
+                       WHERE state = 'completed'
+                         AND updated_at < datetime('now', ? || ' days')"#,
+                )
+                .bind(-(retention_days as i64))
+                .execute(pool)
+                .await?
+                .rows_affected()
+            }
+            Database::Postgres(pool) => {
+                sqlx::query(
+                    r#"DELETE FROM processing_checkpoints
+                       WHERE state = 'completed'
+                         AND updated_at < to_char((now() - make_interval(days => $1)) AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')"#,
+                )
+                .bind(retention_days as i32)
+                .execute(pool)
+                .await?
+                .rows_affected()
+            }
+        };
+        Ok(affected)
     }
 }
 
@@ -243,8 +333,8 @@ fn row_to_checkpoint(row: CheckpointRow) -> ProcessingCheckpoint {
         provider: row.1,
         account_id: row.2,
         last_processed_id: row.3,
-        total_count: row.4,
-        processed_count: row.5,
+        total_count: row.4.map(|v| v as i64),
+        processed_count: row.5 as i64,
         state,
         error_message: row.7,
         updated_at,
@@ -258,6 +348,7 @@ fn row_to_checkpoint(row: CheckpointRow) -> ProcessingCheckpoint {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sqlx::SqlitePool;
 
     /// Create an in-memory SQLite database with the processing_checkpoints table.
     async fn test_pool() -> SqlitePool {
@@ -298,7 +389,7 @@ mod tests {
     #[tokio::test]
     async fn test_save_and_get_checkpoint() {
         let pool = test_pool().await;
-        let svc = CheckpointService::new(pool);
+        let svc = CheckpointService::new(Database::Sqlite(pool));
 
         let cp = make_checkpoint("job-1", CheckpointState::Running);
         svc.save_checkpoint(&cp).await.unwrap();
@@ -314,7 +405,7 @@ mod tests {
     #[tokio::test]
     async fn test_upsert_updates_existing() {
         let pool = test_pool().await;
-        let svc = CheckpointService::new(pool);
+        let svc = CheckpointService::new(Database::Sqlite(pool));
 
         let mut cp = make_checkpoint("job-2", CheckpointState::Running);
         svc.save_checkpoint(&cp).await.unwrap();
@@ -331,7 +422,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_nonexistent_returns_none() {
         let pool = test_pool().await;
-        let svc = CheckpointService::new(pool);
+        let svc = CheckpointService::new(Database::Sqlite(pool));
 
         let loaded = svc.get_checkpoint("no-such-job").await.unwrap();
         assert!(loaded.is_none());
@@ -340,7 +431,7 @@ mod tests {
     #[tokio::test]
     async fn test_complete_marks_state() {
         let pool = test_pool().await;
-        let svc = CheckpointService::new(pool);
+        let svc = CheckpointService::new(Database::Sqlite(pool));
 
         let cp = make_checkpoint("job-3", CheckpointState::Running);
         svc.save_checkpoint(&cp).await.unwrap();
@@ -353,7 +444,7 @@ mod tests {
     #[tokio::test]
     async fn test_fail_stores_error() {
         let pool = test_pool().await;
-        let svc = CheckpointService::new(pool);
+        let svc = CheckpointService::new(Database::Sqlite(pool));
 
         let cp = make_checkpoint("job-4", CheckpointState::Running);
         svc.save_checkpoint(&cp).await.unwrap();
@@ -367,7 +458,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_resumable_excludes_completed() {
         let pool = test_pool().await;
-        let svc = CheckpointService::new(pool);
+        let svc = CheckpointService::new(Database::Sqlite(pool));
 
         svc.save_checkpoint(&make_checkpoint("running-1", CheckpointState::Running))
             .await
@@ -394,7 +485,7 @@ mod tests {
     #[tokio::test]
     async fn test_cleanup_old_removes_completed() {
         let pool = test_pool().await;
-        let svc = CheckpointService::new(pool.clone());
+        let svc = CheckpointService::new(Database::Sqlite(pool.clone()));
 
         // Insert a completed checkpoint with an old timestamp.
         sqlx::query(

@@ -6,8 +6,9 @@
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use sqlx::SqlitePool;
 use uuid::Uuid;
+
+use crate::db::{audited_sql, Database};
 
 // ---------------------------------------------------------------------------
 // Types
@@ -138,34 +139,55 @@ impl QueuedOperation {
     }
 }
 
-/// Row type returned by SQLite queries.
-type QueueRow = (
+/// Row type for SQLite: `created_at`/`processed_at` are TEXT (SQLite has no native
+/// temporal type; the app writes/reads RFC3339 strings by hand). `retry_count`/
+/// `max_retries` decode as i32, matching the actual INTEGER/INT4 column (ADR-035).
+type QueueRowSqlite = (
     String,         // id
     String,         // account_id
     String,         // operation_type
     String,         // target_id
     Option<String>, // payload (JSON)
     String,         // status
-    i64,            // retry_count
-    i64,            // max_retries
+    i32,            // retry_count
+    i32,            // max_retries
     String,         // created_at
     Option<String>, // processed_at
     Option<String>, // error
+);
+
+/// Row type for PostgreSQL: unlike SQLite, `created_at`/`processed_at` are real
+/// TIMESTAMPTZ columns there (ADR-033's dialect port), so binding/decoding the
+/// RFC3339-string values the SQLite path uses fails outright — Postgres has no
+/// text->timestamptz assignment cast. This arm binds/decodes `DateTime<Utc>`
+/// natively instead (ADR-035).
+type QueueRowPostgres = (
+    String,
+    String,
+    String,
+    String,
+    Option<String>,
+    String,
+    i32,
+    i32,
+    DateTime<Utc>,
+    Option<DateTime<Utc>>,
+    Option<String>,
 );
 
 // ---------------------------------------------------------------------------
 // Service
 // ---------------------------------------------------------------------------
 
-/// Offline operation queue backed by SQLite.
+/// Offline operation queue (SQLite or PostgreSQL).
 pub struct OfflineQueue {
-    pool: SqlitePool,
+    db: Database,
 }
 
 impl OfflineQueue {
-    /// Create a new offline queue using the provided connection pool.
-    pub fn new(pool: SqlitePool) -> Self {
-        Self { pool }
+    /// Create a new offline queue using the provided database handle.
+    pub fn new(db: Database) -> Self {
+        Self { db }
     }
 
     /// Enqueue an operation for later execution. Returns the operation ID.
@@ -173,25 +195,44 @@ impl OfflineQueue {
         let op_type = op.operation_type.as_str();
         let status = op.status.as_str();
         let payload_str = op.payload.as_ref().map(|v| v.to_string());
-        let created = op.created_at.to_rfc3339();
 
-        sqlx::query(
+        let sql = self.db.adapt(
             r#"INSERT INTO sync_queue
                    (id, account_id, operation_type, target_id, payload,
                     status, retry_count, max_retries, created_at)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
-        )
-        .bind(&op.id)
-        .bind(&op.account_id)
-        .bind(op_type)
-        .bind(&op.target_id)
-        .bind(&payload_str)
-        .bind(status)
-        .bind(op.retry_count as i64)
-        .bind(op.max_retries as i64)
-        .bind(&created)
-        .execute(&self.pool)
-        .await?;
+        );
+        match &self.db {
+            Database::Sqlite(pool) => {
+                let created = op.created_at.to_rfc3339();
+                sqlx::query(audited_sql(&sql))
+                    .bind(&op.id)
+                    .bind(&op.account_id)
+                    .bind(op_type)
+                    .bind(&op.target_id)
+                    .bind(&payload_str)
+                    .bind(status)
+                    .bind(op.retry_count as i32)
+                    .bind(op.max_retries as i32)
+                    .bind(&created)
+                    .execute(pool)
+                    .await?;
+            }
+            Database::Postgres(pool) => {
+                sqlx::query(audited_sql(&sql))
+                    .bind(&op.id)
+                    .bind(&op.account_id)
+                    .bind(op_type)
+                    .bind(&op.target_id)
+                    .bind(&payload_str)
+                    .bind(status)
+                    .bind(op.retry_count as i32)
+                    .bind(op.max_retries as i32)
+                    .bind(op.created_at)
+                    .execute(pool)
+                    .await?;
+            }
+        }
 
         Ok(op.id.clone())
     }
@@ -201,7 +242,7 @@ impl OfflineQueue {
     /// Atomically marks fetched operations as `processing` to prevent
     /// double-dispatch by concurrent workers.
     pub async fn dequeue_batch(&self, limit: u32) -> Result<Vec<QueuedOperation>, sqlx::Error> {
-        let rows: Vec<QueueRow> = sqlx::query_as(
+        let sql = self.db.adapt(
             r#"SELECT id, account_id, operation_type, target_id, payload,
                       status, retry_count, max_retries, created_at,
                       processed_at, error
@@ -209,36 +250,68 @@ impl OfflineQueue {
                WHERE status = 'pending'
                ORDER BY created_at ASC
                LIMIT ?"#,
-        )
-        .bind(limit)
-        .fetch_all(&self.pool)
-        .await?;
-
-        let ops: Vec<QueuedOperation> = rows.into_iter().map(row_to_op).collect();
-
-        // Mark them as processing.
-        for op in &ops {
-            sqlx::query("UPDATE sync_queue SET status = 'processing' WHERE id = ?")
-                .bind(&op.id)
-                .execute(&self.pool)
-                .await?;
-        }
+        );
+        let mark_sql = self
+            .db
+            .adapt("UPDATE sync_queue SET status = 'processing' WHERE id = ?");
+        let ops: Vec<QueuedOperation> = match &self.db {
+            Database::Sqlite(pool) => {
+                let rows: Vec<QueueRowSqlite> = sqlx::query_as(audited_sql(&sql))
+                    .bind(limit as i32)
+                    .fetch_all(pool)
+                    .await?;
+                let ops: Vec<QueuedOperation> = rows.into_iter().map(row_to_op_sqlite).collect();
+                for op in &ops {
+                    sqlx::query(audited_sql(&mark_sql))
+                        .bind(&op.id)
+                        .execute(pool)
+                        .await?;
+                }
+                ops
+            }
+            Database::Postgres(pool) => {
+                let rows: Vec<QueueRowPostgres> = sqlx::query_as(audited_sql(&sql))
+                    .bind(limit as i32)
+                    .fetch_all(pool)
+                    .await?;
+                let ops: Vec<QueuedOperation> = rows.into_iter().map(row_to_op_postgres).collect();
+                for op in &ops {
+                    sqlx::query(audited_sql(&mark_sql))
+                        .bind(&op.id)
+                        .execute(pool)
+                        .await?;
+                }
+                ops
+            }
+        };
 
         Ok(ops)
     }
 
     /// Mark an operation as completed.
     pub async fn complete(&self, id: &str) -> Result<(), sqlx::Error> {
-        let now = Utc::now().to_rfc3339();
-        sqlx::query(
+        let sql = self.db.adapt(
             r#"UPDATE sync_queue
                SET status = 'completed', processed_at = ?
                WHERE id = ?"#,
-        )
-        .bind(&now)
-        .bind(id)
-        .execute(&self.pool)
-        .await?;
+        );
+        match &self.db {
+            Database::Sqlite(pool) => {
+                let now = Utc::now().to_rfc3339();
+                sqlx::query(audited_sql(&sql))
+                    .bind(&now)
+                    .bind(id)
+                    .execute(pool)
+                    .await?;
+            }
+            Database::Postgres(pool) => {
+                sqlx::query(audited_sql(&sql))
+                    .bind(Utc::now())
+                    .bind(id)
+                    .execute(pool)
+                    .await?;
+            }
+        }
         Ok(())
     }
 
@@ -248,64 +321,113 @@ impl OfflineQueue {
     /// is reset to `pending` so the operation will be retried. Otherwise
     /// it remains in `failed` state.
     pub async fn fail(&self, id: &str, error: &str) -> Result<(), sqlx::Error> {
-        let now = Utc::now().to_rfc3339();
-
-        // Fetch current retry state.
-        let row: Option<(i64, i64)> =
-            sqlx::query_as("SELECT retry_count, max_retries FROM sync_queue WHERE id = ?")
-                .bind(id)
-                .fetch_optional(&self.pool)
-                .await?;
-
-        let (retry_count, max_retries) = row.unwrap_or((0, 3));
-        let new_retry = retry_count + 1;
-        let new_status = if new_retry >= max_retries {
-            "failed"
-        } else {
-            "pending" // re-queue for retry
-        };
-
-        sqlx::query(
+        let select_sql = self
+            .db
+            .adapt("SELECT retry_count, max_retries FROM sync_queue WHERE id = ?");
+        let update_sql = self.db.adapt(
             r#"UPDATE sync_queue
                SET status = ?, retry_count = ?, error = ?, processed_at = ?
                WHERE id = ?"#,
-        )
-        .bind(new_status)
-        .bind(new_retry)
-        .bind(error)
-        .bind(&now)
-        .bind(id)
-        .execute(&self.pool)
-        .await?;
+        );
+
+        match &self.db {
+            Database::Sqlite(pool) => {
+                let row: Option<(i32, i32)> = sqlx::query_as(audited_sql(&select_sql))
+                    .bind(id)
+                    .fetch_optional(pool)
+                    .await?;
+                let (retry_count, max_retries) = row.unwrap_or((0, 3));
+                let new_retry = retry_count + 1;
+                let new_status = if new_retry >= max_retries {
+                    "failed"
+                } else {
+                    "pending"
+                };
+                let now = Utc::now().to_rfc3339();
+                sqlx::query(audited_sql(&update_sql))
+                    .bind(new_status)
+                    .bind(new_retry)
+                    .bind(error)
+                    .bind(&now)
+                    .bind(id)
+                    .execute(pool)
+                    .await?;
+            }
+            Database::Postgres(pool) => {
+                let row: Option<(i32, i32)> = sqlx::query_as(audited_sql(&select_sql))
+                    .bind(id)
+                    .fetch_optional(pool)
+                    .await?;
+                let (retry_count, max_retries) = row.unwrap_or((0, 3));
+                let new_retry = retry_count + 1;
+                let new_status = if new_retry >= max_retries {
+                    "failed"
+                } else {
+                    "pending"
+                };
+                sqlx::query(audited_sql(&update_sql))
+                    .bind(new_status)
+                    .bind(new_retry)
+                    .bind(error)
+                    .bind(Utc::now())
+                    .bind(id)
+                    .execute(pool)
+                    .await?;
+            }
+        }
 
         Ok(())
     }
 
     /// Mark an operation as having a conflict.
     pub async fn mark_conflict(&self, id: &str, error: &str) -> Result<(), sqlx::Error> {
-        let now = Utc::now().to_rfc3339();
-        sqlx::query(
+        let sql = self.db.adapt(
             r#"UPDATE sync_queue
                SET status = 'conflict', error = ?, processed_at = ?
                WHERE id = ?"#,
-        )
-        .bind(error)
-        .bind(&now)
-        .bind(id)
-        .execute(&self.pool)
-        .await?;
+        );
+        match &self.db {
+            Database::Sqlite(pool) => {
+                let now = Utc::now().to_rfc3339();
+                sqlx::query(audited_sql(&sql))
+                    .bind(error)
+                    .bind(&now)
+                    .bind(id)
+                    .execute(pool)
+                    .await?;
+            }
+            Database::Postgres(pool) => {
+                sqlx::query(audited_sql(&sql))
+                    .bind(error)
+                    .bind(Utc::now())
+                    .bind(id)
+                    .execute(pool)
+                    .await?;
+            }
+        }
         Ok(())
     }
 
     /// Get pending count for an account.
     pub async fn pending_count(&self, account_id: &str) -> Result<u64, sqlx::Error> {
-        let row: (i64,) = sqlx::query_as(
-            "SELECT COUNT(*) FROM sync_queue WHERE account_id = ? AND status = 'pending'",
-        )
-        .bind(account_id)
-        .fetch_one(&self.pool)
-        .await?;
-        Ok(row.0 as u64)
+        let sql = self
+            .db
+            .adapt("SELECT COUNT(*) FROM sync_queue WHERE account_id = ? AND status = 'pending'");
+        let row: (i64,) = match &self.db {
+            Database::Sqlite(pool) => {
+                sqlx::query_as(audited_sql(&sql))
+                    .bind(account_id)
+                    .fetch_one(pool)
+                    .await?
+            }
+            Database::Postgres(pool) => {
+                sqlx::query_as(audited_sql(&sql))
+                    .bind(account_id)
+                    .fetch_one(pool)
+                    .await?
+            }
+        };
+        Ok(row.0.max(0) as u64)
     }
 
     /// Get all pending operations for display.
@@ -313,19 +435,32 @@ impl OfflineQueue {
         &self,
         account_id: &str,
     ) -> Result<Vec<QueuedOperation>, sqlx::Error> {
-        let rows: Vec<QueueRow> = sqlx::query_as(
+        let sql = self.db.adapt(
             r#"SELECT id, account_id, operation_type, target_id, payload,
                       status, retry_count, max_retries, created_at,
                       processed_at, error
                FROM sync_queue
                WHERE account_id = ? AND status IN ('pending', 'processing')
                ORDER BY created_at ASC"#,
-        )
-        .bind(account_id)
-        .fetch_all(&self.pool)
-        .await?;
+        );
+        let ops = match &self.db {
+            Database::Sqlite(pool) => {
+                let rows: Vec<QueueRowSqlite> = sqlx::query_as(audited_sql(&sql))
+                    .bind(account_id)
+                    .fetch_all(pool)
+                    .await?;
+                rows.into_iter().map(row_to_op_sqlite).collect()
+            }
+            Database::Postgres(pool) => {
+                let rows: Vec<QueueRowPostgres> = sqlx::query_as(audited_sql(&sql))
+                    .bind(account_id)
+                    .fetch_all(pool)
+                    .await?;
+                rows.into_iter().map(row_to_op_postgres).collect()
+            }
+        };
 
-        Ok(rows.into_iter().map(row_to_op).collect())
+        Ok(ops)
     }
 }
 
@@ -333,7 +468,7 @@ impl OfflineQueue {
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn row_to_op(row: QueueRow) -> QueuedOperation {
+fn row_to_op_sqlite(row: QueueRowSqlite) -> QueuedOperation {
     let operation_type = row
         .2
         .parse::<OperationType>()
@@ -364,6 +499,29 @@ fn row_to_op(row: QueueRow) -> QueuedOperation {
     }
 }
 
+fn row_to_op_postgres(row: QueueRowPostgres) -> QueuedOperation {
+    let operation_type = row
+        .2
+        .parse::<OperationType>()
+        .unwrap_or(OperationType::Archive);
+    let status = row.5.parse::<QueueStatus>().unwrap_or(QueueStatus::Pending);
+    let payload = row.4.as_deref().and_then(|s| serde_json::from_str(s).ok());
+
+    QueuedOperation {
+        id: row.0,
+        account_id: row.1,
+        operation_type,
+        target_id: row.3,
+        payload,
+        status,
+        retry_count: row.6 as u32,
+        max_retries: row.7 as u32,
+        created_at: row.8,
+        processed_at: row.9,
+        error: row.10,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -371,6 +529,7 @@ fn row_to_op(row: QueueRow) -> QueuedOperation {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sqlx::SqlitePool;
 
     async fn test_pool() -> SqlitePool {
         let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
@@ -407,7 +566,7 @@ mod tests {
     #[tokio::test]
     async fn test_enqueue_and_dequeue() {
         let pool = test_pool().await;
-        let queue = OfflineQueue::new(pool);
+        let queue = OfflineQueue::new(Database::Sqlite(pool));
 
         let op = make_op("msg-1");
         let id = queue.enqueue(&op).await.unwrap();
@@ -422,7 +581,7 @@ mod tests {
     #[tokio::test]
     async fn test_fifo_ordering() {
         let pool = test_pool().await;
-        let queue = OfflineQueue::new(pool);
+        let queue = OfflineQueue::new(Database::Sqlite(pool));
 
         // Enqueue three operations with slight time differences.
         for i in 0..3 {
@@ -442,7 +601,7 @@ mod tests {
     #[tokio::test]
     async fn test_dequeue_marks_processing() {
         let pool = test_pool().await;
-        let queue = OfflineQueue::new(pool);
+        let queue = OfflineQueue::new(Database::Sqlite(pool));
 
         queue.enqueue(&make_op("msg-1")).await.unwrap();
 
@@ -458,7 +617,7 @@ mod tests {
     #[tokio::test]
     async fn test_complete_operation() {
         let pool = test_pool().await;
-        let queue = OfflineQueue::new(pool);
+        let queue = OfflineQueue::new(Database::Sqlite(pool));
 
         let op = make_op("msg-1");
         let id = queue.enqueue(&op).await.unwrap();
@@ -472,7 +631,7 @@ mod tests {
     #[tokio::test]
     async fn test_fail_requeues_until_max_retries() {
         let pool = test_pool().await;
-        let queue = OfflineQueue::new(pool);
+        let queue = OfflineQueue::new(Database::Sqlite(pool));
 
         let mut op = make_op("msg-1");
         op.max_retries = 2;
@@ -492,7 +651,7 @@ mod tests {
     #[tokio::test]
     async fn test_mark_conflict() {
         let pool = test_pool().await;
-        let queue = OfflineQueue::new(pool);
+        let queue = OfflineQueue::new(Database::Sqlite(pool));
 
         let op = make_op("msg-1");
         let id = queue.enqueue(&op).await.unwrap();
@@ -508,7 +667,7 @@ mod tests {
     #[tokio::test]
     async fn test_pending_count() {
         let pool = test_pool().await;
-        let queue = OfflineQueue::new(pool);
+        let queue = OfflineQueue::new(Database::Sqlite(pool));
 
         assert_eq!(queue.pending_count("acct-1").await.unwrap(), 0);
 
@@ -522,7 +681,7 @@ mod tests {
     #[tokio::test]
     async fn test_list_pending() {
         let pool = test_pool().await;
-        let queue = OfflineQueue::new(pool);
+        let queue = OfflineQueue::new(Database::Sqlite(pool));
 
         queue.enqueue(&make_op("msg-1")).await.unwrap();
         let op2 = make_op("msg-2");

@@ -17,5 +17,9 @@
     "**/target/**",
     "ruvector/**",
     ".claude/worktrees/**",
+    // Untracked personal working note (starts with a blockquote, so MD041 can't
+    // pass without altering its content). CI never sees it; without this ignore,
+    // `just lint` is red locally and green in CI for the same commit.
+    "docs/Connect Multiple Gmails*",
   ],
 }
