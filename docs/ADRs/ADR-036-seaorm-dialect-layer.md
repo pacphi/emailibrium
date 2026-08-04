@@ -44,12 +44,17 @@ Adopt **SeaORM 2.0** as the dialect layer. Concretely:
    call sites become read-modify-write inside a transaction (spike-verified).
    **Known tradeoff:** the single atomic UPDATE those functions rode in had no
    lost-update window; the read-modify-write does (plain SELECT, no row lock,
-   READ COMMITTED on PostgreSQL). It is sound under the codebase's actual write
-   topology — each `(plan_id, seq)` row has exactly one writer (one apply worker
-   per account; a row's account owns its seq) — and that invariant is documented
-   at the ported call sites. Any future call site with concurrent same-row
-   writers must take a row lock first (`lock_exclusive()`, i.e. `SELECT … FOR
-UPDATE` on PostgreSQL; SQLite serializes writers anyway).
+   READ COMMITTED on PostgreSQL). The _intended_ write topology gives each
+   `(plan_id, seq)` row exactly one writer (one apply worker per account; a
+   row's account owns its seq), but that topology is not machine-enforced:
+   `begin_apply`'s status gate checks the caller's loaded snapshot, so
+   concurrent begin_apply calls for one plan can spawn duplicate workers — a
+   pre-existing TOCTOU (parking-lot `pl-concurrent-apply-guard`) whose primary
+   damage (duplicate mailbox side effects) predates this ADR; under it, the
+   RMW can additionally lose one writer's status update. The accurate
+   documentation lives at the ported call sites. Any call site with deliberate
+   concurrent same-row writers must take a row lock first (`lock_exclusive()`,
+   i.e. `SELECT … FOR UPDATE` on PostgreSQL; SQLite serializes writers anyway).
 5. **A narrow raw-SQL escape hatch remains**, via
    `Statement::from_sql_and_values(conn.get_database_backend(), ...)`, for the
    irreducible cases only: aggregate casts (`AVG(...)::float8`, §2.7) and the

@@ -438,13 +438,19 @@ impl CleanupPlanRepository for SeaOrmCleanupPlanRepo {
         // backends' SQL JSON-mutation functions with per-backend SQL text; now
         // a read-modify-write in one transaction, one code path (ADR-036 §2.4).
         //
-        // CONCURRENCY INVARIANT (ADR-036 §2.4): unlike the single UPDATE it
+        // CONCURRENCY NOTE (ADR-036 §2.4): unlike the single UPDATE it
         // replaced, this read-modify-write has a lost-update window between the
-        // SELECT and the UPDATE. It is safe because each (plan_id, seq) row has
-        // exactly ONE writer — the apply orchestrator spawns one worker per
-        // account and a row's account owns its seq (see orchestrator/apply.rs).
-        // A future call site with concurrent same-row writers must add a row
-        // lock (`lock_exclusive()` — SELECT … FOR UPDATE on PostgreSQL) first.
+        // SELECT and the UPDATE. The INTENDED write topology gives each
+        // (plan_id, seq) row one writer — the apply orchestrator spawns one
+        // worker per account and a row's account owns its seq — but that
+        // topology is not machine-enforced today: begin_apply's status gate
+        // checks the caller's loaded snapshot, so concurrent begin_apply calls
+        // for the same plan can spawn duplicate workers (pre-existing TOCTOU,
+        // recorded as parking-lot `pl-concurrent-apply-guard`; in that already-
+        // broken scenario this RMW can additionally lose one writer's status
+        // update). Any call site with deliberate concurrent same-row writers
+        // must add a row lock first (`lock_exclusive()` — SELECT … FOR UPDATE
+        // on PostgreSQL).
         let txn = self.conn.begin().await?;
         let Some(row) = ops::Entity::find_by_id((id.as_bytes().to_vec(), seq))
             .one(&txn)
@@ -472,8 +478,8 @@ impl CleanupPlanRepository for SeaOrmCleanupPlanRepo {
         let Ok(seq) = i32::try_from(seq) else {
             return Ok(());
         };
-        // Same single-writer-per-row concurrency invariant as
-        // update_operation_status above (ADR-036 §2.4).
+        // Same concurrency note as update_operation_status above (ADR-036
+        // §2.4): intended single-writer-per-row topology, not machine-enforced.
         let txn = self.conn.begin().await?;
         let Some(row) = ops::Entity::find_by_id((id.as_bytes().to_vec(), seq))
             .one(&txn)
