@@ -23,6 +23,21 @@
 # normalization, JSON-array→join-table, sea-orm-migration for future migrations) is queued
 # separately as .autopilot/queued/db-schema-modernization.pipeline.yml — separable,
 # data-migration-sensitive, not required for this pipeline's goal.
+#
+# RE-PLAN 3 (2026-08-03, post-phase-2, user-directed after the phase-2 qe-court): the court's
+# discovered work is folded in rather than left to rot in the parking-lot. Phase 3 gains
+# explicit sweep/TZ/test-pattern requirements (pl-partial-pool-conversions,
+# pl-timestamp-write-tz); phase 4 gains the EMAILIBRIUM_TEST_PG_URL CI export
+# (pl-phase4-test-pg-env); NEW phase 7 (apply-lifecycle concurrency: begin_apply CAS +
+# terminal-persist handling; from pl-concurrent-apply-guard + part of
+# pl-legacy-enum-file-classes) and NEW phase 8 (cleanup-domain latent-bug fixes; from
+# pl-sample-ids-unwritten, pl-action-filter-json, pl-applied-at-payload-unsynced,
+# pl-pred-status-case, pl-load-1000-cap) are appended with depends_on [3] — deliberately AFTER
+# the port so phase 3 stays behavior-preserving and each fix is reviewed as a behavior change.
+# pl-plan-id-only-authz is deliberately NOT folded in: user-scoping the repository trait is a
+# design decision that belongs to the ADR-031 multi-tenancy track (record stays open).
+# Appended ids (7, 8) avoid renumbering — the ready-set is dependency-aware, so id order
+# doesn't constrain execution order.
 
 feature_id: "postgres-support"
 goal: "Make PostgreSQL a real, working, CI-verified second database backend — not just a docker-compose service and an aspirational doc claim."
@@ -96,7 +111,9 @@ requeue_budget: 2
 # its own header comment), and 6 (adopts a new compiled Postgres extension (ruvector-postgres)
 # plus hand-written term/document-frequency maintenance queries feeding a SQL scoring
 # function — new attack surface + new place to get query construction wrong, per ADR-034).
-risk_phases: [2, 3, 4, 6]
+# RE-PLAN 3: 7 added (concurrency-correctness change in the apply path — the exact class the
+# phase-2 court flagged as needing adversarial review).
+risk_phases: [2, 3, 4, 6, 7]
 
 court: auto
 
@@ -193,7 +210,8 @@ phases:
     goal: "Every remaining backend call site talks to the database through SeaORM's single code path — the hand-rolled dispatch (per-backend match arms, Database::adapt(), audited_sql() wrapping, the pool() bridge) is deleted, not merely bypassed."
     track: "database"
     deliverables:
-      - "All remaining files using SqlitePool, .pool(), Database::adapt(), or per-backend match dispatch ported to SeaORM entities/queries (entities added per table as each file ports), including the 13 files hand-converted before RE-PLAN 2 (their width/temporal bug fixes carry into entity definitions)."
+      - "All remaining files using SqlitePool, .pool(), Database::adapt(), or per-backend match dispatch ported to SeaORM entities/queries (entities added per table as each file ports), including the 13 files hand-converted before RE-PLAN 2 (their width/temporal bug fixes carry into entity definitions). The sweep is grep-driven, never commit-message-driven: the wip commits claimed files converted that still carry raw .pool() sites (api/rules.rs ~5 — incl. a to_rfc3339 String bound into TIMESTAMPTZ at run_rule — and api/ingestion.rs ~13; see pl-partial-pool-conversions)."
+      - "Write-side timestamp handling matches the hardened read side at each entity port: files reading PostgreSQL TIMESTAMP (no tz) columns as NaiveDateTime + and_utc() (vectors/audit.rs, vectors/consent.rs) get NaiveDateTime entity fields / naive_utc() binds on writes, so a non-UTC server session can no longer shift stored timestamps — closes pl-timestamp-write-tz."
       - "backend/src/db/mod.rs shrunk to: URL-scheme connect (ADR-033), run_migrations, the sea_orm() accessor, and nothing else — adapt(), audited_sql(), sqlite_placeholders_to_postgres(), and pool() deleted with their unit tests."
       - "Raw-SQL escape hatches (ADR-036 policy) only where ADR-035's catalog proves them irreducible (e.g. AVG casts), each carrying a comment citing the catalog section."
     definition_of_done:
@@ -204,7 +222,7 @@ phases:
       - "grep:absent: Database::adapt|audited_sql|sqlite_placeholders_to_postgres in backend/src"
       - "grep:absent: \\.pool\\(\\) in backend/src"
       - "prose: at least the repository-layer ports are verified against a live postgres:16-alpine container (documented reproduction command in the PR)"
-    conventions: "File-by-file, mimicking phase 2's exemplar ports exactly. Repository/service public signatures unchanged. Any file whose queries are genuinely irreducible per-backend gets the escape hatch, never a revived match-dispatch."
+    conventions: "File-by-file, mimicking phase 2's exemplar ports exactly — including its two-owner scoping test pattern for every ported repository file (the phase-2 mutation court proved owner-scoping is otherwise unasserted: dropped user_id/plan_id filters survived the old suite). Repository/service public signatures unchanged. Any file whose queries are genuinely irreducible per-backend gets the escape hatch, never a revived match-dispatch. Behavior is PRESERVED bug-for-bug: unchecked as-i32 narrowing disappears naturally via entity types, but the dequeue races (email/offline_queue.rs, content/jobs.rs) and similar behavioral gaps in pl-legacy-enum-file-classes are ported as-is and left recorded — phases 7/8 and the parking-lot own behavior changes."
     depends_on: [2]
     touches: ["backend/src/**/*.rs"]
     adrs:
@@ -220,7 +238,7 @@ phases:
     track: "ci"
     deliverables:
       - "backend/entrypoint.sh (or the compose secret name) fixed so the postgres:// URL smoke.yml already writes actually reaches EMAILIBRIUM_DATABASE_URL."
-      - "A new job in .github/workflows/ci.yml running the backend test suite against a live postgres:16-alpine service container (mirroring the sqlite-path job)."
+      - "A new job in .github/workflows/ci.yml running the backend test suite against a live postgres:16-alpine service container (mirroring the sqlite-path job). The job exports EMAILIBRIUM_TEST_PG_URL in addition to EMAILIBRIUM_DATABASE_URL — the dedicated live-Postgres round-trip tests from phase 2 (plan_repo/job_repo postgres_* tests) skip-and-pass when that variable is unset, so without it the job would run against Postgres while silently skipping the strongest Postgres assertions (pl-phase4-test-pg-env)."
       - "smoke.yml updated/verified to assert it is genuinely exercising Postgres post-fix (e.g. a diagnostic log line or health-endpoint field naming the active backend)."
       - 'docker-compose.yml''s `postgres` service gated behind a compose profile (`profiles: ["postgres"]`), mirroring the existing `qdrant` service''s opt-in pattern (same file, ~line 204) — so `docker compose up` (no profile) is a valid, fully-working SQLite-only deployment that never has to pull/start/health-check a Postgres container it won''t use. The backend service''s `depends_on: postgres: condition: service_healthy` is adjusted (e.g. moved to a profile-scoped override, or made conditional per whatever mechanism the phase''s own research into current Compose profile+depends_on semantics confirms actually works — verify empirically, do not assume) so backend still starts cleanly with no profile active.'
       - "docker-compose.yml (or docker-compose.dev.yml) documents, at the point of use, the one env var / profile flag that switches a docker deployment from SQLite to Postgres — e.g. a header comment on the `postgres` service and/or the `backend.environment` block, not just prose in a separate doc file."
@@ -233,6 +251,7 @@ phases:
       - "cmd: docker compose config succeeds with no profile flags and does not include the postgres service"
       - "cmd: docker compose --profile postgres config succeeds and includes the postgres service, wired the same way it is today"
       - "prose: justfile's help text (or the docker-up/docker-up-dev recipe comments) documents the SQLite-vs-Postgres toggle for docker deployments"
+      - "grep: EMAILIBRIUM_TEST_PG_URL in .github/workflows/ci.yml (the postgres job's env — see the deliverable's rationale)"
     conventions: "Match ci.yml's existing job structure and docker.yml/smoke.yml's service-container + healthcheck conventions. Match the qdrant service's existing `profiles:` pattern exactly (docker-compose.yml ~line 200-223) rather than inventing a new opt-in mechanism."
     depends_on: [1, 3]
     touches:
@@ -295,4 +314,61 @@ phases:
         "docs/deployment-guide.md",
       ]
     adrs: ["ADR-034-postgresql-fulltext-search-ruvector-bm25", "ADR-001", "ADR-029"]
+    ddd: []
+
+  # RE-PLAN 3: new phase from the phase-2 court's discovered work (pl-concurrent-apply-guard +
+  # the apply.rs terminal-persist item from pl-legacy-enum-file-classes). Deliberately AFTER
+  # phase 3 so the port stays behavior-preserving and this phase's changes are reviewed as
+  # behavior changes. Trait additions are in scope HERE (they were out of scope for the port
+  # phases, not for this one).
+  - id: 7
+    goal: "The apply lifecycle is race-safe: starting an apply is an atomic state transition (concurrent requests cannot spawn duplicate workers), and a job's terminal state always reaches the database or the failure is surfaced — closing the two apply-lifecycle gaps the phase-2 qe-court surfaced."
+    track: "database"
+    deliverables:
+      - "begin_apply performs an atomic Ready/PartiallyApplied -> Applying compare-and-swap BEFORE spawning workers (SeaORM conditional update_many on current status; rows_affected == 1 wins), replacing the advisory snapshot status gate; the losing concurrent request gets a distinct BeginApplyError variant surfaced as a 409-class API error, never a duplicate job. Adding a narrow CleanupPlanRepository::try_transition_status (or equivalent) method is in scope."
+      - "orchestrator/apply.rs no longer discards the terminal job-state persist result: a failed update_state on the Finished/Failed transition is retried once, then surfaced (error log + job left resumable) — never silently dropped after clients were told the job completed."
+      - "Concurrency tests: two racing begin_apply calls for one plan yield exactly one Applying transition, one job row, one worker set; the terminal-persist failure path is exercised with a failing-repository fake."
+      - "plan_repo.rs's CONCURRENCY NOTE and ADR-036 §2.4 updated to state the topology is now machine-enforced at begin_apply; parking-lot records closed with status transitions."
+    definition_of_done:
+      - "cmd: cd backend && cargo build --features vectors passes"
+      - "cmd: cd backend && cargo test passes"
+      - "cmd: cd backend && cargo clippy --all-targets --features vectors -- -D warnings passes"
+      - "prose: a test demonstrates two concurrent begin_apply calls yield exactly one Applying transition and one job (cite the test name)"
+      - "prose: a test exercises the terminal-persist failure path via a failing repository fake (cite the test name)"
+      - "prose: pl-concurrent-apply-guard closed via a status transition in .autopilot/discovered/postgres-support.jsonl"
+    conventions: "SeaORM single-code-path per ADR-036 (conditional update via update_many + rows_affected — never a revived match-dispatch, never a SELECT-then-decide gate). Phase 2's two-owner scoping test pattern. Status vocabulary from cleanup/domain/operation.rs."
+    depends_on: [3]
+    touches:
+      [
+        "backend/src/cleanup/orchestrator/**",
+        "backend/src/cleanup/repository/plan_repo.rs",
+        "backend/src/cleanup/api/apply.rs",
+        "docs/ADRs/ADR-036-seaorm-dialect-layer.md",
+      ]
+    adrs: ["ADR-030-cleanup-dry-run", "ADR-036-seaorm-dialect-layer"]
+    ddd: []
+
+  # RE-PLAN 3: new phase from the phase-2 court's discovered work (five latent cleanup-domain
+  # bugs, each pinned bug-for-bug by phase 2's equivalence tests precisely so THIS phase can
+  # change them deliberately, with review). pl-plan-id-only-authz is deliberately excluded —
+  # user-scoping the trait belongs to the ADR-031 multi-tenancy track.
+  - id: 8
+    goal: "The cleanup domain's court-surfaced latent bugs are fixed as deliberate, individually-tested behavior changes — separated from the behavior-preserving port so each fix is reviewable on its own merits and historical rows still load."
+    track: "database"
+    deliverables:
+      - "sample_operations works end to end: predicate inserts write sample_ids_json from PlannedOperationPredicate.sample_email_ids; the phase-2 pinning test that froze the always-empty result is updated to assert the fixed behavior (pl-sample-ids-unwritten)."
+      - "OpsFilter.action matches reality: either the filter compares against what the action column actually stores (serialized PlanAction), or the column stores the discriminant string its comment always claimed — one of the two, decided, tested, and documented at the call site (pl-action-filter-json)."
+      - "An applied operation reads back with its applied timestamp: update_operation_status syncs the payload's appliedAt alongside status, or list_operations merges the applied_at column — decided, tested, documented (pl-applied-at-payload-unsynced)."
+      - "PredicateStatus payload spelling unified so a partially-applied predicate row no longer vanishes from list_operations (as_str()/serde agree; historical rows with either spelling still deserialize) (pl-pred-status-case)."
+      - "load()'s silent 1000-operation truncation eliminated for the apply path (internal pagination or streaming), so a >1000-op plan applies completely; the clamp stays for API listing (pl-load-1000-cap)."
+    definition_of_done:
+      - "cmd: cd backend && cargo build --features vectors passes"
+      - "cmd: cd backend && cargo test passes"
+      - "cmd: cd backend && cargo clippy --all-targets --features vectors -- -D warnings passes"
+      - "prose: each of the five fixes carries a test that fails on the pre-fix behavior (cite the five test names)"
+      - "prose: the five parking-lot records are closed with status transitions in .autopilot/discovered/postgres-support.jsonl"
+    conventions: "SeaORM single-code-path (ADR-036); phase 2's two-owner scoping test pattern; any serialized-format change states its back-compat story at the call site (historical rows must still load — forgiving deserialization stays)."
+    depends_on: [3]
+    touches: ["backend/src/cleanup/**"]
+    adrs: ["ADR-030-cleanup-dry-run", "ADR-036-seaorm-dialect-layer"]
     ddd: []
