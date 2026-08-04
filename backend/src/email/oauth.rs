@@ -1068,9 +1068,23 @@ mod tests {
         let b = accounts.iter().find(|x| x.id == "acct-b").expect("acct-b");
         assert_eq!(a.archive_strategy, "instant");
         assert_eq!(a.label_prefix, "X/");
+        // The conditionally-set columns from the COALESCE collapse — the two a
+        // partial-update regression would hit first.
+        assert_eq!(a.sync_depth, "90d");
+        assert_eq!(a.sync_frequency, 120);
         // The bystander keeps every default the save wrote.
         assert_eq!(b.archive_strategy, "delayed");
         assert_eq!(b.label_prefix, "EM/");
+        assert_eq!(b.sync_depth, "30d");
+        assert_eq!(b.sync_frequency, 5);
+
+        // sync_state is scoped by account id: each account sees only its own
+        // seeded row, and an unknown id sees none.
+        let sa = mgr.get_sync_state("acct-a").await.unwrap().expect("a state");
+        assert_eq!(sa.account_id, "acct-a");
+        let sb = mgr.get_sync_state("acct-b").await.unwrap().expect("b state");
+        assert_eq!(sb.account_id, "acct-b");
+        assert!(mgr.get_sync_state("acct-zzz").await.unwrap().is_none());
     }
 
     #[tokio::test]
