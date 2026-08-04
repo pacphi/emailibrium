@@ -24,6 +24,34 @@ use serde::{Deserialize, Serialize};
 use tracing::debug;
 
 use crate::vectors::chat::{ChatMessage, ChatResponse, ChatRole, SessionSummary};
+
+/// Upsert one `app_settings` row (single code path for both backends —
+/// ADR-036; replaces the three hand-written `ON CONFLICT(key) DO UPDATE`
+/// strings this file carried).
+async fn upsert_app_setting(
+    conn: &sea_orm::DatabaseConnection,
+    key: &str,
+    value: &str,
+) -> Result<(), sea_orm::DbErr> {
+    use sea_orm::sea_query::OnConflict;
+    use sea_orm::ActiveValue::Set;
+    use sea_orm::EntityTrait;
+
+    use crate::db::entities::app_settings;
+
+    app_settings::Entity::insert(app_settings::ActiveModel {
+        key: Set(key.to_owned()),
+        value: Set(value.to_owned()),
+    })
+    .on_conflict(
+        OnConflict::column(app_settings::Column::Key)
+            .update_column(app_settings::Column::Value)
+            .to_owned(),
+    )
+    .exec_without_returning(conn)
+    .await?;
+    Ok(())
+}
 use crate::vectors::chat_orchestrator::{
     ChatOrchestrator, OrchestrationResult, OrchestratorConfig,
 };
@@ -914,13 +942,7 @@ async fn switch_model(
             .await;
 
         // Persist the selection so it survives server restarts.
-        let _ = sqlx::query(
-            "INSERT INTO app_settings (key, value) VALUES ('builtInLlmModel', ?1) \
-             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-        )
-        .bind(&req.model_id)
-        .execute(state.db.pool())
-        .await;
+        let _ = upsert_app_setting(&state.orm, "builtInLlmModel", &req.model_id).await;
 
         return Ok(Json(SwitchModelResponse {
             model_id: req.model_id,
@@ -946,7 +968,7 @@ async fn switch_model(
     tracing::info!(model_id = %model_id, "Starting background model download");
     let router = state.vector_service.generative_router.clone();
     let prompts_for_spawn = state.yaml_config.prompts.clone();
-    let db_pool = state.db.pool().clone();
+    let conn = state.orm.clone();
     tokio::spawn(async move {
         match BuiltInGenerativeModel::with_params_and_prompts(
             &config,
@@ -958,13 +980,7 @@ async fn switch_model(
                     .register(ProviderType::BuiltIn, std::sync::Arc::new(model), 1)
                     .await;
                 // Persist the selection so it survives server restarts.
-                let _ = sqlx::query(
-                    "INSERT INTO app_settings (key, value) VALUES ('builtInLlmModel', ?1) \
-                     ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-                )
-                .bind(&model_id)
-                .execute(&db_pool)
-                .await;
+                let _ = upsert_app_setting(&conn, "builtInLlmModel", &model_id).await;
                 tracing::info!(model_id = %model_id, "Model downloaded and activated");
             }
             Err(e) => {
@@ -1065,33 +1081,52 @@ async fn trigger_reembed(
         }
     }
 
-    let sql = match mode.as_str() {
-        "failed" => {
-            "UPDATE emails SET embedding_status = 'pending' WHERE embedding_status = 'failed'"
-        }
-        "stale" => {
-            "UPDATE emails SET embedding_status = 'pending' WHERE embedding_status = 'stale'"
-        }
-        _ => "UPDATE emails SET embedding_status = 'pending', vector_id = NULL",
-    };
+    let reset = {
+        use sea_orm::sea_query::Expr;
+        use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 
-    let reset = sqlx::query(sql)
-        .execute(state.db.pool())
-        .await
-        .map(|r| r.rows_affected())
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        use crate::db::entities::emails;
+
+        let mut update = emails::Entity::update_many()
+            .col_expr(emails::Column::EmbeddingStatus, Expr::value("pending"));
+        match mode.as_str() {
+            "failed" => update = update.filter(emails::Column::EmbeddingStatus.eq("failed")),
+            "stale" => update = update.filter(emails::Column::EmbeddingStatus.eq("stale")),
+            _ => {
+                update = update.col_expr(
+                    emails::Column::VectorId,
+                    Expr::value(Option::<String>::None),
+                )
+            }
+        }
+        update
+            .exec(&state.orm)
+            .await
+            .map(|r| r.rows_affected)
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    };
 
     tracing::info!(emails_reset = reset, mode = %mode, "Re-embed triggered");
 
     // Auto-trigger ingestion for the first account with pending emails.
     let mut ingestion_triggered = false;
     if reset > 0 {
-        let account_row: Option<(String,)> = sqlx::query_as(
-            "SELECT DISTINCT account_id FROM emails WHERE embedding_status = 'pending' LIMIT 1",
-        )
-        .fetch_optional(state.db.pool())
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        let account_row: Option<(String,)> = {
+            use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QuerySelect};
+
+            use crate::db::entities::emails;
+
+            emails::Entity::find()
+                .select_only()
+                .column(emails::Column::AccountId)
+                .distinct()
+                .filter(emails::Column::EmbeddingStatus.eq("pending"))
+                .limit(1)
+                .into_tuple()
+                .one(&state.orm)
+                .await
+                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        };
 
         if let Some((account_id,)) = account_row {
             match state
@@ -1299,15 +1334,25 @@ async fn config_app(State(state): State<AppState>) -> Json<crate::vectors::yaml_
 async fn get_settings(
     State(state): State<AppState>,
 ) -> Result<Json<std::collections::HashMap<String, String>>, (StatusCode, String)> {
-    let rows: Vec<(String, String)> = sqlx::query_as("SELECT key, value FROM app_settings")
-        .fetch_all(state.db.pool())
-        .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to read settings: {e}"),
-            )
-        })?;
+    let rows: Vec<(String, String)> = {
+        use sea_orm::{EntityTrait, QuerySelect};
+
+        use crate::db::entities::app_settings;
+
+        app_settings::Entity::find()
+            .select_only()
+            .column(app_settings::Column::Key)
+            .column(app_settings::Column::Value)
+            .into_tuple()
+            .all(&state.orm)
+            .await
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Failed to read settings: {e}"),
+                )
+            })?
+    };
 
     let settings: std::collections::HashMap<String, String> = rows.into_iter().collect();
     Ok(Json(settings))
@@ -1333,20 +1378,14 @@ async fn save_settings(
             other => other.to_string(),
         };
 
-        sqlx::query(
-            "INSERT INTO app_settings (key, value) VALUES (?1, ?2) \
-             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-        )
-        .bind(key)
-        .bind(&val_str)
-        .execute(state.db.pool())
-        .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to save setting '{key}': {e}"),
-            )
-        })?;
+        upsert_app_setting(&state.orm, key, &val_str)
+            .await
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Failed to save setting '{key}': {e}"),
+                )
+            })?;
         saved += 1;
     }
 

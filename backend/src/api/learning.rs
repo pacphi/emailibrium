@@ -87,14 +87,21 @@ async fn submit_feedback(
     // If this is a reclassification, persist the new category to the DB immediately
     // so the user sees the change on refetch.
     if let FeedbackActionRequest::Reclassify { ref to, .. } = req.action {
-        sqlx::query(
-            "UPDATE emails SET category = ?, category_method = 'user_reclassify' WHERE id = ?",
-        )
-        .bind(to.to_string())
-        .bind(&req.email_id)
-        .execute(state.db.pool())
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        use sea_orm::sea_query::Expr;
+        use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+
+        use crate::db::entities::emails;
+
+        emails::Entity::update_many()
+            .col_expr(emails::Column::Category, Expr::value(to.to_string()))
+            .col_expr(
+                emails::Column::CategoryMethod,
+                Expr::value("user_reclassify"),
+            )
+            .filter(emails::Column::Id.eq(req.email_id.as_str()))
+            .exec(&state.orm)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     }
 
     let action = match req.action {
