@@ -3,7 +3,7 @@
 - **Status:** Accepted
 - **Date:** 2026-08-03
 - **Deciders:** Chris Phillipson
-- **Supersedes:** ADR-035's *implementation strategy* (runtime placeholder translation + per-backend match dispatch). ADR-035 **remains authoritative as the dialect-divergence catalog** — its §2.3–§2.7 findings are the requirements this ADR's solution was validated against.
+- **Supersedes:** ADR-035's _implementation strategy_ (runtime placeholder translation + per-backend match dispatch). ADR-035 **remains authoritative as the dialect-divergence catalog** — its §2.3–§2.7 findings are the requirements this ADR's solution was validated against.
 - **Related:** ADR-033 (dual-backend decision, URL-scheme dispatch — unchanged), ADR-034 (FTS via ruvector-postgres BM25 — unchanged, now implemented through this ADR's escape-hatch pattern).
 
 ## 1. Context
@@ -13,7 +13,7 @@ Phase 2 of the postgres-support pipeline set out to migrate ~22 call sites onto 
 the empirical picture had changed materially:
 
 - The true surface was **51 files**, not 22.
-- Four *additional* divergence classes were discovered mid-flight, each producing
+- Four _additional_ divergence classes were discovered mid-flight, each producing
   real bugs or silent behavior drift caught only by live-Postgres testing:
   INT4-vs-i64 decode widths (§ADR-035), `datetime('now')` writes into TEXT-typed
   timestamp columns (§2.5), plain-`TIMESTAMP` columns requiring `NaiveDateTime`
@@ -50,7 +50,7 @@ Adopt **SeaORM 2.0** as the dialect layer. Concretely:
 
 ### Out of scope here, queued as a follow-up pipeline (`db-schema-modernization`)
 
-Schema debt that *causes* dialect divergence (TEXT-typed timestamp columns,
+Schema debt that _causes_ dialect divergence (TEXT-typed timestamp columns,
 JSON-arrays-as-TEXT, status embedded in `payload_json`) and adoption of
 `sea-orm-migration` for future migrations. SeaORM maps today's schema as-is;
 normalizing it is separable, data-migration-sensitive work.
@@ -64,19 +64,19 @@ the identical scenario against both an on-disk SQLite database and a live
 `Database::connect()` created** — proving legacy sqlx code and SeaORM can share one
 pool during incremental adoption. All 11 checks passed on both backends:
 
-| # | Check | Result |
-|---|-------|--------|
-| 1 | Single `sqlx v0.9.0` in the dependency tree (sea-orm 2.0.1 unifies with ours) | PASS |
-| 2 | Wrap existing sqlx pools (`SqlxSqliteConnector`/`SqlxPostgresConnector::from_sqlx_*_pool`) | PASS |
-| 3 | `Vec<u8>` (16-byte UUID) primary keys, including composite `(Vec<u8>, i32)` | PASS |
-| 4 | One-code-path `ON CONFLICT` upsert | PASS |
-| 5 | One-code-path transactions | PASS |
-| 6 | Optional/dynamic filters + seq-cursor pagination | PASS |
-| 7 | `MAX(seq)` aggregate decoding to `i32` | PASS |
-| 8 | `json_set`/`jsonb_set` divergence eliminated via read-modify-write | PASS |
-| 9 | `update_many` + `rows_affected` | PASS |
-| 10 | Per-backend raw-SQL escape hatch (`AVG` cast; the FTS pattern) | PASS |
-| 11 | Repository fns generic over `ConnectionTrait` (work with connection *or* transaction) | PASS |
+| #   | Check                                                                                      | Result |
+| --- | ------------------------------------------------------------------------------------------ | ------ |
+| 1   | Single `sqlx v0.9.0` in the dependency tree (sea-orm 2.0.1 unifies with ours)              | PASS   |
+| 2   | Wrap existing sqlx pools (`SqlxSqliteConnector`/`SqlxPostgresConnector::from_sqlx_*_pool`) | PASS   |
+| 3   | `Vec<u8>` (16-byte UUID) primary keys, including composite `(Vec<u8>, i32)`                | PASS   |
+| 4   | One-code-path `ON CONFLICT` upsert                                                         | PASS   |
+| 5   | One-code-path transactions                                                                 | PASS   |
+| 6   | Optional/dynamic filters + seq-cursor pagination                                           | PASS   |
+| 7   | `MAX(seq)` aggregate decoding to `i32`                                                     | PASS   |
+| 8   | `json_set`/`jsonb_set` divergence eliminated via read-modify-write                         | PASS   |
+| 9   | `update_many` + `rows_affected`                                                            | PASS   |
+| 10  | Per-backend raw-SQL escape hatch (`AVG` cast; the FTS pattern)                             | PASS   |
+| 11  | Repository fns generic over `ConnectionTrait` (work with connection _or_ transaction)      | PASS   |
 
 Total integration friction encountered: two one-line API renames
 (`query_one(&stmt)` → `query_one_raw(stmt)` for raw statements in 2.0).
@@ -88,7 +88,7 @@ Total integration friction encountered: two one-line API renames
   later ORM adoption rewrites them all a second time. Adopting now converts the 15
   finished files once more but the 35 remaining files only once.
 - **sea-query alone (builder, no ORM)** — rejected as insufficient: it solves the
-  SQL-*text* half (placeholders, upserts, DDL) but not the decode half — and the
+  SQL-_text_ half (placeholders, upserts, DDL) but not the decode half — and the
   decode half produced every real bug found in phase 2.
 - **`sqlx::Any`** — already rejected in ADR-035 §2.2; the typed-decode erasure
   makes the decode problem worse.
@@ -101,6 +101,7 @@ Total integration friction encountered: two one-line API renames
 ## 5. Consequences
 
 **Positive**
+
 - The per-call-site custom dialect code (match-arms, `adapt()`, `audited_sql()`
   wrapping, hand-written per-backend SQL pairs) is deleted rather than completed.
   `Database` shrinks to: URL dispatch, migrations, and one composition-root wrap.
@@ -111,6 +112,7 @@ Total integration friction encountered: two one-line API renames
 - The FTS phase (ADR-034) gets a clean, already-proven pattern (spike check #10).
 
 **Negative / costs**
+
 - The 15 hand-converted files are rewritten once more (their bug fixes — correct
   widths, correct timestamp semantics — carry directly into entity definitions;
   ADR-035's catalog was effectively the requirements doc for this adoption).

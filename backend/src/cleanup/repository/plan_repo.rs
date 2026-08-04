@@ -286,8 +286,8 @@ impl CleanupPlanRepository for SeaOrmCleanupPlanRepo {
         limit: u32,
     ) -> Result<Vec<CleanupPlanSummary>, RepoError> {
         let limit = u64::from(limit.clamp(1, 100));
-        let mut query = plans::Entity::find()
-            .filter(plans::Column::UserId.eq(user_id.as_bytes().to_vec()));
+        let mut query =
+            plans::Entity::find().filter(plans::Column::UserId.eq(user_id.as_bytes().to_vec()));
         if let Some(s) = status {
             query = query.filter(plans::Column::Status.eq(s.as_str()));
         }
@@ -953,8 +953,10 @@ mod tests {
         let repo = SeaOrmCleanupPlanRepo::new(fresh_conn().await);
         let user = "user-sample-ops";
         let mut plan = sample_plan(user);
-        plan.operations
-            .push(sample_predicate(2, vec!["e1".into(), "e2".into(), "e3".into()]));
+        plan.operations.push(sample_predicate(
+            2,
+            vec!["e1".into(), "e2".into(), "e3".into()],
+        ));
         let plan_id = plan.id;
         repo.save(&plan).await.expect("save");
 
@@ -1138,7 +1140,10 @@ mod tests {
             )
             .await
             .expect("list");
-        assert_eq!(by_account.0.iter().map(|o| o.seq()).collect::<Vec<_>>(), [2]);
+        assert_eq!(
+            by_account.0.iter().map(|o| o.seq()).collect::<Vec<_>>(),
+            [2]
+        );
 
         let by_risk = repo
             .list_operations(

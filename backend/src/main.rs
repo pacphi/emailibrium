@@ -493,9 +493,7 @@ async fn main() -> anyhow::Result<()> {
         &vector_service.config,
     );
 
-    let cleanup_plan_repo = Arc::new(cleanup::repository::SeaOrmCleanupPlanRepo::new(
-        orm.clone(),
-    ));
+    let cleanup_plan_repo = Arc::new(cleanup::repository::SeaOrmCleanupPlanRepo::new(orm.clone()));
     // Apply orchestrator (Phase C). Email providers map starts empty;
     // production wiring will populate per-account `EmailProvider` instances
     // after OAuth resolution. The unsubscribe service is shared.

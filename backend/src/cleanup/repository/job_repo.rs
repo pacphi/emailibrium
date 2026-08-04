@@ -129,8 +129,8 @@ fn map_job_model(row: jobs::Model) -> Result<CleanupApplyJob, RepoError> {
         _ => RiskMax::Low,
     };
 
-    let counts: JobCounts = serde_json::from_str(&row.counts_json)
-        .map_err(|e| RepoError::Internal(e.to_string()))?;
+    let counts: JobCounts =
+        serde_json::from_str(&row.counts_json).map_err(|e| RepoError::Internal(e.to_string()))?;
 
     Ok(CleanupApplyJob {
         job_id,

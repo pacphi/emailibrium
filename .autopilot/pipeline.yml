@@ -74,14 +74,14 @@ spec: |
   changes remain a non-goal here (queued: db-schema-modernization).
 
 references:
-  prd:     ""
-  plan:    ""
+  prd: ""
+  plan: ""
   adr_dir: "docs/ADRs"
   ddd_dir: "docs/DDDs"
-  extra:   ["docker-compose.yml", ".github/workflows/smoke.yml"]
+  extra: ["docker-compose.yml", ".github/workflows/smoke.yml"]
 
 trunk: main
-base:  develop
+base: develop
 
 autonomy: pr_ci
 
@@ -118,7 +118,13 @@ phases:
       - "prose: docs/ADRs/ADR-033-postgresql-backend-support.md exists and documents the URL-scheme dispatch decision, and explicitly states that it is the ONE mechanism used to select a backend across every deploy/run mode (native, docker dev, docker prod) — later phases must not invent a second, mode-specific selection mechanism"
     conventions: "Match backend/src/db/mod.rs's existing doc-comment style (see the audited_sql() block); keep the abstraction minimal — this phase is plumbing, not the migration of the 22 call sites (that's phase 2). Match config.yaml's existing inline-comment style for enumerating valid values (see the `store.backend` line)."
     depends_on: []
-    touches: ["backend/Cargo.toml", "backend/src/db/mod.rs", "backend/config.yaml", "docs/ADRs/ADR-033-postgresql-backend-support.md"]
+    touches:
+      [
+        "backend/Cargo.toml",
+        "backend/src/db/mod.rs",
+        "backend/config.yaml",
+        "docs/ADRs/ADR-033-postgresql-backend-support.md",
+      ]
     adrs: []
     ddd: []
 
@@ -166,8 +172,21 @@ phases:
       - "prose: ADR-036 exists, records the 11-point spike table, and names the raw-escape-hatch policy phase 6 will use"
     conventions: "Entity modules follow the spike's structure (partial models over existing tables; empty Relation enums until needed). Repository trait signatures do NOT change — only bodies. Keep the legacy enum working untouched for every not-yet-ported file."
     depends_on: [0, 1]
-    touches: ["backend/Cargo.toml", "backend/src/db/**", "backend/src/cleanup/repository/**", "backend/src/main.rs", "docs/ADRs/ADR-036-seaorm-dialect-layer.md", "docs/ADRs/ADR-035-postgresql-call-site-migration-placeholder-translation.md"]
-    adrs: ["ADR-033-postgresql-backend-support", "ADR-035-postgresql-call-site-migration-placeholder-translation", "ADR-036-seaorm-dialect-layer"]
+    touches:
+      [
+        "backend/Cargo.toml",
+        "backend/src/db/**",
+        "backend/src/cleanup/repository/**",
+        "backend/src/main.rs",
+        "docs/ADRs/ADR-036-seaorm-dialect-layer.md",
+        "docs/ADRs/ADR-035-postgresql-call-site-migration-placeholder-translation.md",
+      ]
+    adrs:
+      [
+        "ADR-033-postgresql-backend-support",
+        "ADR-035-postgresql-call-site-migration-placeholder-translation",
+        "ADR-036-seaorm-dialect-layer",
+      ]
     ddd: []
 
   - id: 3
@@ -188,7 +207,11 @@ phases:
     conventions: "File-by-file, mimicking phase 2's exemplar ports exactly. Repository/service public signatures unchanged. Any file whose queries are genuinely irreducible per-backend gets the escape hatch, never a revived match-dispatch."
     depends_on: [2]
     touches: ["backend/src/**/*.rs"]
-    adrs: ["ADR-035-postgresql-call-site-migration-placeholder-translation", "ADR-036-seaorm-dialect-layer"]
+    adrs:
+      [
+        "ADR-035-postgresql-call-site-migration-placeholder-translation",
+        "ADR-036-seaorm-dialect-layer",
+      ]
     ddd: []
 
   # RE-PLAN 2: renumbered 3 -> 4 (body unchanged).
@@ -199,7 +222,7 @@ phases:
       - "backend/entrypoint.sh (or the compose secret name) fixed so the postgres:// URL smoke.yml already writes actually reaches EMAILIBRIUM_DATABASE_URL."
       - "A new job in .github/workflows/ci.yml running the backend test suite against a live postgres:16-alpine service container (mirroring the sqlite-path job)."
       - "smoke.yml updated/verified to assert it is genuinely exercising Postgres post-fix (e.g. a diagnostic log line or health-endpoint field naming the active backend)."
-      - "docker-compose.yml's `postgres` service gated behind a compose profile (`profiles: [\"postgres\"]`), mirroring the existing `qdrant` service's opt-in pattern (same file, ~line 204) — so `docker compose up` (no profile) is a valid, fully-working SQLite-only deployment that never has to pull/start/health-check a Postgres container it won't use. The backend service's `depends_on: postgres: condition: service_healthy` is adjusted (e.g. moved to a profile-scoped override, or made conditional per whatever mechanism the phase's own research into current Compose profile+depends_on semantics confirms actually works — verify empirically, do not assume) so backend still starts cleanly with no profile active."
+      - 'docker-compose.yml''s `postgres` service gated behind a compose profile (`profiles: ["postgres"]`), mirroring the existing `qdrant` service''s opt-in pattern (same file, ~line 204) — so `docker compose up` (no profile) is a valid, fully-working SQLite-only deployment that never has to pull/start/health-check a Postgres container it won''t use. The backend service''s `depends_on: postgres: condition: service_healthy` is adjusted (e.g. moved to a profile-scoped override, or made conditional per whatever mechanism the phase''s own research into current Compose profile+depends_on semantics confirms actually works — verify empirically, do not assume) so backend still starts cleanly with no profile active.'
       - "docker-compose.yml (or docker-compose.dev.yml) documents, at the point of use, the one env var / profile flag that switches a docker deployment from SQLite to Postgres — e.g. a header comment on the `postgres` service and/or the `backend.environment` block, not just prose in a separate doc file."
       - "justfile's `docker-up` / `docker-up-dev` recipe help text (the `help` recipe's printed Quick Start / Deploy sections) names the exact toggle for running each mode against Postgres instead of the SQLite default, so the answer is visible from `just` / `just --list` itself."
     definition_of_done:
@@ -212,7 +235,15 @@ phases:
       - "prose: justfile's help text (or the docker-up/docker-up-dev recipe comments) documents the SQLite-vs-Postgres toggle for docker deployments"
     conventions: "Match ci.yml's existing job structure and docker.yml/smoke.yml's service-container + healthcheck conventions. Match the qdrant service's existing `profiles:` pattern exactly (docker-compose.yml ~line 200-223) rather than inventing a new opt-in mechanism."
     depends_on: [1, 3]
-    touches: [".github/workflows/ci.yml", ".github/workflows/smoke.yml", "backend/entrypoint.sh", "docker-compose.yml", "docker-compose.dev.yml", "justfile"]
+    touches:
+      [
+        ".github/workflows/ci.yml",
+        ".github/workflows/smoke.yml",
+        "backend/entrypoint.sh",
+        "docker-compose.yml",
+        "docker-compose.dev.yml",
+        "justfile",
+      ]
     adrs: ["ADR-033-postgresql-backend-support"]
     ddd: []
 
@@ -255,6 +286,13 @@ phases:
       - "prose: the term/document-frequency maintenance path is documented at its call site, citing ADR-034 and noting where its BM25 weighting diverges (if at all) from the SQLite FTS5 weight vector"
     conventions: "Match ADR-034's decision exactly — do not substitute tsvector or a different extension without a fresh ADR. Match the existing hybrid-search code's structure in the vectors/ module (ADR-001) rather than building a parallel search path. The per-backend keyword-scoring queries use ADR-036's raw-SQL escape-hatch pattern (Statement::from_sql_and_values on conn.get_database_backend()), each citing ADR-035's catalog — never a revived match-dispatch."
     depends_on: [1, 4]
-    touches: ["docker-compose.yml", "docker-compose.dev.yml", "backend/migrations/postgres/**", "backend/src/vectors/**", "docs/deployment-guide.md"]
+    touches:
+      [
+        "docker-compose.yml",
+        "docker-compose.dev.yml",
+        "backend/migrations/postgres/**",
+        "backend/src/vectors/**",
+        "docs/deployment-guide.md",
+      ]
     adrs: ["ADR-034-postgresql-fulltext-search-ruvector-bm25", "ADR-001", "ADR-029"]
     ddd: []

@@ -21,7 +21,7 @@ Emailibrium needs a real, working, CI-verified second database backend (PostgreS
 `backend/config.yaml`'s single `database_url` key (overridable via `EMAILIBRIUM_DATABASE_URL` per the existing `Env::prefixed("EMAILIBRIUM_")` convention) is the one place this is configured, in every mode:
 
 ```yaml
-database_url: "sqlite:emailibrium.db?mode=rwc" # sqlite:<path>?mode=rwc | postgres://user:pass@host:5432/db
+database_url: 'sqlite:emailibrium.db?mode=rwc' # sqlite:<path>?mode=rwc | postgres://user:pass@host:5432/db
 ```
 
 ### 2.1 `Database` becomes an enum, not a bigger struct
@@ -41,7 +41,7 @@ pub enum Database {
 
 The crate has zero uses of sqlx's compile-time-checked macros today (`grep -rn 'sqlx::query!\|sqlx::query_as!' backend/src` = 0) — every query is the runtime `query`/`query_as` + `.bind(...)` form. This ADR keeps it that way rather than adopting the checked macros now:
 
-- The checked macros need a `DATABASE_URL` pointed at a live database *at compile time*, per-driver — introducing them now would mean two separate compile-time database requirements (SQLite and PostgreSQL) for one crate, which sqlx does not support cleanly for a dual-backend build.
+- The checked macros need a `DATABASE_URL` pointed at a live database _at compile time_, per-driver — introducing them now would mean two separate compile-time database requirements (SQLite and PostgreSQL) for one crate, which sqlx does not support cleanly for a dual-backend build.
 - Runtime queries are what let phase 2 make a single call site portable across both backends (branching on `&self` where SQL dialect differs), which compile-time-checked queries — tied to one schema, one driver — would make significantly harder.
 
 ### 2.3 What stays SQLite-only for now (and why that's fine)
@@ -54,7 +54,7 @@ This phase is plumbing, not the full migration. Two things are true simultaneous
 
 ### 2.4 Convenience across every deploy/run mode (added mid-plan, see §Context)
 
-Because URL-scheme dispatch is the *only* selection mechanism, "which mode am I in" and "which database am I using" are orthogonal by construction — the same `EMAILIBRIUM_DATABASE_URL` value means the same thing whether it's set in a shell before `cargo run` (native), baked into `config/environments/config.*.yaml` (docker), or delivered via the `database_url` Docker secret. What phase 3 adds is *operational* convenience on top of this: gating `docker-compose.yml`'s `postgres` service behind a compose profile (mirroring the existing `qdrant` service's opt-in pattern) so a SQLite-only docker deployment isn't forced to run a Postgres container it never talks to, and surfacing the toggle in `justfile`'s help text and `docs/deployment-guide.md` per mode. None of that changes this ADR's core mechanism — it just makes the mechanism visible and low-friction wherever the app runs.
+Because URL-scheme dispatch is the _only_ selection mechanism, "which mode am I in" and "which database am I using" are orthogonal by construction — the same `EMAILIBRIUM_DATABASE_URL` value means the same thing whether it's set in a shell before `cargo run` (native), baked into `config/environments/config.*.yaml` (docker), or delivered via the `database_url` Docker secret. What phase 3 adds is _operational_ convenience on top of this: gating `docker-compose.yml`'s `postgres` service behind a compose profile (mirroring the existing `qdrant` service's opt-in pattern) so a SQLite-only docker deployment isn't forced to run a Postgres container it never talks to, and surfacing the toggle in `justfile`'s help text and `docs/deployment-guide.md` per mode. None of that changes this ADR's core mechanism — it just makes the mechanism visible and low-friction wherever the app runs.
 
 ## 3. Consequences
 
@@ -66,7 +66,7 @@ Because URL-scheme dispatch is the *only* selection mechanism, "which mode am I 
 
 **Negative / costs**
 
-- **A `postgres://` URL is not yet usable end-to-end.** Phase 0 alone lets you *connect*; phases 1–3 are required before the app actually works against PostgreSQL. Documented above and in the pipeline's phase dependency graph — not a surprise to whoever runs phase 1 next.
+- **A `postgres://` URL is not yet usable end-to-end.** Phase 0 alone lets you _connect_; phases 1–3 are required before the app actually works against PostgreSQL. Documented above and in the pipeline's phase dependency graph — not a surprise to whoever runs phase 1 next.
 - **~250 mechanical call-site edits landed in this phase** (a field access, `db.pool`, becoming a method call, `db.pool()`) purely to keep the crate compiling against the new enum. These are syntactic only — no call site's behavior changed — but they touch 27 files, which is a wider diff than "phase 0 is plumbing" might suggest at a glance. The alternative (a struct with a public `pool: SqlitePool` field wrapping an internal enum) was considered and rejected: it would either duplicate state (a redundant field alongside the real enum) or require the exact same accessor-based edit anyway, without the type-level safety of an enum making the SQLite-only assumption explicit.
 
 ## 4. Alternatives Considered

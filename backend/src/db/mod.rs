@@ -72,9 +72,7 @@ impl Database {
     /// itself a cheap-clone handle); repositories hold their own clone.
     pub fn sea_orm(&self) -> sea_orm::DatabaseConnection {
         match self {
-            Self::Sqlite(pool) => {
-                sea_orm::SqlxSqliteConnector::from_sqlx_sqlite_pool(pool.clone())
-            }
+            Self::Sqlite(pool) => sea_orm::SqlxSqliteConnector::from_sqlx_sqlite_pool(pool.clone()),
             Self::Postgres(pool) => {
                 sea_orm::SqlxPostgresConnector::from_sqlx_postgres_pool(pool.clone())
             }
