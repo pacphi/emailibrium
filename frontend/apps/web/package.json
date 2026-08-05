@@ -30,7 +30,7 @@
     "ky": "^2.0.2",
     "lucide-react": "^1.22.0",
     "nanoid": "^5.1.16",
-    "node-llama-cpp": "^3.18.1",
+    "node-llama-cpp": "^3.19.1",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "react-hook-form": "^7.78.0",
