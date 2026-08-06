@@ -273,12 +273,25 @@ jobs:
       # pulled), so this assumes no client tooling on the runner.
       - name: The PostgreSQL-only tests really ran
         run: |
-          applied=$(docker run --rm --network host -e PGPASSWORD=emailibrium-ci \
-            postgres:16-alpine psql -h localhost -U emailibrium -d emailibrium_test -tAc \
-            "select count(*) from _sqlx_migrations where success" 2>/dev/null || echo 0)
-          echo "migrations applied by the PostgreSQL-only tests: ${applied}"
+          # Queried via information_schema on purpose: it answers whether the table
+          # exists WITHOUT erroring when it does not. Selecting from _sqlx_migrations
+          # directly would make "the tests skipped" and "this step is broken" both look
+          # like a failed psql, and a guard that cannot tell those apart is not a guard.
+          # Any real connection problem therefore still fails loudly on its own error.
+          probe() {
+            docker run --rm --network host -e PGPASSWORD=emailibrium-ci \
+              postgres:16-alpine psql -h localhost -U emailibrium -d emailibrium_test -tAc "$1"
+          }
+          present=$(probe "select count(*) from information_schema.tables
+                           where table_schema='public' and table_name='_sqlx_migrations'")
+          if [ "${present:-0}" -lt 1 ]; then
+            echo "::error::EMAILIBRIUM_TEST_PG_URL never reached the postgres_* tests — they skipped and passed, so this job proved nothing about PostgreSQL"
+            exit 1
+          fi
+          applied=$(probe "select count(*) from _sqlx_migrations where success")
+          echo "migrations applied against PostgreSQL by the postgres_* tests: ${applied}"
           if [ "${applied:-0}" -lt 1 ]; then
-            echo "::error::EMAILIBRIUM_TEST_PG_URL did not reach the postgres_* tests — they skipped and passed, so this job proved nothing about PostgreSQL"
+            echo "::error::the migrations table exists but holds no successful migration"
             exit 1
           fi
 
