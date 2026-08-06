@@ -316,7 +316,7 @@ pub async fn fetch_insights(ctx: &ToolContext) -> Result<InsightsSummary, ToolEr
             None => folded.push((label, count)),
         }
     }
-    folded.sort_by(|a, b| b.1.cmp(&a.1));
+    folded.sort_by_key(|entry| std::cmp::Reverse(entry.1));
 
     Ok(InsightsSummary {
         categories: folded

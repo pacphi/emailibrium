@@ -160,29 +160,40 @@ impl VectorService {
                 }
             }
             "sqlite" => {
-                match sqlx::sqlite::SqlitePoolOptions::new()
-                    .max_connections(5)
-                    .connect(&config.database_url)
-                    .await
-                {
-                    Ok(pool) => match sqlite_store::SqliteVectorStore::new(pool).await {
-                        Ok(ss) => {
-                            tracing::info!("Vector store: SQLite brute-force emergency backend");
-                            Arc::new(ss)
-                        }
+                // The emergency store is SQLite-only (ADR-003): a non-sqlite
+                // database_url falls back to in-memory, exactly as the
+                // pre-port SqlitePool connect would have failed there.
+                if config.database_url.starts_with("sqlite") {
+                    let mut opts = sea_orm::ConnectOptions::new(config.database_url.clone());
+                    opts.max_connections(5);
+                    match sea_orm::Database::connect(opts).await {
+                        Ok(conn) => match sqlite_store::SqliteVectorStore::new(conn).await {
+                            Ok(ss) => {
+                                tracing::info!(
+                                    "Vector store: SQLite brute-force emergency backend"
+                                );
+                                Arc::new(ss)
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    "SQLite vector store init failed ({e}), falling back to in-memory"
+                                );
+                                Arc::new(store::InMemoryVectorStore::new())
+                            }
+                        },
                         Err(e) => {
                             tracing::warn!(
-                                "SQLite vector store init failed ({e}), falling back to in-memory"
+                                "SQLite pool creation failed ({e}), falling back to in-memory"
                             );
                             Arc::new(store::InMemoryVectorStore::new())
                         }
-                    },
-                    Err(e) => {
-                        tracing::warn!(
-                            "SQLite pool creation failed ({e}), falling back to in-memory"
-                        );
-                        Arc::new(store::InMemoryVectorStore::new())
                     }
+                } else {
+                    tracing::warn!(
+                        "SQLite vector store requires a sqlite database_url (ADR-003), \
+                         falling back to in-memory"
+                    );
+                    Arc::new(store::InMemoryVectorStore::new())
                 }
             }
             _ => {
@@ -295,20 +306,32 @@ impl VectorService {
         // ingestion run re-processes them. This handles in-memory store restarts.
         let store_count = store.count().await.unwrap_or(0);
         if store_count == 0 {
-            let (embedded_in_db,): (i64,) =
-                sqlx::query_as("SELECT COUNT(*) FROM emails WHERE embedding_status = 'embedded'")
-                    .fetch_one(db.pool())
-                    .await
-                    .unwrap_or((0,));
+            use sea_orm::sea_query::Expr;
+            use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QuerySelect};
+
+            use crate::db::entities::emails;
+
+            // Best-effort like the pre-port queries: errors count as zero.
+            let embedded_in_db: i64 = emails::Entity::find()
+                .select_only()
+                .expr_as(Expr::cust("COUNT(*)"), "cnt")
+                .filter(emails::Column::EmbeddingStatus.eq("embedded"))
+                .into_tuple::<(i64,)>()
+                .one(&db.sea_orm())
+                .await
+                .ok()
+                .flatten()
+                .map(|(c,)| c)
+                .unwrap_or(0);
 
             if embedded_in_db > 0 {
-                let reset = sqlx::query(
-                    "UPDATE emails SET embedding_status = 'pending' WHERE embedding_status = 'embedded'",
-                )
-                .execute(db.pool())
-                .await
-                .map(|r| r.rows_affected())
-                .unwrap_or(0);
+                let reset = emails::Entity::update_many()
+                    .col_expr(emails::Column::EmbeddingStatus, Expr::value("pending"))
+                    .filter(emails::Column::EmbeddingStatus.eq("embedded"))
+                    .exec(&db.sea_orm())
+                    .await
+                    .map(|r| r.rows_affected)
+                    .unwrap_or(0);
                 tracing::info!(
                     "Vector store empty but {embedded_in_db} emails marked as embedded — \
                      reset {reset} to pending for re-embedding on next sync"
