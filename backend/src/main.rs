@@ -320,6 +320,12 @@ async fn main() -> anyhow::Result<()> {
 
     // Initialize database
     let db = Arc::new(db::Database::connect(&config.database_url).await?);
+    // Name the backend that was actually connected — the only startup evidence of
+    // WHICH database this deployment is running on. .github/workflows/smoke.yml
+    // asserts on this line to prove a postgres:// deployment is genuinely on
+    // PostgreSQL (it silently ran SQLite before — ADR-033 Context). The URL itself is
+    // never logged: it carries the database password.
+    tracing::info!("Database backend: {}", db.backend_name());
     db.run_migrations().await?;
     // SeaORM handle over the SAME pool (ADR-036) — services port onto this
     // during the transition; the enum stays for not-yet-ported call sites.

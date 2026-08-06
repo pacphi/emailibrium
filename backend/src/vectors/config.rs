@@ -99,7 +99,29 @@ impl VectorConfig {
         let config: Self = Figment::new()
             .merge(Yaml::file("config.yaml"))
             .merge(Yaml::file("config.local.yaml"))
+            // TWO env providers, deliberately, because one cannot serve both key shapes.
+            //
+            // `.split("_")` nests on every underscore, which is what lets
+            // EMAILIBRIUM_STORE_BACKEND reach the nested `store.backend` that
+            // docker-compose.yml sets. But it also turned EMAILIBRIUM_DATABASE_URL into
+            // `database.url` — a key no field matches, so serde dropped it and the
+            // documented one-flag database switch (ADR-033 §2) was silently ignored: every
+            // deployment fell back to the SQLite default no matter what URL it was given.
+            // The unsplit provider maps that same variable to the flat `database_url` key
+            // it was always meant to set.
+            //
+            // They compose rather than conflict: each provider's non-matching keys land as
+            // unknown fields serde ignores (`database.url` from the first, `database_url`
+            // as an unknown *nested* name is not produced at all by the second). Later
+            // merges win, so a variable both providers can resolve — a single-word one like
+            // EMAILIBRIUM_HOST — resolves to the same value either way.
+            //
+            // Known remaining gap (not this change's scope): a flat multi-word field
+            // *inside* a nested struct, e.g. `store.qdrant_url`, is reachable by neither
+            // provider — EMAILIBRIUM_STORE_QDRANT_URL splits to `store.qdrant.url` and
+            // flattens to `store_qdrant_url`.
             .merge(Env::prefixed("EMAILIBRIUM_").split("_"))
+            .merge(Env::prefixed("EMAILIBRIUM_"))
             .extract()
             .map_err(|e| VectorError::ConfigError(e.to_string()))?;
 
@@ -1262,6 +1284,63 @@ mod tests {
         );
         assert_eq!(config.store.path, "/custom/vectors");
         assert_eq!(config.database_url, "sqlite:custom.db?mode=rwc");
+    }
+
+    // -- env-var overrides (ADR-033 §2: EMAILIBRIUM_DATABASE_URL is the backend switch) --
+
+    /// The one-flag backend switch must actually reach the flat `database_url` field,
+    /// and must not cost the nested `store.backend` override docker-compose relies on.
+    ///
+    /// Both are asserted together on purpose: they are served by two different env
+    /// providers (see `load`), and a fix for either one alone silently breaks the other.
+    /// `Jail` gives this an isolated cwd (so no repo `config.yaml` leaks in) and a
+    /// process-wide lock, so the env mutation can't race the rest of the suite.
+    // The closure's error type is `figment::Error`, fixed by `Jail::expect_with`'s
+    // signature — not a return type this code chooses, and never constructed here.
+    #[allow(clippy::result_large_err)]
+    #[test]
+    fn env_overrides_reach_both_flat_and_nested_config_fields() {
+        figment::Jail::expect_with(|jail| {
+            // Hermetic, not merely isolated: `Jail` restores the environment on drop but
+            // does not empty it first, so an ambient EMAILIBRIUM_* value would leak in.
+            // CI's PostgreSQL job exports exactly these variables job-wide.
+            jail.clear_env();
+            jail.set_env(
+                "EMAILIBRIUM_DATABASE_URL",
+                "postgres://emailibrium:pw@postgres:5432/emailibrium",
+            );
+            jail.set_env("EMAILIBRIUM_STORE_BACKEND", "qdrant");
+
+            let config = VectorConfig::load().expect("config loads from env alone");
+
+            assert_eq!(
+                config.database_url,
+                "postgres://emailibrium:pw@postgres:5432/emailibrium"
+            );
+            assert_eq!(config.store.backend, "qdrant");
+            Ok(())
+        });
+    }
+
+    /// With no env override the compiled default (SQLite) still wins — the switch is
+    /// opt-in, and SQLite stays the zero-config default per ADR-033.
+    // See the sibling test — `figment::Error` is Jail's return type, not ours.
+    #[allow(clippy::result_large_err)]
+    #[test]
+    fn env_absent_leaves_the_sqlite_default_in_place() {
+        figment::Jail::expect_with(|jail| {
+            // See the sibling test: without this, the CI PostgreSQL job's job-wide
+            // EMAILIBRIUM_DATABASE_URL would leak in and this assertion would be
+            // testing that job's environment rather than the compiled default.
+            jail.clear_env();
+            jail.set_env("EMAILIBRIUM_STORE_BACKEND", "ruvector");
+
+            let config = VectorConfig::load().expect("config loads from env alone");
+
+            assert_eq!(config.database_url, default_database_url());
+            assert!(config.database_url.starts_with("sqlite:"));
+            Ok(())
+        });
     }
 
     #[test]

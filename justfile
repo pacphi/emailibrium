@@ -10,6 +10,7 @@
 #   just install              - Install all dependencies
 #   just dev                  - Start full stack (native)
 #   just docker-up-dev        - Start full stack (Docker)
+#   Database: SQLite by default everywhere. PostgreSQL is one flag — see `just help`.
 #   just ci                   - Run full CI pipeline
 #   just VERSION=x.y.z release - Tag and release
 # ============================================================================
@@ -84,6 +85,14 @@ help:
       just ci                - Run full CI pipeline
       just test              - Run all tests
 
+    {{BOLD}}Database (SQLite by default, PostgreSQL is one flag):{{RESET}}
+      native   EMAILIBRIUM_DATABASE_URL=postgres://user:pw@localhost:5432/emailibrium just dev
+      docker   EMAILIBRIUM_DATABASE_URL=postgres://emailibrium:devpass@postgres:5432/emailibrium \
+                 just docker-up-postgres        (or docker-up-dev-postgres)
+      The URL's scheme IS the selector (ADR-033) — sqlite:… or postgres://…; there is
+      no separate backend flag. In Docker the --profile postgres flag those recipes
+      pass is what starts the database container the URL points at.
+
     {{BOLD}}{{BLUE}}═══ Setup & Onboarding ═════════════════════════════════════════════{{RESET}}
       setup                  - Guided first-time setup wizard
       setup-prereqs          - Check all prerequisites
@@ -135,8 +144,10 @@ help:
       links-check-all        - Check all links
 
     {{BOLD}}{{BLUE}}═══ Docker ═════════════════════════════════════════════════════════{{RESET}}
-      docker-up              - Start production stack
-      docker-up-dev          - Start dev stack (hot-reload)
+      docker-up              - Start production stack (SQLite)
+      docker-up-postgres     - Start production stack against PostgreSQL
+      docker-up-dev          - Start dev stack (hot-reload, SQLite)
+      docker-up-dev-postgres - Start dev stack against PostgreSQL
       docker-down            - Stop all containers
       docker-down-volumes    - Stop + remove volumes (DESTROYS DATA)
       docker-restart         - Restart all containers
@@ -532,29 +543,58 @@ links-check-all: links-check links-check-external
 # Docker
 # ============================================================================
 
-# Start production stack
+# Start production stack (SQLite — the default backend)
 [group('docker')]
 docker-up:
-    @echo "{{GREEN}}Starting Emailibrium stack...{{RESET}}"
+    @echo "{{GREEN}}Starting Emailibrium stack (SQLite)...{{RESET}}"
     @{{COMPOSE}} up -d
     @echo "{{GREEN}}Backend: http://localhost:8080  Frontend: http://localhost:3000{{RESET}}"
 
-# Start dev stack (hot-reload)
+# Start production stack against PostgreSQL
+#
+# Two things have to line up, and this recipe supplies the first: --profile postgres
+# starts the database container (it is opt-in, so a SQLite deployment never runs one).
+# The second is the connection URL, which is the actual backend selector (ADR-033) —
+# export EMAILIBRIUM_DATABASE_URL, or put the postgres:// URL in the database_url
+# secret. Starting the container without pointing the app at it just leaves you on
+# SQLite with an idle database running.
+[group('docker')]
+docker-up-postgres:
+    @echo "{{GREEN}}Starting Emailibrium stack (PostgreSQL)...{{RESET}}"
+    @{{COMPOSE}} --profile postgres up -d
+    @echo "{{YELLOW}}Backend is on PostgreSQL only if EMAILIBRIUM_DATABASE_URL (or the database_url secret) is a postgres:// URL.{{RESET}}"
+    @echo "{{GREEN}}Backend: http://localhost:8080  Frontend: http://localhost:3000{{RESET}}"
+
+# Start dev stack (hot-reload, SQLite — the default backend)
 [group('docker')]
 docker-up-dev:
-    @echo "{{GREEN}}Starting Emailibrium dev stack...{{RESET}}"
+    @echo "{{GREEN}}Starting Emailibrium dev stack (SQLite)...{{RESET}}"
     @{{COMPOSE_DEV}} up -d
     @echo "{{GREEN}}Backend: http://localhost:8080  Frontend: http://localhost:3000{{RESET}}"
 
-# Stop and remove containers
+# Start dev stack (hot-reload) against PostgreSQL — see docker-up-postgres
+[group('docker')]
+docker-up-dev-postgres:
+    @echo "{{GREEN}}Starting Emailibrium dev stack (PostgreSQL)...{{RESET}}"
+    @{{COMPOSE_DEV}} --profile postgres up -d
+    @echo "{{YELLOW}}Backend is on PostgreSQL only if EMAILIBRIUM_DATABASE_URL (or the database_url secret) is a postgres:// URL.{{RESET}}"
+    @echo "{{GREEN}}Backend: http://localhost:8080  Frontend: http://localhost:3000{{RESET}}"
+
+# Stop and remove containers (including the opt-in postgres one)
+#
+# --profile postgres is required for teardown, not optional tidiness: `docker compose
+# down` computes the project from the ACTIVE profiles, so without it a container
+# started by docker-up-postgres is left running while the command reports success.
+# (`docker compose ps` does list it either way — the asymmetry is easy to miss.)
+# Harmless when postgres was never started.
 [group('docker')]
 docker-down:
-    @{{COMPOSE}} down
+    @{{COMPOSE}} --profile postgres down
 
 # Stop + remove volumes (DESTROYS DATA)
 [group('docker')]
 docker-down-volumes:
-    @{{COMPOSE}} down -v
+    @{{COMPOSE}} --profile postgres down -v
 
 # Restart all containers
 [group('docker')]
@@ -618,7 +658,11 @@ docker-secrets:
     @mkdir -p secrets/dev
     @openssl rand -base64 32 > secrets/dev/jwt_secret
     @openssl rand -base64 32 > secrets/dev/oauth_encryption_key
-    @echo "postgres://emailibrium:devpass@postgres:5432/emailibrium" > secrets/dev/database_url
+    # SQLite is the default backend, so that is what a freshly generated secret set
+    # points at. Switch a docker deployment to PostgreSQL by replacing this one line
+    # with `postgres://emailibrium:devpass@postgres:5432/emailibrium` (or exporting
+    # EMAILIBRIUM_DATABASE_URL) and starting the stack via docker-up-postgres.
+    @echo "sqlite:/app/data/emailibrium.db?mode=rwc" > secrets/dev/database_url
     @echo "devpass" > secrets/dev/db_password
     @chmod 600 secrets/dev/*
     @echo "{{GREEN}}Secrets generated in secrets/dev/{{RESET}}"

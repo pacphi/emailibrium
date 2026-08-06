@@ -127,6 +127,10 @@ proptest = { version = "1", optional = true }
 
 [dev-dependencies]
 criterion = { version = "0.8", features = ["async_tokio"] }
+# `test` adds figment::Jail — an isolated cwd + env sandbox, globally serialized so
+# env-var assertions can't race the rest of the suite. Needed to test that
+# EMAILIBRIUM_* variables actually reach VectorConfig (see config.rs `load`).
+figment = { version = "0.10", features = ["test"] }
 tempfile = "3"
 tokio-test = "0.4"
 axum-test = "21"

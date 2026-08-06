@@ -59,6 +59,26 @@ impl Database {
         Ok(())
     }
 
+    /// The name of the backend this connection actually opened — `"SQLite"` or
+    /// `"PostgreSQL"`.
+    ///
+    /// Derived from the connected variant, deliberately NOT by re-reading
+    /// `config.database_url`: a diagnostic that re-parses the requested URL agrees
+    /// with the config even when the app is running on something else, which is the
+    /// exact failure this exists to make visible (a `postgres://` URL silently
+    /// serving SQLite went unnoticed for the life of the smoke workflow — ADR-033
+    /// Context). `.github/workflows/smoke.yml` asserts on the startup line built from
+    /// this, so it is a load-bearing string, not decoration.
+    ///
+    /// Safe to log: it names the driver only, never the URL, which carries the
+    /// database password.
+    pub fn backend_name(&self) -> &'static str {
+        match self {
+            Self::Sqlite(_) => "SQLite",
+            Self::Postgres(_) => "PostgreSQL",
+        }
+    }
+
     /// A SeaORM handle over the SAME underlying pool this enum already holds (ADR-036).
     ///
     /// `sea_orm::DatabaseConnection` is itself a backend-dispatching wrapper, so this match
@@ -204,6 +224,23 @@ pub fn derive_state_from_labels(labels: &[String]) -> (bool, bool, &'static str)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The startup diagnostic must report the backend that was CONNECTED. Both arms
+    /// are covered without infrastructure: `connect_lazy` builds a `PgPool` handle
+    /// without contacting a server, so the PostgreSQL arm is exercised in the default
+    /// suite rather than only in the live-Postgres job.
+    #[tokio::test]
+    async fn backend_name_reports_the_connected_variant() {
+        let sqlite = test_sqlite_database().await;
+        assert_eq!(sqlite.backend_name(), "SQLite");
+
+        let postgres = Database::Postgres(
+            PgPoolOptions::new()
+                .connect_lazy("postgres://user:pw@localhost:5432/db")
+                .expect("lazy postgres pool"),
+        );
+        assert_eq!(postgres.backend_name(), "PostgreSQL");
+    }
 
     #[test]
     fn test_derive_state_inbox() {

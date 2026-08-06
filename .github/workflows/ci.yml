@@ -182,6 +182,66 @@ jobs:
         working-directory: backend
         run: cargo nextest run --profile ci --archive-file nextest.tar.zst --workspace-remap .
 
+  # PostgreSQL is a first-class backend (ADR-033), so it gets a real test run against
+  # a live server instead of a claim in a doc. This is deliberately the SAME binaries
+  # rust-test executes — it consumes rust-build's nextest archive and only changes
+  # which database they talk to — so proving the second backend costs one runner, not
+  # a second compile of the workspace plus the vendored ruvector crates.
+  rust-test-postgres:
+    # MUST match rust-build's runner, for the same host-bound-archive reason spelled
+    # out on rust-test.
+    name: Rust Tests (PostgreSQL)
+    runs-on: ${{ vars.HEAVY_RUNNER || 'ubuntu-latest' }}
+    needs: [rust-format, rust-clippy, rust-build]
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: emailibrium
+          # Throwaway credential for an ephemeral service container that exists only
+          # for the life of this job and is reachable only from it. Not a secret for
+          # any live system — same posture as smoke.yml's generated dev secrets.
+          POSTGRES_PASSWORD: emailibrium-ci
+          POSTGRES_DB: emailibrium_test
+        ports:
+          - 5432:5432
+        # Without a health gate the steps can start before initdb finishes and the
+        # first connection fails on a database that was seconds from being ready.
+        options: >-
+          --health-cmd "pg_isready -U emailibrium -d emailibrium_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # TWO variables, each load-bearing for a different reason:
+      #
+      #   EMAILIBRIUM_DATABASE_URL is what the APP reads — ADR-033's one-flag backend
+      #   switch. It is what makes this job's suite run against PostgreSQL at all.
+      #
+      #   EMAILIBRIUM_TEST_PG_URL is what the dedicated live-Postgres round-trip tests
+      #   read (cleanup::repository plan_repo/job_repo, cleanup::audit). Those tests
+      #   skip AND PASS when it is unset, so omitting it would leave this job running
+      #   "against Postgres" while silently skipping the strongest Postgres assertions
+      #   it exists to run — a green check proving less than it appears to.
+      EMAILIBRIUM_DATABASE_URL: postgres://emailibrium:emailibrium-ci@localhost:5432/emailibrium_test
+      EMAILIBRIUM_TEST_PG_URL: postgres://emailibrium:emailibrium-ci@localhost:5432/emailibrium_test
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: true
+      - uses: ./.github/actions/setup-rust
+      # Must match rust-build's pinned version exactly — see rust-test.
+      - uses: taiki-e/install-action@v2.85.5
+        with:
+          tool: cargo-nextest@0.9.140
+      - uses: actions/download-artifact@v8
+        with:
+          name: nextest-archive
+          path: backend
+      - name: Run tests from archive against PostgreSQL
+        working-directory: backend
+        run: cargo nextest run --profile ci --archive-file nextest.tar.zst --workspace-remap .
+
   rust-audit:
     name: Rust Security Audit
     runs-on: ubuntu-latest
