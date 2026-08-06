@@ -326,6 +326,17 @@ async fn main() -> anyhow::Result<()> {
     // PostgreSQL (it silently ran SQLite before — ADR-033 Context). The URL itself is
     // never logged: it carries the database password.
     tracing::info!("{}", db.startup_backend_line(&config.database_url));
+    // This variable used to be inert, so a value left over in a shell profile or a
+    // Compose .env was harmless; it is live now and will quietly move an existing
+    // deployment onto a different database. An INFO line only helps someone already
+    // reading the log, so the override announces itself at WARN — the endpoint above
+    // then says which database it actually landed on.
+    if std::env::var_os("EMAILIBRIUM_DATABASE_URL").is_some() {
+        tracing::warn!(
+            "Database selected by the EMAILIBRIUM_DATABASE_URL environment variable, \
+             overriding the configured default — unset it to fall back to config.yaml"
+        );
+    }
     db.run_migrations().await?;
     // SeaORM handle over the SAME pool (ADR-036) — services port onto this
     // during the transition; the enum stays for not-yet-ported call sites.

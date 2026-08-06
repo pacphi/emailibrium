@@ -30,32 +30,60 @@ fn selects_postgres(url: &str) -> bool {
 /// makes such a switch invisible: the log looks correct while the app is attached to a
 /// different server entirely. Naming the endpoint makes it loud.
 ///
-/// Two things are stripped, and over-stripping is the deliberate bias:
-/// - the userinfo (`user:password@`), searched within the AUTHORITY only so a `@` in a
-///   path can't be mistaken for a credential delimiter;
-/// - the whole query string, because PostgreSQL accepts `?password=` there. SQLite's
-///   `?mode=rwc` is lost with it, which costs nothing — the file path is the identity.
+/// Redaction has to survive two competing pressures, and getting either wrong defeats
+/// the purpose:
+/// - Redact too little and a password lands in the log permanently. So userinfo is
+///   redacted whether or not the URL has a `://` (a bare `user:pass@host/db` is not a
+///   shape this app should ever see, but "should never" is not a redaction strategy),
+///   and it is located within the AUTHORITY only, so a `@` inside a filesystem path is
+///   never mistaken for a credential delimiter.
+/// - Redact too much and the endpoint is hidden, which is the very thing this exists to
+///   prevent. PostgreSQL accepts `?host=`/`?port=` as the connection target, so dropping
+///   the whole query string would silently erase the identity of the database being
+///   reported. Those two parameters are kept; every other parameter is dropped, because
+///   `?password=` is also legal there and an allowlist is the only safe direction.
+///
+/// The marker is `***@` rather than deletion so a reader can tell redaction happened.
 fn sanitized_endpoint(url: &str) -> String {
-    let without_query = url.split('?').next().unwrap_or(url);
-
-    let Some((scheme, rest)) = without_query.split_once("://") else {
-        // No authority at all (`sqlite:emailibrium.db`) — nowhere for a credential to hide.
-        return without_query.to_string();
+    let (base, query) = match url.split_once('?') {
+        Some((base, query)) => (base, Some(query)),
+        None => (url, None),
     };
 
+    // Allowlist, never a denylist: an unknown future parameter is dropped, not exposed.
+    let identifying: Vec<&str> = query
+        .map(|q| {
+            q.split('&')
+                .filter(|param| {
+                    let key = param.split('=').next().unwrap_or_default();
+                    key.eq_ignore_ascii_case("host") || key.eq_ignore_ascii_case("port")
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let (scheme, rest) = match base.split_once("://") {
+        Some((scheme, rest)) => (format!("{scheme}://"), rest),
+        None => (String::new(), base),
+    };
     let (authority, path) = match rest.split_once('/') {
         Some((authority, path)) => (authority, Some(path)),
         None => (rest, None),
     };
-    let host = match authority.rsplit_once('@') {
-        Some((_userinfo, host)) => host,
-        None => authority,
+    let authority = match authority.rsplit_once('@') {
+        Some((_userinfo, host)) => format!("***@{host}"),
+        None => authority.to_string(),
     };
 
-    match path {
-        Some(path) => format!("{scheme}://{host}/{path}"),
-        None => format!("{scheme}://{host}"),
+    let mut endpoint = match path {
+        Some(path) => format!("{scheme}{authority}/{path}"),
+        None => format!("{scheme}{authority}"),
+    };
+    if !identifying.is_empty() {
+        endpoint.push('?');
+        endpoint.push_str(&identifying.join("&"));
     }
+    endpoint
 }
 
 /// Database connection pool, dispatched to SQLite or PostgreSQL by the connection URL's scheme
@@ -328,7 +356,7 @@ mod tests {
         );
         assert_eq!(
             postgres.startup_backend_line("postgres://user:pw@localhost:5432/db"),
-            "Database backend: PostgreSQL (postgres://localhost:5432/db)"
+            "Database backend: PostgreSQL (postgres://***@localhost:5432/db)"
         );
         // The prefix smoke greps for must survive the endpoint being appended.
         assert!(postgres
@@ -345,28 +373,47 @@ mod tests {
         for (raw, expected) in [
             (
                 "postgres://emailibrium:s3cret@postgres:5432/emailibrium",
-                "postgres://postgres:5432/emailibrium",
+                "postgres://***@postgres:5432/emailibrium",
             ),
             // Password containing the delimiters — the LAST '@' in the authority wins.
             (
                 "postgres://user:p@ss:w0rd@db.internal:5432/app",
-                "postgres://db.internal:5432/app",
+                "postgres://***@db.internal:5432/app",
             ),
             // PostgreSQL accepts the password as a query parameter too.
             (
                 "postgres://user@host:5432/db?password=s3cret&sslmode=require",
-                "postgres://host:5432/db",
+                "postgres://***@host:5432/db",
             ),
-            // No credentials at all — nothing to strip, everything else preserved.
+            // ...and accepts the HOST as one, which is identity, not secret. Dropping the
+            // whole query would hide the very endpoint this line exists to reveal.
+            (
+                "postgresql:///app?host=db.internal&port=5432&password=s3cret",
+                "postgresql:///app?host=db.internal&port=5432",
+            ),
+            // No credentials at all — nothing to redact, everything else preserved.
             (
                 "postgres://host:5432/emailibrium",
                 "postgres://host:5432/emailibrium",
             ),
+            // No scheme. Not a shape this app should produce, but "should not" is not a
+            // redaction strategy — the credential must not survive it either.
+            ("alice:s3cret@db.internal/app", "***@db.internal/app"),
             // SQLite: no authority, so the path IS the identity; the query is dropped.
             ("sqlite:emailibrium.db?mode=rwc", "sqlite:emailibrium.db"),
             (
                 "sqlite:/app/data/emailibrium.db",
                 "sqlite:/app/data/emailibrium.db",
+            ),
+            // A '@' in a FILE PATH is not a credential delimiter and must survive.
+            (
+                "sqlite:/app/data/mail@home.db",
+                "sqlite:/app/data/mail@home.db",
+            ),
+            // Bracketed IPv6 authority.
+            (
+                "postgres://user:s3cret@[::1]:5432/db",
+                "postgres://***@[::1]:5432/db",
             ),
         ] {
             let sanitized = sanitized_endpoint(raw);
