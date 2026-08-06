@@ -21,6 +21,43 @@ fn selects_postgres(url: &str) -> bool {
     url.starts_with("postgres://") || url.starts_with("postgresql://")
 }
 
+/// A connection URL with every credential-bearing part removed, safe to log.
+///
+/// Exists because this pipeline made `EMAILIBRIUM_DATABASE_URL` actually work. It was
+/// inert before — set it and nothing happened — so anyone who still has it lingering in
+/// a shell profile or a Compose `.env` from an earlier attempt now gets that database
+/// instead of the one they have been running on. Naming only the driver ("PostgreSQL")
+/// makes such a switch invisible: the log looks correct while the app is attached to a
+/// different server entirely. Naming the endpoint makes it loud.
+///
+/// Two things are stripped, and over-stripping is the deliberate bias:
+/// - the userinfo (`user:password@`), searched within the AUTHORITY only so a `@` in a
+///   path can't be mistaken for a credential delimiter;
+/// - the whole query string, because PostgreSQL accepts `?password=` there. SQLite's
+///   `?mode=rwc` is lost with it, which costs nothing — the file path is the identity.
+fn sanitized_endpoint(url: &str) -> String {
+    let without_query = url.split('?').next().unwrap_or(url);
+
+    let Some((scheme, rest)) = without_query.split_once("://") else {
+        // No authority at all (`sqlite:emailibrium.db`) — nowhere for a credential to hide.
+        return without_query.to_string();
+    };
+
+    let (authority, path) = match rest.split_once('/') {
+        Some((authority, path)) => (authority, Some(path)),
+        None => (rest, None),
+    };
+    let host = match authority.rsplit_once('@') {
+        Some((_userinfo, host)) => host,
+        None => authority,
+    };
+
+    match path {
+        Some(path) => format!("{scheme}://{host}/{path}"),
+        None => format!("{scheme}://{host}"),
+    }
+}
+
 /// Database connection pool, dispatched to SQLite or PostgreSQL by the connection URL's scheme
 /// (`sqlite:...` vs `postgres://...` / `postgresql://...`) — see ADR-033.
 ///
@@ -82,7 +119,8 @@ impl Database {
     /// Context). `.github/workflows/smoke.yml` asserts on the startup line built from
     /// this, so it is a load-bearing string, not decoration.
     ///
-    /// Safe to log: it names the driver only, never the URL, which carries the
+    /// Safe to log: it names the driver only. The endpoint is logged too, but through
+    /// [`sanitized_endpoint`] — the raw URL is never logged, because it carries the
     /// database password.
     pub fn backend_name(&self) -> &'static str {
         match self {
@@ -91,14 +129,22 @@ impl Database {
         }
     }
 
-    /// The exact startup diagnostic line, verbatim as
-    /// `.github/workflows/smoke.yml` greps for it.
+    /// The startup diagnostic line, whose `Database backend: <name>` prefix
+    /// `.github/workflows/smoke.yml` greps for verbatim.
     ///
     /// It lives here, next to [`Database::backend_name`], so the string smoke asserts on
     /// is pinned by a unit test instead of only by a ten-minute CI leg — a silent rename
     /// would otherwise turn that leg's grep into a check of nothing.
-    pub fn startup_backend_line(&self) -> String {
-        format!("Database backend: {}", self.backend_name())
+    ///
+    /// The endpoint follows the name so "which database am I actually on" is answerable
+    /// from the log, not just "which driver" — see [`sanitized_endpoint`] for why that
+    /// distinction became load-bearing, and for what is stripped before it is logged.
+    pub fn startup_backend_line(&self, url: &str) -> String {
+        format!(
+            "Database backend: {} ({})",
+            self.backend_name(),
+            sanitized_endpoint(url)
+        )
     }
 
     /// A SeaORM handle over the SAME underlying pool this enum already holds (ADR-036).
@@ -265,12 +311,15 @@ mod tests {
     }
 
     /// The startup line is a contract with `.github/workflows/smoke.yml`, which greps
-    /// for it verbatim in both legs. Asserting the whole string here means a rename
-    /// fails in seconds rather than silently reducing that CI leg to a no-op grep.
+    /// for its prefix verbatim in both legs. Asserting the whole string here means a
+    /// rename fails in seconds rather than silently reducing that CI leg to a no-op grep.
     #[tokio::test]
     async fn startup_backend_line_matches_what_smoke_greps_for() {
         let sqlite = test_sqlite_database().await;
-        assert_eq!(sqlite.startup_backend_line(), "Database backend: SQLite");
+        assert_eq!(
+            sqlite.startup_backend_line("sqlite:emailibrium.db?mode=rwc"),
+            "Database backend: SQLite (sqlite:emailibrium.db)"
+        );
 
         let postgres = Database::Postgres(
             PgPoolOptions::new()
@@ -278,9 +327,55 @@ mod tests {
                 .expect("lazy postgres pool"),
         );
         assert_eq!(
-            postgres.startup_backend_line(),
-            "Database backend: PostgreSQL"
+            postgres.startup_backend_line("postgres://user:pw@localhost:5432/db"),
+            "Database backend: PostgreSQL (postgres://localhost:5432/db)"
         );
+        // The prefix smoke greps for must survive the endpoint being appended.
+        assert!(postgres
+            .startup_backend_line("postgres://user:pw@localhost:5432/db")
+            .starts_with("Database backend: PostgreSQL"));
+    }
+
+    /// This string is logged, so a leak here writes a database password into the log
+    /// permanently. Every credential-bearing shape gets its own case, including the
+    /// awkward ones: a password containing `@` and `:`, and PostgreSQL's `?password=`
+    /// query parameter.
+    #[test]
+    fn sanitized_endpoint_never_leaks_a_credential() {
+        for (raw, expected) in [
+            (
+                "postgres://emailibrium:s3cret@postgres:5432/emailibrium",
+                "postgres://postgres:5432/emailibrium",
+            ),
+            // Password containing the delimiters — the LAST '@' in the authority wins.
+            (
+                "postgres://user:p@ss:w0rd@db.internal:5432/app",
+                "postgres://db.internal:5432/app",
+            ),
+            // PostgreSQL accepts the password as a query parameter too.
+            (
+                "postgres://user@host:5432/db?password=s3cret&sslmode=require",
+                "postgres://host:5432/db",
+            ),
+            // No credentials at all — nothing to strip, everything else preserved.
+            (
+                "postgres://host:5432/emailibrium",
+                "postgres://host:5432/emailibrium",
+            ),
+            // SQLite: no authority, so the path IS the identity; the query is dropped.
+            ("sqlite:emailibrium.db?mode=rwc", "sqlite:emailibrium.db"),
+            (
+                "sqlite:/app/data/emailibrium.db",
+                "sqlite:/app/data/emailibrium.db",
+            ),
+        ] {
+            let sanitized = sanitized_endpoint(raw);
+            assert_eq!(sanitized, expected, "sanitizing {raw}");
+            assert!(
+                !sanitized.contains("s3cret") && !sanitized.contains("p@ss:w0rd"),
+                "credential survived sanitizing {raw}: {sanitized}"
+            );
+        }
     }
 
     /// ADR-033 §2 names TWO PostgreSQL spellings, and `connect` cannot be tested

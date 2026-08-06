@@ -37,6 +37,14 @@ services:
       # below); this variable is what points the app at it. Leaving the variable
       # unset falls back to the `database_url` secret, then to the SQLite default in
       # config/environments/config.*.yaml — entrypoint.sh explains the precedence.
+      #
+      # BEHAVIOR CHANGE, read this if you are upgrading: this variable used to be inert.
+      # Setting it did nothing (the app never read it), so a value left in your shell or
+      # in this project's `.env` from an earlier attempt was harmless. It is live now, and
+      # Compose substitutes `.env` here — so a stale value will silently move you onto a
+      # different database. The startup log names the endpoint, not just the driver, so
+      # check the backend's first lines after upgrading if you are unsure which one you
+      # are on.
       EMAILIBRIUM_DATABASE_URL: ${EMAILIBRIUM_DATABASE_URL:-}
       # Non-secret config via env vars (12-factor)
       APP_ENV: ${APP_ENV:-development}

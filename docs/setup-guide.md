@@ -5,14 +5,14 @@ Run `just setup` for an interactive wizard that automates these steps.
 
 ## Prerequisites
 
-| Tool           | Minimum Version | Install Command                                                                  |
-| -------------- | --------------- | -------------------------------------------------------------------------------- |
-| Rust           | 1.97            | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \| sh`                |
-| Node.js        | 26 (LTS)        | `brew install node@26` or [nodejs.org](https://nodejs.org/)                      |
-| pnpm           | 11.5            | `npm install -g pnpm@11`                                                         |
-| Docker         | 24.0+           | [docs.docker.com/get-docker](https://docs.docker.com/get-docker/)                |
-| Docker Compose | v2              | Included with Docker Desktop                                                     |
-| just           | 1.x             | `brew install just` or [just.systems](https://just.systems/man/en/packages.html) |
+| Tool           | Minimum Version | Install Command                                                                                                                                                                          |
+| -------------- | --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Rust           | 1.97            | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \| sh`                                                                                                                        |
+| Node.js        | 26 (LTS)        | `brew install node@26` or [nodejs.org](https://nodejs.org/)                                                                                                                              |
+| pnpm           | 11.5            | `npm install -g pnpm@11`                                                                                                                                                                 |
+| Docker         | 24.0+           | [docs.docker.com/get-docker](https://docs.docker.com/get-docker/)                                                                                                                        |
+| Docker Compose | v2.20+          | Included with Docker Desktop. 2.20 is the floor for `depends_on: required:`, which the opt-in `postgres` profile relies on; older v2 releases reject the compose file during validation. |
+| just           | 1.x             | `brew install just` or [just.systems](https://just.systems/man/en/packages.html)                                                                                                         |
 
 Check all prerequisites at once:
 
@@ -43,8 +43,9 @@ These are created automatically using `openssl rand -base64 32`:
 
 - `jwt_secret` -- Signs JWT authentication tokens
 - `oauth_encryption_key` -- Encrypts OAuth tokens at rest
-- `db_password` -- PostgreSQL password (Docker dev environment)
-- `database_url` -- PostgreSQL connection string for Docker
+- `db_password` -- PostgreSQL password, used only when you opt into the `postgres` profile
+- `database_url` -- the database connection URL for Docker. Defaults to SQLite; its scheme
+  is what selects the backend (see [Deployment Guide](deployment-guide.md#database-strategy-sqlite-vs-postgresql))
 
 ### OAuth credentials (manual)
 
@@ -171,7 +172,9 @@ just docker-logs     # Tail logs
 just docker-down     # Stop
 ```
 
-Docker Compose starts: PostgreSQL, Redis, backend (Rust), frontend (React).
+Docker Compose starts: Redis, backend (Rust), frontend (React) — on SQLite by default.
+PostgreSQL is opt-in: use `just docker-up-dev-postgres` (or `docker-up-postgres`) to start
+it and point the backend at it in one step.
 
 ### Native Development
 
