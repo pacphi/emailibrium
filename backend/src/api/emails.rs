@@ -901,18 +901,25 @@ pub struct EmptyTrashParams {
 }
 
 /// DELETE /api/v1/emails/trash — permanently delete all trashed emails.
+/// The trash set `empty_trash` deletes: every trashed email, optionally
+/// scoped to one account. The same condition drives the attachment-cleanup
+/// lookup and the hard delete, so they cannot drift — and the account scope
+/// is pinned by `empty_trash_scoped_to_account_spares_the_bystander`.
+fn trashed_condition(account_id: Option<&str>) -> Condition {
+    let mut trashed = Condition::all().add(emails::Column::IsTrash.eq(1_i32));
+    if let Some(account_id) = account_id {
+        trashed = trashed.add(emails::Column::AccountId.eq(account_id));
+    }
+    trashed
+}
+
 async fn empty_trash(
     State(state): State<AppState>,
     Query(params): Query<EmptyTrashParams>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     debug!("Emptying trash");
 
-    // Find all trashed emails, optionally filtered by account. The same
-    // condition drives the lookup and the delete, so they cannot drift.
-    let mut trashed = Condition::all().add(emails::Column::IsTrash.eq(1_i32));
-    if let Some(ref account_id) = params.account_id {
-        trashed = trashed.add(emails::Column::AccountId.eq(account_id.as_str()));
-    }
+    let trashed = trashed_condition(params.account_id.as_deref());
 
     let ids: Vec<(String,)> = emails::Entity::find()
         .select_only()
@@ -1525,6 +1532,7 @@ mod tests {
     #[derive(Clone)]
     struct Seed<'a> {
         id: &'a str,
+        account_id: &'a str,
         received_at: &'a str,
         folder: &'a str,
         labels: &'a str,
@@ -1539,6 +1547,7 @@ mod tests {
         fn default() -> Self {
             Self {
                 id: "e1",
+                account_id: "acct-1",
                 received_at: "2026-08-01T10:00:00+00:00",
                 folder: "INBOX",
                 labels: "INBOX",
@@ -1561,10 +1570,11 @@ mod tests {
         conn.execute_unprepared(&format!(
             "INSERT INTO emails (id, account_id, provider, subject, from_addr, to_addrs, \
              received_at, folder, labels, category, is_read, is_spam, is_trash, is_archived) \
-             VALUES ('{id}', 'acct-1', 'gmail', 'subject {id}', 's@example.com', \
+             VALUES ('{id}', '{account_id}', 'gmail', 'subject {id}', 's@example.com', \
              'me@example.com', '{received_at}', '{folder}', '{labels}', {category}, \
              {is_read}, {is_spam}, {is_trash}, {is_archived})",
             id = row.id,
+            account_id = row.account_id,
             received_at = row.received_at,
             folder = row.folder,
             labels = row.labels,
@@ -1600,6 +1610,75 @@ mod tests {
             .into_iter()
             .map(|r| r.id)
             .collect()
+    }
+
+    /// Two-owner scoping pin for `empty_trash`: the account-scoped condition
+    /// drives a REAL hard delete here, and the bystander account's trash must
+    /// survive it. A dropped `account_id` filter is unrecoverable data loss.
+    #[tokio::test]
+    async fn empty_trash_scoped_to_account_spares_the_bystander() {
+        let conn = fresh_conn().await;
+        seed(
+            &conn,
+            Seed {
+                id: "a-trash",
+                is_trash: 1,
+                ..Default::default()
+            },
+        )
+        .await;
+        seed(
+            &conn,
+            Seed {
+                id: "a-keep",
+                ..Default::default()
+            },
+        )
+        .await;
+        seed(
+            &conn,
+            Seed {
+                id: "b-trash",
+                account_id: "acct-2",
+                is_trash: 1,
+                ..Default::default()
+            },
+        )
+        .await;
+
+        let deleted = emails::Entity::delete_many()
+            .filter(trashed_condition(Some("acct-1")))
+            .exec(&conn)
+            .await
+            .expect("scoped delete")
+            .rows_affected;
+        assert_eq!(deleted, 1, "only acct-1's trashed email is deleted");
+
+        let remaining: Vec<String> = emails::Entity::find()
+            .select_only()
+            .column(emails::Column::Id)
+            .order_by_asc(emails::Column::Id)
+            .into_tuple::<(String,)>()
+            .all(&conn)
+            .await
+            .expect("ids")
+            .into_iter()
+            .map(|(id,)| id)
+            .collect();
+        assert_eq!(
+            remaining,
+            vec!["a-keep", "b-trash"],
+            "the bystander account's trash survives an account-scoped empty"
+        );
+
+        // The unscoped form drains every account's trash.
+        let deleted = emails::Entity::delete_many()
+            .filter(trashed_condition(None))
+            .exec(&conn)
+            .await
+            .expect("unscoped delete")
+            .rows_affected;
+        assert_eq!(deleted, 1);
     }
 
     /// The combination the listing UI sends most often — a folder, an unread

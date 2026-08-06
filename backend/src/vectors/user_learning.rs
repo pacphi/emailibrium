@@ -528,6 +528,59 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_two_users_same_category_stay_isolated() {
+        // Composite `(user_id, category)` conflict target: two users saving
+        // offsets for the SAME category must land in two rows — a
+        // mis-specified conflict target would collapse them into one.
+        let db = Arc::new(
+            Database::connect("sqlite::memory:")
+                .await
+                .expect("in-memory DB"),
+        );
+        let config = LearningConfig {
+            min_feedback_events: 0,
+            ..LearningConfig::default()
+        };
+        let store = UserLearningStore::new(db.clone(), config.clone());
+        store.ensure_table().await.unwrap();
+
+        for user in ["user-1", "user-2"] {
+            store
+                .on_feedback(
+                    user,
+                    EmailCategory::Work,
+                    &[0.5, 0.5, 0.0],
+                    &[1.0, 0.0, 0.0],
+                    &FeedbackAction::Star,
+                )
+                .await
+                .unwrap();
+        }
+
+        assert_eq!(
+            store.list_users().await.unwrap(),
+            vec!["user-1".to_string(), "user-2".to_string()],
+            "both users must have their own row"
+        );
+
+        // Reload each from the database through a fresh (cache-empty) store:
+        // each user's model carries exactly their own feedback.
+        let fresh = UserLearningStore::new(db, config);
+        let one = fresh.get_or_create("user-1").await;
+        let two = fresh.get_or_create("user-2").await;
+        assert_eq!(
+            one.total_feedback, 1,
+            "user-1 keeps exactly their own feedback"
+        );
+        assert_eq!(
+            two.total_feedback, 1,
+            "user-2 keeps exactly their own feedback"
+        );
+        assert!(one.offsets.contains_key(&EmailCategory::Work));
+        assert!(two.offsets.contains_key(&EmailCategory::Work));
+    }
+
+    #[tokio::test]
     async fn test_store_cold_user_fallback() {
         let db = Arc::new(
             Database::connect("sqlite::memory:")

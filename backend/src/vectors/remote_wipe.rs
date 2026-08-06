@@ -563,6 +563,7 @@ mod tests {
         let svc = RemoteWipeService::new(db.clone());
         svc.ensure_table().await.unwrap();
         seed(&db, "u1").await;
+        seed(&db, "u2").await;
         let r = svc.wipe_user_data("u1").await.unwrap();
         assert_eq!(r.scope, WipeScope::User);
         assert_eq!(r.user_id.as_deref(), Some("u1"));
@@ -570,6 +571,21 @@ mod tests {
         assert_eq!(
             count(&db, "SELECT COUNT(*) FROM emails WHERE account_id='u1'").await,
             0
+        );
+        // Two-owner scoping: the bystander's emails and backups must survive.
+        assert_eq!(
+            count(&db, "SELECT COUNT(*) FROM emails WHERE account_id='u2'").await,
+            1,
+            "wipe of u1 must not touch u2's emails"
+        );
+        assert_eq!(
+            count(
+                &db,
+                "SELECT COUNT(*) FROM vector_backups WHERE email_id='e-u2'"
+            )
+            .await,
+            1,
+            "wipe of u1 must not touch u2's vector backups"
         );
     }
 

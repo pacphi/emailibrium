@@ -358,10 +358,10 @@ fn narrow_to_i32(value: i64) -> i32 {
 
 /// Map a SeaORM error onto this module's error type.
 ///
-/// `VectorError` has no `DbErr` variant yet (`DatabaseError` wraps a
-/// `sqlx::Error`, and SeaORM only ever hands back an `Arc`-shared one), so the
-/// operation name is prefixed to keep the message diagnosable. Callers map every
-/// variant here to the same HTTP status, so this is a message-shape change only.
+/// `VectorError::Db` exists, but this module keeps `StoreFailed` with an
+/// operation-name prefix: the prefix keeps the message diagnosable, and the
+/// variant is part of this module's observable error shape (callers map every
+/// variant to the same HTTP status, so switching would buy nothing).
 fn db_error(operation: &str, err: DbErr) -> VectorError {
     VectorError::StoreFailed(format!("{operation}: {err}"))
 }

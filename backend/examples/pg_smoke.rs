@@ -88,16 +88,26 @@ async fn main() {
     check("emails entity inserts (naive TIMESTAMP binds)", true);
 
     // 3. update_email_state — boolean→i32 widening, TEXT deleted_at.
-    let n = db::update_email_state(&conn, "email-3", true, false, "TRASH", Some("2026-07-30T00:00:00+00:00"))
-        .await
-        .expect("update_email_state");
+    let n = db::update_email_state(
+        &conn,
+        "email-3",
+        true,
+        false,
+        "TRASH",
+        Some("2026-07-30T00:00:00+00:00"),
+    )
+    .await
+    .expect("update_email_state");
     check("update_email_state", n == 1);
 
     // 4. InsightEngine — GROUP BY + repeated COUNT(*) HAVING, MIN/MAX decode,
     //    read-rate CASE WHEN aggregate, derived-table alias.
     let store: Arc<dyn VectorStoreBackend> = Arc::new(InMemoryVectorStore::new());
     let insights = emailibrium::vectors::insights::InsightEngine::new(db.clone(), store.clone());
-    let subs = insights.detect_subscriptions().await.expect("subscriptions");
+    let subs = insights
+        .detect_subscriptions()
+        .await
+        .expect("subscriptions");
     check(
         "insights.detect_subscriptions (HAVING COUNT(*) >= 3)",
         subs.len() == 1 && subs[0].sender_address == "news@example.com" && subs[0].has_unsubscribe,
@@ -115,8 +125,14 @@ async fn main() {
 
     // 5. ReindexOrchestrator — KV upsert + update_many.
     let reindex = emailibrium::vectors::reindex::ReindexOrchestrator::new(db.clone());
-    let first = reindex.check_model_change("model-a", 384).await.expect("first");
-    let changed = reindex.check_model_change("model-b", 384).await.expect("second");
+    let first = reindex
+        .check_model_change("model-a", 384)
+        .await
+        .expect("first");
+    let changed = reindex
+        .check_model_change("model-b", 384)
+        .await
+        .expect("second");
     let stale = reindex.mark_all_stale().await.expect("stale");
     check(
         "reindex model-change upsert + mark_all_stale",
@@ -125,10 +141,19 @@ async fn main() {
 
     // 6. InteractionTracker — BOOLEAN binds, aggregates, grouped counts.
     let tracker = emailibrium::vectors::interactions::InteractionTracker::new(db.clone());
-    let q1 = tracker.record_search("quarterly report").await.expect("search");
+    let q1 = tracker
+        .record_search("quarterly report")
+        .await
+        .expect("search");
     let _q2 = tracker.record_search("lunch").await.expect("search2");
-    tracker.record_click(&q1, "email-0", 2).await.expect("click");
-    tracker.record_feedback(&q1, "email-0", "relevant").await.expect("fb");
+    tracker
+        .record_click(&q1, "email-0", 2)
+        .await
+        .expect("click");
+    tracker
+        .record_feedback(&q1, "email-0", "relevant")
+        .await
+        .expect("fb");
     let ctr = tracker.get_click_through_rate().await.expect("ctr");
     let dist = tracker.get_rank_distribution().await.expect("dist");
     let listed = tracker.get_interactions(10).await.expect("list");
@@ -157,7 +182,10 @@ async fn main() {
             .expect("obs b");
     }
     let summary = eval.conclude_test(&test.test_id).await.expect("conclude");
-    check("evaluation create/record/conclude", summary.recommendation == "b");
+    check(
+        "evaluation create/record/conclude",
+        summary.recommendation == "b",
+    );
 
     // 8. UserLearningStore — composite-PK upsert, DB reload.
     let learning = emailibrium::vectors::user_learning::UserLearningStore::new(
@@ -187,7 +215,8 @@ async fn main() {
     );
 
     // 9. VectorBackupService — BYTEA blobs, OR-REPLACE→DO-UPDATE upsert.
-    let backup = emailibrium::vectors::backup::VectorBackupService::new(db.clone(), store.clone(), None);
+    let backup =
+        emailibrium::vectors::backup::VectorBackupService::new(db.clone(), store.clone(), None);
     let doc = emailibrium::vectors::types::VectorDocument {
         id: emailibrium::vectors::types::VectorId::new(),
         email_id: "email-0".into(),
@@ -228,17 +257,25 @@ async fn main() {
         }],
     );
     cluster.persist_clusters().await.expect("persist clusters");
-    let loaded = cluster.load_persisted_clusters().await.expect("load clusters");
+    let loaded = cluster
+        .load_persisted_clusters()
+        .await
+        .expect("load clusters");
     check("clustering persist/load (txn + catalog check)", loaded == 1);
 
     // 11. RemoteWipeService — per-backend DDL + sea-query audit insert.
     let wipe = emailibrium::vectors::remote_wipe::RemoteWipeService::new(db.clone());
     wipe.ensure_table().await.expect("wipe table");
     let result = wipe.wipe_vectors_only().await.expect("wipe vectors only");
-    check("remote_wipe ensure_table + vectors-only wipe + audit log", result.backups_deleted == 0);
+    check(
+        "remote_wipe ensure_table + vectors-only wipe + audit log",
+        result.backups_deleted == 0,
+    );
 
     // 12. CheckpointService — TEXT timestamps, upsert, retention delete.
-    use emailibrium::email::checkpoint::{CheckpointService, CheckpointState, ProcessingCheckpoint};
+    use emailibrium::email::checkpoint::{
+        CheckpointService, CheckpointState, ProcessingCheckpoint,
+    };
     let checkpoints = CheckpointService::new((*db).clone());
     checkpoints
         .save_checkpoint(&ProcessingCheckpoint {
@@ -254,7 +291,10 @@ async fn main() {
         })
         .await
         .expect("save checkpoint");
-    let got = checkpoints.get_checkpoint("job-1").await.expect("get checkpoint");
+    let got = checkpoints
+        .get_checkpoint("job-1")
+        .await
+        .expect("get checkpoint");
     check(
         "processing checkpoint upsert + read",
         got.map(|c| c.processed_count) == Some(2),
@@ -263,10 +303,18 @@ async fn main() {
     // 13. OfflineQueue — enqueue/dequeue over sync_queue.
     use emailibrium::email::offline_queue::{OfflineQueue, OperationType, QueuedOperation};
     let queue = OfflineQueue::new((*db).clone());
-    let op = QueuedOperation::new("acct-1".into(), OperationType::Archive, "email-0".into(), None);
+    let op = QueuedOperation::new(
+        "acct-1".into(),
+        OperationType::Archive,
+        "email-0".into(),
+        None,
+    );
     queue.enqueue(&op).await.expect("enqueue");
     let batch = queue.dequeue_batch(10).await.expect("dequeue");
-    check("offline_queue enqueue/dequeue", batch.len() == 1 && batch[0].target_id == "email-0");
+    check(
+        "offline_queue enqueue/dequeue",
+        batch.len() == 1 && batch[0].target_id == "email-0",
+    );
 
     println!("ALL PASS — phase-3 repo-layer ports verified against live postgres:16-alpine");
 }

@@ -1767,7 +1767,8 @@ mod tests {
 
     async fn insert_test_emails(db: &Database, account_id: &str, count: usize) {
         for i in 0..count {
-            let id = format!("email-{}", i);
+            // Account-prefixed ids so multi-account tests can seed bystanders.
+            let id = format!("{account_id}-email-{i}");
             let subject = format!("Test Subject {}", i);
             let from_addr = format!("sender{}@example.com", i);
             let body_text = format!("This is the body of test email number {}", i);
@@ -1855,6 +1856,42 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     }
 
+    /// Two-owner scoping pin: ingestion for one account must not consume the
+    /// bystander account's pending emails, and checkpoints stay per-account.
+    #[tokio::test]
+    async fn test_ingestion_scopes_to_the_target_account() {
+        let db = Arc::new(test_db().await);
+        insert_test_emails(&db, "acct-1", 2).await;
+        insert_test_emails(&db, "acct-2", 3).await;
+        let (pipeline, store, _) = make_pipeline(db.clone());
+
+        let _job_id = pipeline.start_ingestion("acct-1").await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+        // Only acct-1's two emails were embedded into the store.
+        assert_eq!(
+            store.count().await.unwrap(),
+            2,
+            "ingestion of acct-1 must not touch acct-2's pending emails"
+        );
+
+        // The bystander's rows are still pending in the database.
+        let pending_b: Vec<(String,)> = emails::Entity::find()
+            .select_only()
+            .column(emails::Column::Id)
+            .filter(emails::Column::AccountId.eq("acct-2"))
+            .filter(emails::Column::EmbeddingStatus.eq("pending"))
+            .into_tuple()
+            .all(&db.sea_orm())
+            .await
+            .unwrap();
+        assert_eq!(pending_b.len(), 3, "acct-2's emails stay pending");
+
+        // Checkpoints are per-account: acct-1 has one, acct-2 has none.
+        assert!(pipeline.get_checkpoint("acct-1").await.unwrap().is_some());
+        assert!(pipeline.get_checkpoint("acct-2").await.unwrap().is_none());
+    }
+
     #[tokio::test]
     async fn test_ingestion_embeds_emails() {
         let db = Arc::new(test_db().await);
@@ -1874,7 +1911,7 @@ mod tests {
         let row: Option<(Option<String>,)> = emails::Entity::find()
             .select_only()
             .column(emails::Column::EmbeddingStatus)
-            .filter(emails::Column::Id.eq("email-0"))
+            .filter(emails::Column::Id.eq("acct-1-email-0"))
             .into_tuple()
             .one(&db.sea_orm())
             .await
@@ -1902,7 +1939,7 @@ mod tests {
         let row: Option<(Option<String>,)> = emails::Entity::find()
             .select_only()
             .column(emails::Column::Category)
-            .filter(emails::Column::Id.eq("email-0"))
+            .filter(emails::Column::Id.eq("acct-1-email-0"))
             .into_tuple()
             .one(&db.sea_orm())
             .await
