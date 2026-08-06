@@ -51,13 +51,32 @@ fn selects_postgres(url: &str) -> bool {
 ///
 /// The marker is `***@` rather than deletion so a reader can tell redaction happened.
 fn sanitized_endpoint(url: &str) -> String {
-    let (base, query) = match url.split_once('?') {
-        Some((base, query)) => (base, Some(query)),
-        None => (url, None),
+    // ORDER IS LOAD-BEARING: redact first, split the query second.
+    //
+    // Splitting the query first re-created the bug this function was rewritten to fix,
+    // one delimiter over: an unencoded '?' in a password (`postgres://user:p?ss@host/db`)
+    // made the split land INSIDE the credential, leaving `postgres://user:p` with no '@'
+    // to redact against — so the password's prefix went to the log. Redacting against the
+    // last '@' in the WHOLE url first means no credential text survives to be parsed.
+    let (scheme, rest) = match url.split_once("://") {
+        Some((scheme, rest)) => (format!("{scheme}://"), rest),
+        None => (String::new(), url),
+    };
+    // LAST '@' in the whole remainder — see the doc comment: narrowing to an authority
+    // first is what let an unencoded '/' inside a password escape redaction.
+    let remainder = match rest.rsplit_once('@') {
+        Some((_userinfo, after)) => format!("***@{after}"),
+        None => rest.to_string(),
+    };
+
+    let (base, query) = match remainder.split_once('?') {
+        Some((base, query)) => (base.to_string(), Some(query.to_string())),
+        None => (remainder, None),
     };
 
     // Allowlist, never a denylist: an unknown future parameter is dropped, not exposed.
     let identifying: Vec<&str> = query
+        .as_deref()
         .map(|q| {
             q.split('&')
                 .filter(|param| {
@@ -68,18 +87,7 @@ fn sanitized_endpoint(url: &str) -> String {
         })
         .unwrap_or_default();
 
-    let (scheme, rest) = match base.split_once("://") {
-        Some((scheme, rest)) => (format!("{scheme}://"), rest),
-        None => (String::new(), base),
-    };
-    // LAST '@' in the whole remainder — see the doc comment: narrowing to an authority
-    // first is what let an unencoded '/' inside a password escape redaction.
-    let remainder = match rest.rsplit_once('@') {
-        Some((_userinfo, after)) => format!("***@{after}"),
-        None => rest.to_string(),
-    };
-
-    let mut endpoint = format!("{scheme}{remainder}");
+    let mut endpoint = format!("{scheme}{base}");
     if !identifying.is_empty() {
         endpoint.push('?');
         endpoint.push_str(&identifying.join("&"));
@@ -410,6 +418,27 @@ mod tests {
             // that located the authority before looking for the '@'.
             (
                 "postgres://alice:s3/cret@db.internal/app",
+                "postgres://***@db.internal/app",
+            ),
+            // Password containing an unencoded '?', which defeated the version that
+            // split the query string before redacting.
+            (
+                "postgres://alice:s3?cret@db.internal/app",
+                "postgres://***@db.internal/app",
+            ),
+            // Percent-encoded '@' inside the password must not be mistaken for the
+            // delimiter — the LAST '@' is still the real one.
+            (
+                "postgres://alice:p%40s3cret@db.internal/app",
+                "postgres://***@db.internal/app",
+            ),
+            // Empty password, and no password at all: both still redact the userinfo.
+            (
+                "postgres://alice:@db.internal/app",
+                "postgres://***@db.internal/app",
+            ),
+            (
+                "postgres://alice@db.internal/app",
                 "postgres://***@db.internal/app",
             ),
             // The accepted cost of that fix: a '@' in a SQLite FILENAME is redacted too,
