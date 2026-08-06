@@ -54,7 +54,7 @@ This phase is plumbing, not the full migration. Two things are true simultaneous
 
 ### 2.4 Convenience across every deploy/run mode (added mid-plan, see §Context)
 
-Because URL-scheme dispatch is the _only_ selection mechanism, "which mode am I in" and "which database am I using" are orthogonal by construction — the same `EMAILIBRIUM_DATABASE_URL` value means the same thing whether it's set in a shell before `cargo run` (native), baked into `config/environments/config.*.yaml` (docker), or delivered via the `database_url` Docker secret. What phase 3 adds is _operational_ convenience on top of this: gating `docker-compose.yml`'s `postgres` service behind a compose profile (mirroring the existing `qdrant` service's opt-in pattern) so a SQLite-only docker deployment isn't forced to run a Postgres container it never talks to, and surfacing the toggle in `justfile`'s help text and `docs/deployment-guide.md` per mode. None of that changes this ADR's core mechanism — it just makes the mechanism visible and low-friction wherever the app runs.
+Because URL-scheme dispatch is the _only_ selection mechanism, "which mode am I in" and "which database am I using" are orthogonal by construction — the same `EMAILIBRIUM_DATABASE_URL` value means the same thing whether it's set in a shell before `cargo run` (native), baked into `config/environments/config.*.yaml` (docker), or delivered via the `database_url` Docker secret. What phase 4 adds is _operational_ convenience on top of this: gating `docker-compose.yml`'s `postgres` service behind a compose profile (mirroring the existing `qdrant` service's opt-in pattern) so a SQLite-only docker deployment isn't forced to run a Postgres container it never talks to, and surfacing the toggle in `justfile`'s help text and at the point of use in `docker-compose.yml` (phase 5 then does the same in `docs/deployment-guide.md` per mode). None of that changes this ADR's core mechanism — it just makes the mechanism visible and low-friction wherever the app runs.
 
 ## 3. Consequences
 
@@ -79,6 +79,10 @@ Because URL-scheme dispatch is the _only_ selection mechanism, "which mode am I 
 
 - `backend/src/db/mod.rs` — the `Database` enum, `connect()`, `run_migrations()`, `pool()`.
 - `backend/config.yaml` — the `database_url` key and its inline scheme documentation.
-- `.autopilot/pipeline.yml` (`feature_id: postgres-support`) — the full phase plan (0: this ADR + abstraction; 1: migrations; 2: call-site migration; 3: CI + docker-compose profile + justfile docs; 4: deployment docs).
-- `docs/deployment-guide.md` — operator-facing setup (updated in phase 4).
-- `docs/ADRs/ADR-032-make-to-just-task-runner.md` — the `just` task runner this ADR's phase 3 extends with the docker-compose profile toggle.
+- `.autopilot/pipeline.yml` (`feature_id: postgres-support`) — the full phase plan. Phase numbers
+  below are the post-RE-PLAN-2 ones (2026-08-03 renumbered the old 3/4/5 to 4/5/6 when the SeaORM
+  pivot split the call-site migration in two): 0: this ADR + abstraction; 1: migrations; 2: SeaORM
+  dialect layer + exemplar ports (ADR-036); 3: the full port; 4: CI + docker-compose profile +
+  justfile docs; 5: deployment docs; 6: PostgreSQL full-text search (ADR-034).
+- `docs/deployment-guide.md` — operator-facing setup (updated in phase 5).
+- `docs/ADRs/ADR-032-make-to-just-task-runner.md` — the `just` task runner this ADR's phase 4 extends with the docker-compose profile toggle.

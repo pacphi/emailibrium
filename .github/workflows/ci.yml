@@ -257,6 +257,31 @@ jobs:
         working-directory: backend
         run: cargo nextest run --profile ci --archive-file nextest.tar.zst --workspace-remap .
 
+      # The whole point of this job, guarded rather than assumed.
+      #
+      # The three PostgreSQL-only tests skip AND PASS when EMAILIBRIUM_TEST_PG_URL is
+      # unset or misnamed — they eprintln and return, and nextest reports PASS. Worse,
+      # nextest suppresses output for passing tests, so grepping the log for the skip
+      # message would not catch it either. A typo in the env var name above would
+      # therefore leave this job green while testing nothing against PostgreSQL — the
+      # exact "green but proving nothing" failure that burned smoke.yml for its whole
+      # life (ADR-033 Context) and that this phase exists to eliminate.
+      #
+      # So assert against the database instead of the log: those tests are the only
+      # thing in the suite that runs migrations here, so a populated _sqlx_migrations
+      # means they really executed. psql comes from the service image itself (already
+      # pulled), so this assumes no client tooling on the runner.
+      - name: The PostgreSQL-only tests really ran
+        run: |
+          applied=$(docker run --rm --network host -e PGPASSWORD=emailibrium-ci \
+            postgres:16-alpine psql -h localhost -U emailibrium -d emailibrium_test -tAc \
+            "select count(*) from _sqlx_migrations where success" 2>/dev/null || echo 0)
+          echo "migrations applied by the PostgreSQL-only tests: ${applied}"
+          if [ "${applied:-0}" -lt 1 ]; then
+            echo "::error::EMAILIBRIUM_TEST_PG_URL did not reach the postgres_* tests — they skipped and passed, so this job proved nothing about PostgreSQL"
+            exit 1
+          fi
+
   rust-audit:
     name: Rust Security Audit
     runs-on: ubuntu-latest
