@@ -320,6 +320,28 @@ async fn main() -> anyhow::Result<()> {
 
     // Initialize database
     let db = Arc::new(db::Database::connect(&config.database_url).await?);
+    // Name the backend that was actually connected — the only startup evidence of
+    // WHICH database this deployment is running on. .github/workflows/smoke.yml
+    // asserts on this line to prove a postgres:// deployment is genuinely on
+    // PostgreSQL (it silently ran SQLite before — ADR-033 Context). The URL itself is
+    // never logged: it carries the database password.
+    // Provenance rides on the same line rather than a separate WARN. The hazard being
+    // guarded is a one-time upgrade surprise — this variable used to be inert, so a
+    // value left in a shell profile or a Compose .env was harmless and is not any more —
+    // but warning on every start would also fire for every correctly configured
+    // PostgreSQL deployment, which is how a warning becomes something people filter out.
+    // Stated as fact on the info line, it answers "why am I on this database" without
+    // crying wolf.
+    let selected_by = if std::env::var_os("EMAILIBRIUM_DATABASE_URL").is_some() {
+        " [selected by EMAILIBRIUM_DATABASE_URL]"
+    } else {
+        ""
+    };
+    tracing::info!(
+        "{}{}",
+        db.startup_backend_line(&config.database_url),
+        selected_by
+    );
     db.run_migrations().await?;
     // SeaORM handle over the SAME pool (ADR-036) — services port onto this
     // during the transition; the enum stays for not-yet-ported call sites.

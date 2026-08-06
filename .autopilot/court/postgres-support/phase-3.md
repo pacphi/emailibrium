@@ -10,24 +10,24 @@
 
 ## Panel
 
-| Seat                        | Route                | Status                                       | Charges |
-| --------------------------- | -------------------- | -------------------------------------------- | ------- |
-| prosecutor.brutal-honesty   | claude-code (agent)  | filed                                        | 17      |
-| prosecutor.mutation         | claude-code (agent, isolated worktree) | filed (12 mutations applied empirically) | 8 |
-| prosecutor.security-scanner | codex                | filed (lean re-run after full-diff stall)    | 2       |
-| prosecutor.codex-review     | codex                | filed (lean re-run after full-diff stall)    | 1       |
-| prosecutor.devils-advocate  | codex                | **skipped** — stalled >30 min; see note      | —       |
-| prosecutor.sherlock         | codex                | **skipped** — stalled >30 min; see note      | —       |
-| Tier-3 floor: scoping-tests | claude-code (agent)  | filed                                        | 6       |
-| Tier-3 floor: compliance    | claude-code (agent)  | filed                                        | 5       |
-| defense                     | claude-code          | this record's dispositions                   | —       |
-| jury                        | codex                | see Verdict                                  | —       |
+| Seat                        | Route                                  | Status                                    | Charges |
+| --------------------------- | -------------------------------------- | ----------------------------------------- | ------- |
+| prosecutor.brutal-honesty   | claude-code (agent)                    | filed                                     | 17      |
+| prosecutor.mutation         | claude-code (agent, isolated worktree) | filed (12 mutations applied empirically)  | 8       |
+| prosecutor.security-scanner | codex                                  | filed (lean re-run after full-diff stall) | 2       |
+| prosecutor.codex-review     | codex                                  | filed (lean re-run after full-diff stall) | 1       |
+| prosecutor.devils-advocate  | codex                                  | **skipped** — stalled >30 min; see note   | —       |
+| prosecutor.sherlock         | codex                                  | **skipped** — stalled >30 min; see note   | —       |
+| Tier-3 floor: scoping-tests | claude-code (agent)                    | filed                                     | 6       |
+| Tier-3 floor: compliance    | claude-code (agent)                    | filed                                     | 5       |
+| defense                     | claude-code                            | this record's dispositions                | —       |
+| jury                        | codex                                  | see Verdict                               | —       |
 
 **Skipped-seat note (per config `_acceptedRisk` mitigation contract):** all four codex seats
 stalled on the full 83-file diff (>30 min silent, the known failure class from phase 2 — this time
 with diff-reading-only prompts, so the stall is diff-size, not cargo). Per config,
 security-scanner is never omitted and was **re-run lean** (explicit file list) to completion;
-codex-review was likewise re-run lean so both vendors are represented among *filed* prosecutors
+codex-review was likewise re-run lean so both vendors are represented among _filed_ prosecutors
 (`minDistinctVendors: 2` holds; all grading remains codex). devils-advocate's completeness probe
 is covered by the two Tier-3 floor filings (a full owner-scoping coverage census and a
 project-rule/ADR compliance audit with a checked-clean list); sherlock's forensic
@@ -100,18 +100,18 @@ embedding-failure fake (the progression pin covers the update-column set general
 2. **[MAJOR] `test_sqlite_database` justification false; crate already had the fix idiom.**
    REMEDIATED (`e9be763`): `cfg(any(test, feature = "test-vectors"))`, honest doc.
 3. **[MAJOR] `now_text()` copy-pasted four times.** REMEDIATED (`e9be763`): one `db::now_text()`
-   owns the format contract; four copies deleted. (The two "inline" sites format *other*
+   owns the format contract; four copies deleted. (The two "inline" sites format _other_
    instants — a retention cutoff and a test seed — not now().)
 4. **[MAJOR] 21 hand-rolled migration replayers.** REMEDIATED (`e9be763`):
    `db::apply_sqlite_migrations()` is the one copy; 25 call sites converted (incl. the concat!,
    single-file, and path-match variants).
 5. **[MAJOR] ensure_table question answered two opposite ways.** REMEDIATED (`e9be763`): every
-   migration-owned `ensure_*` deleted (audit/privacy no-ops, user_learning/evaluation DDL
+   migration-owned `ensure_*` deleted (audit/privacy no-ops, `user_learning`/evaluation DDL
    replicas) and their composition-root calls dropped; tests replay migrations 007/009; the one
-   keeper is remote_wipe's genuinely migration-less table. The two hand-written *minimal test
-   schemas* (offline_queue/checkpoint) ACCEPTED as test fixtures, not schema copies.
+   keeper is `remote_wipe`'s genuinely migration-less table. The two hand-written _minimal test
+   schemas_ (`offline_queue`/`checkpoint`) ACCEPTED as test fixtures, not schema copies.
 6. **[MAJOR] Four comments falsified by this very range.** REMEDIATED: row 1 in `9e03a6d`; rows
-   2–4 in `e9be763` (ensure_* comments deleted with the fns; AppState.orm doc rewritten to the
+   2–4 in `e9be763` (`ensure_*` comments deleted with the fns; AppState.orm doc rewritten to the
    real end-state + `pl-database-enum-in-signatures`; the "coexists" comment resolved by deleting
    the dead variant it described).
 7. **[MAJOR] Escape hatch ~35× wider than the ADR; ADR untouched.** REMEDIATED (`9e03a6d`): §5

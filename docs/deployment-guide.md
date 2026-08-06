@@ -206,7 +206,7 @@ docker compose down
 | ---------- | -------- | ------------------------------------------------------------------------------------------------------- |
 | `backend`  | 8080     | Axum API server (Rust 1.97+)                                                                            |
 | `frontend` | 3000     | Vite dev server (or Nginx for production)                                                               |
-| `postgres` | internal | PostgreSQL 16 (no external port)                                                                        |
+| `postgres` | internal | PostgreSQL 16, no external port (profile-gated — starts only with `--profile postgres`)                 |
 | `redis`    | internal | Redis 7 cache (no external port)                                                                        |
 | `qdrant`   | internal | Optional vector store backend (profile-gated — see [Vector Store Backend](#vector-store-backend) below) |
 

@@ -48,7 +48,10 @@ jobs:
           printf '%s' "$(openssl rand -hex 32)" > secrets/dev/jwt_secret
           printf '%s' "$(openssl rand -hex 32)" > secrets/dev/oauth_encryption_key
           printf '%s' "smoke-test-db-password"  > secrets/dev/db_password
-          printf '%s' "postgres://emailibrium:smoke-test-db-password@postgres:5432/emailibrium" > secrets/dev/database_url
+          # The DEFAULT deployment's URL — SQLite. The PostgreSQL leg below rewrites
+          # this file, because the connection URL is the whole backend selector
+          # (ADR-033) and this file is where a compose deployment supplies it.
+          printf '%s' "sqlite:/app/data/emailibrium.db?mode=rwc" > secrets/dev/database_url
           for f in google_client_id google_client_secret microsoft_client_id microsoft_client_secret; do
             printf '%s' "placeholder" > "secrets/dev/$f"
           done
@@ -56,7 +59,14 @@ jobs:
       - name: Build images
         run: docker compose build backend frontend
 
-      - name: Bring the stack up
+      # ── Leg 1: the default deployment (SQLite, no profile) ────────────────
+      #
+      # No --profile flag, so the `postgres` service never starts. That is the
+      # property being asserted as much as the health checks are: a SQLite
+      # deployment must be a complete, valid project on its own, not one that
+      # happens to also boot a database container it never talks to.
+
+      - name: Bring the default (SQLite) stack up
         run: docker compose up -d
 
       # THE point of this workflow. `docker compose up --wait` blocks until every
@@ -66,6 +76,14 @@ jobs:
       # step is what would have caught that.
       - name: Wait for healthy
         run: docker compose up -d --wait --wait-timeout 300
+
+      - name: No postgres container runs without the profile
+        run: |
+          if docker compose ps --all --services | grep -qx postgres; then
+            echo "::error::postgres started without --profile postgres"
+            docker compose ps --all
+            exit 1
+          fi
 
       - name: Backend answers its health endpoint
         run: |
@@ -81,12 +99,72 @@ jobs:
             http://localhost:3000/ | grep -qi "<!doctype html" \
             || { echo "::error::frontend did not return an HTML document"; exit 1; }
 
+      # "Healthy" does not mean "on the database you think". This asserts the
+      # backend NAMED SQLite at startup — see the Leg 2 comment for why the two
+      # legs assert on the log line rather than on the URL they were handed.
+      - name: Backend reports the SQLite backend
+        run: |
+          docker compose logs backend | grep -F "Database backend: SQLite" \
+            || { echo "::error::backend did not report the SQLite backend"; \
+                 docker compose logs backend --tail 100; exit 1; }
+
+      # Teardown is unconditional-on-success only: if this leg failed, the stack is
+      # deliberately left standing for the `if: failure()` diagnostics at the end,
+      # and the final `if: always()` teardown still cleans up.
+      - name: Tear down the SQLite stack
+        run: docker compose down -v
+
+      # ── Leg 2: the PostgreSQL deployment (--profile postgres) ─────────────
+      #
+      # This leg is why the workflow exists in its current form. It USED to run
+      # exactly once, with a postgres:// URL in the database_url secret, and pass —
+      # while the app silently ran on SQLite the whole time, because the secret
+      # resolved to DATABASE_URL and the app only ever reads EMAILIBRIUM_DATABASE_URL
+      # (ADR-033 Context). A green "the stack comes up" said nothing about WHICH
+      # database it came up on, so the assertion below is on the backend's own
+      # report of the connection it opened, not on the URL it was handed.
+
+      - name: Point the database_url secret at PostgreSQL
+        run: |
+          printf '%s' "postgres://emailibrium:smoke-test-db-password@postgres:5432/emailibrium" \
+            > secrets/dev/database_url
+
+      - name: Bring the PostgreSQL stack up
+        run: docker compose --profile postgres up -d --wait --wait-timeout 300
+
+      - name: Backend answers its health endpoint (PostgreSQL)
+        run: |
+          curl --fail --silent --show-error --retry 10 --retry-delay 3 --retry-all-errors \
+            http://localhost:8080/api/v1/vectors/health
+
+      - name: Backend reports the PostgreSQL backend
+        run: |
+          docker compose --profile postgres logs backend \
+            | grep -F "Database backend: PostgreSQL" \
+            || { echo "::error::backend did not report the PostgreSQL backend — the postgres:// URL never reached the app"; \
+                 docker compose --profile postgres logs backend --tail 100; exit 1; }
+
+      # The log line proves which driver the app OPENED; this proves it actually USED
+      # it. Startup runs migrations, so a PostgreSQL deployment that connected but
+      # could not write would leave this table empty — a state a healthy container and
+      # a correct log line would both happily report.
+      - name: PostgreSQL holds the schema the app wrote
+        run: |
+          applied=$(docker compose --profile postgres exec -T postgres \
+            psql -U emailibrium -d emailibrium -tAc \
+            "select count(*) from _sqlx_migrations where success")
+          echo "migrations recorded in PostgreSQL: ${applied}"
+          if [ "${applied:-0}" -lt 1 ]; then
+            echo "::error::no successful migrations recorded in PostgreSQL — the app never wrote to it"
+            exit 1
+          fi
+
       - name: Diagnostics on failure
         if: failure()
         run: |
-          docker compose ps
-          docker compose logs --tail 200
+          docker compose --profile postgres ps
+          docker compose --profile postgres logs --tail 200
 
       - name: Tear down
         if: always()
-        run: docker compose down -v
+        run: docker compose --profile postgres down -v
