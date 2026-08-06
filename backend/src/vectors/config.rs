@@ -126,10 +126,23 @@ impl VectorConfig {
             // it); a loud failure is the right outcome, and no code path in this repo
             // sets a struct-shaped name.
             //
-            // Known remaining gap (not this change's scope): a flat multi-word field
-            // *inside* a nested struct, e.g. `store.qdrant_url`, is reachable by neither
-            // provider — EMAILIBRIUM_STORE_QDRANT_URL splits to `store.qdrant.url` and
-            // flattens to `store_qdrant_url`.
+            // KNOWN REMAINING GAP, and it is wider than this change fixes: a flat
+            // multi-word field *inside* a nested struct is addressable by NEITHER
+            // provider. EMAILIBRIUM_STORE_QDRANT_URL splits to `store.qdrant.url` and
+            // flattens to `store_qdrant_url`; serde ignores both. That shape is not rare
+            // and it is not undocumented — docs/configuration-reference.md advertises
+            // EMAILIBRIUM_EMBEDDING_CACHE_SIZE, EMAILIBRIUM_ENCRYPTION_MASTER_PASSWORD,
+            // EMAILIBRIUM_BACKUP_INTERVAL_SECS and EMAILIBRIUM_LEARNING_SONA_ENABLED as
+            // the canonical examples of this whole mechanism, and every one of them is
+            // silently dropped today (pre-existing: the split-only provider dates to the
+            // initial commit). docker-compose.yml sets one of them.
+            //
+            // Not fixed here because the fix changes the env contract for all of them at
+            // once — a candidate is a third provider splitting on the FIRST underscore
+            // only (`store_qdrant_url` -> `store.qdrant_url`), which widens what resolves
+            // without changing any variable that resolves today. That deserves its own
+            // review, so it is recorded as `pl-nested-flat-env-keys-dropped` instead of
+            // being folded into a CI phase.
             .merge(Env::prefixed("EMAILIBRIUM_").split("_"))
             .merge(Env::prefixed("EMAILIBRIUM_"))
             .extract()
