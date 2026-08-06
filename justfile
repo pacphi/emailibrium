@@ -87,8 +87,10 @@ help:
 
     {{BOLD}}Database (SQLite by default, PostgreSQL is one flag):{{RESET}}
       native   EMAILIBRIUM_DATABASE_URL=postgres://user:pw@localhost:5432/emailibrium just dev
-      docker   EMAILIBRIUM_DATABASE_URL=postgres://emailibrium:devpass@postgres:5432/emailibrium \
-                 just docker-up-postgres        (or docker-up-dev-postgres)
+               (same variable for dev-llm, and for `cargo test` / `cargo run` directly)
+      docker   just docker-up-postgres          (or docker-up-dev-postgres)
+               — derives the URL from secrets/$APP_ENV/db_password; export
+                 EMAILIBRIUM_DATABASE_URL first to point at an external PostgreSQL.
       The URL's scheme IS the selector (ADR-033) — sqlite:… or postgres://…; there is
       no separate backend flag. In Docker the --profile postgres flag those recipes
       pass is what starts the database container the URL points at.
@@ -148,9 +150,10 @@ help:
       docker-up-postgres     - Start production stack against PostgreSQL
       docker-up-dev          - Start dev stack (hot-reload, SQLite)
       docker-up-dev-postgres - Start dev stack against PostgreSQL
-      docker-down            - Stop all containers
+      docker-down            - Stop all containers (incl. the postgres profile)
       docker-down-volumes    - Stop + remove volumes (DESTROYS DATA)
-      docker-restart         - Restart all containers
+      docker-restart         - Restart all containers (SQLite)
+      docker-restart-postgres - Restart all containers against PostgreSQL
       docker-build           - Build Docker images
       docker-build-no-cache  - Build images without cache
       docker-logs            - Tail all container logs
@@ -551,19 +554,45 @@ docker-up:
     @echo "{{GREEN}}Backend: http://localhost:8080  Frontend: http://localhost:3000{{RESET}}"
 
 # Start production stack against PostgreSQL
-#
-# Two things have to line up, and this recipe supplies the first: --profile postgres
-# starts the database container (it is opt-in, so a SQLite deployment never runs one).
-# The second is the connection URL, which is the actual backend selector (ADR-033) —
-# export EMAILIBRIUM_DATABASE_URL, or put the postgres:// URL in the database_url
-# secret. Starting the container without pointing the app at it just leaves you on
-# SQLite with an idle database running.
 [group('docker')]
 docker-up-postgres:
-    @echo "{{GREEN}}Starting Emailibrium stack (PostgreSQL)...{{RESET}}"
-    @{{COMPOSE}} --profile postgres up -d
-    @echo "{{YELLOW}}Backend is on PostgreSQL only if EMAILIBRIUM_DATABASE_URL (or the database_url secret) is a postgres:// URL.{{RESET}}"
-    @echo "{{GREEN}}Backend: http://localhost:8080  Frontend: http://localhost:3000{{RESET}}"
+    @just _compose-up-postgres "{{COMPOSE}}" "production"
+
+# Start dev stack (hot-reload) against PostgreSQL
+[group('docker')]
+docker-up-dev-postgres:
+    @just _compose-up-postgres "{{COMPOSE_DEV}}" "dev"
+
+# Shared body of the two PostgreSQL up recipes.
+#
+# TWO things have to line up for a docker deployment to be on PostgreSQL, and a
+# recipe that supplied only the first was the trap this exists to close: --profile
+# postgres starts the database container, but the connection URL is what actually
+# selects the backend (ADR-033). Enabling the profile alone leaves the app on SQLite
+# next to an idle database — a failure that looks like success.
+#
+# So this derives the matching URL from the same db_password secret the postgres
+# service reads, making `just docker-up-postgres` genuinely one command. An explicit
+# EMAILIBRIUM_DATABASE_URL always wins, so pointing at an external PostgreSQL still
+# works — and in that case the local container is redundant but harmless.
+[private]
+_compose-up-postgres compose label:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [[ -z "${EMAILIBRIUM_DATABASE_URL:-}" ]]; then
+      pw_file="secrets/${APP_ENV:-dev}/db_password"
+      if [[ ! -f "$pw_file" ]]; then
+        echo "{{RED}}Missing $pw_file — run 'just docker-secrets' first, or export EMAILIBRIUM_DATABASE_URL to use an external PostgreSQL.{{RESET}}" >&2
+        exit 1
+      fi
+      export EMAILIBRIUM_DATABASE_URL="postgres://emailibrium:$(cat "$pw_file")@postgres:5432/emailibrium"
+      echo "{{GREEN}}Using the compose PostgreSQL service (URL derived from $pw_file).{{RESET}}"
+    else
+      echo "{{GREEN}}Using the EMAILIBRIUM_DATABASE_URL already set in the environment.{{RESET}}"
+    fi
+    echo "{{GREEN}}Starting Emailibrium {{label}} stack (PostgreSQL)...{{RESET}}"
+    {{compose}} --profile postgres up -d
+    echo "{{GREEN}}Backend: http://localhost:8080  Frontend: http://localhost:3000{{RESET}}"
 
 # Start dev stack (hot-reload, SQLite — the default backend)
 [group('docker')]
@@ -572,21 +601,14 @@ docker-up-dev:
     @{{COMPOSE_DEV}} up -d
     @echo "{{GREEN}}Backend: http://localhost:8080  Frontend: http://localhost:3000{{RESET}}"
 
-# Start dev stack (hot-reload) against PostgreSQL — see docker-up-postgres
-[group('docker')]
-docker-up-dev-postgres:
-    @echo "{{GREEN}}Starting Emailibrium dev stack (PostgreSQL)...{{RESET}}"
-    @{{COMPOSE_DEV}} --profile postgres up -d
-    @echo "{{YELLOW}}Backend is on PostgreSQL only if EMAILIBRIUM_DATABASE_URL (or the database_url secret) is a postgres:// URL.{{RESET}}"
-    @echo "{{GREEN}}Backend: http://localhost:8080  Frontend: http://localhost:3000{{RESET}}"
 
-# Stop and remove containers (including the opt-in postgres one)
-#
 # --profile postgres is required for teardown, not optional tidiness: `docker compose
 # down` computes the project from the ACTIVE profiles, so without it a container
 # started by docker-up-postgres is left running while the command reports success.
 # (`docker compose ps` does list it either way — the asymmetry is easy to miss.)
 # Harmless when postgres was never started.
+#
+# Stop and remove containers (including the opt-in postgres one)
 [group('docker')]
 docker-down:
     @{{COMPOSE}} --profile postgres down
@@ -596,9 +618,18 @@ docker-down:
 docker-down-volumes:
     @{{COMPOSE}} --profile postgres down -v
 
-# Restart all containers
+# Restart is NOT backend-preserving, and cannot be: `down` destroys the containers
+# that knew which URL they were started with. Restarting a PostgreSQL deployment
+# with this recipe would stop its database (docker-down now tears the profile down
+# too) and bring the backend back up on SQLite — use docker-restart-postgres.
+#
+# Restart all containers (SQLite — the default backend)
 [group('docker')]
 docker-restart: docker-down docker-up
+
+# Restart all containers against PostgreSQL
+[group('docker')]
+docker-restart-postgres: docker-down docker-up-postgres
 
 # Build Docker images
 [group('docker')]

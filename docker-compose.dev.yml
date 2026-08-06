@@ -30,6 +30,12 @@ services:
       - /app/node_modules
     command: pnpm dev-web
 
+  # Opt-in, exactly as in docker-compose.yml — this override only adds a port, it does
+  # not re-enable the service. `just docker-up-dev` runs SQLite and never starts this;
+  # `just docker-up-dev-postgres` passes --profile postgres AND supplies the matching
+  # EMAILIBRIUM_DATABASE_URL, which is the actual backend selector (ADR-033).
+  # An override for a profile-disabled service is inert, not an error — the dev overlay
+  # validates with and without the profile.
   postgres:
     ports:
       - "5432:5432" # Exposed for local tools (DBeaver, psql)

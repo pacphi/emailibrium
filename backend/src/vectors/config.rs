@@ -110,11 +110,21 @@ impl VectorConfig {
             // The unsplit provider maps that same variable to the flat `database_url` key
             // it was always meant to set.
             //
-            // They compose rather than conflict: each provider's non-matching keys land as
-            // unknown fields serde ignores (`database.url` from the first, `database_url`
-            // as an unknown *nested* name is not produced at all by the second). Later
-            // merges win, so a variable both providers can resolve — a single-word one like
-            // EMAILIBRIUM_HOST — resolves to the same value either way.
+            // For every variable this project actually sets they compose rather than
+            // conflict: each provider's non-matching keys land as unknown fields serde
+            // ignores (`database.url` from the first; the second never produces a nested
+            // name at all). A single-word variable both can resolve — EMAILIBRIUM_HOST —
+            // yields the same value either way, so merge order is not observable there.
+            //
+            // The one case where order IS observable, and it is a conflict rather than a
+            // composition: setting BOTH a struct-shaped name and a child of it, e.g.
+            // EMAILIBRIUM_STORE together with EMAILIBRIUM_STORE_BACKEND. The unsplit
+            // provider merges last and writes a scalar `store` over the split provider's
+            // `store` dict, and extraction then fails with a type error instead of
+            // silently picking one. That collision is inherent to a flat env namespace
+            // over a nested config (the single-provider version had its own version of
+            // it); a loud failure is the right outcome, and no code path in this repo
+            // sets a struct-shaped name.
             //
             // Known remaining gap (not this change's scope): a flat multi-word field
             // *inside* a nested struct, e.g. `store.qdrant_url`, is reachable by neither
@@ -1324,6 +1334,29 @@ mod tests {
 
     /// With no env override the compiled default (SQLite) still wins — the switch is
     /// opt-in, and SQLite stays the zero-config default per ADR-033.
+    /// The one case where the two providers' merge ORDER is observable, pinned so the
+    /// comment in `load` is a checked claim rather than an assertion: setting a
+    /// struct-shaped name (`EMAILIBRIUM_STORE`) alongside a child of it must fail
+    /// LOUDLY — the unsplit provider merges last and writes a scalar over the split
+    /// provider's dict, so extraction hits a type error. A config that silently picked
+    /// one of two contradictory instructions is the worse outcome.
+    // `figment::Error` is Jail's return type, not ours.
+    #[allow(clippy::result_large_err)]
+    #[test]
+    fn a_struct_shaped_env_name_conflicts_loudly_with_its_own_child() {
+        figment::Jail::expect_with(|jail| {
+            jail.clear_env();
+            jail.set_env("EMAILIBRIUM_STORE", "not-a-struct");
+            jail.set_env("EMAILIBRIUM_STORE_BACKEND", "qdrant");
+
+            assert!(
+                VectorConfig::load().is_err(),
+                "a scalar EMAILIBRIUM_STORE over a nested store.* must be rejected, not silently resolved"
+            );
+            Ok(())
+        });
+    }
+
     // See the sibling test — `figment::Error` is Jail's return type, not ours.
     #[allow(clippy::result_large_err)]
     #[test]

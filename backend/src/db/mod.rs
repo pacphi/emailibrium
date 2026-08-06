@@ -9,6 +9,18 @@ use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
 
 pub mod entities;
 
+/// Does this URL select PostgreSQL? Both documented spellings do; everything else —
+/// including the default `sqlite:...?mode=rwc` — selects SQLite (ADR-033 §2).
+///
+/// Extracted from [`Database::connect`] so the selector is testable without a live
+/// server. `connect` itself cannot be, and the consequence was that the `postgresql://`
+/// half of the documented contract had no test at all: it could be deleted with the
+/// whole suite green, silently putting a deployer who used that spelling on SQLite —
+/// the exact failure class this pipeline exists to eliminate.
+fn selects_postgres(url: &str) -> bool {
+    url.starts_with("postgres://") || url.starts_with("postgresql://")
+}
+
 /// Database connection pool, dispatched to SQLite or PostgreSQL by the connection URL's scheme
 /// (`sqlite:...` vs `postgres://...` / `postgresql://...`) — see ADR-033.
 ///
@@ -29,7 +41,7 @@ impl Database {
     /// default `sqlite:...?mode=rwc`) selects SQLite. See ADR-033 for why the URL scheme alone
     /// is the selector — no separate feature flag exists, or should be added, for this choice.
     pub async fn connect(url: &str) -> Result<Self, sqlx::Error> {
-        if url.starts_with("postgres://") || url.starts_with("postgresql://") {
+        if selects_postgres(url) {
             let pool = PgPoolOptions::new().max_connections(5).connect(url).await?;
             Ok(Self::Postgres(pool))
         } else {
@@ -77,6 +89,16 @@ impl Database {
             Self::Sqlite(_) => "SQLite",
             Self::Postgres(_) => "PostgreSQL",
         }
+    }
+
+    /// The exact startup diagnostic line, verbatim as
+    /// `.github/workflows/smoke.yml` greps for it.
+    ///
+    /// It lives here, next to [`Database::backend_name`], so the string smoke asserts on
+    /// is pinned by a unit test instead of only by a ten-minute CI leg — a silent rename
+    /// would otherwise turn that leg's grep into a check of nothing.
+    pub fn startup_backend_line(&self) -> String {
+        format!("Database backend: {}", self.backend_name())
     }
 
     /// A SeaORM handle over the SAME underlying pool this enum already holds (ADR-036).
@@ -240,6 +262,42 @@ mod tests {
                 .expect("lazy postgres pool"),
         );
         assert_eq!(postgres.backend_name(), "PostgreSQL");
+    }
+
+    /// The startup line is a contract with `.github/workflows/smoke.yml`, which greps
+    /// for it verbatim in both legs. Asserting the whole string here means a rename
+    /// fails in seconds rather than silently reducing that CI leg to a no-op grep.
+    #[tokio::test]
+    async fn startup_backend_line_matches_what_smoke_greps_for() {
+        let sqlite = test_sqlite_database().await;
+        assert_eq!(sqlite.startup_backend_line(), "Database backend: SQLite");
+
+        let postgres = Database::Postgres(
+            PgPoolOptions::new()
+                .connect_lazy("postgres://user:pw@localhost:5432/db")
+                .expect("lazy postgres pool"),
+        );
+        assert_eq!(
+            postgres.startup_backend_line(),
+            "Database backend: PostgreSQL"
+        );
+    }
+
+    /// ADR-033 §2 names TWO PostgreSQL spellings, and `connect` cannot be tested
+    /// without a live server — so before this, `postgresql://` could be dropped from
+    /// the selector with the entire suite green, silently routing a deployer who used
+    /// that spelling to SQLite.
+    #[test]
+    fn both_documented_postgres_spellings_select_postgres() {
+        assert!(selects_postgres("postgres://user:pw@host:5432/db"));
+        assert!(selects_postgres("postgresql://user:pw@host:5432/db"));
+
+        assert!(!selects_postgres("sqlite:emailibrium.db?mode=rwc"));
+        assert!(!selects_postgres("emailibrium.db"));
+        // Near-misses must NOT match: a typo has to fail loudly on connect, not
+        // quietly open the other backend.
+        assert!(!selects_postgres("postgre://user@host/db"));
+        assert!(!selects_postgres("sqlite:postgres://not-a-scheme"));
     }
 
     #[test]

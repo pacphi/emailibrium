@@ -187,6 +187,21 @@ jobs:
   # rust-test executes — it consumes rust-build's nextest archive and only changes
   # which database they talk to — so proving the second backend costs one runner, not
   # a second compile of the workspace plus the vendored ruvector crates.
+  #
+  # Reproduce this job locally (the throwaway container is removed with --rm):
+  #
+  #   docker run -d --rm --name emailibrium-pg-test -p 55499:5432 \
+  #     -e POSTGRES_USER=emailibrium -e POSTGRES_PASSWORD=test \
+  #     -e POSTGRES_DB=emailibrium_test postgres:16-alpine
+  #   cd backend && \
+  #     EMAILIBRIUM_DATABASE_URL='postgres://emailibrium:test@localhost:55499/emailibrium_test' \
+  #     EMAILIBRIUM_TEST_PG_URL='postgres://emailibrium:test@localhost:55499/emailibrium_test' \
+  #     cargo test
+  #   docker rm -f emailibrium-pg-test
+  #
+  # Confirm the PostgreSQL-only tests actually RAN rather than skipping: the output must
+  # contain postgres_full_trait_round_trip, postgres_job_lifecycle_round_trip, and
+  # postgres_audit_round_trip as passing — not "skipping ...: EMAILIBRIUM_TEST_PG_URL unset".
   rust-test-postgres:
     # MUST match rust-build's runner, for the same host-bound-archive reason spelled
     # out on rust-test.
