@@ -339,7 +339,7 @@ export EMAILIBRIUM_STORE_BACKEND=sqlite
 
 The fallback chain per ADR-003 is: RuVector (primary) → Qdrant (managed) → SQLite (emergency).
 
-The Docker Compose configuration provisions a PostgreSQL 16 instance automatically. Data is persisted via a named Docker volume.
+The Docker Compose configuration can provision a PostgreSQL 16 instance, but it is opt-in — see [Database Strategy](#database-strategy-sqlite-vs-postgresql) above. When started, its data is persisted via a named Docker volume.
 
 ## Production Deployment
 
