@@ -35,8 +35,14 @@ fn selects_postgres(url: &str) -> bool {
 /// - Redact too little and a password lands in the log permanently. So userinfo is
 ///   redacted whether or not the URL has a `://` (a bare `user:pass@host/db` is not a
 ///   shape this app should ever see, but "should never" is not a redaction strategy),
-///   and it is located within the AUTHORITY only, so a `@` inside a filesystem path is
-///   never mistaken for a credential delimiter.
+///   and the split is on the LAST `@` in the whole remainder rather than within a
+///   pre-computed authority. Locating the authority first looked more precise and was
+///   strictly worse: an unencoded `/` in a password (`postgres://alice:s3/cret@host/db`)
+///   moved the `@` out of the "authority" and defeated redaction entirely. Anything
+///   before the last `@` is now treated as credential material.
+///   The cost is paid by SQLite paths: a filename containing `@` is displayed redacted.
+///   That is the trade accepted deliberately — showing less than the truth is survivable,
+///   printing a password is not.
 /// - Redact too much and the endpoint is hidden, which is the very thing this exists to
 ///   prevent. PostgreSQL accepts `?host=`/`?port=` as the connection target, so dropping
 ///   the whole query string would silently erase the identity of the database being
@@ -66,19 +72,14 @@ fn sanitized_endpoint(url: &str) -> String {
         Some((scheme, rest)) => (format!("{scheme}://"), rest),
         None => (String::new(), base),
     };
-    let (authority, path) = match rest.split_once('/') {
-        Some((authority, path)) => (authority, Some(path)),
-        None => (rest, None),
-    };
-    let authority = match authority.rsplit_once('@') {
-        Some((_userinfo, host)) => format!("***@{host}"),
-        None => authority.to_string(),
+    // LAST '@' in the whole remainder — see the doc comment: narrowing to an authority
+    // first is what let an unencoded '/' inside a password escape redaction.
+    let remainder = match rest.rsplit_once('@') {
+        Some((_userinfo, after)) => format!("***@{after}"),
+        None => rest.to_string(),
     };
 
-    let mut endpoint = match path {
-        Some(path) => format!("{scheme}{authority}/{path}"),
-        None => format!("{scheme}{authority}"),
-    };
+    let mut endpoint = format!("{scheme}{remainder}");
     if !identifying.is_empty() {
         endpoint.push('?');
         endpoint.push_str(&identifying.join("&"));
@@ -405,11 +406,18 @@ mod tests {
                 "sqlite:/app/data/emailibrium.db",
                 "sqlite:/app/data/emailibrium.db",
             ),
-            // A '@' in a FILE PATH is not a credential delimiter and must survive.
+            // Password containing an unencoded '/', which defeated an earlier version
+            // that located the authority before looking for the '@'.
             (
-                "sqlite:/app/data/mail@home.db",
-                "sqlite:/app/data/mail@home.db",
+                "postgres://alice:s3/cret@db.internal/app",
+                "postgres://***@db.internal/app",
             ),
+            // The accepted cost of that fix: a '@' in a SQLite FILENAME is redacted too,
+            // taking the `sqlite:` prefix with it because nothing distinguishes a scheme
+            // from a username without a heuristic that could be wrong in the leaking
+            // direction. Deliberate, and cheap — the same log line already names the
+            // backend as SQLite, so the prefix carried no information the reader lacks.
+            ("sqlite:/app/data/mail@home.db", "***@home.db"),
             // Bracketed IPv6 authority.
             (
                 "postgres://user:s3cret@[::1]:5432/db",
@@ -419,7 +427,9 @@ mod tests {
             let sanitized = sanitized_endpoint(raw);
             assert_eq!(sanitized, expected, "sanitizing {raw}");
             assert!(
-                !sanitized.contains("s3cret") && !sanitized.contains("p@ss:w0rd"),
+                !sanitized.contains("s3cret")
+                    && !sanitized.contains("p@ss:w0rd")
+                    && !sanitized.contains("s3/cret"),
                 "credential survived sanitizing {raw}: {sanitized}"
             );
         }
