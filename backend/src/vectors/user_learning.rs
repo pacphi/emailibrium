@@ -22,8 +22,16 @@ use tracing::debug;
 use super::error::VectorError;
 use super::learning::{FeedbackAction, LearningConfig};
 
-/// Row tuple for user learning model queries (`feedback_count` is INTEGER — `i32`).
-type UserModelRow = (String, String, i32, DateTime<Utc>, DateTime<Utc>);
+/// Row tuple for user learning model queries (`feedback_count` is INTEGER —
+/// `i32`; the TIMESTAMP columns decode as `NaiveDateTime` — PostgreSQL
+/// rejects a `DateTime<Utc>` decode for the no-zone type).
+type UserModelRow = (
+    String,
+    String,
+    i32,
+    chrono::NaiveDateTime,
+    chrono::NaiveDateTime,
+);
 use super::types::EmailCategory;
 use crate::db::entities::user_learning_models;
 use crate::db::Database;
@@ -298,6 +306,8 @@ impl UserLearningStore {
         let mut model = UserLearningModel::new(user_id.to_string());
 
         for (cat_str, offset_json, feedback_count, created_at, updated_at) in rows {
+            let created_at = created_at.and_utc();
+            let updated_at = updated_at.and_utc();
             let category: EmailCategory = serde_json::from_str(&format!("\"{cat_str}\""))
                 .unwrap_or(EmailCategory::Uncategorized);
             let offset: Vec<f32> = serde_json::from_str(&offset_json).unwrap_or_default();

@@ -130,8 +130,10 @@ impl InteractionTracker {
         &self,
         limit: usize,
     ) -> Result<Vec<SearchInteraction>, VectorError> {
-        // `created_at` decodes as `DateTime<Utc>` leniently on the SQLite
-        // path: RFC3339 rows keep their instant, naive rows read as UTC.
+        // `created_at` is plain TIMESTAMP (no zone), so it decodes as
+        // `NaiveDateTime` — PostgreSQL rejects a `DateTime<Utc>` decode for
+        // that type outright, while the SQLite path stays lenient (RFC3339
+        // legacy rows still parse). Naive values read as UTC.
         type Row = (
             String,
             String,
@@ -139,7 +141,7 @@ impl InteractionTracker {
             Option<i32>,
             bool,
             Option<String>,
-            DateTime<Utc>,
+            chrono::NaiveDateTime,
         );
         let rows: Vec<Row> = search_interactions::Entity::find()
             .select_only()
@@ -168,7 +170,7 @@ impl InteractionTracker {
                         result_rank: result_rank.unwrap_or(0) as u32,
                         clicked,
                         feedback,
-                        created_at,
+                        created_at: created_at.and_utc(),
                     }
                 },
             )
