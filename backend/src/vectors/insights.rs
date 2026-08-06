@@ -7,8 +7,14 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
+use sea_orm::sea_query::{Expr, ExprTrait};
+use sea_orm::{
+    ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder,
+    QuerySelect, Statement,
+};
 use serde::Serialize;
 
+use crate::db::entities::{connected_accounts, emails};
 use crate::db::Database;
 
 use super::error::VectorError;
@@ -165,22 +171,27 @@ pub struct InboxReport {
 
 /// Analyzes the email corpus to produce actionable insights about
 /// subscriptions, recurring senders, and inbox health.
+///
+/// Persistence is single-code-path SeaORM (ADR-036).
 pub struct InsightEngine {
-    db: Arc<Database>,
+    conn: DatabaseConnection,
     #[allow(dead_code)]
     store: Arc<dyn VectorStoreBackend>,
 }
 
 /// Row for individual email timestamps per sender (used by interval analysis).
 struct EmailTimestampRow {
-    received_at: String,
+    received_at: chrono::NaiveDateTime,
     body_text: Option<String>,
 }
 
 impl InsightEngine {
     /// Create a new insight engine.
     pub fn new(db: Arc<Database>, store: Arc<dyn VectorStoreBackend>) -> Self {
-        Self { db, store }
+        Self {
+            conn: db.sea_orm(),
+            store,
+        }
     }
 
     /// Detect subscription patterns by grouping emails by sender.
@@ -189,36 +200,43 @@ impl InsightEngine {
     /// for sent mail) to avoid false-positive subscription detections.
     pub async fn detect_subscriptions(&self) -> Result<Vec<SubscriptionInsight>, VectorError> {
         // Collect all connected account email addresses to exclude from results.
-        let own_addresses: Vec<(String,)> = sqlx::query_as(
-            "SELECT DISTINCT email_address FROM connected_accounts WHERE status = 'connected'",
-        )
-        .fetch_all(self.db.pool())
-        .await
-        .unwrap_or_default();
+        // Best-effort like the pre-port query: a missing table yields an empty set.
+        let own_addresses: Vec<(String,)> = connected_accounts::Entity::find()
+            .select_only()
+            .column(connected_accounts::Column::EmailAddress)
+            .distinct()
+            .filter(connected_accounts::Column::Status.eq("connected"))
+            .into_tuple()
+            .all(&self.conn)
+            .await
+            .unwrap_or_default();
 
         let own_set: std::collections::HashSet<String> = own_addresses
             .into_iter()
             .map(|(addr,)| addr.to_lowercase())
             .collect();
 
-        // (from_addr, count, first_received, last_received)
-        let groups: Vec<(String, i32, String, String)> = sqlx::query_as(
-            r#"SELECT from_addr,
-                      COUNT(*) as cnt,
-                      MIN(received_at) as first_seen,
-                      MAX(received_at) as last_seen
-               FROM emails
-               GROUP BY from_addr
-               HAVING cnt >= 3
-               ORDER BY cnt DESC"#,
-        )
-        .fetch_all(self.db.pool())
-        .await
-        .map_err(VectorError::DatabaseError)?;
+        // (from_addr, count, first_received, last_received). `COUNT(*)` is
+        // repeated in HAVING/ORDER BY — PostgreSQL rejects the select alias
+        // there (ADR-035 catalog).
+        let groups: Vec<(String, i64, chrono::NaiveDateTime, chrono::NaiveDateTime)> =
+            emails::Entity::find()
+                .select_only()
+                .column(emails::Column::FromAddr)
+                .column_as(Expr::cust("COUNT(*)"), "cnt")
+                .column_as(emails::Column::ReceivedAt.min(), "first_seen")
+                .column_as(emails::Column::ReceivedAt.max(), "last_seen")
+                .group_by(emails::Column::FromAddr)
+                .having(Expr::cust("COUNT(*)").gte(3))
+                .order_by_desc(Expr::cust("COUNT(*)"))
+                .into_tuple()
+                .all(&self.conn)
+                .await
+                .map_err(VectorError::Db)?;
 
         let mut insights = Vec::new();
 
-        for (from_addr, cnt, first_seen_str, last_seen_str) in &groups {
+        for (from_addr, cnt, first_seen_ts, last_seen_ts) in &groups {
             let sender = from_addr;
 
             // Skip the user's own email addresses (sent mail false positives).
@@ -230,16 +248,17 @@ impl InsightEngine {
             let domain = extract_domain(sender);
 
             // Fetch individual timestamps for interval analysis
-            let timestamp_rows: Vec<(String, Option<String>)> = sqlx::query_as(
-                r#"SELECT received_at, body_text
-                   FROM emails
-                   WHERE from_addr = ?
-                   ORDER BY received_at ASC"#,
-            )
-            .bind(sender)
-            .fetch_all(self.db.pool())
-            .await
-            .map_err(VectorError::DatabaseError)?;
+            let timestamp_rows: Vec<(chrono::NaiveDateTime, Option<String>)> =
+                emails::Entity::find()
+                    .select_only()
+                    .column(emails::Column::ReceivedAt)
+                    .column(emails::Column::BodyText)
+                    .filter(emails::Column::FromAddr.eq(sender.as_str()))
+                    .order_by_asc(emails::Column::ReceivedAt)
+                    .into_tuple()
+                    .all(&self.conn)
+                    .await
+                    .map_err(VectorError::Db)?;
 
             let timestamps: Vec<EmailTimestampRow> = timestamp_rows
                 .into_iter()
@@ -252,17 +271,17 @@ impl InsightEngine {
             // Check for List-Unsubscribe header in DB first (most reliable),
             // then fall back to body text keyword matching for older emails
             // that were ingested before header capture was added.
-            let header_row: Option<(Option<String>, Option<String>)> = sqlx::query_as(
-                r#"SELECT list_unsubscribe, list_unsubscribe_post
-                   FROM emails
-                   WHERE from_addr = ? AND list_unsubscribe IS NOT NULL
-                   ORDER BY received_at DESC
-                   LIMIT 1"#,
-            )
-            .bind(sender)
-            .fetch_optional(self.db.pool())
-            .await
-            .map_err(VectorError::DatabaseError)?;
+            let header_row: Option<(Option<String>, Option<String>)> = emails::Entity::find()
+                .select_only()
+                .column(emails::Column::ListUnsubscribe)
+                .column(emails::Column::ListUnsubscribePost)
+                .filter(emails::Column::FromAddr.eq(sender.as_str()))
+                .filter(emails::Column::ListUnsubscribe.is_not_null())
+                .order_by_desc(emails::Column::ReceivedAt)
+                .into_tuple()
+                .one(&self.conn)
+                .await
+                .map_err(VectorError::Db)?;
 
             let (list_unsub_header, list_unsub_post) = header_row.unwrap_or((None, None));
 
@@ -281,22 +300,29 @@ impl InsightEngine {
             let frequency = classify_frequency(&intervals);
             let category = classify_subscription_category(&domain, has_unsubscribe);
 
-            let first_seen = parse_timestamp(first_seen_str);
-            let last_seen = parse_timestamp(last_seen_str);
+            let first_seen = first_seen_ts.and_utc();
+            let last_seen = last_seen_ts.and_utc();
 
             let email_count = *cnt as u64;
             let suggested_action =
                 suggest_action(&frequency, &category, email_count, has_unsubscribe);
 
-            // Per-sender read rate
-            let read_rate_row: (f64,) = sqlx::query_as(
-                "SELECT COALESCE(CAST(COUNT(CASE WHEN is_read THEN 1 END) AS FLOAT) \
-                 / NULLIF(COUNT(*), 0), 0.0) as read_rate FROM emails WHERE from_addr = ?",
-            )
-            .bind(sender)
-            .fetch_one(self.db.pool())
-            .await
-            .map_err(VectorError::DatabaseError)?;
+            // Per-sender read rate — one portable aggregate expression
+            // (`CASE WHEN` over BOOLEAN, FLOAT cast) valid on both dialects.
+            let read_rate_row: Option<(f64,)> = emails::Entity::find()
+                .select_only()
+                .expr_as(
+                    Expr::cust(
+                        "COALESCE(CAST(COUNT(CASE WHEN is_read THEN 1 END) AS FLOAT) \
+                         / NULLIF(COUNT(*), 0), 0.0)",
+                    ),
+                    "read_rate",
+                )
+                .filter(emails::Column::FromAddr.eq(sender.as_str()))
+                .into_tuple()
+                .one(&self.conn)
+                .await
+                .map_err(VectorError::Db)?;
 
             insights.push(SubscriptionInsight {
                 sender_address: sender.clone(),
@@ -308,7 +334,7 @@ impl InsightEngine {
                 has_unsubscribe,
                 category,
                 suggested_action,
-                read_rate: read_rate_row.0,
+                read_rate: read_rate_row.map(|(r,)| r).unwrap_or(0.0),
                 list_unsubscribe: list_unsub_header,
                 list_unsubscribe_post: list_unsub_post,
             });
@@ -321,25 +347,28 @@ impl InsightEngine {
     pub async fn analyze_recurring_senders(
         &self,
     ) -> Result<Vec<RecurringSenderInsight>, VectorError> {
-        let groups: Vec<(String, i32, String, String)> = sqlx::query_as(
-            r#"SELECT from_addr,
-                      COUNT(*) as cnt,
-                      MIN(received_at) as first_seen,
-                      MAX(received_at) as last_seen
-               FROM emails
-               GROUP BY from_addr
-               HAVING cnt >= 2
-               ORDER BY cnt DESC"#,
-        )
-        .fetch_all(self.db.pool())
-        .await
-        .map_err(VectorError::DatabaseError)?;
+        // `COUNT(*)` repeated in HAVING/ORDER BY — PostgreSQL rejects the
+        // select alias there (ADR-035 catalog).
+        let groups: Vec<(String, i64, chrono::NaiveDateTime, chrono::NaiveDateTime)> =
+            emails::Entity::find()
+                .select_only()
+                .column(emails::Column::FromAddr)
+                .column_as(Expr::cust("COUNT(*)"), "cnt")
+                .column_as(emails::Column::ReceivedAt.min(), "first_seen")
+                .column_as(emails::Column::ReceivedAt.max(), "last_seen")
+                .group_by(emails::Column::FromAddr)
+                .having(Expr::cust("COUNT(*)").gte(2))
+                .order_by_desc(Expr::cust("COUNT(*)"))
+                .into_tuple()
+                .all(&self.conn)
+                .await
+                .map_err(VectorError::Db)?;
 
         let mut results = Vec::new();
 
-        for (from_addr, cnt, first_seen_str, last_seen_str) in &groups {
-            let first = parse_timestamp(first_seen_str);
-            let last = parse_timestamp(last_seen_str);
+        for (from_addr, cnt, first_seen_ts, last_seen_ts) in &groups {
+            let first = first_seen_ts.and_utc();
+            let last = last_seen_ts.and_utc();
             let span_days = (last - first).num_seconds() as f32 / 86400.0;
             let avg_interval = if *cnt > 1 {
                 span_days / (*cnt as f32 - 1.0)
@@ -348,17 +377,16 @@ impl InsightEngine {
             };
 
             // Get the most common category for this sender
-            let category_row: Option<(Option<String>,)> = sqlx::query_as(
-                r#"SELECT category FROM emails
-                   WHERE from_addr = ?
-                   GROUP BY category
-                   ORDER BY COUNT(*) DESC
-                   LIMIT 1"#,
-            )
-            .bind(from_addr)
-            .fetch_optional(self.db.pool())
-            .await
-            .map_err(VectorError::DatabaseError)?;
+            let category_row: Option<(Option<String>,)> = emails::Entity::find()
+                .select_only()
+                .column(emails::Column::Category)
+                .filter(emails::Column::FromAddr.eq(from_addr.as_str()))
+                .group_by(emails::Column::Category)
+                .order_by_desc(Expr::cust("COUNT(*)"))
+                .into_tuple()
+                .one(&self.conn)
+                .await
+                .map_err(VectorError::Db)?;
 
             let category = category_row
                 .and_then(|r| r.0)
@@ -378,22 +406,27 @@ impl InsightEngine {
     /// Generate an aggregated inbox report.
     pub async fn generate_report(&self) -> Result<InboxReport, VectorError> {
         // Total emails
-        let total_row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM emails")
-            .fetch_one(self.db.pool())
+        let total_row: Option<(i64,)> = emails::Entity::find()
+            .select_only()
+            .expr_as(Expr::cust("COUNT(*)"), "cnt")
+            .into_tuple()
+            .one(&self.conn)
             .await
-            .map_err(VectorError::DatabaseError)?;
-        let total_emails = total_row.0 as u64;
+            .map_err(VectorError::Db)?;
+        let total_emails = total_row.map(|(c,)| c).unwrap_or(0) as u64;
 
-        // Category breakdown
-        let categories: Vec<(Option<String>, i32)> = sqlx::query_as(
-            r#"SELECT category, COUNT(*) as cnt
-               FROM emails
-               GROUP BY category
-               ORDER BY cnt DESC"#,
-        )
-        .fetch_all(self.db.pool())
-        .await
-        .map_err(VectorError::DatabaseError)?;
+        // Category breakdown. `COUNT(*)` repeated in ORDER BY for portability
+        // with the HAVING-alias fix elsewhere.
+        let categories: Vec<(Option<String>, i64)> = emails::Entity::find()
+            .select_only()
+            .column(emails::Column::Category)
+            .column_as(Expr::cust("COUNT(*)"), "cnt")
+            .group_by(emails::Column::Category)
+            .order_by_desc(Expr::cust("COUNT(*)"))
+            .into_tuple()
+            .all(&self.conn)
+            .await
+            .map_err(VectorError::Db)?;
 
         let category_breakdown: HashMap<String, u64> = categories
             .into_iter()
@@ -406,50 +439,66 @@ impl InsightEngine {
             .collect();
 
         // Top senders
-        let senders: Vec<(Option<String>, i32)> = sqlx::query_as(
-            r#"SELECT from_addr, COUNT(*) as cnt
-               FROM emails
-               GROUP BY from_addr
-               ORDER BY cnt DESC
-               LIMIT 10"#,
-        )
-        .fetch_all(self.db.pool())
-        .await
-        .map_err(VectorError::DatabaseError)?;
+        let senders: Vec<(String, i64)> = emails::Entity::find()
+            .select_only()
+            .column(emails::Column::FromAddr)
+            .column_as(Expr::cust("COUNT(*)"), "cnt")
+            .group_by(emails::Column::FromAddr)
+            .order_by_desc(Expr::cust("COUNT(*)"))
+            .limit(10)
+            .into_tuple()
+            .all(&self.conn)
+            .await
+            .map_err(VectorError::Db)?;
 
         let top_senders: Vec<TopSender> = senders
             .into_iter()
             .map(|(addr, cnt)| TopSender {
-                sender: addr.unwrap_or_default(),
+                sender: addr,
                 count: cnt as u64,
             })
             .collect();
 
-        // Subscription count (senders with 3+ emails)
-        let sub_row: (i64,) = sqlx::query_as(
-            r#"SELECT COUNT(*) FROM (
+        // Subscription count (senders with 3+ emails).
+        // Raw-SQL escape hatch (ADR-036 §5): a COUNT over a derived table has
+        // no query-builder form here; the `AS sub` alias is required by
+        // PostgreSQL (ADR-035 catalog) and accepted by SQLite.
+        let sub_row = self
+            .conn
+            .query_one_raw(Statement::from_sql_and_values(
+                self.conn.get_database_backend(),
+                r#"SELECT COUNT(*) AS cnt FROM (
                    SELECT from_addr FROM emails
                    GROUP BY from_addr
                    HAVING COUNT(*) >= 3
-               )"#,
-        )
-        .fetch_one(self.db.pool())
-        .await
-        .map_err(VectorError::DatabaseError)?;
-        let subscription_count = sub_row.0 as u64;
+               ) AS sub"#,
+                [],
+            ))
+            .await
+            .map_err(VectorError::Db)?;
+        let subscription_count = match sub_row {
+            Some(row) => row.try_get::<i64>("", "cnt").map_err(VectorError::Db)? as u64,
+            None => 0,
+        };
 
         // Estimated reading hours: ~30 seconds per email (conservative)
         let estimated_reading_hours = total_emails as f32 * 30.0 / 3600.0;
 
         // Overall read rate
-        let read_rate_row: (f64,) = sqlx::query_as(
-            "SELECT COALESCE(CAST(COUNT(CASE WHEN is_read THEN 1 END) AS FLOAT) \
-             / NULLIF(COUNT(*), 0), 0.0) as read_rate FROM emails",
-        )
-        .fetch_one(self.db.pool())
-        .await
-        .map_err(VectorError::DatabaseError)?;
-        let read_rate = read_rate_row.0;
+        let read_rate_row: Option<(f64,)> = emails::Entity::find()
+            .select_only()
+            .expr_as(
+                Expr::cust(
+                    "COALESCE(CAST(COUNT(CASE WHEN is_read THEN 1 END) AS FLOAT) \
+                     / NULLIF(COUNT(*), 0), 0.0)",
+                ),
+                "read_rate",
+            )
+            .into_tuple()
+            .one(&self.conn)
+            .await
+            .map_err(VectorError::Db)?;
+        let read_rate = read_rate_row.map(|(r,)| r).unwrap_or(0.0);
 
         Ok(InboxReport {
             total_emails,
@@ -484,27 +533,17 @@ fn extract_email_address(from: &str) -> String {
     from.trim().to_string()
 }
 
-/// Parse a timestamp string into a DateTime<Utc>.
-fn parse_timestamp(s: &str) -> DateTime<Utc> {
-    // Try RFC3339 first, then the SQLite default format
-    chrono::DateTime::parse_from_rfc3339(s)
-        .map(|dt| dt.with_timezone(&Utc))
-        .or_else(|_| {
-            chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S").map(|ndt| ndt.and_utc())
-        })
-        .unwrap_or_else(|_| Utc::now())
-}
-
 /// Compute inter-arrival intervals in days from a list of timestamp rows.
+///
+/// Timestamps decode leniently on the SQLite path (RFC3339 first, then the
+/// naive `%Y-%m-%d %H:%M:%S` shapes) — the same order the pre-port string
+/// parser used — so legacy rows keep their values.
 fn compute_intervals(timestamps: &[EmailTimestampRow]) -> Vec<f32> {
     if timestamps.len() < 2 {
         return vec![];
     }
 
-    let dates: Vec<DateTime<Utc>> = timestamps
-        .iter()
-        .map(|r| parse_timestamp(&r.received_at))
-        .collect();
+    let dates: Vec<DateTime<Utc>> = timestamps.iter().map(|r| r.received_at.and_utc()).collect();
 
     dates
         .windows(2)
@@ -609,19 +648,28 @@ mod tests {
 
     async fn test_db() -> Database {
         let db = Database::connect("sqlite::memory:").await.unwrap();
-        sqlx::query(include_str!(
-            "../../migrations/sqlite/001_initial_schema.sql"
-        ))
-        .execute(db.pool())
-        .await
-        .unwrap();
-        // Add unsubscribe header columns (migration 018).
-        for stmt in include_str!("../../migrations/sqlite/018_unsubscribe_headers.sql")
-            .split(';')
-            .map(|s| s.trim())
-            .filter(|s| !s.is_empty())
-        {
-            sqlx::query(stmt).execute(db.pool()).await.unwrap();
+        let conn = db.sea_orm();
+        for raw in [
+            include_str!("../../migrations/sqlite/001_initial_schema.sql"),
+            include_str!("../../migrations/sqlite/018_unsubscribe_headers.sql"),
+        ] {
+            let cleaned: String = raw
+                .lines()
+                .map(|l| {
+                    if let Some(idx) = l.find("--") {
+                        &l[..idx]
+                    } else {
+                        l
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            for stmt in cleaned.split(';') {
+                let s = stmt.trim();
+                if !s.is_empty() {
+                    conn.execute_unprepared(s).await.unwrap();
+                }
+            }
         }
         db
     }
@@ -650,18 +698,21 @@ mod tests {
                 base + chrono::Duration::seconds((interval_days * i as f64 * 86400.0) as i64);
             let received_str = received_at.format("%Y-%m-%d %H:%M:%S").to_string();
 
-            sqlx::query(
-                r#"INSERT INTO emails (id, account_id, provider, subject, from_addr, body_text, received_at)
+            db.sea_orm()
+                .execute_raw(sea_orm::Statement::from_sql_and_values(
+                    sea_orm::DatabaseBackend::Sqlite,
+                    r#"INSERT INTO emails (id, account_id, provider, subject, from_addr, body_text, received_at)
                    VALUES (?, 'acct-1', 'test', ?, ?, ?, ?)"#,
-            )
-            .bind(&id)
-            .bind(format!("Email from {}", sender))
-            .bind(sender)
-            .bind(body_text)
-            .bind(&received_str)
-            .execute(db.pool())
-            .await
-            .unwrap();
+                    [
+                        id.as_str().into(),
+                        format!("Email from {}", sender).into(),
+                        sender.into(),
+                        body_text.into(),
+                        received_str.as_str().into(),
+                    ],
+                ))
+                .await
+                .unwrap();
         }
     }
 
