@@ -221,4 +221,73 @@ postgres container without the profile flag.
 
 ## Verdict
 
-_(recorded below by the jury seat)_
+**SHIP** — jury (codex), after the charge sheet above and a correction described below. Upheld on
+the FOURTH overturn pass; `overturnDepth` is 2, so this SHIP survived twice the configured scrutiny,
+because the first three overturn passes each succeeded.
+
+### The jury's first ruling rested on my error, and was re-taken
+
+The jury's initial SHIP recorded "Charge A was not established by the mandated grep." That was a
+false negative I caused: the grep pattern I gave it omitted the markdown `**` bold markers, so it
+could not match text that is plainly present at `docs/deployment-guide.md:244`. Banking a SHIP
+obtained that way would have made the whole court ceremonial, so charge A was re-put with verified
+evidence. The jury held SHIP and attached a condition (below) — but the ruling now rests on the real
+document, not on a broken pattern.
+
+**BINDING CONDITION from the jury, carried forward:** _"Phase 5 must merge before any promotion to
+`main`, release, deployment, or publication of documentation from `develop`."_ This is the operative
+constraint on the eventual integration PR, not a footnote — the docs still tell operators PostgreSQL
+does not work.
+
+### Overturn round — 3 successive overturns, all remediated
+
+The deeper reviewer (codex, high effort) overturned three times. Every finding was real, and the
+first was the single most valuable result of this court:
+
+1. **OVERTURN 1 — a formerly-inert variable going live is a migration, not a bugfix.** This phase
+   made `EMAILIBRIUM_DATABASE_URL` work. It previously did nothing, so a stale value in a shell
+   profile or a Compose `.env` (which Compose substitutes) was harmless — and on upgrade it now
+   silently moves a working SQLite deployment onto whatever database that value names, while the log
+   said only "PostgreSQL" and looked correct. Nothing in the delivery had considered the transition.
+   REMEDIATED (`3a14ce9`): the startup line names the endpoint, via a credential-stripping
+   sanitizer, and `docker-compose.yml` carries the upgrade warning at the point of use. Same round:
+   `depends_on.required` needs Compose 2.20+ while `docs/setup-guide.md` promised "v2" — corrected.
+2. **OVERTURN 2 — the fix hid the endpoint it existed to reveal.** Dropping the whole query string
+   also dropped PostgreSQL's `?host=`/`?port=`, which are the connection target, so
+   `postgresql:///app?host=db.internal` logged as `postgresql:///app`. REMEDIATED (`3117adb`): query
+   params became an allowlist (`host`, `port` kept; everything else dropped, since `?password=` is
+   legal there and an unknown future parameter must fail closed). Same round: the no-scheme early
+   return emitted its input verbatim, leaking `alice:s3cret@db.internal/app` — redaction now applies
+   with or without a `://`.
+3. **OVERTURN 3 — precision in the wrong place.** Locating the authority before searching for the
+   `@` meant an unencoded `/` in a password (`postgres://alice:s3/cret@db.internal/app`) pushed the
+   `@` outside the computed authority, defeating redaction entirely. REMEDIATED (`80e3bf0`): split on
+   the LAST `@` in the whole URL; everything before it is credential material. The accepted cost is
+   that a SQLite filename containing `@` is displayed redacted — deliberate, and cheap, since the
+   same line already names the backend. Same round: the WARN added in round 1 was alarm fatigue (it
+   fired on every start of every correctly configured PostgreSQL deployment), so provenance moved
+   onto the info line as a statement of fact.
+4. **Defense-found, same class (`43312f8`):** probing the same shapes before the fourth pass turned
+   up the round-3 bug moved one delimiter over — an unencoded `?` in a password made the query split
+   land inside the credential, leaving no `@` to redact against. That the same defect recurred at a
+   different delimiter was the tell that the ORDER was wrong, not the delimiter set: redaction now
+   runs against the whole URL before anything is parsed.
+5. **OVERTURN 4 — UPHELD.** Asked to construct a password leak across seven adversarial shapes
+   (`@`+`/` together, `?`, `&`, percent-encoded `%40`, a second `@` in the path,
+   `?password=` beside `?host=`, and a password-shaped param with no `@` at all), it reported
+   **"LEAK: none"** with each input's output, and upheld.
+
+### Verdict logic
+
+Tier 1 (format/lint/build/test/audit/integration) green; Tier 2 DoD 8/8 with evidence; Tier 3 floor
+(reviewer agent + 3-pass review) green after remediation; court **SHIP**. All 20 CI checks green on
+`43312f8`, including `Rust Tests (PostgreSQL)` and `Compose Smoke Test`, with the CI guard printing
+`migrations applied against PostgreSQL by the postgres_* tests: 26` — so the PostgreSQL-only tests
+demonstrably ran rather than skipping.
+
+### What the court could not close (carried as records, not silence)
+
+`pl-nested-flat-env-keys-dropped` (four documented env knobs still ignored, incl. the encryption
+master password), `pl-startup-log-wiring-unpinned`, `pl-postgres-depends-required-false-untested`,
+`pl-smoke-no-app-data-roundtrip`, `pl-ci-postgres-port-published`, `pl-develop-not-branch-protected`,
+and charge A itself — the operator docs, owned by phase 5 under the jury's binding condition.
