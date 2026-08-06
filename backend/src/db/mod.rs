@@ -229,4 +229,80 @@ mod tests {
         assert!(!spam);
         assert_eq!(folder, "TRASH");
     }
+
+    /// Two-row pin for `update_email_state`: the `Id` filter is the only thing
+    /// standing between "trash this email" and "rewrite the state of every
+    /// email in the table" — a lost per-row filter in the `update_many` port
+    /// must fail here.
+    #[tokio::test]
+    async fn update_email_state_touches_only_the_target_row() {
+        use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QuerySelect};
+
+        let db = test_sqlite_database().await;
+        let conn = db.sea_orm();
+        for raw in [
+            include_str!("../../migrations/sqlite/001_initial_schema.sql"),
+            include_str!("../../migrations/sqlite/016_soft_delete_trash_spam.sql"),
+        ] {
+            let cleaned: String = raw
+                .lines()
+                .map(|l| l.find("--").map_or(l, |idx| &l[..idx]))
+                .collect::<Vec<_>>()
+                .join("\n");
+            for stmt in cleaned.split(';') {
+                let s = stmt.trim();
+                if !s.is_empty() {
+                    conn.execute_unprepared(s).await.expect("migrate");
+                }
+            }
+        }
+        for id in ["target", "bystander"] {
+            conn.execute_unprepared(&format!(
+                "INSERT INTO emails (id, account_id, provider, subject, from_addr, to_addrs, \
+                 received_at) VALUES ('{id}', 'acct-1', 'gmail', 's', 'a@x.com', 'b@x.com', \
+                 '2026-08-01T10:00:00+00:00')"
+            ))
+            .await
+            .expect("seed");
+        }
+
+        let n = update_email_state(&conn, "target", true, false, "TRASH", Some("2026-08-02"))
+            .await
+            .expect("update");
+        assert_eq!(n, 1, "exactly one row updated");
+
+        let rows: Vec<(String, i32, i32, String, Option<String>)> =
+            entities::emails::Entity::find()
+                .select_only()
+                .column(entities::emails::Column::Id)
+                .column(entities::emails::Column::IsTrash)
+                .column(entities::emails::Column::IsSpam)
+                .column(entities::emails::Column::Folder)
+                .column(entities::emails::Column::DeletedAt)
+                .filter(entities::emails::Column::Id.is_in(["target", "bystander"]))
+                .into_tuple()
+                .all(&conn)
+                .await
+                .expect("read back");
+        let target = rows.iter().find(|r| r.0 == "target").expect("target row");
+        let bystander = rows
+            .iter()
+            .find(|r| r.0 == "bystander")
+            .expect("bystander row");
+        assert_eq!(
+            (target.1, target.2, target.3.as_str(), target.4.as_deref()),
+            (1, 0, "TRASH", Some("2026-08-02")),
+            "target takes the new state"
+        );
+        assert_eq!(
+            (
+                bystander.1,
+                bystander.2,
+                bystander.3.as_str(),
+                bystander.4.as_deref()
+            ),
+            (0, 0, "INBOX", None),
+            "the bystander row keeps its defaults untouched"
+        );
+    }
 }

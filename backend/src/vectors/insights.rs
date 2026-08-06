@@ -807,15 +807,19 @@ mod tests {
     async fn test_analyze_recurring_senders() {
         let db = Arc::new(test_db().await);
         insert_emails_from_sender(&db, "daily@example.com", 10, 1.0, "Daily").await;
+        insert_emails_from_sender(&db, "weekly@example.com", 3, 7.0, "Weekly").await;
         insert_emails_from_sender(&db, "once@example.com", 1, 0.0, "Once").await;
 
         let engine = make_engine(db);
         let senders = engine.analyze_recurring_senders().await.unwrap();
 
-        // Only senders with 2+ emails
-        assert_eq!(senders.len(), 1);
+        // Only senders with 2+ emails, most frequent FIRST (the ORDER BY the
+        // ADR-035 alias rewrite touched).
+        assert_eq!(senders.len(), 2);
         assert_eq!(senders[0].sender, "daily@example.com");
         assert_eq!(senders[0].email_count, 10);
+        assert_eq!(senders[1].sender, "weekly@example.com");
+        assert_eq!(senders[1].email_count, 3);
         assert!(senders[0].avg_interval_days > 0.0);
     }
 }

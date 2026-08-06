@@ -1701,6 +1701,82 @@ mod tests {
         assert!(has_e2, "e2 should be found via FTS keyword search");
     }
 
+    /// Filter pins for `filter_email_ids` — the block the port rewrote most
+    /// for PostgreSQL (typed date cutoffs, boolean binds). `date_from` must
+    /// keep NEWER emails (gte, not lte), and `is_read: false` must exclude
+    /// read emails.
+    #[tokio::test]
+    async fn test_hybrid_filters_pin_date_direction_and_is_read() {
+        let (hs, _store) = make_hybrid_search().await;
+        insert_test_email(
+            &hs,
+            "old-unread",
+            "meeting notes",
+            "a@x.com",
+            "meeting body",
+        )
+        .await;
+        insert_test_email(&hs, "new-read", "meeting agenda", "b@x.com", "meeting body").await;
+        hs.conn
+            .execute_unprepared(
+                "UPDATE emails SET received_at = '2020-01-01 00:00:00', is_read = 0 \
+                 WHERE id = 'old-unread'",
+            )
+            .await
+            .unwrap();
+        hs.conn
+            .execute_unprepared(
+                "UPDATE emails SET received_at = '2026-01-01 00:00:00', is_read = 1 \
+                 WHERE id = 'new-read'",
+            )
+            .await
+            .unwrap();
+
+        let date_from = chrono::DateTime::parse_from_rfc3339("2025-01-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let query = HybridSearchQuery {
+            text: "meeting".to_string(),
+            mode: SearchMode::Hybrid,
+            filters: Some(SearchFilters {
+                date_from: Some(date_from),
+                ..SearchFilters::default()
+            }),
+            limit: Some(10),
+            vector_weight: 1.0,
+            fts_weight: 1.0,
+        };
+        let result = hs.search(&query).await.unwrap();
+        let ids: Vec<&str> = result.results.iter().map(|r| r.email_id.as_str()).collect();
+        assert!(ids.contains(&"new-read"), "date_from keeps newer emails");
+        assert!(
+            !ids.contains(&"old-unread"),
+            "date_from must EXCLUDE older emails — gte, not lte"
+        );
+
+        let query = HybridSearchQuery {
+            text: "meeting".to_string(),
+            mode: SearchMode::Hybrid,
+            filters: Some(SearchFilters {
+                is_read: Some(false),
+                ..SearchFilters::default()
+            }),
+            limit: Some(10),
+            vector_weight: 1.0,
+            fts_weight: 1.0,
+        };
+        let result = hs.search(&query).await.unwrap();
+        let ids: Vec<&str> = result.results.iter().map(|r| r.email_id.as_str()).collect();
+        assert!(
+            ids.contains(&"old-unread"),
+            "unread email passes is_read: false"
+        );
+        assert!(
+            !ids.contains(&"new-read"),
+            "is_read: false must exclude read emails"
+        );
+    }
+
     #[tokio::test]
     async fn test_keyword_only_search() {
         let (hs, _store) = make_hybrid_search().await;

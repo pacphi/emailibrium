@@ -1856,6 +1856,96 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     }
 
+    /// Conflict-path pin for `save_checkpoint`'s DO-UPDATE column set: a
+    /// multi-batch run re-saves the same `{job}-embedding` checkpoint row once
+    /// per batch, so a dropped update column freezes the row at its
+    /// first-batch values. (`status` itself only diverges on the
+    /// failed→running transition, which needs an embedding-failure fake —
+    /// recorded as an accepted gap in the phase-3 court record.)
+    #[tokio::test]
+    async fn test_checkpoint_conflict_updates_advance_progress() {
+        let db = Arc::new(test_db().await);
+        insert_test_emails(&db, "acct-1", 130).await; // 3 batches at the default 64
+        let (pipeline, _, _) = make_pipeline(db.clone());
+
+        let _job_id = pipeline.start_ingestion("acct-1").await.unwrap();
+        for _ in 0..40 {
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            let done = pipeline
+                .get_progress()
+                .await
+                .map(|p| p.phase == "complete")
+                .unwrap_or(false);
+            if done {
+                break;
+            }
+        }
+
+        let row: Option<(i32, Option<String>)> = ingestion_checkpoints::Entity::find()
+            .select_only()
+            .column(ingestion_checkpoints::Column::Processed)
+            .column(ingestion_checkpoints::Column::LastProcessedId)
+            .filter(ingestion_checkpoints::Column::Stage.eq("embedding"))
+            .into_tuple()
+            .one(&db.sea_orm())
+            .await
+            .unwrap();
+        let (processed, last_id) = row.expect("embedding checkpoint row exists");
+        assert_eq!(
+            processed, 130,
+            "the conflict update advances `processed` past the first batch's 64"
+        );
+        assert!(last_id.is_some(), "last_processed_id is carried forward");
+    }
+
+    /// Exclusion pin for `fetch_pending_emails`: soft-deleted, trashed, and
+    /// spam emails must NOT be re-ingested — dropping any of those filters
+    /// resurrects deleted content into search and insights.
+    #[tokio::test]
+    async fn test_ingestion_skips_deleted_trashed_and_spam_emails() {
+        let db = Arc::new(test_db().await);
+        insert_test_emails(&db, "acct-1", 2).await;
+        let conn = db.sea_orm();
+        for (id, extra_cols, extra_vals) in [
+            (
+                "excl-deleted",
+                ", deleted_at",
+                ", '2026-08-01T00:00:00+00:00'",
+            ),
+            ("excl-trash", ", is_trash", ", 1"),
+            ("excl-spam", ", is_spam", ", 1"),
+        ] {
+            conn.execute_unprepared(&format!(
+                "INSERT INTO emails (id, account_id, provider, subject, from_addr, to_addrs, \
+                 received_at, embedding_status{extra_cols}) VALUES ('{id}', 'acct-1', 'test', \
+                 's', 'a@x.com', 'b@x.com', '2026-08-01T00:00:00+00:00', 'pending'{extra_vals})"
+            ))
+            .await
+            .unwrap();
+        }
+        let (pipeline, store, _) = make_pipeline(db.clone());
+
+        let _job_id = pipeline.start_ingestion("acct-1").await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+        assert_eq!(
+            store.count().await.unwrap(),
+            2,
+            "deleted/trashed/spam emails must not be embedded"
+        );
+        // The excluded rows keep their pending status — they were never picked up.
+        let untouched: Vec<(String,)> = emails::Entity::find()
+            .select_only()
+            .column(emails::Column::Id)
+            .filter(emails::Column::EmbeddingStatus.eq("pending"))
+            .filter(emails::Column::Id.is_in(["excl-deleted", "excl-trash", "excl-spam"]))
+            .into_tuple()
+            .all(&conn)
+            .await
+            .unwrap();
+        assert_eq!(untouched.len(), 3);
+    }
+
     /// Two-owner scoping pin: ingestion for one account must not consume the
     /// bystander account's pending emails, and checkpoints stay per-account.
     #[tokio::test]

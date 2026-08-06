@@ -580,6 +580,63 @@ mod tests {
         assert!(two.offsets.contains_key(&EmailCategory::Work));
     }
 
+    /// Upsert `UpdatedAt` pin: a second feedback for the same (user,
+    /// category) must advance the persisted `updated_at` — dropping it from
+    /// the conflict's update-column set freezes the row at first insert.
+    #[tokio::test]
+    async fn test_upsert_advances_updated_at() {
+        let db = Arc::new(
+            Database::connect("sqlite::memory:")
+                .await
+                .expect("in-memory DB"),
+        );
+        let config = LearningConfig {
+            min_feedback_events: 0,
+            ..LearningConfig::default()
+        };
+        let store = UserLearningStore::new(db.clone(), config.clone());
+        store.ensure_table().await.unwrap();
+
+        store
+            .on_feedback(
+                "user-1",
+                EmailCategory::Work,
+                &[0.5, 0.5, 0.0],
+                &[1.0, 0.0, 0.0],
+                &FeedbackAction::Star,
+            )
+            .await
+            .unwrap();
+        let first = UserLearningStore::new(db.clone(), config.clone())
+            .get_or_create("user-1")
+            .await
+            .offsets[&EmailCategory::Work]
+            .updated_at;
+
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        store
+            .on_feedback(
+                "user-1",
+                EmailCategory::Work,
+                &[0.5, 0.5, 0.0],
+                &[1.0, 0.0, 0.0],
+                &FeedbackAction::Star,
+            )
+            .await
+            .unwrap();
+        let second = UserLearningStore::new(db, config)
+            .get_or_create("user-1")
+            .await
+            .offsets[&EmailCategory::Work]
+            .updated_at;
+
+        assert!(
+            second > first,
+            "the persisted updated_at must advance across the upsert's conflict path \
+             (first {first}, second {second})"
+        );
+    }
+
     #[tokio::test]
     async fn test_store_cold_user_fallback() {
         let db = Arc::new(
