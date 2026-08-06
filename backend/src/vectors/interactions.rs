@@ -7,14 +7,22 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
+use sea_orm::sea_query::Expr;
+use sea_orm::ActiveValue::Set;
+use sea_orm::{
+    ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, QuerySelect,
+};
 use uuid::Uuid;
 
 use super::error::VectorError;
+use crate::db::entities::search_interactions;
 use crate::db::Database;
 
 /// Tracks search interactions for SONA learning.
+///
+/// Persistence is single-code-path SeaORM (ADR-036).
 pub struct InteractionTracker {
-    db: Arc<Database>,
+    conn: DatabaseConnection,
 }
 
 /// A recorded search interaction with optional click and feedback data.
@@ -39,22 +47,24 @@ pub struct SearchInteraction {
 impl InteractionTracker {
     /// Create a new tracker backed by the given database.
     pub fn new(db: Arc<Database>) -> Self {
-        Self { db }
+        Self { conn: db.sea_orm() }
     }
 
     /// Record a new search query. Returns the interaction ID.
     pub async fn record_search(&self, query: &str) -> Result<String, VectorError> {
         let id = Uuid::new_v4().to_string();
-        let now = Utc::now();
 
-        sqlx::query(
-            "INSERT INTO search_interactions (id, query_text, created_at) VALUES (?, ?, ?)",
-        )
-        .bind(&id)
-        .bind(query)
-        .bind(now)
-        .execute(self.db.pool())
-        .await?;
+        // `created_at` is a plain TIMESTAMP in both dialects — naive-UTC bind
+        // (the pre-port `DateTime<Utc>` bind was the write-side TZ bug class).
+        search_interactions::Entity::insert(search_interactions::ActiveModel {
+            id: Set(id.clone()),
+            query_text: Set(query.to_owned()),
+            created_at: Set(Some(Utc::now().naive_utc())),
+            ..Default::default()
+        })
+        .exec_without_returning(&self.conn)
+        .await
+        .map_err(VectorError::Db)?;
 
         Ok(id)
     }
@@ -66,15 +76,21 @@ impl InteractionTracker {
         email_id: &str,
         rank: u32,
     ) -> Result<(), VectorError> {
-        let rows_affected = sqlx::query(
-            "UPDATE search_interactions SET result_email_id = ?, result_rank = ?, clicked = TRUE WHERE id = ?",
-        )
-        .bind(email_id)
-        .bind(rank)
-        .bind(query_id)
-        .execute(self.db.pool())
-        .await?
-        .rows_affected();
+        let rows_affected = search_interactions::Entity::update_many()
+            .col_expr(
+                search_interactions::Column::ResultEmailId,
+                Expr::value(email_id),
+            )
+            .col_expr(
+                search_interactions::Column::ResultRank,
+                Expr::value(rank as i32),
+            )
+            .col_expr(search_interactions::Column::Clicked, Expr::value(true))
+            .filter(search_interactions::Column::Id.eq(query_id))
+            .exec(&self.conn)
+            .await
+            .map_err(VectorError::Db)?
+            .rows_affected;
 
         if rows_affected == 0 {
             return Err(VectorError::NotFound(format!(
@@ -93,12 +109,13 @@ impl InteractionTracker {
         _email_id: &str,
         feedback: &str,
     ) -> Result<(), VectorError> {
-        let rows_affected = sqlx::query("UPDATE search_interactions SET feedback = ? WHERE id = ?")
-            .bind(feedback)
-            .bind(query_id)
-            .execute(self.db.pool())
-            .await?
-            .rows_affected();
+        let rows_affected = search_interactions::Entity::update_many()
+            .col_expr(search_interactions::Column::Feedback, Expr::value(feedback))
+            .filter(search_interactions::Column::Id.eq(query_id))
+            .exec(&self.conn)
+            .await
+            .map_err(VectorError::Db)?
+            .rows_affected;
 
         if rows_affected == 0 {
             return Err(VectorError::NotFound(format!(
@@ -115,31 +132,68 @@ impl InteractionTracker {
         &self,
         limit: usize,
     ) -> Result<Vec<SearchInteraction>, VectorError> {
-        let rows = sqlx::query_as::<_, InteractionRow>(
-            "SELECT id, query_text, result_email_id, result_rank, clicked, feedback, created_at \
-             FROM search_interactions \
-             ORDER BY created_at DESC \
-             LIMIT ?",
-        )
-        .bind(limit as i64)
-        .fetch_all(self.db.pool())
-        .await?;
+        // `created_at` decodes as `DateTime<Utc>` leniently on the SQLite
+        // path: RFC3339 rows keep their instant, naive rows read as UTC.
+        type Row = (
+            String,
+            String,
+            Option<String>,
+            Option<i32>,
+            bool,
+            Option<String>,
+            DateTime<Utc>,
+        );
+        let rows: Vec<Row> = search_interactions::Entity::find()
+            .select_only()
+            .column(search_interactions::Column::Id)
+            .column(search_interactions::Column::QueryText)
+            .column(search_interactions::Column::ResultEmailId)
+            .column(search_interactions::Column::ResultRank)
+            .column(search_interactions::Column::Clicked)
+            .column(search_interactions::Column::Feedback)
+            .column(search_interactions::Column::CreatedAt)
+            .order_by_desc(search_interactions::Column::CreatedAt)
+            .limit(limit as u64)
+            .into_tuple()
+            .all(&self.conn)
+            .await
+            .map_err(VectorError::Db)?;
 
-        Ok(rows.into_iter().map(|r| r.into()).collect())
+        Ok(rows
+            .into_iter()
+            .map(
+                |(id, query_text, result_email_id, result_rank, clicked, feedback, created_at)| {
+                    SearchInteraction {
+                        id,
+                        query_text,
+                        result_email_id: result_email_id.unwrap_or_default(),
+                        result_rank: result_rank.unwrap_or(0) as u32,
+                        clicked,
+                        feedback,
+                        created_at,
+                    }
+                },
+            )
+            .collect())
     }
 
     /// Compute the click-through rate: clicks / total interactions with results.
     pub async fn get_click_through_rate(&self) -> Result<f32, VectorError> {
-        let row: (i64, i64) = sqlx::query_as(
-            "SELECT \
-                COALESCE(SUM(CASE WHEN clicked = TRUE THEN 1 ELSE 0 END), 0), \
-                COUNT(*) \
-             FROM search_interactions",
-        )
-        .fetch_one(self.db.pool())
-        .await?;
+        // Single portable aggregate (`CASE WHEN` over BOOLEAN, SUM/COUNT →
+        // i64) valid on both dialects.
+        let row: Option<(i64, i64)> = search_interactions::Entity::find()
+            .select_only()
+            .expr_as(
+                Expr::cust("COALESCE(SUM(CASE WHEN clicked = TRUE THEN 1 ELSE 0 END), 0)"),
+                "clicks",
+            )
+            .expr_as(Expr::cust("COUNT(*)"), "total")
+            .into_tuple()
+            .one(&self.conn)
+            .await
+            .map_err(VectorError::Db)?;
 
-        let (clicks, total) = row;
+        let (clicks, total) = row.unwrap_or((0, 0));
         if total == 0 {
             return Ok(0.0);
         }
@@ -149,15 +203,18 @@ impl InteractionTracker {
 
     /// Get click count distribution by rank position.
     pub async fn get_rank_distribution(&self) -> Result<HashMap<u32, u64>, VectorError> {
-        let rows: Vec<(i32, i64)> = sqlx::query_as(
-            "SELECT result_rank, COUNT(*) \
-             FROM search_interactions \
-             WHERE clicked = TRUE AND result_rank IS NOT NULL \
-             GROUP BY result_rank \
-             ORDER BY result_rank",
-        )
-        .fetch_all(self.db.pool())
-        .await?;
+        let rows: Vec<(i32, i64)> = search_interactions::Entity::find()
+            .select_only()
+            .column(search_interactions::Column::ResultRank)
+            .expr_as(Expr::cust("COUNT(*)"), "cnt")
+            .filter(search_interactions::Column::Clicked.eq(true))
+            .filter(search_interactions::Column::ResultRank.is_not_null())
+            .group_by(search_interactions::Column::ResultRank)
+            .order_by_asc(search_interactions::Column::ResultRank)
+            .into_tuple()
+            .all(&self.conn)
+            .await
+            .map_err(VectorError::Db)?;
 
         let mut dist = HashMap::new();
         for (rank, count) in rows {
@@ -168,41 +225,18 @@ impl InteractionTracker {
     }
 }
 
-/// Internal row type for SQLx deserialization.
-#[derive(sqlx::FromRow)]
-struct InteractionRow {
-    id: String,
-    query_text: String,
-    result_email_id: Option<String>,
-    result_rank: Option<i32>,
-    clicked: bool,
-    feedback: Option<String>,
-    created_at: DateTime<Utc>,
-}
-
-impl From<InteractionRow> for SearchInteraction {
-    fn from(row: InteractionRow) -> Self {
-        Self {
-            id: row.id,
-            query_text: row.query_text,
-            result_email_id: row.result_email_id.unwrap_or_default(),
-            result_rank: row.result_rank.unwrap_or(0) as u32,
-            clicked: row.clicked,
-            feedback: row.feedback,
-            created_at: row.created_at,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
+    use sea_orm::ConnectionTrait;
+
     use super::*;
 
     async fn setup_db() -> Arc<Database> {
         let db = Database::connect("sqlite::memory:").await.unwrap();
         // Create the table directly for testing.
-        sqlx::query(
-            "CREATE TABLE IF NOT EXISTS search_interactions (
+        db.sea_orm()
+            .execute_unprepared(
+                "CREATE TABLE IF NOT EXISTS search_interactions (
                 id TEXT PRIMARY KEY,
                 query_text TEXT NOT NULL,
                 query_vector_id TEXT,
@@ -212,10 +246,9 @@ mod tests {
                 feedback TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )",
-        )
-        .execute(db.pool())
-        .await
-        .unwrap();
+            )
+            .await
+            .unwrap();
 
         Arc::new(db)
     }
