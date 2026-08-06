@@ -406,15 +406,11 @@ mod tests {
     use crate::cleanup::domain::operation::{
         MoveKind, OperationStatus, PlanAction, PlanSource, PlannedOperationRow, RiskLevel,
     };
-    use sqlx::sqlite::SqlitePoolOptions;
-    use sqlx::SqlitePool;
+    async fn fresh_db() -> Database {
+        use sea_orm::ConnectionTrait;
 
-    async fn fresh_pool() -> SqlitePool {
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect(":memory:")
-            .await
-            .expect("connect");
+        let db = crate::db::test_sqlite_database().await;
+        let conn = db.sea_orm();
         // Apply migration 024 (referenced by ON DELETE CASCADE) plus 025.
         for path in [
             "../../../migrations/024_cleanup_planning.sql",
@@ -441,14 +437,11 @@ mod tests {
             for stmt in cleaned.split(';') {
                 let s = stmt.trim();
                 if !s.is_empty() {
-                    sqlx::query(crate::db::audited_sql(s))
-                        .execute(&pool)
-                        .await
-                        .expect("migrate");
+                    conn.execute_unprepared(s).await.expect("migrate");
                 }
             }
         }
-        pool
+        db
     }
 
     fn sample_row(seq: u64) -> PlannedOperationRow {
@@ -472,8 +465,7 @@ mod tests {
 
     #[tokio::test]
     async fn audit_write_then_list_for_plan() {
-        let pool = fresh_pool().await;
-        let writer = SeaOrmCleanupAuditWriter::new(Database::Sqlite(pool));
+        let writer = SeaOrmCleanupAuditWriter::new(fresh_db().await);
         let plan_id = Uuid::now_v7();
         let job_id = Uuid::now_v7();
 
@@ -501,8 +493,7 @@ mod tests {
 
     #[tokio::test]
     async fn audit_write_idempotent_on_duplicate_seq() {
-        let pool = fresh_pool().await;
-        let writer = SeaOrmCleanupAuditWriter::new(Database::Sqlite(pool));
+        let writer = SeaOrmCleanupAuditWriter::new(fresh_db().await);
         let plan_id = Uuid::now_v7();
         let job_id = Uuid::now_v7();
         let row = sample_row(7);
@@ -551,8 +542,8 @@ mod tests {
     async fn audit_excludes_email_content() {
         // Compile-time + runtime guard: the entry struct + the SELECT we
         // issue must not surface email_id, body, target name, etc.
-        let pool = fresh_pool().await;
-        let writer = SeaOrmCleanupAuditWriter::new(Database::Sqlite(pool.clone()));
+        let db = fresh_db().await;
+        let writer = SeaOrmCleanupAuditWriter::new(db.clone());
         let plan_id = Uuid::now_v7();
         let job_id = Uuid::now_v7();
         let row = PlannedOperationRow {
@@ -569,16 +560,21 @@ mod tests {
         writer.write(entry).await.expect("write");
 
         // Schema introspection: verify no columns leak email content.
-        #[derive(sqlx::FromRow, Debug)]
-        struct ColInfo {
-            name: String,
-        }
-        let cols: Vec<ColInfo> =
-            sqlx::query_as::<_, ColInfo>("SELECT name FROM pragma_table_info('cleanup_audit_log')")
-                .fetch_all(&pool)
-                .await
-                .expect("pragma");
-        let names: Vec<&str> = cols.iter().map(|c| c.name.as_str()).collect();
+        // `pragma_table_info` is deliberately SQLite-only (ADR-030): this
+        // privacy assertion runs against the test schema, not production.
+        use sea_orm::{ConnectionTrait, Statement};
+        let cols: Vec<String> = db
+            .sea_orm()
+            .query_all_raw(Statement::from_string(
+                sea_orm::DatabaseBackend::Sqlite,
+                "SELECT name FROM pragma_table_info('cleanup_audit_log')".to_owned(),
+            ))
+            .await
+            .expect("pragma")
+            .iter()
+            .map(|row| row.try_get::<String>("", "name").expect("name column"))
+            .collect();
+        let names: Vec<&str> = cols.iter().map(|c| c.as_str()).collect();
         for forbidden in [
             "email_id",
             "email",
@@ -619,8 +615,7 @@ mod tests {
 
     #[tokio::test]
     async fn audit_records_skip_reason() {
-        let pool = fresh_pool().await;
-        let writer = SeaOrmCleanupAuditWriter::new(Database::Sqlite(pool));
+        let writer = SeaOrmCleanupAuditWriter::new(fresh_db().await);
         let plan_id = Uuid::now_v7();
         let job_id = Uuid::now_v7();
 
@@ -642,8 +637,7 @@ mod tests {
 
     #[tokio::test]
     async fn audit_action_type_camelcase() {
-        let pool = fresh_pool().await;
-        let writer = SeaOrmCleanupAuditWriter::new(Database::Sqlite(pool));
+        let writer = SeaOrmCleanupAuditWriter::new(fresh_db().await);
         let plan_id = Uuid::now_v7();
         let job_id = Uuid::now_v7();
 
@@ -669,8 +663,7 @@ mod tests {
         // outcomes into another's — the WHERE clause is load-bearing, and a
         // dropped filter would still return rows and still look "green" to
         // every single-plan test above.
-        let pool = fresh_pool().await;
-        let writer = SeaOrmCleanupAuditWriter::new(Database::Sqlite(pool));
+        let writer = SeaOrmCleanupAuditWriter::new(fresh_db().await);
         let plan_a = Uuid::now_v7();
         let plan_b = Uuid::now_v7();
         let job_id = Uuid::now_v7();
@@ -711,8 +704,7 @@ mod tests {
 
     #[tokio::test]
     async fn audit_list_for_user_is_scoped_newest_first_and_capped() {
-        let pool = fresh_pool().await;
-        let writer = SeaOrmCleanupAuditWriter::new(Database::Sqlite(pool));
+        let writer = SeaOrmCleanupAuditWriter::new(fresh_db().await);
         let plan_id = Uuid::now_v7();
         let job_id = Uuid::now_v7();
 

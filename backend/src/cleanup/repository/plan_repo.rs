@@ -677,15 +677,12 @@ mod tests {
     use crate::cleanup::domain::plan::{CleanupPlan, PlanTotals, RiskRollup};
     use crate::db::Database;
     use chrono::{Duration, Utc};
-    use sqlx::sqlite::SqlitePoolOptions;
     use uuid::Uuid;
 
     async fn fresh_conn() -> DatabaseConnection {
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect(":memory:")
-            .await
-            .expect("connect");
+        use sea_orm::ConnectionTrait;
+
+        let conn = crate::db::test_sqlite_database().await.sea_orm();
         let raw = include_str!("../../../migrations/sqlite/024_cleanup_planning.sql");
         // Strip line comments before splitting on ';'.
         let cleaned: String = raw
@@ -702,13 +699,10 @@ mod tests {
         for stmt in cleaned.split(';') {
             let s = stmt.trim();
             if !s.is_empty() {
-                sqlx::query(crate::db::audited_sql(s))
-                    .execute(&pool)
-                    .await
-                    .expect("migrate");
+                conn.execute_unprepared(s).await.expect("migrate");
             }
         }
-        Database::Sqlite(pool).sea_orm()
+        conn
     }
 
     fn sample_plan(user_id: &str) -> CleanupPlan {

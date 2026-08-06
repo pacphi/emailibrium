@@ -181,18 +181,11 @@ async fn restore_backup(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::Database;
-    use sqlx::sqlite::SqlitePoolOptions;
 
     /// In-memory SQLite with migration 001, which creates both `vector_backups`
     /// and the `emails` table its `email_id` foreign key points at.
     async fn fresh_conn() -> DatabaseConnection {
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect(":memory:")
-            .await
-            .expect("connect");
-        let conn = Database::Sqlite(pool).sea_orm();
+        let conn = crate::db::test_sqlite_database().await.sea_orm();
         // Strip line comments before splitting on ';'.
         let cleaned: String = include_str!("../../migrations/sqlite/001_initial_schema.sql")
             .lines()

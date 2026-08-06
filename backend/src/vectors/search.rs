@@ -1040,8 +1040,8 @@ impl HybridSearch {
 
         if let Some(ref categories) = filters.categories {
             if !categories.is_empty() {
-                cond = cond
-                    .add(emails::Column::Category.is_in(categories.iter().map(String::as_str)));
+                cond =
+                    cond.add(emails::Column::Category.is_in(categories.iter().map(String::as_str)));
             }
         }
 

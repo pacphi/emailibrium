@@ -942,15 +942,13 @@ mod tests {
     #[tokio::test]
     async fn audit_rows_written_for_each_apply_outcome() {
         use crate::cleanup::audit::{AuditOutcome, CleanupAuditWriter, SeaOrmCleanupAuditWriter};
-        use sqlx::sqlite::SqlitePoolOptions;
 
-        // Set up a SQLite pool with migrations 024 + 025 applied so the
-        // audit writer has its table.
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect(":memory:")
-            .await
-            .expect("connect");
+        // Set up an in-memory database with migrations 024 + 025 applied so
+        // the audit writer has its table.
+        use sea_orm::ConnectionTrait;
+
+        let db = crate::db::test_sqlite_database().await;
+        let conn = db.sea_orm();
         for raw in [
             include_str!("../../../migrations/sqlite/024_cleanup_planning.sql"),
             include_str!("../../../migrations/sqlite/025_cleanup_audit_log.sql"),
@@ -969,10 +967,7 @@ mod tests {
             for stmt in cleaned.split(';') {
                 let s = stmt.trim();
                 if !s.is_empty() {
-                    sqlx::query(crate::db::audited_sql(s))
-                        .execute(&pool)
-                        .await
-                        .expect("migrate");
+                    conn.execute_unprepared(s).await.expect("migrate");
                 }
             }
         }
@@ -991,9 +986,8 @@ mod tests {
             Arc::new(StubRules) as Arc<dyn crate::cleanup::domain::ports::RuleEvaluator>,
             Arc::new(StubEmailRepo) as Arc<dyn EmailRepository>,
         ));
-        let audit: Arc<dyn CleanupAuditWriter> = Arc::new(SeaOrmCleanupAuditWriter::new(
-            crate::db::Database::Sqlite(pool.clone()),
-        ));
+        let audit: Arc<dyn CleanupAuditWriter> =
+            Arc::new(SeaOrmCleanupAuditWriter::new(db.clone()));
         let orch = Arc::new(
             ApplyOrchestrator::new(
                 plan_repo.clone() as Arc<dyn CleanupPlanRepository>,

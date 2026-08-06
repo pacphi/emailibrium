@@ -557,7 +557,6 @@ fn db_error(operation: &str, err: DbErr) -> VectorError {
 mod tests {
     use super::*;
     use sea_orm::ConnectionTrait;
-    use sqlx::sqlite::SqlitePoolOptions;
 
     /// In-memory SQLite carrying the migrations this module's entities span:
     /// 001 (`emails`), 002 (`ai_consent`) and 010 (`consent_decisions`,
@@ -565,12 +564,7 @@ mod tests {
     /// runtime DDL `ensure_tables()` used to run — tests and production now agree
     /// on one schema definition.
     async fn setup_db() -> Arc<Database> {
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect(":memory:")
-            .await
-            .expect("connect");
-        let db = Database::Sqlite(pool);
+        let db = crate::db::test_sqlite_database().await;
         let conn = db.sea_orm();
         for raw in [
             include_str!("../../migrations/sqlite/001_initial_schema.sql"),

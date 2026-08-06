@@ -121,12 +121,6 @@ impl ToolContext {
         self.db.sea_orm()
     }
 
-    /// Legacy SQLite-only accessor — panics on a PostgreSQL-backed context.
-    // phase-3G: delete — kept only while not-yet-ported handlers still call it.
-    pub fn pool(&self) -> &sqlx::SqlitePool {
-        self.db.pool()
-    }
-
     /// Vector services, or `NotConfigured` naming what is missing.
     pub fn vectors(&self) -> Result<&Arc<VectorService>, ToolError> {
         self.vectors

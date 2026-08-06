@@ -587,7 +587,9 @@ impl super::store::VectorStoreBackend for SqliteVectorStore {
                 ],
             ))
             .await
-            .map_err(|e| VectorError::StoreFailed(format!("sqlite list_by_collection failed: {e}")))?
+            .map_err(|e| {
+                VectorError::StoreFailed(format!("sqlite list_by_collection failed: {e}"))
+            })?
             .iter()
             .map(decode_row)
             .collect::<Result<Vec<_>, _>>()

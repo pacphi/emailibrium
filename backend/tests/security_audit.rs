@@ -289,28 +289,20 @@ async fn test_embedding_invertibility_risk() {
 /// (not raw f32 bytes) when encryption is enabled.
 #[tokio::test]
 async fn test_vector_backup_encrypted() {
-    use emailibrium::db::Database;
     use emailibrium::vectors::backup::VectorBackupService;
-    use sqlx::sqlite::SqlitePoolOptions;
+    use sea_orm::ConnectionTrait;
 
     // Set up an in-memory SQLite database with schema.
-    let pool = SqlitePoolOptions::new()
-        .max_connections(1)
-        .connect("sqlite::memory:")
+    let db = Arc::new(emailibrium::db::test_sqlite_database().await);
+    let conn = db.sea_orm();
+
+    conn.execute_unprepared("PRAGMA foreign_keys = OFF")
         .await
         .unwrap();
 
-    sqlx::query("PRAGMA foreign_keys = OFF")
-        .execute(&pool)
+    conn.execute_unprepared(include_str!("../migrations/sqlite/001_initial_schema.sql"))
         .await
         .unwrap();
-
-    sqlx::query(include_str!("../migrations/sqlite/001_initial_schema.sql"))
-        .execute(&pool)
-        .await
-        .unwrap();
-
-    let db = Arc::new(Database::Sqlite(pool));
 
     // Create an encrypted vector store.
     let inner: Arc<dyn VectorStoreBackend> = Arc::new(InMemoryVectorStore::new());
@@ -329,14 +321,17 @@ async fn test_vector_backup_encrypted() {
     backup_service.backup_vector(&doc).await.unwrap();
 
     // Read the raw blob from SQLite directly.
-    let row: (Vec<u8>,) =
-        sqlx::query_as("SELECT vector_data FROM vector_backups WHERE vector_id = ?1")
-            .bind(&vector_id)
-            .fetch_one(db.pool())
-            .await
-            .unwrap();
-
-    let stored_blob = row.0;
+    let stored_blob: Vec<u8> = conn
+        .query_one_raw(sea_orm::Statement::from_sql_and_values(
+            sea_orm::DatabaseBackend::Sqlite,
+            "SELECT vector_data FROM vector_backups WHERE vector_id = ?1",
+            [vector_id.as_str().into()],
+        ))
+        .await
+        .unwrap()
+        .unwrap()
+        .try_get("", "vector_data")
+        .unwrap();
 
     // The raw f32 bytes of the original vector.
     let raw_bytes = f32_slice_to_bytes(&[1.0, 2.0, 3.0, 4.0, 5.0]);

@@ -740,17 +740,11 @@ mod tests {
     use super::*;
     use crate::db::Database;
     use sea_orm::{ActiveModelTrait, ActiveValue::Set, ConnectionTrait, DatabaseConnection};
-    use sqlx::sqlite::SqlitePoolOptions;
 
     /// In-memory SQLite carrying every migration the `emails` entity spans (see
     /// `rules::executor`'s identical helper for why each one is needed).
     async fn fresh_db() -> Database {
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect(":memory:")
-            .await
-            .expect("connect");
-        let db = Database::Sqlite(pool);
+        let db = crate::db::test_sqlite_database().await;
         let conn = db.sea_orm();
         for raw in [
             include_str!("../../../migrations/sqlite/001_initial_schema.sql"),

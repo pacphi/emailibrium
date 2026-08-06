@@ -513,17 +513,11 @@ mod tests {
     use sea_orm::ConnectionTrait;
 
     use super::*;
-    use crate::db::Database;
 
     /// In-memory context with the full emails-table schema (001 + the ALTERs
     /// from 016/018/021/027 the entity's columns require).
     async fn ctx() -> Arc<ToolContext> {
-        let pool = sqlx::sqlite::SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect(":memory:")
-            .await
-            .expect("connect");
-        let db = Database::Sqlite(pool);
+        let db = crate::db::test_sqlite_database().await;
         let conn = db.sea_orm();
         for raw in [
             include_str!("../../../migrations/sqlite/001_initial_schema.sql"),

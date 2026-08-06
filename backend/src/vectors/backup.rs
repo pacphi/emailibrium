@@ -283,14 +283,8 @@ mod tests {
     /// max-connection pool and set the pragma before schema creation.
     async fn test_db() -> Database {
         use sea_orm::ConnectionTrait;
-        use sqlx::sqlite::SqlitePoolOptions;
 
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect("sqlite::memory:")
-            .await
-            .unwrap();
-        let db = Database::Sqlite(pool);
+        let db = crate::db::test_sqlite_database().await;
         let conn = db.sea_orm();
 
         conn.execute_unprepared("PRAGMA foreign_keys = OFF")

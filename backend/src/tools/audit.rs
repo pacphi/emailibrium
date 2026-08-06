@@ -62,7 +62,7 @@ pub fn hash_arguments(args: &serde_json::Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::Database;
+
     use sea_orm::{ConnectionTrait, QueryOrder};
 
     #[test]
@@ -82,12 +82,7 @@ mod tests {
     }
 
     async fn fresh_conn() -> DatabaseConnection {
-        let pool = sqlx::sqlite::SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect(":memory:")
-            .await
-            .expect("connect");
-        let conn = Database::Sqlite(pool).sea_orm();
+        let conn = crate::db::test_sqlite_database().await.sea_orm();
         let raw = concat!(
             include_str!("../../migrations/sqlite/022_mcp_tool_audit.sql"),
             "\nALTER TABLE mcp_tool_audit ADD COLUMN source TEXT NOT NULL DEFAULT 'mcp';",
@@ -145,12 +140,7 @@ mod tests {
     /// PostgreSQL — the swallow is load-bearing and deliberate).
     #[tokio::test]
     async fn log_tool_call_swallows_insert_failure() {
-        let pool = sqlx::sqlite::SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect(":memory:")
-            .await
-            .expect("connect");
-        let conn = Database::Sqlite(pool).sea_orm();
+        let conn = crate::db::test_sqlite_database().await.sea_orm();
         // No table created — the insert fails internally, the call must not panic
         // or surface an error (it returns ()).
         log_tool_call(&conn, &sample_entry()).await;

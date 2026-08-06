@@ -453,19 +453,13 @@ async fn topic_clusters(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::Database;
+
     use sea_orm::{ConnectionTrait, DbBackend, QueryTrait};
-    use sqlx::sqlite::SqlitePoolOptions;
 
     /// In-memory SQLite carrying every migration the `emails` entity spans: 001
     /// creates the table and 016/018/021/027 add the columns it declares.
     async fn fresh_conn() -> DatabaseConnection {
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect(":memory:")
-            .await
-            .expect("connect");
-        let conn = Database::Sqlite(pool).sea_orm();
+        let conn = crate::db::test_sqlite_database().await.sea_orm();
         for raw in [
             include_str!("../../migrations/sqlite/001_initial_schema.sql"),
             include_str!("../../migrations/sqlite/016_soft_delete_trash_spam.sql"),

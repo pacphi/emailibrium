@@ -11,9 +11,7 @@ use chrono::{DateTime, Utc};
 use futures::stream::{self, StreamExt};
 use sea_orm::sea_query::{Expr, OnConflict};
 use sea_orm::ActiveValue::Set;
-use sea_orm::{
-    ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, QuerySelect,
-};
+use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, QuerySelect};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, mpsc, Notify, RwLock};
 use tracing::{debug, error, info, warn};
@@ -554,9 +552,7 @@ impl IngestionPipeline {
             .column(ingestion_checkpoints::Column::Failed)
             .column(ingestion_checkpoints::Column::LastProcessedId)
             .filter(ingestion_checkpoints::Column::AccountId.eq(account_id))
-            .filter(
-                ingestion_checkpoints::Column::Status.is_in(["running", "failed", "paused"]),
-            )
+            .filter(ingestion_checkpoints::Column::Status.is_in(["running", "failed", "paused"]))
             .order_by_desc(ingestion_checkpoints::Column::CreatedAt)
             .into_tuple()
             .one(&self.conn)
@@ -578,7 +574,10 @@ impl IngestionPipeline {
 
         // Update checkpoint status to running.
         ingestion_checkpoints::Entity::update_many()
-            .col_expr(ingestion_checkpoints::Column::Status, Expr::value("running"))
+            .col_expr(
+                ingestion_checkpoints::Column::Status,
+                Expr::value("running"),
+            )
             .col_expr(
                 ingestion_checkpoints::Column::UpdatedAt,
                 Expr::value(now_text()),

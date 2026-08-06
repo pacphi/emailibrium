@@ -555,13 +555,14 @@ mod tests {
         assert_eq!(JobType::Sync.to_string(), "sync");
     }
 
-    #[tokio::test]
-    async fn test_job_queue_enqueue_and_dequeue() {
-        let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+    /// In-memory database carrying the `background_jobs` table.
+    async fn test_db() -> Database {
+        use sea_orm::ConnectionTrait;
 
-        // Create the background_jobs table.
-        sqlx::query(
-            r#"CREATE TABLE IF NOT EXISTS background_jobs (
+        let db = crate::db::test_sqlite_database().await;
+        db.sea_orm()
+            .execute_unprepared(
+                r#"CREATE TABLE IF NOT EXISTS background_jobs (
                 id          TEXT PRIMARY KEY,
                 job_type    TEXT NOT NULL,
                 payload     TEXT NOT NULL,
@@ -575,12 +576,17 @@ mod tests {
                 scheduled_at TEXT,
                 completed_at TEXT
             )"#,
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
+            )
+            .await
+            .unwrap();
+        db
+    }
 
-        let queue = JobQueue::new(Database::Sqlite(pool));
+    #[tokio::test]
+    async fn test_job_queue_enqueue_and_dequeue() {
+        let db = test_db().await;
+
+        let queue = JobQueue::new(db);
 
         // Enqueue a content extraction job.
         let job = ContentExtractionJob {
@@ -622,29 +628,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_job_queue_retry_on_failure() {
-        let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+        let db = test_db().await;
 
-        sqlx::query(
-            r#"CREATE TABLE IF NOT EXISTS background_jobs (
-                id          TEXT PRIMARY KEY,
-                job_type    TEXT NOT NULL,
-                payload     TEXT NOT NULL,
-                status      TEXT NOT NULL DEFAULT 'pending',
-                priority    INTEGER NOT NULL DEFAULT 0,
-                attempts    INTEGER NOT NULL DEFAULT 0,
-                max_retries INTEGER NOT NULL DEFAULT 3,
-                error_msg   TEXT,
-                created_at  TEXT NOT NULL DEFAULT (datetime('now')),
-                updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
-                scheduled_at TEXT,
-                completed_at TEXT
-            )"#,
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-
-        let queue = JobQueue::new(Database::Sqlite(pool));
+        let queue = JobQueue::new(db);
 
         let job = EmbeddingJob {
             email_id: "e2".to_string(),
@@ -681,29 +667,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_job_queue_cancel() {
-        let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+        let db = test_db().await;
 
-        sqlx::query(
-            r#"CREATE TABLE IF NOT EXISTS background_jobs (
-                id          TEXT PRIMARY KEY,
-                job_type    TEXT NOT NULL,
-                payload     TEXT NOT NULL,
-                status      TEXT NOT NULL DEFAULT 'pending',
-                priority    INTEGER NOT NULL DEFAULT 0,
-                attempts    INTEGER NOT NULL DEFAULT 0,
-                max_retries INTEGER NOT NULL DEFAULT 3,
-                error_msg   TEXT,
-                created_at  TEXT NOT NULL DEFAULT (datetime('now')),
-                updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
-                scheduled_at TEXT,
-                completed_at TEXT
-            )"#,
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-
-        let queue = JobQueue::new(Database::Sqlite(pool));
+        let queue = JobQueue::new(db);
 
         let job = SyncJob {
             account_id: "a1".to_string(),
@@ -727,29 +693,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_job_queue_resume_abandoned() {
-        let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+        let db = test_db().await;
 
-        sqlx::query(
-            r#"CREATE TABLE IF NOT EXISTS background_jobs (
-                id          TEXT PRIMARY KEY,
-                job_type    TEXT NOT NULL,
-                payload     TEXT NOT NULL,
-                status      TEXT NOT NULL DEFAULT 'pending',
-                priority    INTEGER NOT NULL DEFAULT 0,
-                attempts    INTEGER NOT NULL DEFAULT 0,
-                max_retries INTEGER NOT NULL DEFAULT 3,
-                error_msg   TEXT,
-                created_at  TEXT NOT NULL DEFAULT (datetime('now')),
-                updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
-                scheduled_at TEXT,
-                completed_at TEXT
-            )"#,
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-
-        let queue = JobQueue::new(Database::Sqlite(pool));
+        let queue = JobQueue::new(db);
 
         let job = ContentExtractionJob {
             email_id: "e3".to_string(),
@@ -772,29 +718,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_job_queue_priority_ordering() {
-        let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+        let db = test_db().await;
 
-        sqlx::query(
-            r#"CREATE TABLE IF NOT EXISTS background_jobs (
-                id          TEXT PRIMARY KEY,
-                job_type    TEXT NOT NULL,
-                payload     TEXT NOT NULL,
-                status      TEXT NOT NULL DEFAULT 'pending',
-                priority    INTEGER NOT NULL DEFAULT 0,
-                attempts    INTEGER NOT NULL DEFAULT 0,
-                max_retries INTEGER NOT NULL DEFAULT 3,
-                error_msg   TEXT,
-                created_at  TEXT NOT NULL DEFAULT (datetime('now')),
-                updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
-                scheduled_at TEXT,
-                completed_at TEXT
-            )"#,
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-
-        let queue = JobQueue::new(Database::Sqlite(pool));
+        let queue = JobQueue::new(db);
 
         // Enqueue low priority first.
         let low = ContentExtractionJob {
@@ -841,27 +767,10 @@ mod tests {
     /// will flip this pin's shape.
     #[tokio::test]
     async fn test_dequeue_claim_syncs_attempts_with_the_row_when_uncontended() {
-        let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
-        sqlx::query(
-            r#"CREATE TABLE IF NOT EXISTS background_jobs (
-                id          TEXT PRIMARY KEY,
-                job_type    TEXT NOT NULL,
-                payload     TEXT NOT NULL,
-                status      TEXT NOT NULL DEFAULT 'pending',
-                priority    INTEGER NOT NULL DEFAULT 0,
-                attempts    INTEGER NOT NULL DEFAULT 0,
-                max_retries INTEGER NOT NULL DEFAULT 3,
-                error_msg   TEXT,
-                created_at  TEXT NOT NULL DEFAULT (datetime('now')),
-                updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
-                scheduled_at TEXT,
-                completed_at TEXT
-            )"#,
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-        let db = Database::Sqlite(pool.clone());
+        use sea_orm::ConnectionTrait;
+
+        let db = test_db().await;
+        let conn = db.sea_orm();
         let queue = JobQueue::new(db);
 
         let job = ContentExtractionJob {
@@ -880,12 +789,17 @@ mod tests {
             record.attempts, 1,
             "fabricated attempts = select-time 0 + 1"
         );
-        let (db_status, db_attempts): (String, i32) =
-            sqlx::query_as("SELECT status, attempts FROM background_jobs WHERE id = ?1")
-                .bind(&job_id)
-                .fetch_one(&pool)
-                .await
-                .unwrap();
+        let row = conn
+            .query_one_raw(sea_orm::Statement::from_sql_and_values(
+                sea_orm::DatabaseBackend::Sqlite,
+                "SELECT status, attempts FROM background_jobs WHERE id = ?1",
+                [job_id.as_str().into()],
+            ))
+            .await
+            .unwrap()
+            .unwrap();
+        let db_status: String = row.try_get("", "status").unwrap();
+        let db_attempts: i32 = row.try_get("", "attempts").unwrap();
         assert_eq!(db_status, "running");
         assert_eq!(
             db_attempts, record.attempts,
@@ -895,23 +809,30 @@ mod tests {
         // Re-arm the row with a nonzero attempt count: the next claim must
         // report select-time + 1 again, proving the increment rides the
         // guarded UPDATE, not the SELECT.
-        sqlx::query("UPDATE background_jobs SET status = 'pending', attempts = 7 WHERE id = ?1")
-            .bind(&job_id)
-            .execute(&pool)
-            .await
-            .unwrap();
+        conn.execute_raw(sea_orm::Statement::from_sql_and_values(
+            sea_orm::DatabaseBackend::Sqlite,
+            "UPDATE background_jobs SET status = 'pending', attempts = 7 WHERE id = ?1",
+            [job_id.as_str().into()],
+        ))
+        .await
+        .unwrap();
         let record = queue
             .dequeue(JobType::ContentExtraction)
             .await
             .unwrap()
             .unwrap();
         assert_eq!(record.attempts, 8);
-        let (db_attempts,): (i32,) =
-            sqlx::query_as("SELECT attempts FROM background_jobs WHERE id = ?1")
-                .bind(&job_id)
-                .fetch_one(&pool)
-                .await
-                .unwrap();
+        let db_attempts: i32 = conn
+            .query_one_raw(sea_orm::Statement::from_sql_and_values(
+                sea_orm::DatabaseBackend::Sqlite,
+                "SELECT attempts FROM background_jobs WHERE id = ?1",
+                [job_id.as_str().into()],
+            ))
+            .await
+            .unwrap()
+            .unwrap()
+            .try_get("", "attempts")
+            .unwrap();
         assert_eq!(db_attempts, 8);
     }
 
@@ -919,27 +840,10 @@ mod tests {
     /// already claimed (`running`) is invisible even when it is the oldest.
     #[tokio::test]
     async fn test_dequeue_skips_non_pending_rows() {
-        let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
-        sqlx::query(
-            r#"CREATE TABLE IF NOT EXISTS background_jobs (
-                id          TEXT PRIMARY KEY,
-                job_type    TEXT NOT NULL,
-                payload     TEXT NOT NULL,
-                status      TEXT NOT NULL DEFAULT 'pending',
-                priority    INTEGER NOT NULL DEFAULT 0,
-                attempts    INTEGER NOT NULL DEFAULT 0,
-                max_retries INTEGER NOT NULL DEFAULT 3,
-                error_msg   TEXT,
-                created_at  TEXT NOT NULL DEFAULT (datetime('now')),
-                updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
-                scheduled_at TEXT,
-                completed_at TEXT
-            )"#,
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-        let db = Database::Sqlite(pool.clone());
+        use sea_orm::ConnectionTrait;
+
+        let db = test_db().await;
+        let conn = db.sea_orm();
         let queue = JobQueue::new(db);
 
         let older = ContentExtractionJob {
@@ -956,11 +860,13 @@ mod tests {
         let newer_id = queue.enqueue_content_extraction(&newer).await.unwrap();
 
         // Claim the older row out-of-band; dequeue must return the newer one.
-        sqlx::query("UPDATE background_jobs SET status = 'running' WHERE id = ?1")
-            .bind(&older_id)
-            .execute(&pool)
-            .await
-            .unwrap();
+        conn.execute_raw(sea_orm::Statement::from_sql_and_values(
+            sea_orm::DatabaseBackend::Sqlite,
+            "UPDATE background_jobs SET status = 'running' WHERE id = ?1",
+            [older_id.as_str().into()],
+        ))
+        .await
+        .unwrap();
         let record = queue
             .dequeue(JobType::ContentExtraction)
             .await

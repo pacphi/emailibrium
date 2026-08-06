@@ -275,19 +275,13 @@ fn db_error(operation: &str, err: DbErr) -> VectorError {
 mod tests {
     use super::*;
     use sea_orm::ConnectionTrait;
-    use sqlx::sqlite::SqlitePoolOptions;
 
     /// In-memory SQLite carrying migration 002, which owns both tables this
     /// module reads and writes. Replaying the real migration (rather than the
     /// hand-written `CREATE TABLE`s these tests used to carry) is what makes the
     /// timestamp columns genuinely `TIMESTAMP` here, matching production.
     async fn setup_db() -> Arc<Database> {
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect(":memory:")
-            .await
-            .expect("connect");
-        let db = Database::Sqlite(pool);
+        let db = crate::db::test_sqlite_database().await;
         let conn = db.sea_orm();
         let raw = include_str!("../../migrations/sqlite/002_ai_consent.sql");
         // Strip line comments before splitting on ';'.

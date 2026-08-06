@@ -1038,18 +1038,12 @@ mod tests {
     use crate::db::Database;
     use chrono::{DateTime, Duration, NaiveDateTime};
     use sea_orm::{ActiveModelTrait, ActiveValue::Set, ConnectionTrait, DbBackend, QueryTrait};
-    use sqlx::sqlite::SqlitePoolOptions;
 
     /// In-memory SQLite carrying every migration the two entities span: 001
     /// creates `emails` and 016/018/021/027 add the columns the entity declares;
     /// 012 creates `rules` and 026 adds `match_count`/`last_run_at`.
     async fn fresh_db() -> Database {
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect(":memory:")
-            .await
-            .expect("connect");
-        let db = Database::Sqlite(pool);
+        let db = crate::db::test_sqlite_database().await;
         let conn = db.sea_orm();
         for raw in [
             include_str!("../../migrations/sqlite/001_initial_schema.sql"),

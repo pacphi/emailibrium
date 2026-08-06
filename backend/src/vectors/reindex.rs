@@ -9,9 +9,7 @@ use std::sync::Arc;
 
 use sea_orm::sea_query::{Expr, OnConflict};
 use sea_orm::ActiveValue::Set;
-use sea_orm::{
-    ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QuerySelect,
-};
+use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QuerySelect};
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 
@@ -169,12 +167,7 @@ mod tests {
     use super::*;
 
     async fn test_db() -> Database {
-        let pool = sqlx::sqlite::SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect(":memory:")
-            .await
-            .unwrap();
-        let db = Database::Sqlite(pool);
+        let db = crate::db::test_sqlite_database().await;
         let conn = db.sea_orm();
         for raw in [
             include_str!("../../migrations/sqlite/001_initial_schema.sql"),

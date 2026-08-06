@@ -297,11 +297,12 @@ fn map_conflict_model(row: conflicts::Model) -> SyncConflict {
 mod tests {
     use super::*;
     use crate::email::offline_queue::OperationType;
-    use sqlx::SqlitePool;
+    use sea_orm::ConnectionTrait;
 
-    async fn test_pool() -> SqlitePool {
-        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
-        sqlx::query(
+    async fn test_db() -> Database {
+        let db = crate::db::test_sqlite_database().await;
+        let conn = db.sea_orm();
+        conn.execute_unprepared(
             r#"CREATE TABLE sync_queue (
                 id TEXT PRIMARY KEY,
                 account_id TEXT NOT NULL,
@@ -316,10 +317,9 @@ mod tests {
                 error TEXT
             )"#,
         )
-        .execute(&pool)
         .await
         .unwrap();
-        sqlx::query(
+        conn.execute_unprepared(
             r#"CREATE TABLE sync_conflicts (
                 id TEXT PRIMARY KEY,
                 queue_entry_id TEXT NOT NULL,
@@ -330,10 +330,9 @@ mod tests {
                 created_at DATETIME DEFAULT (datetime('now'))
             )"#,
         )
-        .execute(&pool)
         .await
         .unwrap();
-        pool
+        db
     }
 
     fn make_operation() -> QueuedOperation {
@@ -347,9 +346,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_detect_conflict_with_remote_deleted() {
-        let pool = test_pool().await;
-        let resolver =
-            ConflictResolver::new(Database::Sqlite(pool), ConflictStrategy::LastWriterWins);
+        let resolver = ConflictResolver::new(test_db().await, ConflictStrategy::LastWriterWins);
         let op = make_operation();
 
         let remote = serde_json::json!({ "deleted": true });
@@ -360,9 +357,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_detect_conflict_with_remote_modified() {
-        let pool = test_pool().await;
-        let resolver =
-            ConflictResolver::new(Database::Sqlite(pool), ConflictStrategy::LastWriterWins);
+        let resolver = ConflictResolver::new(test_db().await, ConflictStrategy::LastWriterWins);
         let op = make_operation();
 
         // Remote was modified after the operation was queued.
@@ -374,9 +369,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_no_conflict_when_unchanged() {
-        let pool = test_pool().await;
-        let resolver =
-            ConflictResolver::new(Database::Sqlite(pool), ConflictStrategy::LastWriterWins);
+        let resolver = ConflictResolver::new(test_db().await, ConflictStrategy::LastWriterWins);
         let op = make_operation();
 
         let remote = serde_json::json!({ "status": "active" });
@@ -386,8 +379,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_log_and_retrieve_conflict() {
-        let pool = test_pool().await;
-        let resolver = ConflictResolver::new(Database::Sqlite(pool), ConflictStrategy::Manual);
+        let resolver = ConflictResolver::new(test_db().await, ConflictStrategy::Manual);
         let op = make_operation();
 
         let remote = serde_json::json!({ "deleted": true });
@@ -403,8 +395,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_conflicts_scope_to_queue_entry() {
-        let pool = test_pool().await;
-        let resolver = ConflictResolver::new(Database::Sqlite(pool), ConflictStrategy::LocalWins);
+        let resolver = ConflictResolver::new(test_db().await, ConflictStrategy::LocalWins);
 
         let op_a = QueuedOperation::new(
             "acct-a".to_string(),
@@ -440,8 +431,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_resolve_local_wins_strategy() {
-        let pool = test_pool().await;
-        let resolver = ConflictResolver::new(Database::Sqlite(pool), ConflictStrategy::LocalWins);
+        let resolver = ConflictResolver::new(test_db().await, ConflictStrategy::LocalWins);
         let op = make_operation();
 
         let remote = serde_json::json!({ "deleted": true });
@@ -458,8 +448,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_resolve_remote_wins_strategy() {
-        let pool = test_pool().await;
-        let resolver = ConflictResolver::new(Database::Sqlite(pool), ConflictStrategy::RemoteWins);
+        let resolver = ConflictResolver::new(test_db().await, ConflictStrategy::RemoteWins);
         let op = make_operation();
 
         let remote = serde_json::json!({ "deleted": true });
@@ -472,8 +461,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_resolve_manual_stays_unresolved() {
-        let pool = test_pool().await;
-        let resolver = ConflictResolver::new(Database::Sqlite(pool), ConflictStrategy::Manual);
+        let resolver = ConflictResolver::new(test_db().await, ConflictStrategy::Manual);
         let op = make_operation();
 
         let remote = serde_json::json!({ "deleted": true });
@@ -490,9 +478,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_last_writer_wins_remote_newer() {
-        let pool = test_pool().await;
-        let resolver =
-            ConflictResolver::new(Database::Sqlite(pool), ConflictStrategy::LastWriterWins);
+        let resolver = ConflictResolver::new(test_db().await, ConflictStrategy::LastWriterWins);
         let op = make_operation();
 
         let future_ts = (Utc::now() + chrono::Duration::hours(1)).to_rfc3339();

@@ -154,8 +154,8 @@ impl QueuedOperation {
 ///
 /// One code path for both backends: the `sync_queue` entity declares the Rust
 /// types and SeaORM owns encode/decode per backend (ADR-036), replacing the
-/// pre-port `QueueRowSqlite`/`QueueRowPostgres` split and its `adapt()` /
-/// `audited_sql()` plumbing.
+/// pre-port `QueueRowSqlite`/`QueueRowPostgres` split and its per-backend
+/// SQL-adaptation plumbing.
 pub struct OfflineQueue {
     conn: DatabaseConnection,
 }
@@ -361,12 +361,13 @@ fn model_to_op(row: sync_queue::Model) -> QueuedOperation {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sqlx::SqlitePool;
+    use sea_orm::ConnectionTrait;
 
-    async fn test_pool() -> SqlitePool {
-        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
-        sqlx::query(
-            r#"CREATE TABLE sync_queue (
+    async fn test_db() -> Database {
+        let db = crate::db::test_sqlite_database().await;
+        db.sea_orm()
+            .execute_unprepared(
+                r#"CREATE TABLE sync_queue (
                 id              TEXT PRIMARY KEY,
                 account_id      TEXT NOT NULL,
                 operation_type  TEXT NOT NULL,
@@ -379,11 +380,10 @@ mod tests {
                 processed_at    DATETIME,
                 error           TEXT
             )"#,
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-        pool
+            )
+            .await
+            .unwrap();
+        db
     }
 
     fn make_op(target_id: &str) -> QueuedOperation {
@@ -406,8 +406,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_enqueue_and_dequeue() {
-        let pool = test_pool().await;
-        let queue = OfflineQueue::new(Database::Sqlite(pool));
+        let queue = OfflineQueue::new(test_db().await);
 
         let op = make_op("msg-1");
         let id = queue.enqueue(&op).await.unwrap();
@@ -421,8 +420,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_fifo_ordering() {
-        let pool = test_pool().await;
-        let queue = OfflineQueue::new(Database::Sqlite(pool));
+        let queue = OfflineQueue::new(test_db().await);
 
         // Enqueue three operations with slight time differences.
         for i in 0..3 {
@@ -441,8 +439,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_dequeue_marks_processing() {
-        let pool = test_pool().await;
-        let queue = OfflineQueue::new(Database::Sqlite(pool));
+        let queue = OfflineQueue::new(test_db().await);
 
         queue.enqueue(&make_op("msg-1")).await.unwrap();
 
@@ -457,8 +454,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_complete_operation() {
-        let pool = test_pool().await;
-        let queue = OfflineQueue::new(Database::Sqlite(pool));
+        let queue = OfflineQueue::new(test_db().await);
 
         let op = make_op("msg-1");
         let id = queue.enqueue(&op).await.unwrap();
@@ -471,8 +467,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_fail_requeues_until_max_retries() {
-        let pool = test_pool().await;
-        let queue = OfflineQueue::new(Database::Sqlite(pool));
+        let queue = OfflineQueue::new(test_db().await);
 
         let mut op = make_op("msg-1");
         op.max_retries = 2;
@@ -491,8 +486,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_mark_conflict() {
-        let pool = test_pool().await;
-        let queue = OfflineQueue::new(Database::Sqlite(pool));
+        let queue = OfflineQueue::new(test_db().await);
 
         let op = make_op("msg-1");
         let id = queue.enqueue(&op).await.unwrap();
@@ -507,8 +501,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_pending_count() {
-        let pool = test_pool().await;
-        let queue = OfflineQueue::new(Database::Sqlite(pool));
+        let queue = OfflineQueue::new(test_db().await);
 
         assert_eq!(queue.pending_count("acct-1").await.unwrap(), 0);
 
@@ -521,8 +514,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_pending() {
-        let pool = test_pool().await;
-        let queue = OfflineQueue::new(Database::Sqlite(pool));
+        let queue = OfflineQueue::new(test_db().await);
 
         queue.enqueue(&make_op("msg-1")).await.unwrap();
         let op2 = make_op("msg-2");
@@ -541,8 +533,7 @@ mod tests {
     /// listed too, so the scoping must hold after a dequeue.
     #[tokio::test]
     async fn test_list_pending_scopes_to_account() {
-        let pool = test_pool().await;
-        let queue = OfflineQueue::new(Database::Sqlite(pool));
+        let queue = OfflineQueue::new(test_db().await);
 
         queue.enqueue(&make_op_for("acct-a", "a-1")).await.unwrap();
         queue.enqueue(&make_op_for("acct-a", "a-2")).await.unwrap();
@@ -573,8 +564,7 @@ mod tests {
     /// by accident.
     #[tokio::test]
     async fn test_dequeue_batch_is_not_account_scoped() {
-        let pool = test_pool().await;
-        let queue = OfflineQueue::new(Database::Sqlite(pool));
+        let queue = OfflineQueue::new(test_db().await);
 
         queue.enqueue(&make_op_for("acct-a", "a-1")).await.unwrap();
         queue.enqueue(&make_op_for("acct-b", "b-1")).await.unwrap();
@@ -593,8 +583,7 @@ mod tests {
     /// dropped `WHERE id = ?` would flip every other account's rows too.
     #[tokio::test]
     async fn test_terminal_transitions_touch_only_their_own_row() {
-        let pool = test_pool().await;
-        let queue = OfflineQueue::new(Database::Sqlite(pool));
+        let queue = OfflineQueue::new(test_db().await);
 
         let a = make_op_for("acct-a", "a-1");
         let b = make_op_for("acct-b", "b-1");

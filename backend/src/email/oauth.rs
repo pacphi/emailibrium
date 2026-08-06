@@ -893,13 +893,13 @@ impl OAuthManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sqlx::SqlitePool;
+    use sea_orm::ConnectionTrait;
 
     #[tokio::test]
     async fn test_encrypt_decrypt_roundtrip_no_key() {
         // Without encryption key, tokens are base64 encoded.
         let mgr = OAuthManager {
-            conn: Database::Sqlite(SqlitePool::connect_lazy("sqlite::memory:").unwrap()).sea_orm(),
+            conn: crate::db::test_sqlite_database().await.sea_orm(),
             encryption_key: None,
             http: reqwest::Client::new(),
         };
@@ -914,7 +914,7 @@ mod tests {
     async fn test_encrypt_decrypt_roundtrip_with_key() {
         let key = crate::vectors::encryption::derive_key("test-password", TOKEN_KEY_SALT).unwrap();
         let mgr = OAuthManager {
-            conn: Database::Sqlite(SqlitePool::connect_lazy("sqlite::memory:").unwrap()).sea_orm(),
+            conn: crate::db::test_sqlite_database().await.sea_orm(),
             encryption_key: Some(key),
             http: reqwest::Client::new(),
         };
@@ -931,33 +931,26 @@ mod tests {
 
     #[tokio::test]
     async fn test_save_and_load_imap_account_roundtrip() {
-        // Single-connection in-memory pool so the schema persists across queries.
-        let pool = sqlx::sqlite::SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect("sqlite::memory:")
+        // Single-connection in-memory database so the schema persists
+        // across queries; migrations replay as raw multi-statement scripts.
+        let conn = crate::db::test_sqlite_database().await.sea_orm();
+        conn.execute_unprepared(include_str!("../../migrations/sqlite/004_accounts.sql"))
             .await
             .unwrap();
-        // Apply migrations as raw multi-statement scripts.
-        sqlx::raw_sql(include_str!("../../migrations/sqlite/004_accounts.sql"))
-            .execute(&pool)
-            .await
-            .unwrap();
-        sqlx::raw_sql(
+        conn.execute_unprepared(
             "ALTER TABLE connected_accounts ADD COLUMN sync_depth TEXT NOT NULL DEFAULT '30d';",
         )
-        .execute(&pool)
         .await
         .unwrap();
-        sqlx::raw_sql(include_str!(
+        conn.execute_unprepared(include_str!(
             "../../migrations/sqlite/028_imap_accounts.sql"
         ))
-        .execute(&pool)
         .await
         .unwrap();
 
         let key = crate::vectors::encryption::derive_key("test-password", TOKEN_KEY_SALT).unwrap();
         let mgr = OAuthManager {
-            conn: Database::Sqlite(pool).sea_orm(),
+            conn: conn.clone(),
             encryption_key: Some(key),
             http: reqwest::Client::new(),
         };
@@ -1003,37 +996,29 @@ mod tests {
     /// must not leak onto another account's row.
     #[tokio::test]
     async fn test_update_account_settings_scopes_to_the_target_account() {
-        let pool = sqlx::sqlite::SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect("sqlite::memory:")
+        let conn = crate::db::test_sqlite_database().await.sea_orm();
+        conn.execute_unprepared(include_str!("../../migrations/sqlite/004_accounts.sql"))
             .await
             .unwrap();
-        sqlx::raw_sql(include_str!("../../migrations/sqlite/004_accounts.sql"))
-            .execute(&pool)
-            .await
-            .unwrap();
-        sqlx::raw_sql(
+        conn.execute_unprepared(
             "ALTER TABLE connected_accounts ADD COLUMN sync_depth TEXT NOT NULL DEFAULT '30d';",
         )
-        .execute(&pool)
         .await
         .unwrap();
-        sqlx::raw_sql(
+        conn.execute_unprepared(
             "ALTER TABLE connected_accounts ADD COLUMN sync_frequency INTEGER NOT NULL DEFAULT 5;",
         )
-        .execute(&pool)
         .await
         .unwrap();
-        sqlx::raw_sql(include_str!(
+        conn.execute_unprepared(include_str!(
             "../../migrations/sqlite/028_imap_accounts.sql"
         ))
-        .execute(&pool)
         .await
         .unwrap();
 
         let key = crate::vectors::encryption::derive_key("test-password", TOKEN_KEY_SALT).unwrap();
         let mgr = OAuthManager {
-            conn: Database::Sqlite(pool).sea_orm(),
+            conn: conn.clone(),
             encryption_key: Some(key),
             http: reqwest::Client::new(),
         };
@@ -1098,7 +1083,7 @@ mod tests {
     #[tokio::test]
     async fn test_authorization_url_contains_params() {
         let mgr = OAuthManager {
-            conn: Database::Sqlite(SqlitePool::connect_lazy("sqlite::memory:").unwrap()).sea_orm(),
+            conn: crate::db::test_sqlite_database().await.sea_orm(),
             encryption_key: None,
             http: reqwest::Client::new(),
         };

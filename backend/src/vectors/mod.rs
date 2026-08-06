@@ -162,7 +162,7 @@ impl VectorService {
             "sqlite" => {
                 // The emergency store is SQLite-only (ADR-003): a non-sqlite
                 // database_url falls back to in-memory, exactly as the
-                // pre-port SqlitePool connect would have failed there.
+                // pre-port sqlite pool connect would have failed there.
                 if config.database_url.starts_with("sqlite") {
                     let mut opts = sea_orm::ConnectOptions::new(config.database_url.clone());
                     opts.max_connections(5);

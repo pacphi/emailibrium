@@ -455,19 +455,13 @@ mod tests {
     use crate::rules::types::{EmailField, MatchOperator, Rule, RuleAction, RuleCondition};
     use chrono::{NaiveDate, NaiveDateTime, Utc};
     use sea_orm::{ActiveModelTrait, ActiveValue::Set, ConnectionTrait, DatabaseConnection};
-    use sqlx::sqlite::SqlitePoolOptions;
 
     /// In-memory SQLite carrying every table these adapters read: `emails`
     /// (001 + the 016/018/021/027 column additions the entity declares),
     /// `topic_clusters` (017), `connected_accounts`/`sync_state` (004, plus
     /// 013/028's added columns), and `rules` (012 + 026).
     async fn fresh_db() -> Database {
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect(":memory:")
-            .await
-            .expect("connect");
-        let db = Database::Sqlite(pool);
+        let db = crate::db::test_sqlite_database().await;
         let conn = db.sea_orm();
         for raw in [
             include_str!("../../../migrations/sqlite/001_initial_schema.sql"),

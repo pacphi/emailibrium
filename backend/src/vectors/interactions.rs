@@ -9,9 +9,7 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use sea_orm::sea_query::Expr;
 use sea_orm::ActiveValue::Set;
-use sea_orm::{
-    ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, QuerySelect,
-};
+use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, QuerySelect};
 use uuid::Uuid;
 
 use super::error::VectorError;

@@ -1564,18 +1564,13 @@ mod persistence_tests {
     use sea_orm::ConnectionTrait;
 
     use super::*;
-    use crate::db::Database;
+
     use crate::email::types::EmailMessage;
 
     /// In-memory connection carrying the `emails` schema (001 plus the ALTERs from
     /// 016/018/021/027 the entity's columns require) and `sync_state` (004).
     async fn test_conn() -> DatabaseConnection {
-        let pool = sqlx::sqlite::SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect(":memory:")
-            .await
-            .expect("connect");
-        let conn = Database::Sqlite(pool).sea_orm();
+        let conn = crate::db::test_sqlite_database().await.sea_orm();
         for raw in [
             include_str!("../../migrations/sqlite/001_initial_schema.sql"),
             include_str!("../../migrations/sqlite/004_accounts.sql"),

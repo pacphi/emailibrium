@@ -239,9 +239,12 @@ mod tests {
     use crate::db::Database;
     use crate::email::offline_queue::{OfflineQueue, OperationType, QueuedOperation};
 
-    async fn test_pool() -> sqlx::SqlitePool {
-        let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
-        sqlx::query(
+    async fn test_db() -> Database {
+        use sea_orm::ConnectionTrait;
+
+        let db = crate::db::test_sqlite_database().await;
+        let conn = db.sea_orm();
+        conn.execute_unprepared(
             r#"CREATE TABLE sync_queue (
                 id TEXT PRIMARY KEY,
                 account_id TEXT NOT NULL,
@@ -256,10 +259,9 @@ mod tests {
                 error TEXT
             )"#,
         )
-        .execute(&pool)
         .await
         .unwrap();
-        sqlx::query(
+        conn.execute_unprepared(
             r#"CREATE TABLE processing_checkpoints (
                 job_id TEXT PRIMARY KEY,
                 provider TEXT NOT NULL,
@@ -272,15 +274,14 @@ mod tests {
                 updated_at TEXT NOT NULL DEFAULT (datetime('now'))
             )"#,
         )
-        .execute(&pool)
         .await
         .unwrap();
-        pool
+        db
     }
 
-    fn make_scheduler(pool: &sqlx::SqlitePool) -> Arc<SyncScheduler> {
-        let queue = Arc::new(OfflineQueue::new(Database::Sqlite(pool.clone())));
-        let checkpoint = Arc::new(CheckpointService::new(Database::Sqlite(pool.clone())));
+    fn make_scheduler(db: &Database) -> Arc<SyncScheduler> {
+        let queue = Arc::new(OfflineQueue::new(db.clone()));
+        let checkpoint = Arc::new(CheckpointService::new(db.clone()));
         Arc::new(SyncScheduler::with_config(
             queue,
             checkpoint,
@@ -301,8 +302,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_process_batch_empty() {
-        let pool = test_pool().await;
-        let scheduler = make_scheduler(&pool);
+        let db = test_db().await;
+        let scheduler = make_scheduler(&db);
 
         let count = scheduler.process_batch().await.unwrap();
         assert_eq!(count, 0);
@@ -310,9 +311,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_process_batch_completes_operations() {
-        let pool = test_pool().await;
-        let queue = OfflineQueue::new(Database::Sqlite(pool.clone()));
-        let scheduler = make_scheduler(&pool);
+        let db = test_db().await;
+        let queue = OfflineQueue::new(db.clone());
+        let scheduler = make_scheduler(&db);
 
         queue.enqueue(&make_op("msg-1")).await.unwrap();
         queue.enqueue(&make_op("msg-2")).await.unwrap();
@@ -327,9 +328,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_process_batch_respects_batch_size() {
-        let pool = test_pool().await;
-        let queue = Arc::new(OfflineQueue::new(Database::Sqlite(pool.clone())));
-        let checkpoint = Arc::new(CheckpointService::new(Database::Sqlite(pool.clone())));
+        let db = test_db().await;
+        let queue = Arc::new(OfflineQueue::new(db.clone()));
+        let checkpoint = Arc::new(CheckpointService::new(db.clone()));
         let scheduler = Arc::new(SyncScheduler::with_config(
             queue.clone(),
             checkpoint,
@@ -352,10 +353,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_backoff_exponential_growth() {
-        let pool = test_pool().await;
+        let db = test_db().await;
         let scheduler = Arc::new(SyncScheduler::with_config(
-            Arc::new(OfflineQueue::new(Database::Sqlite(pool.clone()))),
-            Arc::new(CheckpointService::new(Database::Sqlite(pool))),
+            Arc::new(OfflineQueue::new(db.clone())),
+            Arc::new(CheckpointService::new(db.clone())),
             Duration::from_secs(1),
             Duration::from_secs(60),
             10,
@@ -378,10 +379,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_backoff_capped_at_max() {
-        let pool = test_pool().await;
+        let db = test_db().await;
         let scheduler = Arc::new(SyncScheduler::with_config(
-            Arc::new(OfflineQueue::new(Database::Sqlite(pool.clone()))),
-            Arc::new(CheckpointService::new(Database::Sqlite(pool))),
+            Arc::new(OfflineQueue::new(db.clone())),
+            Arc::new(CheckpointService::new(db.clone())),
             Duration::from_secs(1),
             Duration::from_secs(5), // 5s max backoff
             10,
@@ -397,10 +398,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_effective_delay_includes_backoff() {
-        let pool = test_pool().await;
+        let db = test_db().await;
         let scheduler = Arc::new(SyncScheduler::with_config(
-            Arc::new(OfflineQueue::new(Database::Sqlite(pool.clone()))),
-            Arc::new(CheckpointService::new(Database::Sqlite(pool))),
+            Arc::new(OfflineQueue::new(db.clone())),
+            Arc::new(CheckpointService::new(db.clone())),
             Duration::from_secs(30),
             Duration::from_secs(300),
             10,
@@ -414,9 +415,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_start_runs_and_can_be_aborted() {
-        let pool = test_pool().await;
-        let queue = Arc::new(OfflineQueue::new(Database::Sqlite(pool.clone())));
-        let checkpoint = Arc::new(CheckpointService::new(Database::Sqlite(pool.clone())));
+        let db = test_db().await;
+        let queue = Arc::new(OfflineQueue::new(db.clone()));
+        let checkpoint = Arc::new(CheckpointService::new(db.clone()));
         let scheduler = Arc::new(SyncScheduler::with_config(
             queue,
             checkpoint,

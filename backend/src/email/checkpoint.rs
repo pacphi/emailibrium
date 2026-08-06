@@ -267,13 +267,14 @@ fn map_checkpoint_model(row: checkpoints::Model) -> ProcessingCheckpoint {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sqlx::SqlitePool;
+    use sea_orm::ConnectionTrait;
 
     /// Create an in-memory SQLite database with the processing_checkpoints table.
-    async fn test_pool() -> SqlitePool {
-        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
-        sqlx::query(
-            r#"CREATE TABLE processing_checkpoints (
+    async fn test_db() -> Database {
+        let db = crate::db::test_sqlite_database().await;
+        db.sea_orm()
+            .execute_unprepared(
+                r#"CREATE TABLE processing_checkpoints (
                 job_id           TEXT PRIMARY KEY,
                 provider         TEXT NOT NULL,
                 account_id       TEXT NOT NULL,
@@ -284,11 +285,10 @@ mod tests {
                 error_message    TEXT,
                 updated_at       TEXT NOT NULL DEFAULT (datetime('now'))
             )"#,
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-        pool
+            )
+            .await
+            .unwrap();
+        db
     }
 
     fn make_checkpoint(job_id: &str, state: CheckpointState) -> ProcessingCheckpoint {
@@ -307,8 +307,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_save_and_get_checkpoint() {
-        let pool = test_pool().await;
-        let svc = CheckpointService::new(Database::Sqlite(pool));
+        let svc = CheckpointService::new(test_db().await);
 
         let cp = make_checkpoint("job-1", CheckpointState::Running);
         svc.save_checkpoint(&cp).await.unwrap();
@@ -323,8 +322,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_upsert_updates_existing() {
-        let pool = test_pool().await;
-        let svc = CheckpointService::new(Database::Sqlite(pool));
+        let svc = CheckpointService::new(test_db().await);
 
         let mut cp = make_checkpoint("job-2", CheckpointState::Running);
         svc.save_checkpoint(&cp).await.unwrap();
@@ -340,8 +338,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_nonexistent_returns_none() {
-        let pool = test_pool().await;
-        let svc = CheckpointService::new(Database::Sqlite(pool));
+        let svc = CheckpointService::new(test_db().await);
 
         let loaded = svc.get_checkpoint("no-such-job").await.unwrap();
         assert!(loaded.is_none());
@@ -349,8 +346,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_operations_scope_to_job_id() {
-        let pool = test_pool().await;
-        let svc = CheckpointService::new(Database::Sqlite(pool));
+        let svc = CheckpointService::new(test_db().await);
 
         let mut job_a = make_checkpoint("job-acct-a", CheckpointState::Running);
         job_a.account_id = "acct-a".to_string();
@@ -377,8 +373,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_complete_marks_state() {
-        let pool = test_pool().await;
-        let svc = CheckpointService::new(Database::Sqlite(pool));
+        let svc = CheckpointService::new(test_db().await);
 
         let cp = make_checkpoint("job-3", CheckpointState::Running);
         svc.save_checkpoint(&cp).await.unwrap();
@@ -390,8 +385,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_fail_stores_error() {
-        let pool = test_pool().await;
-        let svc = CheckpointService::new(Database::Sqlite(pool));
+        let svc = CheckpointService::new(test_db().await);
 
         let cp = make_checkpoint("job-4", CheckpointState::Running);
         svc.save_checkpoint(&cp).await.unwrap();
@@ -404,8 +398,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_resumable_excludes_completed() {
-        let pool = test_pool().await;
-        let svc = CheckpointService::new(Database::Sqlite(pool));
+        let svc = CheckpointService::new(test_db().await);
 
         svc.save_checkpoint(&make_checkpoint("running-1", CheckpointState::Running))
             .await
@@ -431,18 +424,18 @@ mod tests {
 
     #[tokio::test]
     async fn test_cleanup_old_removes_completed() {
-        let pool = test_pool().await;
-        let svc = CheckpointService::new(Database::Sqlite(pool.clone()));
+        let db = test_db().await;
+        let svc = CheckpointService::new(db.clone());
 
         // Insert a completed checkpoint with an old timestamp.
-        sqlx::query(
-            r#"INSERT INTO processing_checkpoints
+        db.sea_orm()
+            .execute_unprepared(
+                r#"INSERT INTO processing_checkpoints
                    (job_id, provider, account_id, processed_count, state, updated_at)
                VALUES ('old-job', 'gmail', 'acct', 0, 'completed', '2020-01-01T00:00:00+00:00')"#,
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
+            )
+            .await
+            .unwrap();
 
         // Insert a recent completed checkpoint.
         svc.save_checkpoint(&make_checkpoint("new-job", CheckpointState::Completed))

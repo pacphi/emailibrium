@@ -230,17 +230,11 @@ mod tests {
     use crate::db::Database;
     use sea_orm::sea_query::Expr;
     use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
-    use sqlx::sqlite::SqlitePoolOptions;
 
     /// In-memory SQLite with the `rules` table: 012 creates it, 026 adds
     /// `match_count`/`last_run_at` (both of which the entity declares).
     async fn fresh_db() -> Database {
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect(":memory:")
-            .await
-            .expect("connect");
-        let db = Database::Sqlite(pool);
+        let db = crate::db::test_sqlite_database().await;
         let conn = db.sea_orm();
         for raw in [
             include_str!("../../migrations/sqlite/012_rules.sql"),

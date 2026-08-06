@@ -344,13 +344,17 @@ async fn main() -> anyhow::Result<()> {
     // ── Restore persisted user settings ──────────────────────────────────
     // Override config defaults with user's saved preferences from the
     // `app_settings` table so that model selections survive restarts.
-    if let Ok(row) = sqlx::query_as::<_, (String,)>(
-        "SELECT value FROM app_settings WHERE key = 'builtInLlmModel'",
-    )
-    .fetch_one(db.pool())
-    .await
-    {
-        let saved_model = &row.0;
+    if let Ok(Some((saved_value,))) = {
+        use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QuerySelect};
+        db::entities::app_settings::Entity::find()
+            .select_only()
+            .column(db::entities::app_settings::Column::Value)
+            .filter(db::entities::app_settings::Column::Key.eq("builtInLlmModel"))
+            .into_tuple::<(String,)>()
+            .one(&db.sea_orm())
+            .await
+    } {
+        let saved_model = &saved_value;
         if !saved_model.is_empty() && saved_model != &config.generative.builtin.model_id {
             tracing::info!(
                 saved = %saved_model,
@@ -757,10 +761,24 @@ async fn main() -> anyhow::Result<()> {
     // Periodically hard-deletes emails that have been in trash or spam
     // longer than the configured retention period (default: 30 days).
     {
-        let db = state.db.clone();
+        let conn = state.db.sea_orm();
         let trash_days = yaml_config.app.email.trash_retention_days;
         let spam_days = yaml_config.app.email.spam_retention_days;
         tokio::spawn(async move {
+            use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+
+            use db::entities::emails;
+
+            // `deleted_at` is TEXT (RFC3339, app-written); the cutoff bind
+            // keeps the exact `YYYY-MM-DD HH:MM:SS` shape the pre-port
+            // `datetime('now', '-N days')` literal produced, so the text
+            // comparison is unchanged.
+            let cutoff = |days: u32| {
+                (chrono::Utc::now() - chrono::Duration::days(days as i64))
+                    .format("%Y-%m-%d %H:%M:%S")
+                    .to_string()
+            };
+
             // Run once per hour.
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
             loop {
@@ -768,14 +786,15 @@ async fn main() -> anyhow::Result<()> {
 
                 // Purge expired trash.
                 if trash_days > 0 {
-                    let sql = format!(
-                        "DELETE FROM emails WHERE is_trash = 1 AND deleted_at < datetime('now', '-{} days')",
-                        trash_days
-                    );
-                    match sqlx::query(db::audited_sql(&sql)).execute(db.pool()).await {
-                        Ok(result) if result.rows_affected() > 0 => {
+                    let purge = emails::Entity::delete_many()
+                        .filter(emails::Column::IsTrash.eq(1))
+                        .filter(emails::Column::DeletedAt.lt(cutoff(trash_days)))
+                        .exec(&conn)
+                        .await;
+                    match purge {
+                        Ok(result) if result.rows_affected > 0 => {
                             tracing::info!(
-                                purged = result.rows_affected(),
+                                purged = result.rows_affected,
                                 retention_days = trash_days,
                                 "Auto-purged expired trash emails"
                             );
@@ -787,14 +806,15 @@ async fn main() -> anyhow::Result<()> {
 
                 // Purge expired spam.
                 if spam_days > 0 {
-                    let sql = format!(
-                        "DELETE FROM emails WHERE is_spam = 1 AND deleted_at < datetime('now', '-{} days')",
-                        spam_days
-                    );
-                    match sqlx::query(db::audited_sql(&sql)).execute(db.pool()).await {
-                        Ok(result) if result.rows_affected() > 0 => {
+                    let purge = emails::Entity::delete_many()
+                        .filter(emails::Column::IsSpam.eq(1))
+                        .filter(emails::Column::DeletedAt.lt(cutoff(spam_days)))
+                        .exec(&conn)
+                        .await;
+                    match purge {
+                        Ok(result) if result.rows_affected > 0 => {
                             tracing::info!(
-                                purged = result.rows_affected(),
+                                purged = result.rows_affected,
                                 retention_days = spam_days,
                                 "Auto-purged expired spam emails"
                             );
@@ -1090,14 +1110,29 @@ fn validate_provider_catalog(yaml_config: &vectors::yaml_config::YamlConfig) {
 /// (e.g. `Label_356207529...`) and replace them with human-readable names by
 /// querying the provider API.
 async fn repair_unresolved_labels(state: &AppState) -> anyhow::Result<()> {
+    use sea_orm::sea_query::Expr;
+    use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QuerySelect};
+
+    use db::entities::emails;
+
+    let conn = state.db.sea_orm();
+
     // Step 1: Find distinct unresolved label IDs across all emails.
-    let rows: Vec<(i64, String, String)> = sqlx::query_as(
-        "SELECT rowid, labels, account_id FROM emails \
-         WHERE labels LIKE '%Label_%' \
-         AND COALESCE(is_spam, 0) = 0 AND COALESCE(is_trash, 0) = 0",
-    )
-    .fetch_all(state.db.pool())
-    .await?;
+    // The SQLite-only `rowid` handle becomes the portable `id` primary key;
+    // `is_trash`/`is_spam` are NOT NULL DEFAULT 0 (migration 016), so the
+    // pre-port `COALESCE(x, 0) = 0` is exactly `x = 0`. The LIKE filter
+    // guarantees `labels` is non-NULL, so the non-optional decode is safe.
+    let rows: Vec<(String, String, String)> = emails::Entity::find()
+        .select_only()
+        .column(emails::Column::Id)
+        .column(emails::Column::Labels)
+        .column(emails::Column::AccountId)
+        .filter(emails::Column::Labels.like("%Label_%"))
+        .filter(emails::Column::IsSpam.eq(0))
+        .filter(emails::Column::IsTrash.eq(0))
+        .into_tuple()
+        .all(&conn)
+        .await?;
 
     if rows.is_empty() {
         return Ok(());
@@ -1131,7 +1166,7 @@ async fn repair_unresolved_labels(state: &AppState) -> anyhow::Result<()> {
     let mut resolved_count: u64 = 0;
     let unresolved_re = regex::Regex::new(r"^Label_\d+").expect("valid regex");
 
-    for (rowid, labels_csv, account_id) in &rows {
+    for (email_id, labels_csv, account_id) in &rows {
         let Some(map) = label_maps.get(account_id) else {
             continue;
         };
@@ -1157,10 +1192,10 @@ async fn repair_unresolved_labels(state: &AppState) -> anyhow::Result<()> {
 
         if changed {
             let joined = new_labels.join(", ");
-            sqlx::query("UPDATE emails SET labels = ?1 WHERE rowid = ?2")
-                .bind(&joined)
-                .bind(rowid)
-                .execute(state.db.pool())
+            emails::Entity::update_many()
+                .col_expr(emails::Column::Labels, Expr::value(joined))
+                .filter(emails::Column::Id.eq(email_id.as_str()))
+                .exec(&conn)
                 .await?;
             resolved_count += 1;
         }
