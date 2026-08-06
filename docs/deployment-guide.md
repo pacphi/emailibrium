@@ -239,20 +239,83 @@ APP_ENV=production docker compose up -d
 
 ## Database Strategy: SQLite vs PostgreSQL
 
-SQLite is the primary database for development and single-node deployment. It requires no external process, supports the full feature set, and is the default (`database_url: "sqlite:emailibrium.db?mode=rwc"`).
+Both databases work. SQLite is the default and needs no external process; PostgreSQL is
+available for multi-user and high-availability deployments.
 
-SQLite is currently the **only** database the backend can actually connect to: `backend/Cargo.toml`
-enables SQLx's `sqlite` feature but not `postgres`, and `backend/src/db/mod.rs` is built directly
-against `SqlitePool`. The `postgres` service in Docker Compose starts alongside the backend today,
-but the backend does not yet use it — PostgreSQL support is planned, not implemented. Do not set
-`EMAILIBRIUM_DATABASE_URL` to a `postgres://` URL; the backend will fail to connect.
+**The connection URL's scheme is the only selector.** `sqlite:` selects SQLite, `postgres://` or
+`postgresql://` selects PostgreSQL. There is no separate backend flag, and the same
+`EMAILIBRIUM_DATABASE_URL` value means the same thing in every mode — native, Docker dev, or
+Docker production (ADR-033).
 
-| Scenario                     | Database | Notes                                                      |
-| ---------------------------- | -------- | ---------------------------------------------------------- |
-| Local development            | SQLite   | Zero setup, fast iteration                                 |
-| Single-user deployment       | SQLite   | No external dependencies, simpler operations               |
-| Multi-user / team deployment | SQLite   | Works today (single-writer); PostgreSQL support is planned |
-| High-availability production | SQLite   | Works today (single-writer); PostgreSQL support is planned |
+```yaml
+database_url: 'sqlite:emailibrium.db?mode=rwc' # default
+database_url: 'postgres://emailibrium:PASSWORD@postgres:5432/emailibrium' # PostgreSQL
+```
+
+| Scenario                     | Database   | Notes                                                            |
+| ---------------------------- | ---------- | ---------------------------------------------------------------- |
+| Local development            | SQLite     | Zero setup, fast iteration                                       |
+| Single-user deployment       | SQLite     | No external dependencies, simpler operations                     |
+| Multi-user / team deployment | PostgreSQL | Concurrent writers; SQLite is single-writer                      |
+| High-availability production | PostgreSQL | Replication and failover are PostgreSQL operational capabilities |
+
+### Choosing the database per run mode
+
+Each row is the complete toggle for that mode. The database container is opt-in, so a SQLite
+deployment never starts one.
+
+| Mode                 | SQLite (default)     | PostgreSQL                                                                        |
+| -------------------- | -------------------- | --------------------------------------------------------------------------------- |
+| Native (`just dev`)  | `just dev`           | `EMAILIBRIUM_DATABASE_URL=postgres://user:pw@localhost:5432/emailibrium just dev` |
+| Native, built-in LLM | `just dev-llm`       | Same variable, prefixed to `just dev-llm`                                         |
+| Docker dev           | `just docker-up-dev` | `just docker-up-dev-postgres`                                                     |
+| Docker production    | `just docker-up`     | `just docker-up-postgres`                                                         |
+
+The `*-postgres` recipes do two things, and both are required: they pass `--profile postgres`,
+which starts the database container, and they derive the matching connection URL from the same
+`secrets/$APP_ENV/db_password` the container reads. Starting the container without pointing the
+app at it would leave you on SQLite with an idle database running.
+
+To use a PostgreSQL server you manage yourself, export `EMAILIBRIUM_DATABASE_URL` first — an
+explicit value always wins over the derived one, and the local container is then redundant:
+
+```bash
+EMAILIBRIUM_DATABASE_URL='postgres://user:pw@db.example.com:5432/emailibrium' just docker-up
+```
+
+Confirm which backend you actually landed on — the backend reports it on startup, naming the
+endpoint with credentials stripped:
+
+```text
+Database backend: PostgreSQL (postgres://***@postgres:5432/emailibrium)
+```
+
+### Migrations
+
+Each backend has its own migration directory (`backend/migrations/sqlite/`,
+`backend/migrations/postgres/`), carrying the same schema under matching numbers. Migrations run
+automatically at startup for whichever backend the URL selected.
+
+### Interim limitation: no keyword search on PostgreSQL
+
+Full-text (keyword) search is implemented with SQLite's FTS5, which PostgreSQL has no equivalent
+for, so `migrations/postgres/` deliberately omits the three FTS5 migrations. **Semantic and vector
+search are unaffected and work identically on both backends** — only the keyword-ranking half of
+hybrid search is absent on PostgreSQL. BM25 parity via the `ruvector-postgres` extension is
+specified in ADR-034 and is the subject of its own queued work; this section will describe the
+shipped capability once it lands.
+
+### Switching an existing deployment
+
+There is no data migration between the two backends. Switching points the app at a different,
+empty database, which then runs its own migrations from scratch — accounts must be reconnected
+and mail re-ingested. Plan a switch as a re-onboarding, not a cutover.
+
+> **Upgrading from a build before PostgreSQL support:** `EMAILIBRIUM_DATABASE_URL` used to be
+> ignored — setting it did nothing. It is honoured now, and Docker Compose substitutes values
+> from a project `.env`, so a stale value left over from an earlier attempt will silently move
+> you onto a different database. The startup line above names the endpoint; check it after
+> upgrading if you are unsure which one you are on.
 
 ## Vector Store Backend
 

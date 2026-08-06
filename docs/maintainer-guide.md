@@ -380,11 +380,11 @@ Emailibrium is a **single-node, local-first** application by design. Scaling is 
 
 Quantization auto-scales when `quantization.mode: auto` (default). See ADR-007 for the tier thresholds and hysteresis logic.
 
-`docker-compose.yml` already runs PostgreSQL as a required service today (the backend
-won't start until it reports healthy), but the backend does not yet connect to or store
-data in it -- SQLite remains the only database actually in use. See
-[deployment-guide.md](./deployment-guide.md)'s Database Strategy section for the current
-state.
+PostgreSQL is a working second backend (ADR-033), selected by the connection URL's scheme.
+Its `docker-compose.yml` service is behind the `postgres` profile, so it starts only when
+asked for -- a SQLite deployment does not run one. See
+[deployment-guide.md](./deployment-guide.md)'s Database Strategy section for the per-mode
+toggle and the interim keyword-search limitation.
 
 ### Troubleshooting
 

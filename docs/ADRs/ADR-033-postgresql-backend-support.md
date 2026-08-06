@@ -67,6 +67,9 @@ Because URL-scheme dispatch is the _only_ selection mechanism, "which mode am I 
 **Negative / costs**
 
 - **A `postgres://` URL is not yet usable end-to-end.** Phase 0 alone lets you _connect_; phases 1–3 are required before the app actually works against PostgreSQL. Documented above and in the pipeline's phase dependency graph — not a surprise to whoever runs phase 1 next.
+
+  > **Status update, 2026-08-06 — this cost has been paid.** Phases 1–4 shipped: migrations run on both backends, every call site is on the SeaORM dialect layer (ADR-036), CI runs the suite against a live `postgres:16-alpine`, and the smoke workflow proves a compose deployment connects to and writes to PostgreSQL. A `postgres://` URL now works end to end, with one documented exception — keyword (full-text) search, which awaits ADR-034. The bullet above is retained as the record of what phase 0 knowingly deferred, not as a description of today.
+
 - **~250 mechanical call-site edits landed in this phase** (a field access, `db.pool`, becoming a method call, `db.pool()`) purely to keep the crate compiling against the new enum. These are syntactic only — no call site's behavior changed — but they touch 27 files, which is a wider diff than "phase 0 is plumbing" might suggest at a glance. The alternative (a struct with a public `pool: SqlitePool` field wrapping an internal enum) was considered and rejected: it would either duplicate state (a redundant field alongside the real enum) or require the exact same accessor-based edit anyway, without the type-level safety of an enum making the SQLite-only assumption explicit.
 
 ## 4. Alternatives Considered
