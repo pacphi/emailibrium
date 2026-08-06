@@ -185,6 +185,15 @@ struct EmailTimestampRow {
     body_text: Option<String>,
 }
 
+/// The portable read-rate aggregate (`CASE WHEN` over BOOLEAN, FLOAT cast —
+/// valid on both dialects), shared by the per-sender and overall queries.
+fn read_rate_expr() -> Expr {
+    Expr::cust(
+        "COALESCE(CAST(COUNT(CASE WHEN is_read THEN 1 END) AS FLOAT) \
+         / NULLIF(COUNT(*), 0), 0.0)",
+    )
+}
+
 impl InsightEngine {
     /// Create a new insight engine.
     pub fn new(db: Arc<Database>, store: Arc<dyn VectorStoreBackend>) -> Self {
@@ -311,13 +320,7 @@ impl InsightEngine {
             // (`CASE WHEN` over BOOLEAN, FLOAT cast) valid on both dialects.
             let read_rate_row: Option<(f64,)> = emails::Entity::find()
                 .select_only()
-                .expr_as(
-                    Expr::cust(
-                        "COALESCE(CAST(COUNT(CASE WHEN is_read THEN 1 END) AS FLOAT) \
-                         / NULLIF(COUNT(*), 0), 0.0)",
-                    ),
-                    "read_rate",
-                )
+                .expr_as(read_rate_expr(), "read_rate")
                 .filter(emails::Column::FromAddr.eq(sender.as_str()))
                 .into_tuple()
                 .one(&self.conn)
@@ -487,13 +490,7 @@ impl InsightEngine {
         // Overall read rate
         let read_rate_row: Option<(f64,)> = emails::Entity::find()
             .select_only()
-            .expr_as(
-                Expr::cust(
-                    "COALESCE(CAST(COUNT(CASE WHEN is_read THEN 1 END) AS FLOAT) \
-                     / NULLIF(COUNT(*), 0), 0.0)",
-                ),
-                "read_rate",
-            )
+            .expr_as(read_rate_expr(), "read_rate")
             .into_tuple()
             .one(&self.conn)
             .await
@@ -649,28 +646,15 @@ mod tests {
     async fn test_db() -> Database {
         let db = Database::connect("sqlite::memory:").await.unwrap();
         let conn = db.sea_orm();
-        for raw in [
-            include_str!("../../migrations/sqlite/001_initial_schema.sql"),
-            include_str!("../../migrations/sqlite/018_unsubscribe_headers.sql"),
-        ] {
-            let cleaned: String = raw
-                .lines()
-                .map(|l| {
-                    if let Some(idx) = l.find("--") {
-                        &l[..idx]
-                    } else {
-                        l
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
-            for stmt in cleaned.split(';') {
-                let s = stmt.trim();
-                if !s.is_empty() {
-                    conn.execute_unprepared(s).await.unwrap();
-                }
-            }
-        }
+        crate::db::apply_sqlite_migrations(
+            &conn,
+            &[
+                include_str!("../../migrations/sqlite/001_initial_schema.sql"),
+                include_str!("../../migrations/sqlite/018_unsubscribe_headers.sql"),
+            ],
+        )
+        .await
+        .unwrap();
         db
     }
 

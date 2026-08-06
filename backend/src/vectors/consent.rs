@@ -274,7 +274,6 @@ fn db_error(operation: &str, err: DbErr) -> VectorError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sea_orm::ConnectionTrait;
 
     /// In-memory SQLite carrying migration 002, which owns both tables this
     /// module reads and writes. Replaying the real migration (rather than the
@@ -283,25 +282,12 @@ mod tests {
     async fn setup_db() -> Arc<Database> {
         let db = crate::db::test_sqlite_database().await;
         let conn = db.sea_orm();
-        let raw = include_str!("../../migrations/sqlite/002_ai_consent.sql");
-        // Strip line comments before splitting on ';'.
-        let cleaned: String = raw
-            .lines()
-            .map(|l| {
-                if let Some(idx) = l.find("--") {
-                    &l[..idx]
-                } else {
-                    l
-                }
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-        for stmt in cleaned.split(';') {
-            let s = stmt.trim();
-            if !s.is_empty() {
-                conn.execute_unprepared(s).await.expect("migrate");
-            }
-        }
+        crate::db::apply_sqlite_migrations(
+            &conn,
+            &[include_str!("../../migrations/sqlite/002_ai_consent.sql")],
+        )
+        .await
+        .expect("migrate");
 
         Arc::new(db)
     }

@@ -16,7 +16,6 @@
 //! storage for fast dispatch and persists state to the connected database for
 //! durability.
 
-use chrono::Utc;
 use sea_orm::sea_query::{Expr, ExprTrait};
 use sea_orm::ActiveValue::Set;
 use sea_orm::{
@@ -170,16 +169,6 @@ pub struct JobRecord {
     pub updated_at: String,
 }
 
-/// A UTC `'YYYY-MM-DD HH:MM:SS'` timestamp for the TEXT-typed temporal columns.
-///
-/// `updated_at`/`completed_at` are TEXT in both dialects (ADR-035 §2.5), so the value is
-/// formatted in Rust and bound as a string — byte-equivalent to what the two hand-written
-/// arms this port replaced produced (`datetime('now')` on SQLite,
-/// `to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')` on PostgreSQL).
-fn now_text() -> String {
-    Utc::now().format("%Y-%m-%d %H:%M:%S").to_string()
-}
-
 /// Job queue for background processing (ADR-006, item #28).
 ///
 /// Provides enqueue/dequeue/update operations against the `background_jobs`
@@ -269,7 +258,7 @@ impl JobQueue {
         };
 
         // Mark as running. `updated_at` is TEXT in both dialects (ADR-035 §2.5), so the
-        // timestamp is formatted in Rust — see `now_text()`.
+        // timestamp is formatted in Rust — see `crate::db::now_text()`.
         //
         // KNOWN CLAIM RACE, preserved deliberately by the SeaORM port: the SELECT above and
         // this guarded UPDATE are not atomic, and `rows_affected` is ignored. When another
@@ -284,7 +273,7 @@ impl JobQueue {
                 jobs::Column::Attempts,
                 Expr::col(jobs::Column::Attempts).add(1),
             )
-            .col_expr(jobs::Column::UpdatedAt, Expr::value(now_text()))
+            .col_expr(jobs::Column::UpdatedAt, Expr::value(crate::db::now_text()))
             .filter(jobs::Column::Id.eq(r.id.clone()))
             .filter(jobs::Column::Status.eq("pending"))
             .exec(&self.conn)
@@ -306,10 +295,10 @@ impl JobQueue {
 
     /// Mark a job as completed.
     pub async fn mark_completed(&self, job_id: &str) -> Result<(), DbErr> {
-        // completed_at/updated_at are TEXT in both dialects (ADR-035 §2.5) — see `now_text()`.
+        // completed_at/updated_at are TEXT in both dialects (ADR-035 §2.5) — see `crate::db::now_text()`.
         // One value for both columns, matching what a single statement's two `datetime('now')`
         // calls already produced.
-        let now = now_text();
+        let now = crate::db::now_text();
         jobs::Entity::update_many()
             .col_expr(jobs::Column::Status, Expr::value("completed"))
             .col_expr(jobs::Column::CompletedAt, Expr::value(now.clone()))
@@ -349,11 +338,11 @@ impl JobQueue {
             }
         };
 
-        // updated_at is TEXT in both dialects (ADR-035 §2.5) — see `now_text()`.
+        // updated_at is TEXT in both dialects (ADR-035 §2.5) — see `crate::db::now_text()`.
         jobs::Entity::update_many()
             .col_expr(jobs::Column::Status, Expr::value(final_status))
             .col_expr(jobs::Column::ErrorMsg, Expr::value(error))
-            .col_expr(jobs::Column::UpdatedAt, Expr::value(now_text()))
+            .col_expr(jobs::Column::UpdatedAt, Expr::value(crate::db::now_text()))
             .filter(jobs::Column::Id.eq(job_id))
             .exec(&self.conn)
             .await?;
@@ -363,10 +352,10 @@ impl JobQueue {
 
     /// Cancel a pending or running job.
     pub async fn cancel(&self, job_id: &str) -> Result<bool, DbErr> {
-        // updated_at is TEXT in both dialects (ADR-035 §2.5) — see `now_text()`.
+        // updated_at is TEXT in both dialects (ADR-035 §2.5) — see `crate::db::now_text()`.
         let affected = jobs::Entity::update_many()
             .col_expr(jobs::Column::Status, Expr::value("cancelled"))
-            .col_expr(jobs::Column::UpdatedAt, Expr::value(now_text()))
+            .col_expr(jobs::Column::UpdatedAt, Expr::value(crate::db::now_text()))
             .filter(jobs::Column::Id.eq(job_id))
             .filter(jobs::Column::Status.is_in(["pending", "running"]))
             .exec(&self.conn)
@@ -393,10 +382,10 @@ impl JobQueue {
     /// Called on startup to reset jobs that were running when the process
     /// was interrupted.
     pub async fn resume_abandoned(&self) -> Result<u64, DbErr> {
-        // updated_at is TEXT in both dialects (ADR-035 §2.5) — see `now_text()`.
+        // updated_at is TEXT in both dialects (ADR-035 §2.5) — see `crate::db::now_text()`.
         let count = jobs::Entity::update_many()
             .col_expr(jobs::Column::Status, Expr::value("pending"))
-            .col_expr(jobs::Column::UpdatedAt, Expr::value(now_text()))
+            .col_expr(jobs::Column::UpdatedAt, Expr::value(crate::db::now_text()))
             .filter(jobs::Column::Status.eq("running"))
             .exec(&self.conn)
             .await?

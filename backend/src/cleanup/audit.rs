@@ -407,40 +407,18 @@ mod tests {
         MoveKind, OperationStatus, PlanAction, PlanSource, PlannedOperationRow, RiskLevel,
     };
     async fn fresh_db() -> Database {
-        use sea_orm::ConnectionTrait;
-
         let db = crate::db::test_sqlite_database().await;
         let conn = db.sea_orm();
         // Apply migration 024 (referenced by ON DELETE CASCADE) plus 025.
-        for path in [
-            "../../../migrations/024_cleanup_planning.sql",
-            "../../../migrations/025_cleanup_audit_log.sql",
-        ] {
-            // include_str! requires literal paths.
-            let raw = match path {
-                "../../../migrations/024_cleanup_planning.sql" => {
-                    include_str!("../../migrations/sqlite/024_cleanup_planning.sql")
-                }
-                _ => include_str!("../../migrations/sqlite/025_cleanup_audit_log.sql"),
-            };
-            let cleaned: String = raw
-                .lines()
-                .map(|l| {
-                    if let Some(idx) = l.find("--") {
-                        &l[..idx]
-                    } else {
-                        l
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
-            for stmt in cleaned.split(';') {
-                let s = stmt.trim();
-                if !s.is_empty() {
-                    conn.execute_unprepared(s).await.expect("migrate");
-                }
-            }
-        }
+        crate::db::apply_sqlite_migrations(
+            &conn,
+            &[
+                include_str!("../../migrations/sqlite/024_cleanup_planning.sql"),
+                include_str!("../../migrations/sqlite/025_cleanup_audit_log.sql"),
+            ],
+        )
+        .await
+        .expect("migrate");
         db
     }
 

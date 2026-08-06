@@ -135,17 +135,6 @@ async fn ingestion_status_sse(
 // sync_state persistence
 // ---------------------------------------------------------------------------
 
-/// The `'YYYY-MM-DD HH:MM:SS'` UTC string `sync_state.last_sync_at` holds.
-///
-/// That column is TEXT, not TIMESTAMPTZ, in both dialects (ADR-035 §2.5), so the format is
-/// the application's to own. SQLite's `datetime('now')` — what the pre-port writes used —
-/// and the PostgreSQL DDL default's `to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')`
-/// both produce exactly this, so one Rust-side format string is the single code path for
-/// both (ADR-036). Same helper, same reasoning, as `email/oauth.rs`.
-fn now_text() -> String {
-    chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string()
-}
-
 /// `UPDATE sync_state SET emails_synced = emails_synced + n, [history_id = h,]
 /// last_sync_at = <now>, status = 'idle' WHERE account_id = ?` — the shape every
 /// end-of-sync write in this file shared.
@@ -169,7 +158,10 @@ async fn mark_sync_idle(
             sync_state::Column::EmailsSynced,
             Expr::col(sync_state::Column::EmailsSynced).add(delta),
         )
-        .col_expr(sync_state::Column::LastSyncAt, Expr::value(now_text()))
+        .col_expr(
+            sync_state::Column::LastSyncAt,
+            Expr::value(crate::db::now_text()),
+        )
         .col_expr(sync_state::Column::Status, Expr::value("idle"));
     if let Some(hid) = history_id {
         update = update.col_expr(sync_state::Column::HistoryId, Expr::value(hid));
@@ -1571,26 +1563,19 @@ mod persistence_tests {
     /// 016/018/021/027 the entity's columns require) and `sync_state` (004).
     async fn test_conn() -> DatabaseConnection {
         let conn = crate::db::test_sqlite_database().await.sea_orm();
-        for raw in [
-            include_str!("../../migrations/sqlite/001_initial_schema.sql"),
-            include_str!("../../migrations/sqlite/004_accounts.sql"),
-            include_str!("../../migrations/sqlite/016_soft_delete_trash_spam.sql"),
-            include_str!("../../migrations/sqlite/018_unsubscribe_headers.sql"),
-            include_str!("../../migrations/sqlite/021_thread_key.sql"),
-            include_str!("../../migrations/sqlite/027_is_archived.sql"),
-        ] {
-            let cleaned: String = raw
-                .lines()
-                .map(|l| l.find("--").map_or(l, |idx| &l[..idx]))
-                .collect::<Vec<_>>()
-                .join("\n");
-            for stmt in cleaned.split(';') {
-                let s = stmt.trim();
-                if !s.is_empty() {
-                    conn.execute_unprepared(s).await.expect("migrate");
-                }
-            }
-        }
+        crate::db::apply_sqlite_migrations(
+            &conn,
+            &[
+                include_str!("../../migrations/sqlite/001_initial_schema.sql"),
+                include_str!("../../migrations/sqlite/004_accounts.sql"),
+                include_str!("../../migrations/sqlite/016_soft_delete_trash_spam.sql"),
+                include_str!("../../migrations/sqlite/018_unsubscribe_headers.sql"),
+                include_str!("../../migrations/sqlite/021_thread_key.sql"),
+                include_str!("../../migrations/sqlite/027_is_archived.sql"),
+            ],
+        )
+        .await
+        .expect("migrate");
         conn
     }
 

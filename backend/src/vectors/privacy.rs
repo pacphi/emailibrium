@@ -131,19 +131,6 @@ impl PrivacyService {
         Self { conn: db.sea_orm() }
     }
 
-    /// Retained no-op: migrations own this schema.
-    ///
-    /// Migration 010 creates `consent_decisions` and `privacy_audit_log` for both
-    /// backends. The runtime `CREATE TABLE` this used to run was SQLite-shaped DDL
-    /// (`DATETIME` columns, `AUTOINCREMENT`, `datetime('now')` defaults) that
-    /// PostgreSQL either rejects or silently interprets differently — a second
-    /// schema definition free to drift from the migration it duplicated. ADR-036
-    /// keeps one source of truth. The signature stays until `vectors/mod.rs` is
-    /// ported and its call site drops.
-    pub async fn ensure_tables(&self) -> Result<(), VectorError> {
-        Ok(())
-    }
-
     // -- Consent management ------------------------------------------------
 
     /// Record a consent decision (grant or revoke).
@@ -556,7 +543,6 @@ fn db_error(operation: &str, err: DbErr) -> VectorError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sea_orm::ConnectionTrait;
 
     /// In-memory SQLite carrying the migrations this module's entities span:
     /// 001 (`emails`), 002 (`ai_consent`) and 010 (`consent_decisions`,
@@ -566,30 +552,16 @@ mod tests {
     async fn setup_db() -> Arc<Database> {
         let db = crate::db::test_sqlite_database().await;
         let conn = db.sea_orm();
-        for raw in [
-            include_str!("../../migrations/sqlite/001_initial_schema.sql"),
-            include_str!("../../migrations/sqlite/002_ai_consent.sql"),
-            include_str!("../../migrations/sqlite/010_gdpr_consent.sql"),
-        ] {
-            // Strip line comments before splitting on ';'.
-            let cleaned: String = raw
-                .lines()
-                .map(|l| {
-                    if let Some(idx) = l.find("--") {
-                        &l[..idx]
-                    } else {
-                        l
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
-            for stmt in cleaned.split(';') {
-                let s = stmt.trim();
-                if !s.is_empty() {
-                    conn.execute_unprepared(s).await.expect("migrate");
-                }
-            }
-        }
+        crate::db::apply_sqlite_migrations(
+            &conn,
+            &[
+                include_str!("../../migrations/sqlite/001_initial_schema.sql"),
+                include_str!("../../migrations/sqlite/002_ai_consent.sql"),
+                include_str!("../../migrations/sqlite/010_gdpr_consent.sql"),
+            ],
+        )
+        .await
+        .expect("migrate");
 
         Arc::new(db)
     }

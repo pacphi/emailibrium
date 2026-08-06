@@ -739,39 +739,25 @@ fn group_key(op: &PlannedOperation) -> String {
 mod tests {
     use super::*;
     use crate::db::Database;
-    use sea_orm::{ActiveModelTrait, ActiveValue::Set, ConnectionTrait, DatabaseConnection};
+    use sea_orm::{ActiveModelTrait, ActiveValue::Set, DatabaseConnection};
 
     /// In-memory SQLite carrying every migration the `emails` entity spans (see
     /// `rules::executor`'s identical helper for why each one is needed).
     async fn fresh_db() -> Database {
         let db = crate::db::test_sqlite_database().await;
         let conn = db.sea_orm();
-        for raw in [
-            include_str!("../../../migrations/sqlite/001_initial_schema.sql"),
-            include_str!("../../../migrations/sqlite/016_soft_delete_trash_spam.sql"),
-            include_str!("../../../migrations/sqlite/018_unsubscribe_headers.sql"),
-            include_str!("../../../migrations/sqlite/021_thread_key.sql"),
-            include_str!("../../../migrations/sqlite/027_is_archived.sql"),
-        ] {
-            // Strip line comments before splitting on ';'.
-            let cleaned: String = raw
-                .lines()
-                .map(|l| {
-                    if let Some(idx) = l.find("--") {
-                        &l[..idx]
-                    } else {
-                        l
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
-            for stmt in cleaned.split(';') {
-                let s = stmt.trim();
-                if !s.is_empty() {
-                    conn.execute_unprepared(s).await.expect("migrate");
-                }
-            }
-        }
+        crate::db::apply_sqlite_migrations(
+            &conn,
+            &[
+                include_str!("../../../migrations/sqlite/001_initial_schema.sql"),
+                include_str!("../../../migrations/sqlite/016_soft_delete_trash_spam.sql"),
+                include_str!("../../../migrations/sqlite/018_unsubscribe_headers.sql"),
+                include_str!("../../../migrations/sqlite/021_thread_key.sql"),
+                include_str!("../../../migrations/sqlite/027_is_archived.sql"),
+            ],
+        )
+        .await
+        .expect("migrate");
         db
     }
 

@@ -481,7 +481,10 @@ pub async fn count_emails(
         query = query.filter(emails::Column::ReceivedAt.gte(ts));
     }
     if let Some(ts) = req.before.as_deref().and_then(midnight) {
-        query = query.filter(emails::Column::ReceivedAt.lte(ts));
+        // Strictly-less-than: the pre-port text compare against a bare
+        // `YYYY-MM-DD` excluded the ENTIRE boundary day (every stored shape
+        // sorts above the bare date), so midnight itself is out too.
+        query = query.filter(emails::Column::ReceivedAt.lt(ts));
     }
 
     let count = sea_orm::PaginatorTrait::count(query, &ctx.conn())
@@ -519,31 +522,18 @@ mod tests {
     async fn ctx() -> Arc<ToolContext> {
         let db = crate::db::test_sqlite_database().await;
         let conn = db.sea_orm();
-        for raw in [
-            include_str!("../../../migrations/sqlite/001_initial_schema.sql"),
-            include_str!("../../../migrations/sqlite/016_soft_delete_trash_spam.sql"),
-            include_str!("../../../migrations/sqlite/018_unsubscribe_headers.sql"),
-            include_str!("../../../migrations/sqlite/021_thread_key.sql"),
-            include_str!("../../../migrations/sqlite/027_is_archived.sql"),
-        ] {
-            let cleaned: String = raw
-                .lines()
-                .map(|l| {
-                    if let Some(idx) = l.find("--") {
-                        &l[..idx]
-                    } else {
-                        l
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
-            for stmt in cleaned.split(';') {
-                let s = stmt.trim();
-                if !s.is_empty() {
-                    conn.execute_unprepared(s).await.expect("migrate");
-                }
-            }
-        }
+        crate::db::apply_sqlite_migrations(
+            &conn,
+            &[
+                include_str!("../../../migrations/sqlite/001_initial_schema.sql"),
+                include_str!("../../../migrations/sqlite/016_soft_delete_trash_spam.sql"),
+                include_str!("../../../migrations/sqlite/018_unsubscribe_headers.sql"),
+                include_str!("../../../migrations/sqlite/021_thread_key.sql"),
+                include_str!("../../../migrations/sqlite/027_is_archived.sql"),
+            ],
+        )
+        .await
+        .expect("migrate");
         Arc::new(ToolContext::new(Arc::new(db)))
     }
 

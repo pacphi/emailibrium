@@ -11,10 +11,7 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use sea_orm::sea_query::OnConflict;
 use sea_orm::ActiveValue::Set;
-use sea_orm::{
-    ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder,
-    QuerySelect,
-};
+use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, QuerySelect};
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 use tracing::debug;
@@ -155,38 +152,6 @@ impl UserLearningStore {
             conn: db.sea_orm(),
             config,
         }
-    }
-
-    /// Ensure the per-user learning table exists.
-    ///
-    /// Raw-DDL escape hatch (ADR-036 §5): migration 007 is the authoritative
-    /// schema; this defensive `IF NOT EXISTS` replay exists for databases
-    /// that have not run migrations (tests use it). The DDL text is portable
-    /// as-is (composite PK, no auto-increment).
-    pub async fn ensure_table(&self) -> Result<(), VectorError> {
-        self.conn
-            .execute_unprepared(
-                "CREATE TABLE IF NOT EXISTS user_learning_models (
-                user_id TEXT NOT NULL,
-                category TEXT NOT NULL,
-                offset_json TEXT NOT NULL,
-                feedback_count INTEGER NOT NULL DEFAULT 0,
-                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                PRIMARY KEY (user_id, category)
-            )",
-            )
-            .await
-            .map_err(VectorError::Db)?;
-
-        self.conn
-            .execute_unprepared(
-                "CREATE INDEX IF NOT EXISTS idx_user_learning_user ON user_learning_models(user_id)",
-            )
-            .await
-            .map_err(VectorError::Db)?;
-
-        Ok(())
     }
 
     /// Get or create a user's learning model.
@@ -477,8 +442,15 @@ mod tests {
                 .expect("in-memory DB"),
         );
         let config = LearningConfig::default();
+        crate::db::apply_sqlite_migrations(
+            &db.sea_orm(),
+            &[include_str!(
+                "../../migrations/sqlite/007_per_user_learning.sql"
+            )],
+        )
+        .await
+        .unwrap();
         let store = UserLearningStore::new(db, config);
-        store.ensure_table().await.unwrap();
 
         let model = store.get_or_create("user-1").await;
         assert_eq!(model.user_id, "user-1");
@@ -500,8 +472,15 @@ mod tests {
             min_feedback_events: 0,
             ..LearningConfig::default()
         };
+        crate::db::apply_sqlite_migrations(
+            &db.sea_orm(),
+            &[include_str!(
+                "../../migrations/sqlite/007_per_user_learning.sql"
+            )],
+        )
+        .await
+        .unwrap();
         let store = UserLearningStore::new(db, config);
-        store.ensure_table().await.unwrap();
 
         let _ = store.get_or_create("user-1").await;
 
@@ -541,8 +520,15 @@ mod tests {
             min_feedback_events: 0,
             ..LearningConfig::default()
         };
+        crate::db::apply_sqlite_migrations(
+            &db.sea_orm(),
+            &[include_str!(
+                "../../migrations/sqlite/007_per_user_learning.sql"
+            )],
+        )
+        .await
+        .unwrap();
         let store = UserLearningStore::new(db.clone(), config.clone());
-        store.ensure_table().await.unwrap();
 
         for user in ["user-1", "user-2"] {
             store
@@ -594,8 +580,15 @@ mod tests {
             min_feedback_events: 0,
             ..LearningConfig::default()
         };
+        crate::db::apply_sqlite_migrations(
+            &db.sea_orm(),
+            &[include_str!(
+                "../../migrations/sqlite/007_per_user_learning.sql"
+            )],
+        )
+        .await
+        .unwrap();
         let store = UserLearningStore::new(db.clone(), config.clone());
-        store.ensure_table().await.unwrap();
 
         store
             .on_feedback(
@@ -648,8 +641,15 @@ mod tests {
             min_feedback_events: 100, // high threshold
             ..LearningConfig::default()
         };
+        crate::db::apply_sqlite_migrations(
+            &db.sea_orm(),
+            &[include_str!(
+                "../../migrations/sqlite/007_per_user_learning.sql"
+            )],
+        )
+        .await
+        .unwrap();
         let store = UserLearningStore::new(db, config);
-        store.ensure_table().await.unwrap();
 
         let shared = vec![1.0, 0.0, 0.0];
         let effective = store
@@ -670,8 +670,15 @@ mod tests {
             min_feedback_events: 2,
             ..LearningConfig::default()
         };
+        crate::db::apply_sqlite_migrations(
+            &db.sea_orm(),
+            &[include_str!(
+                "../../migrations/sqlite/007_per_user_learning.sql"
+            )],
+        )
+        .await
+        .unwrap();
         let store = UserLearningStore::new(db, config);
-        store.ensure_table().await.unwrap();
 
         assert!(!store.is_user_warm("user-1").await);
 

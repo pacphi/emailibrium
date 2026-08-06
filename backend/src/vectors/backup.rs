@@ -291,24 +291,14 @@ mod tests {
             .await
             .unwrap();
 
-        let raw = include_str!("../../migrations/sqlite/001_initial_schema.sql");
-        let cleaned: String = raw
-            .lines()
-            .map(|l| {
-                if let Some(idx) = l.find("--") {
-                    &l[..idx]
-                } else {
-                    l
-                }
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-        for stmt in cleaned.split(';') {
-            let s = stmt.trim();
-            if !s.is_empty() {
-                conn.execute_unprepared(s).await.unwrap();
-            }
-        }
+        crate::db::apply_sqlite_migrations(
+            &conn,
+            &[include_str!(
+                "../../migrations/sqlite/001_initial_schema.sql"
+            )],
+        )
+        .await
+        .unwrap();
 
         db
     }

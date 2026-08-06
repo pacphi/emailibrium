@@ -169,32 +169,19 @@ mod tests {
     async fn test_db() -> Database {
         let db = crate::db::test_sqlite_database().await;
         let conn = db.sea_orm();
-        for raw in [
-            include_str!("../../migrations/sqlite/001_initial_schema.sql"),
-            include_str!("../../migrations/sqlite/003_ai_metadata.sql"),
-            include_str!("../../migrations/sqlite/016_soft_delete_trash_spam.sql"),
-            include_str!("../../migrations/sqlite/018_unsubscribe_headers.sql"),
-            include_str!("../../migrations/sqlite/021_thread_key.sql"),
-            include_str!("../../migrations/sqlite/027_is_archived.sql"),
-        ] {
-            let cleaned: String = raw
-                .lines()
-                .map(|l| {
-                    if let Some(idx) = l.find("--") {
-                        &l[..idx]
-                    } else {
-                        l
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
-            for stmt in cleaned.split(';') {
-                let s = stmt.trim();
-                if !s.is_empty() {
-                    conn.execute_unprepared(s).await.unwrap();
-                }
-            }
-        }
+        crate::db::apply_sqlite_migrations(
+            &conn,
+            &[
+                include_str!("../../migrations/sqlite/001_initial_schema.sql"),
+                include_str!("../../migrations/sqlite/003_ai_metadata.sql"),
+                include_str!("../../migrations/sqlite/016_soft_delete_trash_spam.sql"),
+                include_str!("../../migrations/sqlite/018_unsubscribe_headers.sql"),
+                include_str!("../../migrations/sqlite/021_thread_key.sql"),
+                include_str!("../../migrations/sqlite/027_is_archived.sql"),
+            ],
+        )
+        .await
+        .unwrap();
         db
     }
 

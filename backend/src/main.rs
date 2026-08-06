@@ -33,10 +33,11 @@ pub use vectors::config::VectorConfig;
 pub struct AppState {
     pub vector_service: Arc<vectors::VectorService>,
     pub db: Arc<db::Database>,
-    /// SeaORM handle over the SAME underlying pool as `db` (ADR-036). Carried
-    /// alongside the legacy enum during the transition; ported repositories and
-    /// services take clones of this, and phase 3 retires the enum from general
-    /// circulation.
+    /// SeaORM handle over the SAME underlying pool as `db` (ADR-036). Every
+    /// query goes through this; `db` above remains the composition-root enum
+    /// (connect/migrations) and the `Arc<Database>` constructor currency —
+    /// retiring it from constructor signatures is deliberately deferred
+    /// (pl-database-enum-in-signatures, optimization-pass candidate).
     pub orm: sea_orm::DatabaseConnection,
     pub redis: Option<Arc<cache::RedisCache>>,
     pub ingestion_broadcast: api::ingestion::IngestionBroadcast,
@@ -1259,22 +1260,15 @@ mod tests {
 
         let database = db::test_sqlite_database().await;
         let conn = database.sea_orm();
-        for raw in [
-            include_str!("../migrations/sqlite/001_initial_schema.sql"),
-            include_str!("../migrations/sqlite/016_soft_delete_trash_spam.sql"),
-        ] {
-            let cleaned: String = raw
-                .lines()
-                .map(|l| l.find("--").map_or(l, |idx| &l[..idx]))
-                .collect::<Vec<_>>()
-                .join("\n");
-            for stmt in cleaned.split(';') {
-                let s = stmt.trim();
-                if !s.is_empty() {
-                    conn.execute_unprepared(s).await.expect("migrate");
-                }
-            }
-        }
+        db::apply_sqlite_migrations(
+            &conn,
+            &[
+                include_str!("../migrations/sqlite/001_initial_schema.sql"),
+                include_str!("../migrations/sqlite/016_soft_delete_trash_spam.sql"),
+            ],
+        )
+        .await
+        .expect("migrate");
         // (id, is_trash, is_spam, deleted_at)
         for (id, is_trash, is_spam, deleted_at) in [
             ("trash-old", 1, 0, "2020-01-01 00:00:00"),

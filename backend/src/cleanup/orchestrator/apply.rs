@@ -945,32 +945,18 @@ mod tests {
 
         // Set up an in-memory database with migrations 024 + 025 applied so
         // the audit writer has its table.
-        use sea_orm::ConnectionTrait;
 
         let db = crate::db::test_sqlite_database().await;
         let conn = db.sea_orm();
-        for raw in [
-            include_str!("../../../migrations/sqlite/024_cleanup_planning.sql"),
-            include_str!("../../../migrations/sqlite/025_cleanup_audit_log.sql"),
-        ] {
-            let cleaned: String = raw
-                .lines()
-                .map(|l| {
-                    if let Some(idx) = l.find("--") {
-                        &l[..idx]
-                    } else {
-                        l
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
-            for stmt in cleaned.split(';') {
-                let s = stmt.trim();
-                if !s.is_empty() {
-                    conn.execute_unprepared(s).await.expect("migrate");
-                }
-            }
-        }
+        crate::db::apply_sqlite_migrations(
+            &conn,
+            &[
+                include_str!("../../../migrations/sqlite/024_cleanup_planning.sql"),
+                include_str!("../../../migrations/sqlite/025_cleanup_audit_log.sql"),
+            ],
+        )
+        .await
+        .expect("migrate");
 
         let plan_repo = Arc::new(InMemPlanRepo::default());
         let job_repo = Arc::new(InMemJobRepo::default());

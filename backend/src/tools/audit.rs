@@ -63,7 +63,7 @@ pub fn hash_arguments(args: &serde_json::Value) -> String {
 mod tests {
     use super::*;
 
-    use sea_orm::{ConnectionTrait, QueryOrder};
+    use sea_orm::QueryOrder;
 
     #[test]
     fn hash_arguments_deterministic() {
@@ -87,23 +87,9 @@ mod tests {
             include_str!("../../migrations/sqlite/022_mcp_tool_audit.sql"),
             "\nALTER TABLE mcp_tool_audit ADD COLUMN source TEXT NOT NULL DEFAULT 'mcp';",
         );
-        let cleaned: String = raw
-            .lines()
-            .map(|l| {
-                if let Some(idx) = l.find("--") {
-                    &l[..idx]
-                } else {
-                    l
-                }
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-        for stmt in cleaned.split(';') {
-            let s = stmt.trim();
-            if !s.is_empty() {
-                conn.execute_unprepared(s).await.expect("migrate");
-            }
-        }
+        crate::db::apply_sqlite_migrations(&conn, &[raw])
+            .await
+            .expect("migrate");
         conn
     }
 

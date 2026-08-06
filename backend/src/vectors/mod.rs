@@ -531,28 +531,22 @@ impl VectorService {
             tracing::warn!("Failed to create wipe audit table: {e}");
         }
 
-        // Initialize GDPR privacy service (R-09: consent persistence)
+        // Initialize GDPR privacy service (R-09: consent persistence).
+        // Its tables come from migration 010 — no runtime DDL (ADR-036).
         let privacy_service = Arc::new(privacy::PrivacyService::new(db.clone()));
-        if let Err(e) = privacy_service.ensure_tables().await {
-            tracing::warn!("Failed to create GDPR consent tables: {e}");
-        }
 
         // Initialize unsubscribe service (R-04: bulk unsubscribe)
         let unsubscribe_service = Some(Arc::new(
             crate::email::unsubscribe::UnsubscribeService::new(),
         ));
 
-        // Initialize cloud API audit logger (ADR-008, item #39)
+        // Initialize cloud API audit logger (ADR-008, item #39).
+        // Its table comes from migration 008 — no runtime DDL (ADR-036).
         let audit_logger = Arc::new(CloudApiAuditLogger::new(db.clone()));
-        if let Err(e) = audit_logger.ensure_table().await {
-            tracing::warn!("Failed to create cloud API audit table: {e}");
-        }
 
-        // Initialize A/B evaluation engine (ADR-004, item #22)
+        // Initialize A/B evaluation engine (ADR-004, item #22).
+        // Its tables come from migration 009 — no runtime DDL (ADR-036).
         let evaluation_engine = Arc::new(EvaluationEngine::new(db.clone()));
-        if let Err(e) = evaluation_engine.ensure_tables().await {
-            tracing::warn!("Failed to create evaluation tables: {e}");
-        }
 
         // Initialize generative router with failover (DDD-006, item #38)
         let generative_router = Arc::new(GenerativeRouter::new());

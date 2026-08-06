@@ -186,24 +186,14 @@ mod tests {
     /// and the `emails` table its `email_id` foreign key points at.
     async fn fresh_conn() -> DatabaseConnection {
         let conn = crate::db::test_sqlite_database().await.sea_orm();
-        // Strip line comments before splitting on ';'.
-        let cleaned: String = include_str!("../../migrations/sqlite/001_initial_schema.sql")
-            .lines()
-            .map(|l| {
-                if let Some(idx) = l.find("--") {
-                    &l[..idx]
-                } else {
-                    l
-                }
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-        for stmt in cleaned.split(';') {
-            let s = stmt.trim();
-            if !s.is_empty() {
-                conn.execute_unprepared(s).await.expect("migrate");
-            }
-        }
+        crate::db::apply_sqlite_migrations(
+            &conn,
+            &[include_str!(
+                "../../migrations/sqlite/001_initial_schema.sql"
+            )],
+        )
+        .await
+        .expect("migrate");
         conn
     }
 

@@ -454,7 +454,7 @@ mod tests {
     use crate::rules::rule_engine::RuleEngine;
     use crate::rules::types::{EmailField, MatchOperator, Rule, RuleAction, RuleCondition};
     use chrono::{NaiveDate, NaiveDateTime, Utc};
-    use sea_orm::{ActiveModelTrait, ActiveValue::Set, ConnectionTrait, DatabaseConnection};
+    use sea_orm::{ActiveModelTrait, ActiveValue::Set, DatabaseConnection};
 
     /// In-memory SQLite carrying every table these adapters read: `emails`
     /// (001 + the 016/018/021/027 column additions the entity declares),
@@ -463,38 +463,24 @@ mod tests {
     async fn fresh_db() -> Database {
         let db = crate::db::test_sqlite_database().await;
         let conn = db.sea_orm();
-        for raw in [
-            include_str!("../../../migrations/sqlite/001_initial_schema.sql"),
-            include_str!("../../../migrations/sqlite/004_accounts.sql"),
-            include_str!("../../../migrations/sqlite/012_rules.sql"),
-            include_str!("../../../migrations/sqlite/013_account_settings.sql"),
-            include_str!("../../../migrations/sqlite/016_soft_delete_trash_spam.sql"),
-            include_str!("../../../migrations/sqlite/017_topic_clusters.sql"),
-            include_str!("../../../migrations/sqlite/018_unsubscribe_headers.sql"),
-            include_str!("../../../migrations/sqlite/021_thread_key.sql"),
-            include_str!("../../../migrations/sqlite/026_rules_match_count.sql"),
-            include_str!("../../../migrations/sqlite/027_is_archived.sql"),
-            include_str!("../../../migrations/sqlite/028_imap_accounts.sql"),
-        ] {
-            // Strip line comments before splitting on ';'.
-            let cleaned: String = raw
-                .lines()
-                .map(|l| {
-                    if let Some(idx) = l.find("--") {
-                        &l[..idx]
-                    } else {
-                        l
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
-            for stmt in cleaned.split(';') {
-                let s = stmt.trim();
-                if !s.is_empty() {
-                    conn.execute_unprepared(s).await.expect("migrate");
-                }
-            }
-        }
+        crate::db::apply_sqlite_migrations(
+            &conn,
+            &[
+                include_str!("../../../migrations/sqlite/001_initial_schema.sql"),
+                include_str!("../../../migrations/sqlite/004_accounts.sql"),
+                include_str!("../../../migrations/sqlite/012_rules.sql"),
+                include_str!("../../../migrations/sqlite/013_account_settings.sql"),
+                include_str!("../../../migrations/sqlite/016_soft_delete_trash_spam.sql"),
+                include_str!("../../../migrations/sqlite/017_topic_clusters.sql"),
+                include_str!("../../../migrations/sqlite/018_unsubscribe_headers.sql"),
+                include_str!("../../../migrations/sqlite/021_thread_key.sql"),
+                include_str!("../../../migrations/sqlite/026_rules_match_count.sql"),
+                include_str!("../../../migrations/sqlite/027_is_archived.sql"),
+                include_str!("../../../migrations/sqlite/028_imap_accounts.sql"),
+            ],
+        )
+        .await
+        .expect("migrate");
         db
     }
 

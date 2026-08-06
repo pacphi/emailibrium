@@ -83,10 +83,11 @@ impl Database {
 /// This helper — together with [`Database::connect`] — is deliberately the
 /// ONE place in the crate that names the SQLite pool types; every test module
 /// builds its database here rather than assembling a pool by hand (ADR-036 —
-/// the phase-3 sweep removes all other `SqlitePool` call sites). Not
-/// `#[cfg(test)]`-gated because the server binary's own test modules reach it
-/// through this library crate, which cargo builds without `cfg(test)` there.
-#[doc(hidden)]
+/// the phase-3 sweep removes all other `SqlitePool` call sites). Gated on
+/// `test-vectors` like `embedding.rs`'s mock provider: the binary's and
+/// `backend/tests/`' test targets reach it through the self-dev-dependency's
+/// feature (Cargo.toml), while production builds never compile it.
+#[cfg(any(test, feature = "test-vectors"))]
 pub async fn test_sqlite_database() -> Database {
     let pool = SqlitePoolOptions::new()
         .max_connections(1)
@@ -94,6 +95,43 @@ pub async fn test_sqlite_database() -> Database {
         .await
         .expect("in-memory sqlite");
     Database::Sqlite(pool)
+}
+
+/// Test-only migration replay: strip `--` line comments, split on `;`, and
+/// execute each statement. The ONE copy of the replay loop every test module
+/// used to hand-roll (the naive splitter is fine for these migration files —
+/// no semicolons or `--` inside string literals).
+#[cfg(any(test, feature = "test-vectors"))]
+pub async fn apply_sqlite_migrations(
+    conn: &sea_orm::DatabaseConnection,
+    migrations: &[&str],
+) -> Result<(), sea_orm::DbErr> {
+    use sea_orm::ConnectionTrait;
+
+    for raw in migrations {
+        let cleaned: String = raw
+            .lines()
+            .map(|l| l.find("--").map_or(l, |idx| &l[..idx]))
+            .collect::<Vec<_>>()
+            .join("\n");
+        for stmt in cleaned.split(';') {
+            let s = stmt.trim();
+            if !s.is_empty() {
+                conn.execute_unprepared(s).await?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The application-owned `YYYY-MM-DD HH:MM:SS` UTC wall-clock string written
+/// to TEXT timestamp columns (ADR-035 §2.5) — the Rust-side replacement for
+/// the `datetime('now')` / `to_char(now() AT TIME ZONE 'UTC', ...)` SQL the
+/// ADR-036 port deleted. ONE copy on purpose: this format string is the
+/// on-disk compatibility contract for every TEXT-timestamp table, so write
+/// sites call this instead of spelling the format locally.
+pub fn now_text() -> String {
+    chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string()
 }
 
 // ---------------------------------------------------------------------------

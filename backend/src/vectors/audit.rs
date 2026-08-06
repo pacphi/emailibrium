@@ -125,18 +125,6 @@ impl CloudApiAuditLogger {
         Self { conn: db.sea_orm() }
     }
 
-    /// Retained no-op: migrations own this schema.
-    ///
-    /// Migration 008 creates `cloud_api_audit_log` and its three indexes for both
-    /// backends, with DDL identical to what this method used to run at runtime —
-    /// including the per-backend `AUTOINCREMENT` / `GENERATED ALWAYS AS IDENTITY`
-    /// split it hand-wrote. A second copy of a schema is a copy free to drift, so
-    /// ADR-036 keeps only the migration. The signature stays until
-    /// `vectors/mod.rs` is ported and its call site drops.
-    pub async fn ensure_table(&self) -> Result<(), VectorError> {
-        Ok(())
-    }
-
     /// Log a cloud API call.
     pub async fn log(&self, entry: &CloudApiAuditEntry) -> Result<(), VectorError> {
         debug!(
@@ -451,7 +439,6 @@ impl AuditTimer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sea_orm::ConnectionTrait;
 
     /// In-memory SQLite carrying migration 008, which owns this module's table.
     /// Replaying the real migration is what replaced the runtime DDL
@@ -460,25 +447,14 @@ mod tests {
     async fn setup_db() -> Arc<Database> {
         let db = crate::db::test_sqlite_database().await;
         let conn = db.sea_orm();
-        let raw = include_str!("../../migrations/sqlite/008_cloud_api_audit.sql");
-        // Strip line comments before splitting on ';'.
-        let cleaned: String = raw
-            .lines()
-            .map(|l| {
-                if let Some(idx) = l.find("--") {
-                    &l[..idx]
-                } else {
-                    l
-                }
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-        for stmt in cleaned.split(';') {
-            let s = stmt.trim();
-            if !s.is_empty() {
-                conn.execute_unprepared(s).await.expect("migrate");
-            }
-        }
+        crate::db::apply_sqlite_migrations(
+            &conn,
+            &[include_str!(
+                "../../migrations/sqlite/008_cloud_api_audit.sql"
+            )],
+        )
+        .await
+        .expect("migrate");
 
         Arc::new(db)
     }
@@ -499,14 +475,12 @@ mod tests {
         }
     }
 
-    /// The table comes from the migration; `ensure_table` is the retained no-op
-    /// its composition-root caller still invokes, and stays safe to call twice.
+    /// The table comes from migration 008 alone — no runtime DDL remains
+    /// (ADR-036); a fresh migrated table reads back empty.
     #[tokio::test]
-    async fn test_ensure_table() {
+    async fn test_fresh_table_reads_empty() {
         let db = setup_db().await;
         let logger = CloudApiAuditLogger::new(db);
-        logger.ensure_table().await.unwrap();
-        logger.ensure_table().await.unwrap();
 
         let (entries, total) = logger.get_log(1, 10, None).await.unwrap();
         assert!(entries.is_empty());

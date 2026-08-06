@@ -24,17 +24,6 @@ use crate::db::Database;
 const TOKEN_KEY_SALT: &[u8] = b"emailibrium-token-encryption-v1";
 const NONCE_SIZE: usize = 12;
 
-/// The `'YYYY-MM-DD HH:MM:SS'` UTC string this table's TEXT timestamp columns hold.
-///
-/// `created_at`/`updated_at` are TEXT, not TIMESTAMPTZ, in both dialects (ADR-035 §2.5), so
-/// the format is the application's to own. The two hand-written per-backend writes this
-/// replaces — SQLite `datetime('now')` and PostgreSQL
-/// `to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')` — both produced exactly this,
-/// so one Rust-side format string is the single code path for both (ADR-036).
-fn now_text() -> String {
-    Utc::now().format("%Y-%m-%d %H:%M:%S").to_string()
-}
-
 /// Row tuple for the connected_accounts query (10 columns).
 type AccountRow = (
     String,
@@ -301,7 +290,7 @@ impl OAuthManager {
         // index), the DO UPDATE re-sets exactly the columns the old per-backend SQL pairs
         // re-set, and `updated_at` is an explicit conflict-side value so the INSERT path still
         // takes the DDL default, as before. `token_expires_at` stays RFC3339 — that is what
-        // this file writes and parses; only the `%Y-%m-%d %H:%M:%S` columns are `now_text()`.
+        // this file writes and parses; only the `%Y-%m-%d %H:%M:%S` columns are `crate::db::now_text()`.
         accounts::Entity::insert(accounts::ActiveModel {
             id: Set(id.to_owned()),
             provider: Set(provider.as_str().to_owned()),
@@ -320,7 +309,10 @@ impl OAuthManager {
                     accounts::Column::TokenExpiresAt,
                     accounts::Column::Status,
                 ])
-                .value(accounts::Column::UpdatedAt, Expr::value(now_text()))
+                .value(
+                    accounts::Column::UpdatedAt,
+                    Expr::value(crate::db::now_text()),
+                )
                 .to_owned(),
         )
         .exec_without_returning(&self.conn)
@@ -334,11 +326,16 @@ impl OAuthManager {
     /// SQLite's `INSERT OR IGNORE` and PostgreSQL's `ON CONFLICT (account_id) DO NOTHING`
     /// collapse to one `OnConflict::do_nothing()`. `exec_without_returning` reports zero rows
     /// rather than raising `DbErr::RecordNotInserted`, so an existing row stays a silent no-op
-    /// as both arms had it. This narrows one pre-existing divergence: `INSERT OR IGNORE`
-    /// swallowed *any* constraint violation on SQLite, `DO NOTHING` only the primary-key
-    /// conflict — the single path keeps the (stricter) PostgreSQL semantics the two arms
-    /// already disagreed on. Only the PK conflict is reachable here: the caller has just
-    /// written the parent `connected_accounts` row, and every other column is DEFAULT-filled.
+    /// as both arms had it. This narrows one pre-existing divergence: SQLite's
+    /// `INSERT OR IGNORE` swallowed UNIQUE/NOT NULL/CHECK/PK violations (its
+    /// conflict algorithm does NOT cover FOREIGN KEY), `DO NOTHING` only the
+    /// primary-key conflict — the single path keeps the (stricter) PostgreSQL
+    /// semantics the two arms already disagreed on. In the normal flow only the
+    /// PK conflict arises: the caller has just written the parent
+    /// `connected_accounts` row and every other column is DEFAULT-filled. (Two
+    /// racing OAuth callbacks for one address can in principle leave a loser id
+    /// without a parent row — a pre-existing check-then-act in
+    /// `find_account_id_by_email`, identical in both worlds.)
     async fn ensure_sync_state(&self, account_id: &str) -> Result<(), OAuthError> {
         sync_state::Entity::insert(sync_state::ActiveModel {
             account_id: Set(account_id.to_owned()),
@@ -409,7 +406,10 @@ impl OAuthManager {
                     accounts::Column::SmtpHost,
                     accounts::Column::SmtpPort,
                 ])
-                .value(accounts::Column::UpdatedAt, Expr::value(now_text()))
+                .value(
+                    accounts::Column::UpdatedAt,
+                    Expr::value(crate::db::now_text()),
+                )
                 .to_owned(),
         )
         .exec_without_returning(&self.conn)
@@ -492,7 +492,10 @@ impl OAuthManager {
                 Expr::value(enc_access),
             )
             .col_expr(accounts::Column::TokenExpiresAt, Expr::value(expires_at))
-            .col_expr(accounts::Column::UpdatedAt, Expr::value(now_text()));
+            .col_expr(
+                accounts::Column::UpdatedAt,
+                Expr::value(crate::db::now_text()),
+            );
         if let Some(refresh) = enc_refresh {
             update = update.col_expr(
                 accounts::Column::EncryptedRefreshToken,
@@ -736,8 +739,10 @@ impl OAuthManager {
         // Each `COALESCE(?, col)` was a per-column no-op when the caller passed NULL, so
         // setting only the `Some` columns is the same write. `updated_at` is set
         // unconditionally, as before — an all-`None` call still touches the row.
-        let mut update = accounts::Entity::update_many()
-            .col_expr(accounts::Column::UpdatedAt, Expr::value(now_text()));
+        let mut update = accounts::Entity::update_many().col_expr(
+            accounts::Column::UpdatedAt,
+            Expr::value(crate::db::now_text()),
+        );
         if let Some(v) = archive_strategy {
             update = update.col_expr(accounts::Column::ArchiveStrategy, Expr::value(v));
         }
@@ -778,7 +783,10 @@ impl OAuthManager {
                 accounts::Column::TokenExpiresAt,
                 Expr::value(Option::<String>::None),
             )
-            .col_expr(accounts::Column::UpdatedAt, Expr::value(now_text()))
+            .col_expr(
+                accounts::Column::UpdatedAt,
+                Expr::value(crate::db::now_text()),
+            )
             .filter(accounts::Column::Id.eq(account_id))
             .exec(&self.conn)
             .await?

@@ -45,12 +45,6 @@ type FullCheckpointRow = (
     Option<String>,
 );
 
-/// `datetime('now')` replacement for the checkpoint TEXT timestamp columns
-/// (ADR-035 §2.5): the application owns the `YYYY-MM-DD HH:MM:SS` shape.
-fn now_text() -> String {
-    Utc::now().format("%Y-%m-%d %H:%M:%S").to_string()
-}
-
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -580,7 +574,7 @@ impl IngestionPipeline {
             )
             .col_expr(
                 ingestion_checkpoints::Column::UpdatedAt,
-                Expr::value(now_text()),
+                Expr::value(crate::db::now_text()),
             )
             .filter(ingestion_checkpoints::Column::Id.eq(&cp_id))
             .exec(&self.conn)
@@ -1615,7 +1609,7 @@ impl IngestionPipelineHandle {
             failed: Set(failed),
             last_processed_id: Set(last_processed_id.map(str::to_owned)),
             error_msg: Set(error_msg.map(str::to_owned)),
-            updated_at: Set(now_text()),
+            updated_at: Set(crate::db::now_text()),
             ..Default::default()
         })
         .on_conflict(

@@ -236,30 +236,15 @@ mod tests {
     async fn fresh_db() -> Database {
         let db = crate::db::test_sqlite_database().await;
         let conn = db.sea_orm();
-        for raw in [
-            include_str!("../../migrations/sqlite/012_rules.sql"),
-            include_str!("../../migrations/sqlite/026_rules_match_count.sql"),
-        ] {
-            // Strip line comments before splitting on ';'.
-            let cleaned: String = raw
-                .lines()
-                .map(|l| {
-                    if let Some(idx) = l.find("--") {
-                        &l[..idx]
-                    } else {
-                        l
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
-            for stmt in cleaned.split(';') {
-                let s = stmt.trim();
-                if !s.is_empty() {
-                    use sea_orm::ConnectionTrait;
-                    conn.execute_unprepared(s).await.expect("migrate");
-                }
-            }
-        }
+        crate::db::apply_sqlite_migrations(
+            &conn,
+            &[
+                include_str!("../../migrations/sqlite/012_rules.sql"),
+                include_str!("../../migrations/sqlite/026_rules_match_count.sql"),
+            ],
+        )
+        .await
+        .expect("migrate");
         db
     }
 

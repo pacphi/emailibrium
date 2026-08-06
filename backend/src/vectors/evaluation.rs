@@ -14,9 +14,7 @@ use tracing::{debug, info};
 
 use sea_orm::sea_query::Expr;
 use sea_orm::ActiveValue::Set;
-use sea_orm::{
-    ColumnTrait, ConnectionTrait, DatabaseBackend, DatabaseConnection, EntityTrait, QueryFilter,
-};
+use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 
 use super::error::VectorError;
 use crate::db::entities::{ab_test_results, ab_tests};
@@ -149,62 +147,6 @@ impl EvaluationEngine {
             tests: RwLock::new(HashMap::new()),
             conn: db.sea_orm(),
         }
-    }
-
-    /// Ensure the evaluation tables exist in the database.
-    ///
-    /// Raw-DDL escape hatch (ADR-036 §5): migration 009 is the authoritative
-    /// schema; this defensive `IF NOT EXISTS` replay exists for databases
-    /// that have not run migrations (tests use it). The `id` auto-increment
-    /// syntax genuinely differs per backend (ADR-035 §2.3), mirroring the two
-    /// migration texts.
-    pub async fn ensure_tables(&self) -> Result<(), VectorError> {
-        self.conn
-            .execute_unprepared(
-                "CREATE TABLE IF NOT EXISTS ab_tests (
-                test_id TEXT PRIMARY KEY,
-                name TEXT NOT NULL,
-                variant_a_config TEXT NOT NULL,
-                variant_b_config TEXT NOT NULL,
-                traffic_split REAL NOT NULL DEFAULT 0.5,
-                status TEXT NOT NULL DEFAULT 'running',
-                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                concluded_at TIMESTAMP,
-                metrics_a TEXT NOT NULL DEFAULT '{}',
-                metrics_b TEXT NOT NULL DEFAULT '{}'
-            )",
-            )
-            .await
-            .map_err(VectorError::Db)?;
-
-        let results_id = match self.conn.get_database_backend() {
-            DatabaseBackend::Postgres => "INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY",
-            _ => "INTEGER PRIMARY KEY AUTOINCREMENT",
-        };
-        self.conn
-            .execute_unprepared(&format!(
-                "CREATE TABLE IF NOT EXISTS ab_test_results (
-                id {results_id},
-                test_id TEXT NOT NULL REFERENCES ab_tests(test_id),
-                variant TEXT NOT NULL CHECK(variant IN ('a', 'b')),
-                timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                mrr REAL,
-                precision_at_k REAL,
-                recall_at_k REAL,
-                ndcg REAL
-            )"
-            ))
-            .await
-            .map_err(VectorError::Db)?;
-
-        self.conn
-            .execute_unprepared(
-                "CREATE INDEX IF NOT EXISTS idx_ab_results_test ON ab_test_results(test_id)",
-            )
-            .await
-            .map_err(VectorError::Db)?;
-
-        Ok(())
     }
 
     /// Create a new A/B test.
@@ -604,8 +546,13 @@ mod tests {
                 .await
                 .expect("in-memory db"),
         );
+        crate::db::apply_sqlite_migrations(
+            &db.sea_orm(),
+            &[include_str!("../../migrations/sqlite/009_ab_tests.sql")],
+        )
+        .await
+        .unwrap();
         let engine = EvaluationEngine::new(db);
-        engine.ensure_tables().await.unwrap();
 
         let test = engine
             .create_test(
@@ -637,8 +584,13 @@ mod tests {
                 .await
                 .expect("in-memory db"),
         );
+        crate::db::apply_sqlite_migrations(
+            &db.sea_orm(),
+            &[include_str!("../../migrations/sqlite/009_ab_tests.sql")],
+        )
+        .await
+        .unwrap();
         let engine = EvaluationEngine::new(db);
-        engine.ensure_tables().await.unwrap();
 
         let test = engine
             .create_test(
@@ -680,8 +632,13 @@ mod tests {
                 .await
                 .expect("in-memory db"),
         );
+        crate::db::apply_sqlite_migrations(
+            &db.sea_orm(),
+            &[include_str!("../../migrations/sqlite/009_ab_tests.sql")],
+        )
+        .await
+        .unwrap();
         let engine = EvaluationEngine::new(db);
-        engine.ensure_tables().await.unwrap();
 
         let test = engine
             .create_test(
@@ -722,8 +679,13 @@ mod tests {
                 .await
                 .expect("in-memory db"),
         );
+        crate::db::apply_sqlite_migrations(
+            &db.sea_orm(),
+            &[include_str!("../../migrations/sqlite/009_ab_tests.sql")],
+        )
+        .await
+        .unwrap();
         let engine = EvaluationEngine::new(db);
-        engine.ensure_tables().await.unwrap();
 
         let vc = || VariantConfig {
             name: "v".to_string(),

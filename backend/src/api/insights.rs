@@ -126,9 +126,9 @@ fn format_received_at(ts: NaiveDateTime) -> String {
 
 /// `COUNT(*)`, spelled out at each use site rather than aliased once.
 ///
-/// PostgreSQL rejects select-alias references in GROUP BY, so the expression is
-/// repeated in the SELECT list and the ORDER BY — which is what the pre-port SQL
-/// did too.
+/// PostgreSQL rejects select-alias references in HAVING (it accepts them in
+/// GROUP BY/ORDER BY), so the expression is repeated wherever it recurs — which
+/// is what the pre-port SQL did too.
 fn count_star() -> Expr {
     Expr::from(Func::count(Expr::col(Asterisk)))
 }
@@ -460,32 +460,18 @@ mod tests {
     /// creates the table and 016/018/021/027 add the columns it declares.
     async fn fresh_conn() -> DatabaseConnection {
         let conn = crate::db::test_sqlite_database().await.sea_orm();
-        for raw in [
-            include_str!("../../migrations/sqlite/001_initial_schema.sql"),
-            include_str!("../../migrations/sqlite/016_soft_delete_trash_spam.sql"),
-            include_str!("../../migrations/sqlite/018_unsubscribe_headers.sql"),
-            include_str!("../../migrations/sqlite/021_thread_key.sql"),
-            include_str!("../../migrations/sqlite/027_is_archived.sql"),
-        ] {
-            // Strip line comments before splitting on ';'.
-            let cleaned: String = raw
-                .lines()
-                .map(|l| {
-                    if let Some(idx) = l.find("--") {
-                        &l[..idx]
-                    } else {
-                        l
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
-            for stmt in cleaned.split(';') {
-                let s = stmt.trim();
-                if !s.is_empty() {
-                    conn.execute_unprepared(s).await.expect("migrate");
-                }
-            }
-        }
+        crate::db::apply_sqlite_migrations(
+            &conn,
+            &[
+                include_str!("../../migrations/sqlite/001_initial_schema.sql"),
+                include_str!("../../migrations/sqlite/016_soft_delete_trash_spam.sql"),
+                include_str!("../../migrations/sqlite/018_unsubscribe_headers.sql"),
+                include_str!("../../migrations/sqlite/021_thread_key.sql"),
+                include_str!("../../migrations/sqlite/027_is_archived.sql"),
+            ],
+        )
+        .await
+        .expect("migrate");
         conn
     }
 

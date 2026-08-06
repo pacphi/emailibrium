@@ -680,28 +680,15 @@ mod tests {
     use uuid::Uuid;
 
     async fn fresh_conn() -> DatabaseConnection {
-        use sea_orm::ConnectionTrait;
-
         let conn = crate::db::test_sqlite_database().await.sea_orm();
-        let raw = include_str!("../../../migrations/sqlite/024_cleanup_planning.sql");
-        // Strip line comments before splitting on ';'.
-        let cleaned: String = raw
-            .lines()
-            .map(|l| {
-                if let Some(idx) = l.find("--") {
-                    &l[..idx]
-                } else {
-                    l
-                }
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-        for stmt in cleaned.split(';') {
-            let s = stmt.trim();
-            if !s.is_empty() {
-                conn.execute_unprepared(s).await.expect("migrate");
-            }
-        }
+        crate::db::apply_sqlite_migrations(
+            &conn,
+            &[include_str!(
+                "../../../migrations/sqlite/024_cleanup_planning.sql"
+            )],
+        )
+        .await
+        .expect("migrate");
         conn
     }
 

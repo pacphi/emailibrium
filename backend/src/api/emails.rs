@@ -229,7 +229,12 @@ fn email_response(row: EmailRow) -> EmailResponse {
 /// `LOWER()` on both sides is the portable spelling, and on SQLite it folds the
 /// same ASCII range NOCASE does, so the SQLite result set is unchanged.
 fn ci_eq(column: emails::Column, value: &str) -> Expr {
-    Expr::from(Func::lower(Expr::col(column))).eq(value.to_lowercase())
+    // ASCII-only fold on BOTH sides: SQLite's `lower()` folds ASCII only, so a
+    // Unicode-aware `str::to_lowercase()` on the bind would stop exact-case
+    // non-ASCII values from matching (pre-port `COLLATE NOCASE` is ASCII-only
+    // too). PostgreSQL's `lower()` IS Unicode-aware, so non-ASCII case folding
+    // differs per backend — irreducible without ICU collation.
+    Expr::from(Func::lower(Expr::col(column))).eq(value.to_ascii_lowercase())
 }
 
 /// Match a label inside the comma-separated `labels` column.
@@ -1504,26 +1509,18 @@ mod tests {
     /// creates the table and 016/018/021/027 add the columns it declares.
     async fn fresh_conn() -> DatabaseConnection {
         let conn = crate::db::test_sqlite_database().await.sea_orm();
-        for raw in [
-            include_str!("../../migrations/sqlite/001_initial_schema.sql"),
-            include_str!("../../migrations/sqlite/016_soft_delete_trash_spam.sql"),
-            include_str!("../../migrations/sqlite/018_unsubscribe_headers.sql"),
-            include_str!("../../migrations/sqlite/021_thread_key.sql"),
-            include_str!("../../migrations/sqlite/027_is_archived.sql"),
-        ] {
-            // Strip line comments before splitting on ';'.
-            let cleaned: String = raw
-                .lines()
-                .map(|l| l.find("--").map_or(l, |idx| &l[..idx]))
-                .collect::<Vec<_>>()
-                .join("\n");
-            for stmt in cleaned.split(';') {
-                let s = stmt.trim();
-                if !s.is_empty() {
-                    conn.execute_unprepared(s).await.expect("migrate");
-                }
-            }
-        }
+        crate::db::apply_sqlite_migrations(
+            &conn,
+            &[
+                include_str!("../../migrations/sqlite/001_initial_schema.sql"),
+                include_str!("../../migrations/sqlite/016_soft_delete_trash_spam.sql"),
+                include_str!("../../migrations/sqlite/018_unsubscribe_headers.sql"),
+                include_str!("../../migrations/sqlite/021_thread_key.sql"),
+                include_str!("../../migrations/sqlite/027_is_archived.sql"),
+            ],
+        )
+        .await
+        .expect("migrate");
         conn
     }
 
@@ -1762,13 +1759,16 @@ mod tests {
         assert_eq!(ids_matching(&conn, &p).await, ["hit-rfc3339", "hit-naive"]);
     }
 
-    /// A pre-existing storage caveat, not something this port introduced:
-    /// SQLite compares the TEXT it stored, so within ONE day a naive
-    /// `YYYY-MM-DD HH:MM:SS` row sorts before an RFC3339 row regardless of the
-    /// actual instants (`' ' < 'T'`). Across different days both shapes order
-    /// correctly. The entity's module doc records this; the queued
-    /// `db-schema-modernization` pipeline (TIMESTAMPTZ) retires it. Pinned here
-    /// so a future change to the ordering is a deliberate one.
+    /// A storage caveat THIS PORT introduces (pl-received-at-mixed-shape):
+    /// pre-port, production writes were RFC3339-only, so one shape existed on
+    /// disk; the entity's `NaiveDateTime` binds now write the second, naive
+    /// `YYYY-MM-DD HH:MM:SS` shape. SQLite compares the TEXT it stored, so
+    /// within ONE day a naive row sorts before an RFC3339 row regardless of
+    /// the actual instants (`' ' < 'T'`) — on a live upgrade, newly-synced
+    /// same-day mail sorts below pre-upgrade mail. Across different days both
+    /// shapes order correctly. The entity's module doc records this; the
+    /// queued `db-schema-modernization` pipeline (TIMESTAMPTZ) retires it.
+    /// Pinned here so a future change to the ordering is a deliberate one.
     #[tokio::test]
     async fn mixed_shape_rows_interleave_within_one_day() {
         let conn = fresh_conn().await;
