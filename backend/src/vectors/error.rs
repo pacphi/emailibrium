@@ -34,6 +34,11 @@ pub enum VectorError {
     #[error("Database error: {0}")]
     DatabaseError(#[from] sqlx::Error),
 
+    /// SeaORM-path database error (ADR-036). Coexists with `DatabaseError`
+    /// while the port completes; call sites migrate variant-by-variant.
+    #[error("Database error: {0}")]
+    Db(#[from] sea_orm::DbErr),
+
     #[error("Serialization error: {0}")]
     SerializationError(#[from] serde_json::Error),
 
