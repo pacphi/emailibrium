@@ -4,8 +4,6 @@
 //! separate config flag) is the one backend-selection mechanism, applied consistently across
 //! every deploy/run mode (native, Docker dev, Docker prod).
 
-use std::borrow::Cow;
-
 use sqlx::postgres::{PgPool, PgPoolOptions};
 use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
 
@@ -14,11 +12,10 @@ pub mod entities;
 /// Database connection pool, dispatched to SQLite or PostgreSQL by the connection URL's scheme
 /// (`sqlite:...` vs `postgres://...` / `postgresql://...`) — see ADR-033.
 ///
-/// This phase introduces the abstraction and the PostgreSQL connection path; most call sites
-/// elsewhere in the crate still hold a raw `SqlitePool` obtained via [`Database::pool`] rather
-/// than matching on this enum directly — that bridge is intentional and temporary. A later
-/// phase migrates every remaining call site onto this enum so a PostgreSQL-backed deployment
-/// works end to end, not just at the connection layer.
+/// Application code talks to the database exclusively through [`Database::sea_orm`], the
+/// single dialect-dispatching code path (ADR-036). This enum's own surface is just the
+/// connection layer: [`Database::connect`], [`Database::run_migrations`], and the
+/// `sea_orm()` wrap.
 #[derive(Debug, Clone)]
 pub enum Database {
     Sqlite(SqlitePool),
@@ -78,133 +75,63 @@ impl Database {
             }
         }
     }
-
-    /// The SQLite pool, for call sites not yet migrated onto this enum directly (see the module
-    /// doc and ADR-033). Panics if connected to PostgreSQL — a later phase migrates these
-    /// remaining callers onto the enum so this accessor can be removed.
-    pub fn pool(&self) -> &SqlitePool {
-        match self {
-            Self::Sqlite(pool) => pool,
-            Self::Postgres(_) => panic!(
-                "Database::pool() called on a PostgreSQL-backed connection — this accessor is a \
-                 temporary bridge for call sites not yet migrated onto the Database enum \
-                 directly (see ADR-033); a later phase removes it."
-            ),
-        }
-    }
-
-    /// Adapt a SQLite-authored query for the connected backend — see ADR-035. Returns `sql`
-    /// unchanged for SQLite (zero-cost); for PostgreSQL, rewrites `?`/`?N` placeholders to
-    /// `$N` and `datetime('now')` to `now()` (the one SQLite-specific function call this
-    /// codebase's application-code queries use — migrations 004/006/010/011/012 needed the
-    /// same substitution, plus a `TIMESTAMPTZ` column-type change these inline application
-    /// queries don't need to make, since they only ever pass the value through `now()`/
-    /// `datetime('now')`'s return, never declare a column type). Every call site authors ONE
-    /// query string, SQLite-style, and calls this before executing it against whichever pool
-    /// is live.
-    pub fn adapt<'a>(&self, sql: &'a str) -> Cow<'a, str> {
-        match self {
-            Self::Sqlite(_) => Cow::Borrowed(sql),
-            Self::Postgres(_) => {
-                let with_now = sql.replace("datetime('now')", "now()");
-                Cow::Owned(sqlite_placeholders_to_postgres(&with_now))
-            }
-        }
-    }
 }
 
-/// Rewrite SQLite's `?`/`?N` bind placeholders into PostgreSQL's `$N` positional parameters.
+/// Test-only constructor: an in-memory SQLite [`Database`] on a single
+/// connection (so `:memory:` state survives across pooled acquires).
 ///
-/// Single-pass scan tracking single-quoted string literals (SQL-standard `''` escaped quote)
-/// and double-quoted identifiers — a `?` inside either is data/an identifier character, never
-/// rewritten. `?N` (already explicitly numbered) becomes `$N` directly, since SQLite's and
-/// PostgreSQL's numbered-parameter semantics are identical, just spelled differently. A bare
-/// `?` becomes `$<k>` where `k` counts bare `?` occurrences in order of appearance, matching
-/// how SQLite itself treats consecutive bare `?`s as sequential parameters. Mixing bare and
-/// numbered placeholders in the same query is not a case this function is designed to make
-/// sensible — no call site in this codebase does that (see ADR-035 §2.3).
-fn sqlite_placeholders_to_postgres(sql: &str) -> String {
-    let mut out = String::with_capacity(sql.len() + 8);
-    let mut chars = sql.char_indices().peekable();
-    let mut in_single_quote = false;
-    let mut in_double_quote = false;
-    let mut bare_counter: u32 = 0;
-
-    while let Some((_, c)) = chars.next() {
-        match c {
-            '\'' if !in_double_quote => {
-                out.push(c);
-                // A doubled '' inside a single-quoted literal is an escaped quote, not the
-                // string's end — consume both characters and stay inside the literal.
-                if in_single_quote && chars.peek().map(|&(_, next)| next) == Some('\'') {
-                    let (_, next) = chars.next().unwrap();
-                    out.push(next);
-                } else {
-                    in_single_quote = !in_single_quote;
-                }
-            }
-            '"' if !in_single_quote => {
-                out.push(c);
-                if in_double_quote && chars.peek().map(|&(_, next)| next) == Some('"') {
-                    let (_, next) = chars.next().unwrap();
-                    out.push(next);
-                } else {
-                    in_double_quote = !in_double_quote;
-                }
-            }
-            '?' if !in_single_quote && !in_double_quote => {
-                let mut digits = String::new();
-                while let Some(&(_, next)) = chars.peek() {
-                    if next.is_ascii_digit() {
-                        digits.push(next);
-                        chars.next();
-                    } else {
-                        break;
-                    }
-                }
-                if digits.is_empty() {
-                    bare_counter += 1;
-                    out.push('$');
-                    out.push_str(&bare_counter.to_string());
-                } else {
-                    out.push('$');
-                    out.push_str(&digits);
-                }
-            }
-            _ => out.push(c),
-        }
-    }
-
-    out
+/// This helper — together with [`Database::connect`] — is deliberately the
+/// ONE place in the crate that names the SQLite pool types; every test module
+/// builds its database here rather than assembling a pool by hand (ADR-036 —
+/// the phase-3 sweep removes all other `SqlitePool` call sites). Gated on
+/// `test-vectors` like `embedding.rs`'s mock provider: the binary's and
+/// `backend/tests/`' test targets reach it through the self-dev-dependency's
+/// feature (Cargo.toml), while production builds never compile it.
+#[cfg(any(test, feature = "test-vectors"))]
+pub async fn test_sqlite_database() -> Database {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect(":memory:")
+        .await
+        .expect("in-memory sqlite");
+    Database::Sqlite(pool)
 }
 
-// ---------------------------------------------------------------------------
-// Dynamic SQL safety (sqlx 0.9 `SqlSafeStr`)
-// ---------------------------------------------------------------------------
+/// Test-only migration replay: strip `--` line comments, split on `;`, and
+/// execute each statement. The ONE copy of the replay loop every test module
+/// used to hand-roll (the naive splitter is fine for these migration files —
+/// no semicolons or `--` inside string literals).
+#[cfg(any(test, feature = "test-vectors"))]
+pub async fn apply_sqlite_migrations(
+    conn: &sea_orm::DatabaseConnection,
+    migrations: &[&str],
+) -> Result<(), sea_orm::DbErr> {
+    use sea_orm::ConnectionTrait;
 
-/// Mark a runtime-built SQL string as safe for sqlx 0.9's [`SqlSafeStr`] guard.
-///
-/// sqlx 0.9 only implements `SqlSafeStr` for `&'static str`. Any query whose
-/// text is assembled at runtime — dynamic `IN (?, ?, …)` placeholder lists,
-/// optional `WHERE` fragments, retention-window `DELETE`s, etc. — must be
-/// explicitly asserted safe via [`sqlx::AssertSqlSafe`].
-///
-/// This function is the crate's single audited choke point for that assertion,
-/// so the invariant is documented and reviewed in one place instead of being
-/// repeated at every call site. Every caller composes SQL the same vetted way:
-/// the query *structure* is built only from string literals and bind-parameter
-/// markers (`?` / `?N`) — never from caller- or user-supplied values, which are
-/// always passed through `.bind(...)`. Bare integer literals that appear inline
-/// (e.g. `bool as i32`, config-derived retention day counts) are never user
-/// input.
-///
-/// Do **not** route a string through here that interpolates untrusted data;
-/// doing so reintroduces the SQL-injection risk the guard exists to prevent.
-///
-/// [`SqlSafeStr`]: sqlx::SqlSafeStr
-#[inline]
-pub fn audited_sql(sql: &str) -> sqlx::AssertSqlSafe<String> {
-    sqlx::AssertSqlSafe(sql.to_owned())
+    for raw in migrations {
+        let cleaned: String = raw
+            .lines()
+            .map(|l| l.find("--").map_or(l, |idx| &l[..idx]))
+            .collect::<Vec<_>>()
+            .join("\n");
+        for stmt in cleaned.split(';') {
+            let s = stmt.trim();
+            if !s.is_empty() {
+                conn.execute_unprepared(s).await?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The application-owned `YYYY-MM-DD HH:MM:SS` UTC wall-clock string written
+/// to TEXT timestamp columns (ADR-035 §2.5) — the Rust-side replacement for
+/// the `datetime('now')` / `to_char(now() AT TIME ZONE 'UTC', ...)` SQL the
+/// ADR-036 port deleted. ONE copy on purpose: this format string is the
+/// on-disk compatibility contract for every TEXT-timestamp table, so write
+/// sites call this instead of spelling the format locally.
+pub fn now_text() -> String {
+    chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string()
 }
 
 // ---------------------------------------------------------------------------
@@ -217,28 +144,33 @@ pub fn audited_sql(sql: &str) -> sqlx::AssertSqlSafe<String> {
 /// This is the single authoritative function for mutating email folder/state
 /// columns and is called from both the delta-sync path and the API endpoints.
 ///
+/// `is_trash`/`is_spam` are INTEGER 0/1 columns (migration 016), so the bool
+/// arguments are widened to `i32` here — the entity mirrors the DDL (ADR-036).
+///
 /// Returns the number of rows affected (0 if the email was not found).
 pub async fn update_email_state(
-    pool: &SqlitePool,
+    conn: &sea_orm::DatabaseConnection,
     email_id: &str,
     is_trash: bool,
     is_spam: bool,
     folder: &str,
     deleted_at: Option<&str>,
-) -> Result<u64, sqlx::Error> {
-    let result = sqlx::query(
-        "UPDATE emails SET is_trash = ?1, is_spam = ?2, folder = ?3, deleted_at = ?4 \
-         WHERE id = ?5",
-    )
-    .bind(is_trash)
-    .bind(is_spam)
-    .bind(folder)
-    .bind(deleted_at)
-    .bind(email_id)
-    .execute(pool)
-    .await?;
+) -> Result<u64, sea_orm::DbErr> {
+    use sea_orm::sea_query::Expr;
+    use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 
-    Ok(result.rows_affected())
+    use entities::emails;
+
+    let result = emails::Entity::update_many()
+        .col_expr(emails::Column::IsTrash, Expr::value(is_trash as i32))
+        .col_expr(emails::Column::IsSpam, Expr::value(is_spam as i32))
+        .col_expr(emails::Column::Folder, Expr::value(folder))
+        .col_expr(emails::Column::DeletedAt, Expr::value(deleted_at))
+        .filter(emails::Column::Id.eq(email_id))
+        .exec(conn)
+        .await?;
+
+    Ok(result.rows_affected)
 }
 
 /// Derive `(is_trash, is_spam, folder)` from a comma-separated label string.
@@ -336,95 +268,79 @@ mod tests {
         assert_eq!(folder, "TRASH");
     }
 
-    // -----------------------------------------------------------------------
-    // Placeholder translation (ADR-035)
-    // -----------------------------------------------------------------------
+    /// Two-row pin for `update_email_state`: the `Id` filter is the only thing
+    /// standing between "trash this email" and "rewrite the state of every
+    /// email in the table" — a lost per-row filter in the `update_many` port
+    /// must fail here.
+    #[tokio::test]
+    async fn update_email_state_touches_only_the_target_row() {
+        use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QuerySelect};
 
-    #[test]
-    fn adapt_bare_placeholders_numbered_sequentially() {
-        let sql = sqlite_placeholders_to_postgres("SELECT * FROM t WHERE a = ? AND b = ?");
-        assert_eq!(sql, "SELECT * FROM t WHERE a = $1 AND b = $2");
-    }
+        let db = test_sqlite_database().await;
+        let conn = db.sea_orm();
+        for raw in [
+            include_str!("../../migrations/sqlite/001_initial_schema.sql"),
+            include_str!("../../migrations/sqlite/016_soft_delete_trash_spam.sql"),
+        ] {
+            let cleaned: String = raw
+                .lines()
+                .map(|l| l.find("--").map_or(l, |idx| &l[..idx]))
+                .collect::<Vec<_>>()
+                .join("\n");
+            for stmt in cleaned.split(';') {
+                let s = stmt.trim();
+                if !s.is_empty() {
+                    conn.execute_unprepared(s).await.expect("migrate");
+                }
+            }
+        }
+        for id in ["target", "bystander"] {
+            conn.execute_unprepared(&format!(
+                "INSERT INTO emails (id, account_id, provider, subject, from_addr, to_addrs, \
+                 received_at) VALUES ('{id}', 'acct-1', 'gmail', 's', 'a@x.com', 'b@x.com', \
+                 '2026-08-01T10:00:00+00:00')"
+            ))
+            .await
+            .expect("seed");
+        }
 
-    #[test]
-    fn adapt_numbered_placeholders_pass_through_with_dollar_prefix() {
-        let sql = sqlite_placeholders_to_postgres(
-            "UPDATE emails SET is_trash = ?1, is_spam = ?2, folder = ?3 WHERE id = ?5",
+        let n = update_email_state(&conn, "target", true, false, "TRASH", Some("2026-08-02"))
+            .await
+            .expect("update");
+        assert_eq!(n, 1, "exactly one row updated");
+
+        let rows: Vec<(String, i32, i32, String, Option<String>)> =
+            entities::emails::Entity::find()
+                .select_only()
+                .column(entities::emails::Column::Id)
+                .column(entities::emails::Column::IsTrash)
+                .column(entities::emails::Column::IsSpam)
+                .column(entities::emails::Column::Folder)
+                .column(entities::emails::Column::DeletedAt)
+                .filter(entities::emails::Column::Id.is_in(["target", "bystander"]))
+                .into_tuple()
+                .all(&conn)
+                .await
+                .expect("read back");
+        let target = rows.iter().find(|r| r.0 == "target").expect("target row");
+        let bystander = rows
+            .iter()
+            .find(|r| r.0 == "bystander")
+            .expect("bystander row");
+        assert_eq!(
+            (target.1, target.2, target.3.as_str(), target.4.as_deref()),
+            (1, 0, "TRASH", Some("2026-08-02")),
+            "target takes the new state"
         );
         assert_eq!(
-            sql,
-            "UPDATE emails SET is_trash = $1, is_spam = $2, folder = $3 WHERE id = $5"
+            (
+                bystander.1,
+                bystander.2,
+                bystander.3.as_str(),
+                bystander.4.as_deref()
+            ),
+            (0, 0, "INBOX", None),
+            "the bystander row keeps its defaults untouched"
         );
-    }
-
-    #[test]
-    fn adapt_ten_bare_placeholders_matches_cloud_api_audit_log_insert() {
-        // Mirrors vectors/audit.rs's real INSERT — the largest bind count in the codebase.
-        let sql = sqlite_placeholders_to_postgres(
-            "INSERT INTO cloud_api_audit_log \
-             (timestamp, provider, model, input_tokens, output_tokens, latency_ms, \
-              user_id, request_type, status, error_message) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        );
-        assert_eq!(
-            sql,
-            "INSERT INTO cloud_api_audit_log \
-             (timestamp, provider, model, input_tokens, output_tokens, latency_ms, \
-              user_id, request_type, status, error_message) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)"
-        );
-    }
-
-    #[test]
-    fn adapt_ignores_question_mark_inside_single_quoted_literal() {
-        let sql =
-            sqlite_placeholders_to_postgres("SELECT * FROM t WHERE a = ? AND b = 'is it ok?'");
-        assert_eq!(sql, "SELECT * FROM t WHERE a = $1 AND b = 'is it ok?'");
-    }
-
-    #[test]
-    fn adapt_honors_escaped_single_quote_inside_literal() {
-        // 'it''s a ?' is ONE literal (the '' is an escaped quote, not the string's end) —
-        // the ? inside must not be rewritten, and the bare ? after the literal is $1.
-        let sql =
-            sqlite_placeholders_to_postgres("SELECT * FROM t WHERE a = 'it''s a ?' AND b = ?");
-        assert_eq!(sql, "SELECT * FROM t WHERE a = 'it''s a ?' AND b = $1");
-    }
-
-    #[test]
-    fn adapt_ignores_question_mark_inside_double_quoted_identifier() {
-        let sql = sqlite_placeholders_to_postgres(r#"SELECT "weird?col" FROM t WHERE a = ?"#);
-        assert_eq!(sql, r#"SELECT "weird?col" FROM t WHERE a = $1"#);
-    }
-
-    #[test]
-    fn adapt_no_placeholders_is_unchanged() {
-        let sql = sqlite_placeholders_to_postgres("SELECT * FROM t");
-        assert_eq!(sql, "SELECT * FROM t");
-    }
-
-    #[tokio::test]
-    async fn database_adapt_is_noop_borrowed_for_sqlite() {
-        let db = Database::connect("sqlite::memory:").await.unwrap();
-        let sql = "SELECT * FROM t WHERE a = ?";
-        let adapted = db.adapt(sql);
-        assert_eq!(adapted, sql);
-        assert!(matches!(adapted, Cow::Borrowed(_)));
-    }
-
-    #[tokio::test]
-    async fn database_adapt_rewrites_datetime_now_and_placeholders_for_postgres() {
-        // Doesn't require a live Postgres connection to exercise `adapt()`'s branch — only
-        // `Database::connect()` needs a real socket, and this test never calls it for Postgres;
-        // it directly constructs the enum variant it needs to check the Postgres arm.
-        let db = Database::Postgres(
-            sqlx::postgres::PgPoolOptions::new()
-                .max_connections(1)
-                .connect_lazy("postgres://user:pass@localhost/db")
-                .unwrap(),
-        );
-        let adapted = db.adapt("UPDATE t SET updated_at = datetime('now') WHERE id = ?");
-        assert_eq!(adapted, "UPDATE t SET updated_at = now() WHERE id = $1");
-        assert!(matches!(adapted, Cow::Owned(_)));
     }
 }

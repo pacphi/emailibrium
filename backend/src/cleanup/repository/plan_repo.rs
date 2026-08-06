@@ -677,38 +677,19 @@ mod tests {
     use crate::cleanup::domain::plan::{CleanupPlan, PlanTotals, RiskRollup};
     use crate::db::Database;
     use chrono::{Duration, Utc};
-    use sqlx::sqlite::SqlitePoolOptions;
     use uuid::Uuid;
 
     async fn fresh_conn() -> DatabaseConnection {
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect(":memory:")
-            .await
-            .expect("connect");
-        let raw = include_str!("../../../migrations/sqlite/024_cleanup_planning.sql");
-        // Strip line comments before splitting on ';'.
-        let cleaned: String = raw
-            .lines()
-            .map(|l| {
-                if let Some(idx) = l.find("--") {
-                    &l[..idx]
-                } else {
-                    l
-                }
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-        for stmt in cleaned.split(';') {
-            let s = stmt.trim();
-            if !s.is_empty() {
-                sqlx::query(crate::db::audited_sql(s))
-                    .execute(&pool)
-                    .await
-                    .expect("migrate");
-            }
-        }
-        Database::Sqlite(pool).sea_orm()
+        let conn = crate::db::test_sqlite_database().await.sea_orm();
+        crate::db::apply_sqlite_migrations(
+            &conn,
+            &[include_str!(
+                "../../../migrations/sqlite/024_cleanup_planning.sql"
+            )],
+        )
+        .await
+        .expect("migrate");
+        conn
     }
 
     fn sample_plan(user_id: &str) -> CleanupPlan {

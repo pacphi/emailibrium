@@ -1,59 +1,48 @@
-//! Rule engine service -- CRUD operations backed by SQLite (R-03).
+//! Rule engine service -- CRUD operations backed by the `rules` table (R-03).
 //!
 //! `RuleEngine` holds rules in memory and persists them to the `rules` table.
 //! It delegates evaluation to `rule_processor` and validation to `rule_validator`.
+//!
+//! Persistence is single-code-path SeaORM (ADR-036): the `rules` entity owns
+//! per-backend encode/decode and the upsert goes through `OnConflict`, so the
+//! same bodies run against SQLite and PostgreSQL. The one thing that used to
+//! differ between the backends here was `enabled`'s bind type — the column is
+//! INTEGER, not BOOLEAN, and PostgreSQL refuses to coerce a `bool` bind into it
+//! (ADR-035) — which the entity's `i32` column now settles once.
 
 use anyhow::{Context, Result};
-use chrono::{DateTime, Utc};
+use chrono::Utc;
+use sea_orm::sea_query::OnConflict;
+use sea_orm::{ActiveValue::Set, EntityTrait, QueryOrder};
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use super::types::{Rule, RuleAction, RuleCondition};
-use crate::db::{audited_sql, Database};
+use crate::db::entities::rules;
+use crate::db::Database;
 
-/// Portable decode target for one `rules` row across both backends — `enabled` is
-/// decoded as its raw INTEGER (0/1) rather than `bool` because the column is
-/// INTEGER (not BOOLEAN) in both dialects, and Postgres won't implicitly coerce
-/// an integer literal into a `bool`-typed bind on the way back in either
-/// (see `bind_enabled` below). See ADR-035.
-type RuleRow = (
-    String,
-    String,
-    String,
-    String,
-    String,
-    i32,
-    i32,
-    DateTime<Utc>,
-    DateTime<Utc>,
-);
-
-fn row_to_rule(row: RuleRow) -> Result<Rule> {
-    let (
-        id,
-        name,
-        description,
-        conditions_json,
-        actions_json,
-        priority,
-        enabled,
-        created_at,
-        updated_at,
-    ) = row;
-    let conditions: Vec<RuleCondition> = serde_json::from_str(&conditions_json)
-        .with_context(|| format!("Failed to deserialise conditions for rule '{id}'"))?;
-    let actions: Vec<RuleAction> = serde_json::from_str(&actions_json)
-        .with_context(|| format!("Failed to deserialise actions for rule '{id}'"))?;
+/// Decode one `rules` row into a [`Rule`].
+///
+/// `enabled` stays an INTEGER 0/1 compared with `!= 0`, exactly as before the
+/// port. The nullable columns all carry DDL defaults that every write through
+/// [`RuleEngine::save_rule`] fills in, so the fallbacks below only apply to rows
+/// written outside this module; a NULL `enabled` reads as disabled, the safe
+/// direction.
+fn model_to_rule(model: rules::Model) -> Result<Rule> {
+    let conditions: Vec<RuleCondition> = serde_json::from_str(&model.conditions_json)
+        .with_context(|| format!("Failed to deserialise conditions for rule '{}'", model.id))?;
+    let actions: Vec<RuleAction> = serde_json::from_str(&model.actions_json)
+        .with_context(|| format!("Failed to deserialise actions for rule '{}'", model.id))?;
     Ok(Rule {
-        id,
-        name,
-        description,
+        id: model.id,
+        name: model.name,
+        description: model.description.unwrap_or_default(),
         conditions,
         actions,
-        priority,
-        enabled: enabled != 0,
-        created_at,
-        updated_at,
+        priority: model.priority.unwrap_or(0),
+        enabled: model.enabled.unwrap_or(0) != 0,
+        created_at: model.created_at.unwrap_or_else(Utc::now),
+        updated_at: model.updated_at.unwrap_or_else(Utc::now),
     })
 }
 
@@ -70,22 +59,20 @@ impl RuleEngine {
 
     /// Load all rules from the database.
     pub async fn load_rules(db: &Database) -> Result<Vec<Rule>> {
-        let sql = "SELECT id, name, description, conditions_json, actions_json, \
-                   priority, enabled, created_at, updated_at \
-                   FROM rules ORDER BY priority DESC";
-        let rows: Vec<RuleRow> = match db {
-            Database::Sqlite(pool) => sqlx::query_as(sql).fetch_all(pool).await,
-            Database::Postgres(pool) => sqlx::query_as(sql).fetch_all(pool).await,
-        }
-        .context("Failed to load rules from database")?;
+        let conn = db.sea_orm();
+        let models = rules::Entity::find()
+            .order_by_desc(rules::Column::Priority)
+            .all(&conn)
+            .await
+            .context("Failed to load rules from database")?;
 
-        let rules = rows
+        let loaded = models
             .into_iter()
-            .map(row_to_rule)
+            .map(model_to_rule)
             .collect::<Result<Vec<_>>>()?;
 
-        info!(count = rules.len(), "Rules loaded from database");
-        Ok(rules)
+        info!(count = loaded.len(), "Rules loaded from database");
+        Ok(loaded)
     }
 
     /// Save (insert or update) a rule to the database.
@@ -95,52 +82,43 @@ impl RuleEngine {
         let actions_json =
             serde_json::to_string(&rule.actions).context("Failed to serialise rule actions")?;
 
-        // `INSERT ... ON CONFLICT(id) DO UPDATE SET ... = excluded....` is valid upsert
-        // syntax in both SQLite (3.24+) and PostgreSQL, so this goes through the ordinary
-        // placeholder-adapting path — only `enabled`'s bind type differs per backend,
-        // since the column is INTEGER (not BOOLEAN) in both dialects and Postgres refuses
-        // to implicitly coerce a `bool`-typed bind into an integer column (see ADR-035).
-        let sql = db.adapt(
-            r#"INSERT INTO rules (id, name, description, conditions_json, actions_json, priority, enabled, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-               ON CONFLICT(id) DO UPDATE SET
-                   name = excluded.name,
-                   description = excluded.description,
-                   conditions_json = excluded.conditions_json,
-                   actions_json = excluded.actions_json,
-                   priority = excluded.priority,
-                   enabled = excluded.enabled,
-                   updated_at = excluded.updated_at"#,
-        );
-        match db {
-            Database::Sqlite(pool) => sqlx::query(audited_sql(&sql))
-                .bind(&rule.id)
-                .bind(&rule.name)
-                .bind(&rule.description)
-                .bind(&conditions_json)
-                .bind(&actions_json)
-                .bind(rule.priority)
-                .bind(rule.enabled)
-                .bind(rule.created_at)
-                .bind(rule.updated_at)
-                .execute(pool)
-                .await
-                .map(|_| ()),
-            Database::Postgres(pool) => sqlx::query(audited_sql(&sql))
-                .bind(&rule.id)
-                .bind(&rule.name)
-                .bind(&rule.description)
-                .bind(&conditions_json)
-                .bind(&actions_json)
-                .bind(rule.priority)
-                .bind(rule.enabled as i32)
-                .bind(rule.created_at)
-                .bind(rule.updated_at)
-                .execute(pool)
-                .await
-                .map(|_| ()),
-        }
-        .context("Failed to save rule")?;
+        // One `OnConflict` upsert replaces the hand-written
+        // `INSERT ... ON CONFLICT(id) DO UPDATE SET ... = excluded....` and its two
+        // bind arms. `match_count`/`last_run_at` are owned by the manual-run path
+        // (`api/rules.rs`), so they stay `NotSet` — absent from both the INSERT
+        // column list and the conflict UPDATE, exactly as the old SQL left them.
+        // `created_at` is likewise not in the update set: a re-save must not
+        // rewrite it.
+        let conn = db.sea_orm();
+        let row = rules::ActiveModel {
+            id: Set(rule.id.clone()),
+            name: Set(rule.name.clone()),
+            description: Set(Some(rule.description.clone())),
+            conditions_json: Set(conditions_json),
+            actions_json: Set(actions_json),
+            priority: Set(Some(rule.priority)),
+            enabled: Set(Some(i32::from(rule.enabled))),
+            created_at: Set(Some(rule.created_at)),
+            updated_at: Set(Some(rule.updated_at)),
+            ..Default::default()
+        };
+        rules::Entity::insert(row)
+            .on_conflict(
+                OnConflict::column(rules::Column::Id)
+                    .update_columns([
+                        rules::Column::Name,
+                        rules::Column::Description,
+                        rules::Column::ConditionsJson,
+                        rules::Column::ActionsJson,
+                        rules::Column::Priority,
+                        rules::Column::Enabled,
+                        rules::Column::UpdatedAt,
+                    ])
+                    .to_owned(),
+            )
+            .exec(&conn)
+            .await
+            .context("Failed to save rule")?;
 
         debug!(rule_id = %rule.id, "Rule saved to database");
         Ok(())
@@ -148,21 +126,12 @@ impl RuleEngine {
 
     /// Delete a rule by ID.
     pub async fn delete_rule(db: &Database, id: &str) -> Result<bool> {
-        let sql = db.adapt("DELETE FROM rules WHERE id = ?");
-        let affected = match db {
-            Database::Sqlite(pool) => sqlx::query(audited_sql(&sql))
-                .bind(id)
-                .execute(pool)
-                .await
-                .context("Failed to delete rule")?
-                .rows_affected(),
-            Database::Postgres(pool) => sqlx::query(audited_sql(&sql))
-                .bind(id)
-                .execute(pool)
-                .await
-                .context("Failed to delete rule")?
-                .rows_affected(),
-        };
+        let conn = db.sea_orm();
+        let affected = rules::Entity::delete_by_id(id)
+            .exec(&conn)
+            .await
+            .context("Failed to delete rule")?
+            .rows_affected;
 
         let deleted = affected > 0;
         if deleted {
@@ -175,28 +144,13 @@ impl RuleEngine {
 
     /// Get a single rule by ID.
     pub async fn get_rule(db: &Database, id: &str) -> Result<Option<Rule>> {
-        let sql = db.adapt(
-            r#"SELECT id, name, description, conditions_json, actions_json,
-                      priority, enabled, created_at, updated_at
-               FROM rules WHERE id = ?"#,
-        );
-        let row: Option<RuleRow> = match db {
-            Database::Sqlite(pool) => {
-                sqlx::query_as(audited_sql(&sql))
-                    .bind(id)
-                    .fetch_optional(pool)
-                    .await
-            }
-            Database::Postgres(pool) => {
-                sqlx::query_as(audited_sql(&sql))
-                    .bind(id)
-                    .fetch_optional(pool)
-                    .await
-            }
-        }
-        .context("Failed to fetch rule")?;
+        let conn = db.sea_orm();
+        let model = rules::Entity::find_by_id(id)
+            .one(&conn)
+            .await
+            .context("Failed to fetch rule")?;
 
-        row.map(row_to_rule).transpose()
+        model.map(model_to_rule).transpose()
     }
 
     // -- In-memory helpers (useful for batch evaluation) --
@@ -260,5 +214,177 @@ mod tests {
     fn new_id_is_valid_uuid() {
         let id = RuleEngine::new_id();
         assert!(uuid::Uuid::parse_str(&id).is_ok());
+    }
+
+    // -----------------------------------------------------------------------
+    // Persistence round-trips. Added with the SeaORM port (ADR-036): the three
+    // tests above never touch a database, so `save_rule`'s upsert — the file's
+    // riskiest statement — had no coverage at all. Unlike `executor.rs`'s pins
+    // these were written after the port, so what they assert about equivalence
+    // is derived from the pre-port SQL *text* rather than from executing it:
+    // that INSERT's `ON CONFLICT (id) DO UPDATE SET` listed name, description,
+    // conditions_json, actions_json, priority, enabled and updated_at, and
+    // deliberately omitted created_at, match_count and last_run_at.
+    // -----------------------------------------------------------------------
+
+    use crate::db::Database;
+    use sea_orm::sea_query::Expr;
+    use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+
+    /// In-memory SQLite with the `rules` table: 012 creates it, 026 adds
+    /// `match_count`/`last_run_at` (both of which the entity declares).
+    async fn fresh_db() -> Database {
+        let db = crate::db::test_sqlite_database().await;
+        let conn = db.sea_orm();
+        crate::db::apply_sqlite_migrations(
+            &conn,
+            &[
+                include_str!("../../migrations/sqlite/012_rules.sql"),
+                include_str!("../../migrations/sqlite/026_rules_match_count.sql"),
+            ],
+        )
+        .await
+        .expect("migrate");
+        db
+    }
+
+    fn sample_rule(id: &str, name: &str, priority: i32) -> Rule {
+        Rule {
+            id: id.to_string(),
+            name: name.to_string(),
+            description: "a description".to_string(),
+            conditions: vec![RuleCondition::FieldMatch {
+                field: EmailField::Subject,
+                operator: MatchOperator::Contains,
+                value: "invoice".to_string(),
+            }],
+            actions: vec![RuleAction::AddLabel {
+                label: "billing".to_string(),
+            }],
+            priority,
+            enabled: true,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        }
+    }
+
+    #[tokio::test]
+    async fn save_load_get_and_delete_round_trip() {
+        let db = fresh_db().await;
+        let rule = sample_rule("r-1", "Invoices", 5);
+        RuleEngine::save_rule(&db, &rule).await.expect("save");
+
+        let fetched = RuleEngine::get_rule(&db, "r-1")
+            .await
+            .expect("get")
+            .expect("present");
+        assert_eq!(fetched.name, "Invoices");
+        assert_eq!(fetched.description, "a description");
+        assert_eq!(fetched.priority, 5);
+        assert!(fetched.enabled);
+        assert_eq!(fetched.conditions.len(), 1);
+        assert_eq!(fetched.actions.len(), 1);
+        // TIMESTAMPTZ-class columns must survive the round trip in the right
+        // fields — a created_at/updated_at swap would be invisible otherwise.
+        assert_eq!(
+            fetched.created_at.timestamp_millis(),
+            rule.created_at.timestamp_millis()
+        );
+        assert_eq!(
+            fetched.updated_at.timestamp_millis(),
+            rule.updated_at.timestamp_millis()
+        );
+
+        assert_eq!(RuleEngine::load_rules(&db).await.expect("load").len(), 1);
+        assert!(RuleEngine::get_rule(&db, "absent")
+            .await
+            .expect("get absent")
+            .is_none());
+
+        assert!(RuleEngine::delete_rule(&db, "r-1").await.expect("delete"));
+        // Deleting a row that is not there reports false rather than erroring.
+        assert!(!RuleEngine::delete_rule(&db, "r-1")
+            .await
+            .expect("delete again"));
+        assert!(RuleEngine::load_rules(&db).await.expect("load").is_empty());
+    }
+
+    #[tokio::test]
+    async fn save_rule_upserts_in_place_and_leaves_run_counters_alone() {
+        let db = fresh_db().await;
+        let conn = db.sea_orm();
+        let mut rule = sample_rule("r-1", "Original", 5);
+        let bystander = sample_rule("r-2", "Bystander", 1);
+        RuleEngine::save_rule(&db, &rule).await.expect("save");
+        RuleEngine::save_rule(&db, &bystander)
+            .await
+            .expect("save bystander");
+
+        // `match_count` is owned by the manual-run path, not by save_rule.
+        rules::Entity::update_many()
+            .col_expr(rules::Column::MatchCount, Expr::value(7))
+            .filter(rules::Column::Id.eq("r-1"))
+            .exec(&conn)
+            .await
+            .expect("seed match_count");
+
+        let original_created_at = rule.created_at;
+        rule.name = "Renamed".to_string();
+        rule.enabled = false;
+        rule.priority = 9;
+        rule.updated_at = Utc::now();
+        // A re-save must not rewrite created_at, even when the caller passes a
+        // different one — the conflict UPDATE never listed that column.
+        rule.created_at = Utc::now() + chrono::Duration::hours(1);
+        RuleEngine::save_rule(&db, &rule).await.expect("upsert");
+
+        let all = RuleEngine::load_rules(&db).await.expect("load");
+        assert_eq!(all.len(), 2, "upsert must not duplicate the row");
+
+        let updated = RuleEngine::get_rule(&db, "r-1")
+            .await
+            .expect("get")
+            .expect("present");
+        assert_eq!(updated.name, "Renamed");
+        assert!(!updated.enabled, "enabled round-trips through INTEGER 0/1");
+        assert_eq!(updated.priority, 9);
+        assert_eq!(
+            updated.created_at.timestamp_millis(),
+            original_created_at.timestamp_millis()
+        );
+
+        let row = rules::Entity::find_by_id("r-1")
+            .one(&conn)
+            .await
+            .expect("query")
+            .expect("row present");
+        assert_eq!(row.match_count, 7, "match_count must survive a re-save");
+
+        let untouched = RuleEngine::get_rule(&db, "r-2")
+            .await
+            .expect("get")
+            .expect("present");
+        assert_eq!(untouched.name, "Bystander");
+        assert!(untouched.enabled);
+    }
+
+    #[tokio::test]
+    async fn load_rules_orders_by_priority_descending() {
+        let db = fresh_db().await;
+        for (id, name, priority) in [
+            ("r-lo", "Low", 1),
+            ("r-hi", "High", 10),
+            ("r-mid", "Mid", 5),
+        ] {
+            RuleEngine::save_rule(&db, &sample_rule(id, name, priority))
+                .await
+                .expect("save");
+        }
+
+        let loaded = RuleEngine::load_rules(&db).await.expect("load");
+        assert_eq!(
+            loaded.iter().map(|r| r.name.as_str()).collect::<Vec<_>>(),
+            ["High", "Mid", "Low"]
+        );
     }
 }

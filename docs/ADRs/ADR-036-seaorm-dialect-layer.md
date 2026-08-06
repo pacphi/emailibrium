@@ -57,9 +57,26 @@ Adopt **SeaORM 2.0** as the dialect layer. Concretely:
    i.e. `SELECT … FOR UPDATE` on PostgreSQL; SQLite serializes writers anyway).
 5. **A narrow raw-SQL escape hatch remains**, via
    `Statement::from_sql_and_values(conn.get_database_backend(), ...)`, for the
-   irreducible cases only: aggregate casts (`AVG(...)::float8`, §2.7) and the
-   per-backend FTS implementations (FTS5 vs `ruvector_bm25_score()`, ADR-034).
-   Escape hatches live behind the same repository traits as everything else.
+   irreducible cases only. Escape hatches live behind the same repository
+   traits as everything else. The accepted classes (amended during the
+   phase-3 sweep, which surfaced the full inventory — each in-code site cites
+   this section plus its class-specific ADR):
+   - **Portable aggregate text** the query builder cannot express: aggregate
+     casts (`CAST(AVG(...) AS double precision)`, §2.7), `COUNT(*)` over a
+     derived table (which PostgreSQL requires to carry an alias — `AS sub`),
+     and `SUM(LENGTH(...))` over BLOB/BYTEA.
+   - **Per-backend FTS implementations** (FTS5 `MATCH` vs
+     `ruvector_bm25_score()`, ADR-034), backend-gated at the call site.
+   - **Per-backend DDL** where the auto-increment syntax genuinely differs
+     (§2.3: `AUTOINCREMENT` vs `GENERATED ALWAYS AS IDENTITY`) — the
+     runtime-created `wipe_audit_log` plus the defensive `IF NOT EXISTS`
+     replays that mirror migrations 007/009 verbatim for un-migrated
+     databases.
+   - **Catalog introspection**, inherently per-backend (`sqlite_master` vs
+     `information_schema.tables`).
+   - **The ADR-003 emergency SQLite vector store** (`sqlite_store.rs`)
+     wholesale: deliberately SQLite-only, runtime-gated on the backend, with
+     its own self-migrating table.
 
 ### Out of scope here, queued as a follow-up pipeline (`db-schema-modernization`)
 

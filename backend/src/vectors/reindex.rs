@@ -7,9 +7,13 @@
 
 use std::sync::Arc;
 
+use sea_orm::sea_query::{Expr, OnConflict};
+use sea_orm::ActiveValue::Set;
+use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QuerySelect};
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 
+use crate::db::entities::{ai_metadata, emails};
 use crate::db::Database;
 
 use super::error::VectorError;
@@ -48,8 +52,10 @@ impl Default for ReindexStatus {
 }
 
 /// Orchestrates re-indexing when the embedding model changes.
+///
+/// Persistence is single-code-path SeaORM (ADR-036).
 pub struct ReindexOrchestrator {
-    db: Arc<Database>,
+    conn: DatabaseConnection,
     status: Arc<RwLock<ReindexStatus>>,
 }
 
@@ -57,7 +63,7 @@ impl ReindexOrchestrator {
     /// Create a new orchestrator backed by the given database.
     pub fn new(db: Arc<Database>) -> Self {
         Self {
-            db,
+            conn: db.sea_orm(),
             status: Arc::new(RwLock::new(ReindexStatus::default())),
         }
     }
@@ -73,11 +79,30 @@ impl ReindexOrchestrator {
         current_model: &str,
         _current_dims: usize,
     ) -> Result<bool, VectorError> {
-        let stored: Option<(String,)> =
-            sqlx::query_as("SELECT value FROM ai_metadata WHERE key = 'active_embedding_model'")
-                .fetch_optional(self.db.pool())
-                .await
-                .map_err(VectorError::DatabaseError)?;
+        let stored: Option<(String,)> = ai_metadata::Entity::find()
+            .select_only()
+            .column(ai_metadata::Column::Value)
+            .filter(ai_metadata::Column::Key.eq("active_embedding_model"))
+            .into_tuple()
+            .one(&self.conn)
+            .await
+            .map_err(VectorError::Db)?;
+
+        // One upsert body serves both the first-run INSERT and the
+        // model-change `INSERT OR REPLACE` (for this single-column-key KV row
+        // the replace and DO-UPDATE forms are observably identical).
+        // `updated_at` is a real TIMESTAMP in both dialects (migration 003),
+        // so the old `datetime('now')` literal becomes a naive-UTC bind.
+        let upsert = ai_metadata::Entity::insert(ai_metadata::ActiveModel {
+            key: Set("active_embedding_model".to_owned()),
+            value: Set(current_model.to_owned()),
+            updated_at: Set(Some(chrono::Utc::now().naive_utc())),
+        })
+        .on_conflict(
+            OnConflict::column(ai_metadata::Column::Key)
+                .update_columns([ai_metadata::Column::Value, ai_metadata::Column::UpdatedAt])
+                .to_owned(),
+        );
 
         match stored {
             Some((stored_model,)) if stored_model != current_model => {
@@ -86,26 +111,18 @@ impl ReindexOrchestrator {
                     stored_model,
                     current_model
                 );
-                sqlx::query(
-                    "INSERT OR REPLACE INTO ai_metadata (key, value, updated_at) \
-                     VALUES ('active_embedding_model', ?, datetime('now'))",
-                )
-                .bind(current_model)
-                .execute(self.db.pool())
-                .await
-                .map_err(VectorError::DatabaseError)?;
+                upsert
+                    .exec_without_returning(&self.conn)
+                    .await
+                    .map_err(VectorError::Db)?;
                 Ok(true)
             }
             None => {
                 // First run -- store current model, no re-index needed.
-                sqlx::query(
-                    "INSERT INTO ai_metadata (key, value, updated_at) \
-                     VALUES ('active_embedding_model', ?, datetime('now'))",
-                )
-                .bind(current_model)
-                .execute(self.db.pool())
-                .await
-                .map_err(VectorError::DatabaseError)?;
+                upsert
+                    .exec_without_returning(&self.conn)
+                    .await
+                    .map_err(VectorError::Db)?;
                 Ok(false)
             }
             _ => Ok(false), // same model, no re-index
@@ -115,14 +132,14 @@ impl ReindexOrchestrator {
     /// Mark all previously-embedded emails as stale so the ingestion pipeline
     /// will re-embed them with the new model.
     pub async fn mark_all_stale(&self) -> Result<u64, VectorError> {
-        let result = sqlx::query(
-            "UPDATE emails SET embedding_status = 'stale' WHERE embedding_status = 'embedded'",
-        )
-        .execute(self.db.pool())
-        .await
-        .map_err(VectorError::DatabaseError)?;
+        let result = emails::Entity::update_many()
+            .col_expr(emails::Column::EmbeddingStatus, Expr::value("stale"))
+            .filter(emails::Column::EmbeddingStatus.eq("embedded"))
+            .exec(&self.conn)
+            .await
+            .map_err(VectorError::Db)?;
 
-        let count = result.rows_affected();
+        let count = result.rows_affected;
 
         let mut status = self.status.write().await;
         status.in_progress = true;
@@ -145,22 +162,26 @@ impl ReindexOrchestrator {
 
 #[cfg(test)]
 mod tests {
+    use sea_orm::{ConnectionTrait, PaginatorTrait};
+
     use super::*;
 
     async fn test_db() -> Database {
-        let db = Database::connect("sqlite::memory:").await.unwrap();
-        // Run the initial schema migration.
-        sqlx::query(include_str!(
-            "../../migrations/sqlite/001_initial_schema.sql"
-        ))
-        .execute(db.pool())
+        let db = crate::db::test_sqlite_database().await;
+        let conn = db.sea_orm();
+        crate::db::apply_sqlite_migrations(
+            &conn,
+            &[
+                include_str!("../../migrations/sqlite/001_initial_schema.sql"),
+                include_str!("../../migrations/sqlite/003_ai_metadata.sql"),
+                include_str!("../../migrations/sqlite/016_soft_delete_trash_spam.sql"),
+                include_str!("../../migrations/sqlite/018_unsubscribe_headers.sql"),
+                include_str!("../../migrations/sqlite/021_thread_key.sql"),
+                include_str!("../../migrations/sqlite/027_is_archived.sql"),
+            ],
+        )
         .await
         .unwrap();
-        // Run the ai_metadata migration.
-        sqlx::query(include_str!("../../migrations/sqlite/003_ai_metadata.sql"))
-            .execute(db.pool())
-            .await
-            .unwrap();
         db
     }
 
@@ -219,24 +240,21 @@ mod tests {
     async fn test_mark_all_stale() {
         let db = Arc::new(test_db().await);
 
+        let conn = db.sea_orm();
         // Insert some emails with 'embedded' status.
         for i in 0..5 {
-            let id = format!("email-{}", i);
-            sqlx::query(
+            conn.execute_unprepared(&format!(
                 "INSERT INTO emails (id, account_id, provider, embedding_status) \
-                 VALUES (?, 'acct-1', 'test', 'embedded')",
-            )
-            .bind(&id)
-            .execute(db.pool())
+                 VALUES ('email-{i}', 'acct-1', 'test', 'embedded')"
+            ))
             .await
             .unwrap();
         }
         // One pending email that should not be affected.
-        sqlx::query(
+        conn.execute_unprepared(
             "INSERT INTO emails (id, account_id, provider, embedding_status) \
              VALUES ('email-pending', 'acct-1', 'test', 'pending')",
         )
-        .execute(db.pool())
         .await
         .unwrap();
 
@@ -251,19 +269,22 @@ mod tests {
         assert_eq!(status.total_emails, 5);
 
         // Verify the DB was updated.
-        let stale: (i64,) =
-            sqlx::query_as("SELECT COUNT(*) FROM emails WHERE embedding_status = 'stale'")
-                .fetch_one(db.pool())
-                .await
-                .unwrap();
-        assert_eq!(stale.0, 5);
+        let stale = emails::Entity::find()
+            .filter(emails::Column::EmbeddingStatus.eq("stale"))
+            .count(&conn)
+            .await
+            .unwrap();
+        assert_eq!(stale, 5);
 
         // Pending email should be unchanged.
-        let pending: (String,) =
-            sqlx::query_as("SELECT embedding_status FROM emails WHERE id = 'email-pending'")
-                .fetch_one(db.pool())
-                .await
-                .unwrap();
-        assert_eq!(pending.0, "pending");
+        let pending: Option<(Option<String>,)> = emails::Entity::find()
+            .select_only()
+            .column(emails::Column::EmbeddingStatus)
+            .filter(emails::Column::Id.eq("email-pending"))
+            .into_tuple()
+            .one(&conn)
+            .await
+            .unwrap();
+        assert_eq!(pending.unwrap().0.as_deref(), Some("pending"));
     }
 }

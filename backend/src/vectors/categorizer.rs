@@ -527,12 +527,19 @@ impl VectorCategorizer {
     /// Load category centroids from the database (ADR-004).
     /// Returns the number of centroids loaded.
     pub async fn load_centroids_from_db(&self, db: &Database) -> Result<usize, VectorError> {
-        type CentroidRow = (String, Vec<u8>, i64);
-        let rows: Vec<CentroidRow> =
-            sqlx::query_as("SELECT category, vector_data, dimensions FROM category_centroids")
-                .fetch_all(db.pool())
-                .await
-                .map_err(VectorError::DatabaseError)?;
+        use crate::db::entities::category_centroids;
+        use sea_orm::{EntityTrait, QuerySelect};
+
+        type CentroidRow = (String, Vec<u8>, i32);
+        let rows: Vec<CentroidRow> = category_centroids::Entity::find()
+            .select_only()
+            .column(category_centroids::Column::Category)
+            .column(category_centroids::Column::VectorData)
+            .column(category_centroids::Column::Dimensions)
+            .into_tuple()
+            .all(&db.sea_orm())
+            .await
+            .map_err(VectorError::Db)?;
 
         let mut centroids = self.centroids.write().await;
         for (cat_name, blob, dims) in &rows {
@@ -611,14 +618,29 @@ impl VectorCategorizer {
             }
             match self.embedding.embed(text).await {
                 Ok(vector) => {
+                    use crate::db::entities::category_centroids;
+                    use sea_orm::sea_query::OnConflict;
+                    use sea_orm::ActiveValue::Set;
+                    use sea_orm::EntityTrait;
+
                     let blob = f32_vec_to_bytes(&vector);
-                    let _ = sqlx::query(
-                        "INSERT OR IGNORE INTO category_centroids (category, vector_data, dimensions, email_count, feedback_count, last_updated) VALUES (?, ?, ?, 0, 0, datetime('now'))",
+                    // `INSERT OR IGNORE` → conflict-do-nothing; `last_updated`
+                    // is a plain TIMESTAMP, so `datetime('now')` becomes a
+                    // naive-UTC bind. Best-effort like the pre-port write.
+                    let _ = category_centroids::Entity::insert(category_centroids::ActiveModel {
+                        category: Set(category.to_string()),
+                        vector_data: Set(blob),
+                        dimensions: Set(vector.len() as i32),
+                        email_count: Set(0),
+                        feedback_count: Set(0),
+                        last_updated: Set(Some(chrono::Utc::now().naive_utc())),
+                    })
+                    .on_conflict(
+                        OnConflict::column(category_centroids::Column::Category)
+                            .do_nothing()
+                            .to_owned(),
                     )
-                    .bind(category.to_string())
-                    .bind(&blob)
-                    .bind(vector.len() as i64)
-                    .execute(db.pool())
+                    .exec_without_returning(&db.sea_orm())
                     .await;
 
                     centroids.insert(

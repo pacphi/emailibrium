@@ -283,7 +283,7 @@ impl ToolRegistry {
         source: CallSource,
     ) -> Result<Value, ToolError> {
         let start = Instant::now();
-        let pool = ctx.pool().clone();
+        let conn = ctx.conn();
 
         let result = self.invoke(ctx, name, &args).await;
 
@@ -298,7 +298,7 @@ impl ToolRegistry {
             latency_ms: start.elapsed().as_millis() as u64,
             source: source.as_str(),
         };
-        audit::log_tool_call(&pool, &entry).await;
+        audit::log_tool_call(&conn, &entry).await;
 
         result
     }

@@ -69,17 +69,25 @@ const THREAD_KEY: &str = "<msg/1@example.com>";
 /// `THREAD_KEY`, percent-encoded for use inside a `thread://` URI.
 const THREAD_KEY_ENCODED: &str = "%3Cmsg%2F1%40example.com%3E";
 
-async fn seed(pool: &sqlx::SqlitePool) {
+async fn seed(conn: &sea_orm::DatabaseConnection) {
+    use sea_orm::ConnectionTrait;
+
+    fn stmt<I>(sql: &str, values: I) -> sea_orm::Statement
+    where
+        I: IntoIterator<Item = sea_orm::Value>,
+    {
+        sea_orm::Statement::from_sql_and_values(sea_orm::DatabaseBackend::Sqlite, sql, values)
+    }
+
     // `connected_accounts` has CHECK constraints on provider/status, and
     // timestamps are parsed RFC3339-first — a row failing the parse is
     // silently dropped from list_accounts, so be explicit.
-    sqlx::query(
+    conn.execute_raw(stmt(
         "INSERT INTO connected_accounts (id, provider, email_address, status, created_at, updated_at) \
          VALUES (?1, 'gmail', 'user@example.com', 'connected', \
                  '2026-07-01T00:00:00+00:00', '2026-07-01T00:00:00+00:00')",
-    )
-    .bind(ACCOUNT_ID)
-    .execute(pool)
+        [ACCOUNT_ID.into()],
+    ))
     .await
     .expect("seed account");
 
@@ -109,45 +117,56 @@ async fn seed(pool: &sqlx::SqlitePool) {
             10,
         ),
     ] {
-        sqlx::query(
+        conn.execute_raw(stmt(
             "INSERT INTO emails (id, account_id, provider, subject, from_addr, from_name, to_addrs, \
              received_at, body_text, is_read, is_starred, has_attachments, embedding_status, \
              category, thread_key) \
              VALUES (?1, ?2, 'gmail', ?3, ?4, ?5, 'me@example.com', datetime('now', ?6), \
                      'body of ' || ?3, 0, 0, 0, 'pending', 'Inbox', ?7)",
-        )
-        .bind(id)
-        .bind(ACCOUNT_ID)
-        .bind(subject)
-        .bind(from_addr)
-        .bind(from_name)
-        .bind(format!("-{ago} minutes"))
-        .bind(thread)
-        .execute(pool)
+            [
+                id.into(),
+                ACCOUNT_ID.into(),
+                subject.into(),
+                from_addr.into(),
+                from_name.into(),
+                format!("-{ago} minutes").into(),
+                thread.into(),
+            ],
+        ))
         .await
         .expect("seed email");
     }
 
     // Sentinel values so the redaction assertion is real, not decorative.
-    sqlx::query(
+    conn.execute_raw(stmt(
         "INSERT INTO attachments (id, email_id, account_id, filename, content_type, size_bytes, \
          is_inline, storage_path, provider_attachment_id, fetch_status) \
          VALUES ('att-1', 'email-1', ?1, 'report.pdf', 'application/pdf', 2048, FALSE, \
                  '/var/data/SENTINEL-PATH/report.pdf', 'SENTINEL-PROVIDER-ID', 'fetched')",
-    )
-    .bind(ACCOUNT_ID)
-    .execute(pool)
+        [ACCOUNT_ID.into()],
+    ))
     .await
     .expect("seed attachment");
 }
 
-async fn audit_rows(pool: &sqlx::SqlitePool) -> Vec<(String, String, String)> {
-    sqlx::query_as::<_, (String, String, String)>(
-        "SELECT tool_name, result_status, source FROM mcp_tool_audit ORDER BY id",
-    )
-    .fetch_all(pool)
+async fn audit_rows(conn: &sea_orm::DatabaseConnection) -> Vec<(String, String, String)> {
+    use sea_orm::ConnectionTrait;
+
+    conn.query_all_raw(sea_orm::Statement::from_string(
+        sea_orm::DatabaseBackend::Sqlite,
+        "SELECT tool_name, result_status, source FROM mcp_tool_audit ORDER BY id".to_owned(),
+    ))
     .await
     .expect("audit query")
+    .iter()
+    .map(|row| {
+        (
+            row.try_get_by_index(0).expect("tool_name"),
+            row.try_get_by_index(1).expect("result_status"),
+            row.try_get_by_index(2).expect("source"),
+        )
+    })
+    .collect()
 }
 
 struct Env {
@@ -163,7 +182,7 @@ struct Env {
 impl Env {
     async fn new(config: ToolsConfig, limiter: Option<Arc<ToolRateLimiter>>) -> Self {
         let (_dir, db) = migrated_db().await;
-        seed(db.pool()).await;
+        seed(&db.sea_orm()).await;
         let ctx = Arc::new(
             ToolContext::new(db.clone())
                 .with_oauth(Arc::new(OAuthManager::new((*db).clone(), None))),
@@ -587,7 +606,7 @@ async fn rate_limits_are_shared_across_surfaces_and_sessions() {
     );
 
     // The trail tells the same story the clients saw.
-    let rows = audit_rows(env.db.pool()).await;
+    let rows = audit_rows(&env.db.sea_orm()).await;
     let statuses: Vec<&str> = rows.iter().map(|(_, st, _)| st.as_str()).collect();
     assert_eq!(
         statuses,
@@ -643,7 +662,7 @@ async fn throttled_thread_reads_are_tagged_on_all_four_axes() {
     assert_eq!(err_kind(&throttled), "rate_limited");
 
     // Axes 3 + 4: the audit row agrees with the client, and stays a resource.
-    let rows = audit_rows(env.db.pool()).await;
+    let rows = audit_rows(&env.db.sea_orm()).await;
     let last = rows.last().expect("audit row for the throttled read");
     assert_eq!(last.0, "resource:thread_read");
     assert_eq!(last.1, "rate_limited");
@@ -702,7 +721,7 @@ async fn resources_read_end_to_end_with_policy_grade_errors() {
     assert_eq!(err_kind(&garbage), "not_found");
 
     // Resource reads are attributed as resources in the trail.
-    let rows = audit_rows(env.db.pool()).await;
+    let rows = audit_rows(&env.db.sea_orm()).await;
     assert!(
         rows.iter().any(|(_, _, src)| src == "resource"),
         "no resource-sourced audit rows: {rows:?}"
@@ -744,25 +763,33 @@ async fn prompts_are_listed_and_retrievable() {
 // Tests — read-only and redaction guarantees
 // ---------------------------------------------------------------------------
 
+async fn count_cleanup_plans(conn: &sea_orm::DatabaseConnection) -> Result<i64, sea_orm::DbErr> {
+    use sea_orm::ConnectionTrait;
+
+    Ok(conn
+        .query_one_raw(sea_orm::Statement::from_string(
+            sea_orm::DatabaseBackend::Sqlite,
+            "SELECT COUNT(*) AS cnt FROM cleanup_plans".to_owned(),
+        ))
+        .await?
+        .map(|row| row.try_get_by_index(0))
+        .transpose()?
+        .unwrap_or(0))
+}
+
 #[tokio::test]
 async fn preview_cleanup_plan_is_strictly_read_only() {
     let env = Env::default_env().await;
     let s = env.open_session().await;
 
-    let before: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM cleanup_plans")
-        .fetch_one(env.db.pool())
-        .await
-        .expect("count");
+    let before: i64 = count_cleanup_plans(&env.db.sea_orm()).await.expect("count");
 
     let resp = env
         .call_tool(&s, "preview_cleanup_plan", json!({"user_id": "test-user"}))
         .await;
     ok(&resp);
 
-    let after: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM cleanup_plans")
-        .fetch_one(env.db.pool())
-        .await
-        .expect("count");
+    let after: i64 = count_cleanup_plans(&env.db.sea_orm()).await.expect("count");
     assert_eq!(
         before, after,
         "preview persisted a plan — the dry-run guarantee is broken"

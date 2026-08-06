@@ -13,7 +13,33 @@
 //! - `Relation` enums stay empty until a join is actually needed;
 //! - columns are added as call sites port over — never speculatively.
 
+pub mod ab_test_results;
+pub mod ab_tests;
+pub mod ai_audit_log;
+pub mod ai_consent;
+pub mod ai_metadata;
+pub mod app_settings;
+pub mod attachments;
+pub mod background_jobs;
+pub mod category_centroids;
 pub mod cleanup_apply_jobs;
+pub mod cleanup_audit_log;
 pub mod cleanup_plan_account_etags;
 pub mod cleanup_plan_operations;
 pub mod cleanup_plans;
+pub mod cloud_api_audit_log;
+pub mod connected_accounts;
+pub mod consent_decisions;
+pub mod emails;
+pub mod ingestion_checkpoints;
+pub mod mcp_tool_audit;
+pub mod privacy_audit_log;
+pub mod processing_checkpoints;
+pub mod rules;
+pub mod search_interactions;
+pub mod sync_conflicts;
+pub mod sync_queue;
+pub mod sync_state;
+pub mod topic_clusters;
+pub mod user_learning_models;
+pub mod vector_backups;

@@ -22,6 +22,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::Utc;
+use sea_orm::sea_query::Expr;
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use thiserror::Error;
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
@@ -33,6 +35,7 @@ use crate::cleanup::domain::operation::{
 };
 use crate::cleanup::domain::plan::{JobCounts, JobId, PlanId};
 use crate::cleanup::repository::CleanupPlanRepository;
+use crate::db::entities::emails;
 use crate::email::provider::{MoveKind as ProvMoveKind, ProviderError};
 use crate::email::unsubscribe::{SubscriptionTarget, UnsubscribeService};
 
@@ -648,47 +651,30 @@ impl AccountWorker {
 /// Mark an email `is_archived` locally after a successful provider archive. Best-effort:
 /// errors are swallowed (matching this call site's pre-existing `let _ =` behavior — the
 /// provider-side archive already succeeded, so a failure here is a local cache staleness,
-/// not an apply failure). `is_archived` is a real BOOLEAN column in both dialects, so this
-/// binds `true` rather than embedding a `1` literal — Postgres rejects an integer literal
-/// against a BOOLEAN column (ADR-035).
+/// not an apply failure).
+///
+/// `labels` is REPLACED by the single value `'ARCHIVED'`, not appended to — the pre-port
+/// behavior, preserved deliberately.
+///
+/// `is_archived` is a real BOOLEAN column in both dialects, and the `emails` entity declares
+/// it `bool`, so SeaORM encodes the right per-backend value: Postgres rejects an integer
+/// literal against a BOOLEAN column (ADR-035, now entity-owned per ADR-036).
 async fn mark_archived_locally(db: &crate::db::Database, email_id: &str) {
-    let sql = db.adapt("UPDATE emails SET labels = 'ARCHIVED', is_archived = ? WHERE id = ?");
-    match db {
-        crate::db::Database::Sqlite(pool) => {
-            let _ = sqlx::query(crate::db::audited_sql(&sql))
-                .bind(true)
-                .bind(email_id)
-                .execute(pool)
-                .await;
-        }
-        crate::db::Database::Postgres(pool) => {
-            let _ = sqlx::query(crate::db::audited_sql(&sql))
-                .bind(true)
-                .bind(email_id)
-                .execute(pool)
-                .await;
-        }
-    }
+    let _ = emails::Entity::update_many()
+        .col_expr(emails::Column::Labels, Expr::value("ARCHIVED"))
+        .col_expr(emails::Column::IsArchived, Expr::value(true))
+        .filter(emails::Column::Id.eq(email_id))
+        .exec(&db.sea_orm())
+        .await;
 }
 
 /// Remove an email from the local cache after a successful permanent provider delete.
 /// Best-effort, matching `mark_archived_locally`'s error-swallowing rationale.
 async fn delete_locally(db: &crate::db::Database, email_id: &str) {
-    let sql = db.adapt("DELETE FROM emails WHERE id = ?");
-    match db {
-        crate::db::Database::Sqlite(pool) => {
-            let _ = sqlx::query(crate::db::audited_sql(&sql))
-                .bind(email_id)
-                .execute(pool)
-                .await;
-        }
-        crate::db::Database::Postgres(pool) => {
-            let _ = sqlx::query(crate::db::audited_sql(&sql))
-                .bind(email_id)
-                .execute(pool)
-                .await;
-        }
-    }
+    let _ = emails::Entity::delete_many()
+        .filter(emails::Column::Id.eq(email_id))
+        .exec(&db.sea_orm())
+        .await;
 }
 
 #[allow(dead_code)] // Skipped variant reserved for precondition checks (ADR-030 §8 rule 4).
@@ -737,5 +723,119 @@ fn group_key(op: &PlannedOperation) -> String {
             S::ArchiveStrategy { strategy } => format!("strategy:{strategy:?}"),
             S::Manual => String::new(),
         },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests — behavior pins for the two local-cache helpers.
+//
+// These reach the database directly rather than through `AccountWorker::run`:
+// the orchestrator-level tests all run with `MockEmailProviderFactory::no_op()`,
+// whose `NotFound` short-circuits `dispatch` before either helper is reached,
+// so nothing above this line exercises them.
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::Database;
+    use sea_orm::{ActiveModelTrait, ActiveValue::Set, DatabaseConnection};
+
+    /// In-memory SQLite carrying every migration the `emails` entity spans (see
+    /// `rules::executor`'s identical helper for why each one is needed).
+    async fn fresh_db() -> Database {
+        let db = crate::db::test_sqlite_database().await;
+        let conn = db.sea_orm();
+        crate::db::apply_sqlite_migrations(
+            &conn,
+            &[
+                include_str!("../../../migrations/sqlite/001_initial_schema.sql"),
+                include_str!("../../../migrations/sqlite/016_soft_delete_trash_spam.sql"),
+                include_str!("../../../migrations/sqlite/018_unsubscribe_headers.sql"),
+                include_str!("../../../migrations/sqlite/021_thread_key.sql"),
+                include_str!("../../../migrations/sqlite/027_is_archived.sql"),
+            ],
+        )
+        .await
+        .expect("migrate");
+        db
+    }
+
+    async fn seed_email(conn: &DatabaseConnection, id: &str, labels: &str) {
+        emails::ActiveModel {
+            id: Set(id.to_owned()),
+            account_id: Set("acct-1".to_owned()),
+            provider: Set("gmail".to_owned()),
+            subject: Set(format!("subject {id}")),
+            from_addr: Set("sender@example.com".to_owned()),
+            to_addrs: Set("me@example.com".to_owned()),
+            received_at: Set(Utc::now().naive_utc()),
+            labels: Set(Some(labels.to_owned())),
+            is_read: Set(Some(false)),
+            is_starred: Set(Some(false)),
+            is_spam: Set(0),
+            is_trash: Set(0),
+            folder: Set("INBOX".to_owned()),
+            is_archived: Set(false),
+            ..Default::default()
+        }
+        .insert(conn)
+        .await
+        .expect("seed email");
+    }
+
+    async fn load(conn: &DatabaseConnection, id: &str) -> Option<emails::Model> {
+        emails::Entity::find_by_id(id)
+            .one(conn)
+            .await
+            .expect("load")
+    }
+
+    #[tokio::test]
+    async fn mark_archived_locally_sets_the_flag_and_replaces_labels() {
+        let db = fresh_db().await;
+        let conn = db.sea_orm();
+        seed_email(&conn, "e1", "INBOX,IMPORTANT").await;
+        seed_email(&conn, "e2", "INBOX").await;
+
+        mark_archived_locally(&db, "e1").await;
+
+        let target = load(&conn, "e1").await.expect("row present");
+        assert!(target.is_archived);
+        // Wholesale replacement, NOT an append — pre-port behavior, preserved.
+        assert_eq!(target.labels.as_deref(), Some("ARCHIVED"));
+
+        let bystander = load(&conn, "e2").await.expect("row present");
+        assert!(!bystander.is_archived);
+        assert_eq!(bystander.labels.as_deref(), Some("INBOX"));
+    }
+
+    #[tokio::test]
+    async fn delete_locally_removes_only_the_target_row() {
+        let db = fresh_db().await;
+        let conn = db.sea_orm();
+        seed_email(&conn, "e1", "INBOX").await;
+        seed_email(&conn, "e2", "INBOX").await;
+
+        delete_locally(&db, "e1").await;
+
+        assert!(load(&conn, "e1").await.is_none());
+        assert!(load(&conn, "e2").await.is_some());
+    }
+
+    #[tokio::test]
+    async fn local_helpers_are_silent_no_ops_for_an_unknown_email() {
+        // Both are best-effort: a miss must not panic (they swallow errors and
+        // return `()`, so "no panic" is the whole observable contract).
+        let db = fresh_db().await;
+        let conn = db.sea_orm();
+        seed_email(&conn, "e1", "INBOX").await;
+
+        mark_archived_locally(&db, "does-not-exist").await;
+        delete_locally(&db, "does-not-exist").await;
+
+        let untouched = load(&conn, "e1").await.expect("row present");
+        assert!(!untouched.is_archived);
+        assert_eq!(untouched.labels.as_deref(), Some("INBOX"));
     }
 }

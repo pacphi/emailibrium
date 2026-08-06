@@ -107,30 +107,33 @@ async fn list_clusters(
         .flat_map(|c| c.representative_email_ids.iter().cloned())
         .collect();
 
-    let email_meta: std::collections::HashMap<String, (String, String, Option<String>)> =
-        if !all_rep_ids.is_empty() {
-            let placeholders: Vec<String> =
-                (1..=all_rep_ids.len()).map(|i| format!("?{i}")).collect();
-            let sql = format!(
-                "SELECT id, subject, from_addr, from_name FROM emails WHERE id IN ({})",
-                placeholders.join(", ")
-            );
-            let mut query = sqlx::query_as::<_, (String, String, String, Option<String>)>(
-                crate::db::audited_sql(&sql),
-            );
-            for id in &all_rep_ids {
-                query = query.bind(id);
-            }
-            query
-                .fetch_all(state.db.pool())
+    let email_meta: std::collections::HashMap<String, (String, String, Option<String>)> = {
+        use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QuerySelect};
+
+        use crate::db::entities::emails;
+
+        let mut meta = std::collections::HashMap::new();
+        // Chunked IN lists: PostgreSQL caps a statement at 65535 bind
+        // parameters, and cluster membership is unbounded. Results land in a
+        // HashMap, so per-chunk ordering is irrelevant.
+        for chunk in all_rep_ids.chunks(500) {
+            let rows: Vec<(String, String, String, Option<String>)> = emails::Entity::find()
+                .select_only()
+                .column(emails::Column::Id)
+                .column(emails::Column::Subject)
+                .column(emails::Column::FromAddr)
+                .column(emails::Column::FromName)
+                .filter(emails::Column::Id.is_in(chunk.iter().map(String::as_str)))
+                .into_tuple()
+                .all(&state.orm)
                 .await
-                .unwrap_or_default()
-                .into_iter()
-                .map(|(id, subject, from_addr, from_name)| (id, (subject, from_addr, from_name)))
-                .collect()
-        } else {
-            std::collections::HashMap::new()
-        };
+                .unwrap_or_default();
+            for (id, subject, from_addr, from_name) in rows {
+                meta.insert(id, (subject, from_addr, from_name));
+            }
+        }
+        meta
+    };
 
     let summaries: Vec<ClusterSummary> = clusters
         .iter()

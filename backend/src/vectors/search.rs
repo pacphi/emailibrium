@@ -13,10 +13,15 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Timelike, Utc};
+use sea_orm::{
+    ColumnTrait, Condition, ConnectionTrait, DatabaseBackend, DatabaseConnection, EntityTrait,
+    QueryFilter, QueryOrder, QuerySelect, Statement,
+};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
+use crate::db::entities::emails;
 use crate::db::Database;
 
 use super::categorizer::cosine_similarity;
@@ -364,10 +369,12 @@ fn reciprocal_rank_fusion_detailed(
 // ---------------------------------------------------------------------------
 
 /// Orchestrates hybrid FTS + vector search with RRF fusion (ADR-001).
+///
+/// Persistence is single-code-path SeaORM (ADR-036).
 pub struct HybridSearch {
     store: Arc<dyn VectorStoreBackend>,
     embedding: Arc<EmbeddingPipeline>,
-    db: Arc<Database>,
+    conn: DatabaseConnection,
     config: SearchConfig,
     /// Optional cross-encoder reranker applied after RRF fusion (ADR-029 Phase C).
     reranker: Option<Arc<dyn Reranker>>,
@@ -384,7 +391,7 @@ impl HybridSearch {
         Self {
             store,
             embedding,
-            db,
+            conn: db.sea_orm(),
             config,
             reranker: None,
         }
@@ -401,7 +408,7 @@ impl HybridSearch {
         Self {
             store,
             embedding,
-            db,
+            conn: db.sea_orm(),
             config,
             reranker: Some(reranker),
         }
@@ -832,39 +839,55 @@ impl HybridSearch {
     /// The `rank` column is the built-in BM25 score provided by FTS5
     /// (negative values where more-negative = better match). We negate
     /// so that higher is better, consistent with the rest of the pipeline.
+    ///
+    /// Raw-SQL escape hatch (ADR-036 §5 / ADR-035 catalog): `MATCH` over an
+    /// FTS5 virtual table has no portable query-builder form and exists only
+    /// on SQLite (ADR-034). On other backends this errors so `fts_search`
+    /// takes the portable LIKE fallback, matching the pre-port no-FTS
+    /// behavior there.
     async fn fts5_search(
         &self,
         query: &str,
         limit: usize,
     ) -> Result<Vec<(String, f32)>, VectorError> {
+        if self.conn.get_database_backend() != DatabaseBackend::Sqlite {
+            return Err(VectorError::ConfigError(
+                "FTS5 keyword search is SQLite-only (ADR-034)".to_string(),
+            ));
+        }
+
         let fts_query = sanitize_fts5_query(query);
         if fts_query.is_empty() {
             return Ok(Vec::new());
         }
 
-        let limit_i64 = limit as i64;
-
         // FTS5 rank values are negative (lower = better). We negate them so
         // that a higher score means a better match, matching the convention
         // used by the vector similarity pipeline.
-        let rows: Vec<(String, f64)> = sqlx::query_as(
-            r#"
+        let rows = self
+            .conn
+            .query_all_raw(Statement::from_sql_and_values(
+                DatabaseBackend::Sqlite,
+                r#"
             SELECT id, -rank AS score
             FROM email_fts
             WHERE email_fts MATCH ?1
             ORDER BY rank
             LIMIT ?2
             "#,
-        )
-        .bind(&fts_query)
-        .bind(limit_i64)
-        .fetch_all(self.db.pool())
-        .await?;
+                [fts_query.into(), (limit as i64).into()],
+            ))
+            .await
+            .map_err(VectorError::Db)?;
 
-        Ok(rows
-            .into_iter()
-            .map(|(id, score)| (id, score as f32))
-            .collect())
+        rows.into_iter()
+            .map(|row| {
+                let id: String = row.try_get("", "id")?;
+                let score: f64 = row.try_get("", "score")?;
+                Ok((id, score as f32))
+            })
+            .collect::<Result<Vec<_>, sea_orm::DbErr>>()
+            .map_err(VectorError::Db)
     }
 
     /// Legacy LIKE-based keyword search (fallback when FTS5 is unavailable).
@@ -887,33 +910,29 @@ impl HybridSearch {
             return Ok(Vec::new());
         }
 
-        // Build OR conditions for each keyword across all searchable columns.
-        let mut conditions: Vec<String> = Vec::new();
-        let mut bind_values: Vec<String> = Vec::new();
-        for (i, kw) in keywords.iter().enumerate() {
-            let p = i + 1; // 1-based parameter index
-            conditions.push(format!(
-                "(subject LIKE ?{p} OR from_name LIKE ?{p} OR from_addr LIKE ?{p} OR body_text LIKE ?{p})"
-            ));
-            bind_values.push(format!("%{kw}%"));
+        // Any keyword matching any searchable column produces a hit.
+        let mut any_keyword = Condition::any();
+        for kw in &keywords {
+            let pat = format!("%{kw}%");
+            any_keyword = any_keyword.add(
+                Condition::any()
+                    .add(emails::Column::Subject.like(pat.as_str()))
+                    .add(emails::Column::FromName.like(pat.as_str()))
+                    .add(emails::Column::FromAddr.like(pat.as_str()))
+                    .add(emails::Column::BodyText.like(pat.as_str())),
+            );
         }
 
-        let sql = format!(
-            "SELECT id FROM emails WHERE {} ORDER BY received_at DESC LIMIT ?{}",
-            conditions.join(" OR "),
-            keywords.len() + 1
-        );
-        let limit_i64 = limit as i64;
-
-        // Dynamic SQL: static column names + `?N` placeholders only; all
-        // keyword/limit values are bound below. See `crate::db::audited_sql`.
-        let mut q = sqlx::query_as::<_, (String,)>(crate::db::audited_sql(&sql));
-        for val in &bind_values {
-            q = q.bind(val.as_str());
-        }
-        q = q.bind(limit_i64);
-
-        let rows: Vec<(String,)> = q.fetch_all(self.db.pool()).await?;
+        let rows: Vec<(String,)> = emails::Entity::find()
+            .select_only()
+            .column(emails::Column::Id)
+            .filter(any_keyword)
+            .order_by_desc(emails::Column::ReceivedAt)
+            .limit(limit as u64)
+            .into_tuple()
+            .all(&self.conn)
+            .await
+            .map_err(VectorError::Db)?;
 
         // Assign descending rank scores (1.0 for first, decaying).
         let total = rows.len() as f32;
@@ -976,26 +995,23 @@ impl HybridSearch {
         ids: &[String],
         filters: &SearchFilters,
     ) -> Result<Vec<String>, VectorError> {
-        // Build dynamic SQL. SQLx doesn't support dynamic IN clauses
-        // elegantly, so we build the query string manually.
-        let placeholders: Vec<String> = ids.iter().map(|_| "?".to_string()).collect();
-        let in_clause = placeholders.join(", ");
+        let mut cond =
+            Condition::all().add(emails::Column::Id.is_in(ids.iter().map(String::as_str)));
 
-        let mut conditions = vec![format!("id IN ({in_clause})")];
-        let mut bind_offset = ids.len();
-
-        if let Some(ref date_from) = filters.date_from {
-            conditions.push(format!(
-                "received_at >= '{}'",
-                date_from.format("%Y-%m-%d %H:%M:%S")
-            ));
+        // The pre-port SQL embedded whole-second literals; truncating the bind
+        // to whole seconds keeps the SQLite wire bytes identical (`%.f` prints
+        // nothing at zero nanoseconds) while giving PostgreSQL a properly
+        // typed timestamp parameter.
+        if let Some(date_from) = filters.date_from {
+            let cutoff = date_from.naive_utc();
+            let cutoff = cutoff.with_nanosecond(0).unwrap_or(cutoff);
+            cond = cond.add(emails::Column::ReceivedAt.gte(cutoff));
         }
 
-        if let Some(ref date_to) = filters.date_to {
-            conditions.push(format!(
-                "received_at <= '{}'",
-                date_to.format("%Y-%m-%d %H:%M:%S")
-            ));
+        if let Some(date_to) = filters.date_to {
+            let cutoff = date_to.naive_utc();
+            let cutoff = cutoff.with_nanosecond(0).unwrap_or(cutoff);
+            cond = cond.add(emails::Column::ReceivedAt.lte(cutoff));
         }
 
         if let Some(ref senders) = filters.senders {
@@ -1004,78 +1020,50 @@ impl HybridSearch {
                 // For multi-word names like "Mind Valley", also try the
                 // space-collapsed form "MindValley" to handle cases where
                 // the stored name has no space.
-                let mut like_clauses: Vec<String> = Vec::new();
-                for _ in senders {
-                    like_clauses.push("from_addr LIKE ?".to_string());
-                    like_clauses.push("from_name LIKE ?".to_string());
+                let mut like_any = Condition::any();
+                for sender in senders {
+                    let pat = format!("%{sender}%");
+                    like_any = like_any
+                        .add(emails::Column::FromAddr.like(pat.as_str()))
+                        .add(emails::Column::FromName.like(pat.as_str()));
                 }
-                // Add space-collapsed variants for multi-word senders.
-                let multi_word: Vec<&String> = senders.iter().filter(|s| s.contains(' ')).collect();
-                for _ in &multi_word {
-                    like_clauses.push("from_addr LIKE ?".to_string());
-                    like_clauses.push("from_name LIKE ?".to_string());
+                for sender in senders.iter().filter(|s| s.contains(' ')) {
+                    let collapsed: String = sender.split_whitespace().collect();
+                    let pat = format!("%{collapsed}%");
+                    like_any = like_any
+                        .add(emails::Column::FromAddr.like(pat.as_str()))
+                        .add(emails::Column::FromName.like(pat.as_str()));
                 }
-                conditions.push(format!("({})", like_clauses.join(" OR ")));
-                bind_offset += senders.len() * 2 + multi_word.len() * 2;
+                cond = cond.add(like_any);
             }
         }
 
         if let Some(ref categories) = filters.categories {
             if !categories.is_empty() {
-                let cat_placeholders: Vec<String> =
-                    categories.iter().map(|_| "?".to_string()).collect();
-                conditions.push(format!("category IN ({})", cat_placeholders.join(", ")));
-                bind_offset += categories.len();
+                cond =
+                    cond.add(emails::Column::Category.is_in(categories.iter().map(String::as_str)));
             }
         }
 
+        // BOOLEAN columns take boolean binds — the pre-port integer literals
+        // (`has_attachments = 0`) are a type error on PostgreSQL.
         if let Some(has_attachment) = filters.has_attachment {
-            conditions.push(format!("has_attachments = {}", has_attachment as i32));
+            cond = cond.add(emails::Column::HasAttachments.eq(has_attachment));
         }
 
         if let Some(is_read) = filters.is_read {
-            conditions.push(format!("is_read = {}", is_read as i32));
+            cond = cond.add(emails::Column::IsRead.eq(is_read));
         }
 
-        let _ = bind_offset; // suppress unused warning
-
-        let sql = format!("SELECT id FROM emails WHERE {}", conditions.join(" AND "));
-
-        // Use raw query with dynamic bindings.
-        // Dynamic SQL: static column names, `?` placeholders, and bool-as-int
-        // literals (0/1) only; all string values are bound below. See
-        // `crate::db::audited_sql`.
-        let mut query = sqlx::query_scalar::<_, String>(crate::db::audited_sql(&sql));
-
-        // Bind the email IDs.
-        for id in ids {
-            query = query.bind(id.as_str());
-        }
-
-        // Bind sender values: LIKE patterns for from_addr and from_name,
-        // plus space-collapsed variants for multi-word names.
-        if let Some(ref senders) = filters.senders {
-            for sender in senders {
-                query = query.bind(format!("%{sender}%")); // from_addr
-                query = query.bind(format!("%{sender}%")); // from_name
-            }
-            // Bind space-collapsed variants (e.g. "Mind Valley" → "MindValley")
-            for sender in senders.iter().filter(|s| s.contains(' ')) {
-                let collapsed: String = sender.split_whitespace().collect();
-                query = query.bind(format!("%{collapsed}%")); // from_addr
-                query = query.bind(format!("%{collapsed}%")); // from_name
-            }
-        }
-
-        // Bind category values.
-        if let Some(ref categories) = filters.categories {
-            for cat in categories {
-                query = query.bind(cat.as_str());
-            }
-        }
-
-        let result = query.fetch_all(self.db.pool()).await?;
-        Ok(result)
+        let rows: Vec<(String,)> = emails::Entity::find()
+            .select_only()
+            .column(emails::Column::Id)
+            .filter(cond)
+            .into_tuple()
+            .all(&self.conn)
+            .await
+            .map_err(VectorError::Db)?;
+        Ok(rows.into_iter().map(|(id,)| id).collect())
     }
 }
 
@@ -1459,9 +1447,10 @@ mod tests {
                 .await
                 .expect("in-memory DB"),
         );
+        let conn = db.sea_orm();
 
         // Create the emails table for FTS queries.
-        sqlx::query(
+        conn.execute_unprepared(
             r#"
             CREATE TABLE IF NOT EXISTS emails (
                 id TEXT PRIMARY KEY,
@@ -1478,12 +1467,11 @@ mod tests {
             )
             "#,
         )
-        .execute(db.pool())
         .await
         .unwrap();
 
         // Create FTS5 virtual table and sync triggers (mirrors migration 005).
-        sqlx::query(
+        conn.execute_unprepared(
             r#"
             CREATE VIRTUAL TABLE IF NOT EXISTS email_fts USING fts5(
                 id,
@@ -1497,11 +1485,10 @@ mod tests {
             )
             "#,
         )
-        .execute(db.pool())
         .await
         .unwrap();
 
-        sqlx::query(
+        conn.execute_unprepared(
             r#"
             CREATE TRIGGER IF NOT EXISTS emails_ai AFTER INSERT ON emails BEGIN
                 INSERT INTO email_fts(rowid, id, subject, from_addr, body_text, labels)
@@ -1509,11 +1496,10 @@ mod tests {
             END
             "#,
         )
-        .execute(db.pool())
         .await
         .unwrap();
 
-        sqlx::query(
+        conn.execute_unprepared(
             r#"
             CREATE TRIGGER IF NOT EXISTS emails_ad AFTER DELETE ON emails BEGIN
                 INSERT INTO email_fts(email_fts, rowid, id, subject, from_addr, body_text, labels)
@@ -1521,11 +1507,10 @@ mod tests {
             END
             "#,
         )
-        .execute(db.pool())
         .await
         .unwrap();
 
-        sqlx::query(
+        conn.execute_unprepared(
             r#"
             CREATE TRIGGER IF NOT EXISTS emails_au AFTER UPDATE ON emails BEGIN
                 INSERT INTO email_fts(email_fts, rowid, id, subject, from_addr, body_text, labels)
@@ -1535,7 +1520,6 @@ mod tests {
             END
             "#,
         )
-        .execute(db.pool())
         .await
         .unwrap();
 
@@ -1552,12 +1536,12 @@ mod tests {
         from_addr: &str,
         body: &str,
     ) {
-        sqlx::query("INSERT INTO emails (id, subject, from_addr, body_text) VALUES (?, ?, ?, ?)")
-            .bind(id)
-            .bind(subject)
-            .bind(from_addr)
-            .bind(body)
-            .execute(hs.db.pool())
+        hs.conn
+            .execute_raw(Statement::from_sql_and_values(
+                DatabaseBackend::Sqlite,
+                "INSERT INTO emails (id, subject, from_addr, body_text) VALUES (?, ?, ?, ?)",
+                [id.into(), subject.into(), from_addr.into(), body.into()],
+            ))
             .await
             .unwrap();
     }
@@ -1715,6 +1699,82 @@ mod tests {
         // e2 should appear (found by FTS keyword match on "meeting").
         let has_e2 = result.results.iter().any(|r| r.email_id == "e2");
         assert!(has_e2, "e2 should be found via FTS keyword search");
+    }
+
+    /// Filter pins for `filter_email_ids` — the block the port rewrote most
+    /// for PostgreSQL (typed date cutoffs, boolean binds). `date_from` must
+    /// keep NEWER emails (gte, not lte), and `is_read: false` must exclude
+    /// read emails.
+    #[tokio::test]
+    async fn test_hybrid_filters_pin_date_direction_and_is_read() {
+        let (hs, _store) = make_hybrid_search().await;
+        insert_test_email(
+            &hs,
+            "old-unread",
+            "meeting notes",
+            "a@x.com",
+            "meeting body",
+        )
+        .await;
+        insert_test_email(&hs, "new-read", "meeting agenda", "b@x.com", "meeting body").await;
+        hs.conn
+            .execute_unprepared(
+                "UPDATE emails SET received_at = '2020-01-01 00:00:00', is_read = 0 \
+                 WHERE id = 'old-unread'",
+            )
+            .await
+            .unwrap();
+        hs.conn
+            .execute_unprepared(
+                "UPDATE emails SET received_at = '2026-01-01 00:00:00', is_read = 1 \
+                 WHERE id = 'new-read'",
+            )
+            .await
+            .unwrap();
+
+        let date_from = chrono::DateTime::parse_from_rfc3339("2025-01-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let query = HybridSearchQuery {
+            text: "meeting".to_string(),
+            mode: SearchMode::Hybrid,
+            filters: Some(SearchFilters {
+                date_from: Some(date_from),
+                ..SearchFilters::default()
+            }),
+            limit: Some(10),
+            vector_weight: 1.0,
+            fts_weight: 1.0,
+        };
+        let result = hs.search(&query).await.unwrap();
+        let ids: Vec<&str> = result.results.iter().map(|r| r.email_id.as_str()).collect();
+        assert!(ids.contains(&"new-read"), "date_from keeps newer emails");
+        assert!(
+            !ids.contains(&"old-unread"),
+            "date_from must EXCLUDE older emails — gte, not lte"
+        );
+
+        let query = HybridSearchQuery {
+            text: "meeting".to_string(),
+            mode: SearchMode::Hybrid,
+            filters: Some(SearchFilters {
+                is_read: Some(false),
+                ..SearchFilters::default()
+            }),
+            limit: Some(10),
+            vector_weight: 1.0,
+            fts_weight: 1.0,
+        };
+        let result = hs.search(&query).await.unwrap();
+        let ids: Vec<&str> = result.results.iter().map(|r| r.email_id.as_str()).collect();
+        assert!(
+            ids.contains(&"old-unread"),
+            "unread email passes is_read: false"
+        );
+        assert!(
+            !ids.contains(&"new-read"),
+            "is_read: false must exclude read emails"
+        );
     }
 
     #[tokio::test]
@@ -2013,9 +2073,10 @@ mod tests {
                 .await
                 .expect("in-memory DB"),
         );
+        let conn = db.sea_orm();
 
         // Create emails table and FTS.
-        sqlx::query(
+        conn.execute_unprepared(
             "CREATE TABLE IF NOT EXISTS emails (
                 id TEXT PRIMARY KEY,
                 account_id TEXT NOT NULL DEFAULT '',
@@ -2030,7 +2091,6 @@ mod tests {
                 is_read BOOLEAN DEFAULT FALSE
             )",
         )
-        .execute(db.pool())
         .await
         .unwrap();
 
@@ -2066,18 +2126,20 @@ mod tests {
         store.insert(doc_aligned).await.unwrap();
         store.insert(doc_other).await.unwrap();
 
-        sqlx::query("INSERT INTO emails (id, subject) VALUES (?, ?)")
-            .bind("aligned")
-            .bind("Budget Report")
-            .execute(db.pool())
-            .await
-            .unwrap();
-        sqlx::query("INSERT INTO emails (id, subject) VALUES (?, ?)")
-            .bind("other")
-            .bind("Cat Pictures")
-            .execute(db.pool())
-            .await
-            .unwrap();
+        conn.execute_raw(Statement::from_sql_and_values(
+            DatabaseBackend::Sqlite,
+            "INSERT INTO emails (id, subject) VALUES (?, ?)",
+            ["aligned".into(), "Budget Report".into()],
+        ))
+        .await
+        .unwrap();
+        conn.execute_raw(Statement::from_sql_and_values(
+            DatabaseBackend::Sqlite,
+            "INSERT INTO emails (id, subject) VALUES (?, ?)",
+            ["other".into(), "Cat Pictures".into()],
+        ))
+        .await
+        .unwrap();
 
         // The preference vector is the "aligned" embedding (user prefers finance).
         let query = HybridSearchQuery {
@@ -2114,7 +2176,8 @@ mod tests {
                 .expect("in-memory DB"),
         );
 
-        sqlx::query(
+        let conn = db.sea_orm();
+        conn.execute_unprepared(
             "CREATE TABLE IF NOT EXISTS emails (
                 id TEXT PRIMARY KEY,
                 account_id TEXT NOT NULL DEFAULT '',
@@ -2129,7 +2192,6 @@ mod tests {
                 is_read BOOLEAN DEFAULT FALSE
             )",
         )
-        .execute(db.pool())
         .await
         .unwrap();
 
@@ -2171,18 +2233,20 @@ mod tests {
         };
         store.insert(doc2).await.unwrap();
 
-        sqlx::query("INSERT INTO emails (id, subject) VALUES (?, ?)")
-            .bind("email_hit")
-            .bind("Budget Review")
-            .execute(db.pool())
-            .await
-            .unwrap();
-        sqlx::query("INSERT INTO emails (id, subject) VALUES (?, ?)")
-            .bind("attachment_hit")
-            .bind("Attachment Budget")
-            .execute(db.pool())
-            .await
-            .unwrap();
+        conn.execute_raw(Statement::from_sql_and_values(
+            DatabaseBackend::Sqlite,
+            "INSERT INTO emails (id, subject) VALUES (?, ?)",
+            ["email_hit".into(), "Budget Review".into()],
+        ))
+        .await
+        .unwrap();
+        conn.execute_raw(Statement::from_sql_and_values(
+            DatabaseBackend::Sqlite,
+            "INSERT INTO emails (id, subject) VALUES (?, ?)",
+            ["attachment_hit".into(), "Attachment Budget".into()],
+        ))
+        .await
+        .unwrap();
 
         let query = HybridSearchQuery {
             text: "quarterly budget review".to_string(),

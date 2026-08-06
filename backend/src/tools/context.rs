@@ -114,9 +114,11 @@ impl ToolContext {
         self
     }
 
-    /// Most handlers only need the pool.
-    pub fn pool(&self) -> &sqlx::SqlitePool {
-        self.db.pool()
+    /// A SeaORM handle over the context's database (ADR-036) — the accessor
+    /// every handler's persistence goes through. Cheap: wraps the pool the
+    /// `Database` already holds.
+    pub fn conn(&self) -> sea_orm::DatabaseConnection {
+        self.db.sea_orm()
     }
 
     /// Vector services, or `NotConfigured` naming what is missing.

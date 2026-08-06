@@ -27,11 +27,12 @@ use crate::cleanup::domain::plan::{
 use crate::cleanup::domain::ports::{
     AccountStateProvider, ClusterRepository, EmailRepository, RuleEvaluator, SubscriptionRepository,
 };
-use crate::cleanup::repository::{
-    SqlxAccountStateProvider, SqlxClusterRepository, SqlxEmailRepository, SqlxRuleEvaluator,
-    SqlxSubscriptionRepository,
+use crate::cleanup::repository::adapters::{
+    SeaOrmAccountStateProvider, SeaOrmClusterRepository, SeaOrmEmailRepository,
+    SeaOrmRuleEvaluator, SeaOrmSubscriptionRepository,
 };
-use crate::db::{audited_sql, Database};
+use crate::db::entities::connected_accounts;
+use crate::db::Database;
 use crate::tools::{ToolContext, ToolError};
 
 /// Build a cleanup plan in memory and summarize it without persisting.
@@ -78,41 +79,55 @@ pub async fn preview_cleanup_plan(
     }))
 }
 
-/// Assemble a `PlanBuilder` over the read-only SQLx adapters.
+/// `(id, provider)` projection of a `connected_accounts` row.
+#[derive(sea_orm::FromQueryResult)]
+struct AccountProviderRow {
+    id: String,
+    provider: String,
+}
+
+/// Assemble a `PlanBuilder` over the read-only adapters.
 ///
 /// Mirrors the REST wiring helper (`cleanup/api/plan.rs`), but takes a `Database`
 /// rather than `AppState`: the plan-build path needs nothing else, and depending
 /// only on the `Database` handle keeps this tool reachable from the library
 /// crate once `cleanup::{domain, repository}` move there.
-async fn plan_builder(db: &Database) -> Result<PlanBuilder, sqlx::Error> {
+async fn plan_builder(db: &Database) -> Result<PlanBuilder, sea_orm::DbErr> {
+    use sea_orm::{EntityTrait, QuerySelect};
+
     // Load per-account providers up front so the lookup closure stays sync.
-    let sql = db.adapt("SELECT id, provider FROM connected_accounts");
-    let rows: Vec<(String, String)> = match db {
-        Database::Sqlite(pool) => sqlx::query_as(audited_sql(&sql)).fetch_all(pool).await?,
-        Database::Postgres(pool) => sqlx::query_as(audited_sql(&sql)).fetch_all(pool).await?,
-    };
+    // One typed projection for both backends (ADR-036) — the former
+    // `match Database::Sqlite/Postgres` around the fetch is gone.
+    let rows = connected_accounts::Entity::find()
+        .select_only()
+        .column(connected_accounts::Column::Id)
+        .column(connected_accounts::Column::Provider)
+        .into_model::<AccountProviderRow>()
+        .all(&db.sea_orm())
+        .await?;
 
     let provider_map: Arc<HashMap<String, Provider>> = Arc::new(
         rows.into_iter()
-            .map(|(id, provider)| {
-                let provider = match provider.as_str() {
+            .map(|row| {
+                let provider = match row.provider.as_str() {
                     "outlook" => Provider::Outlook,
                     "imap" => Provider::Imap,
                     "pop3" => Provider::Pop3,
                     _ => Provider::Gmail,
                 };
-                (id, provider)
+                (row.id, provider)
             })
             .collect(),
     );
 
     Ok(PlanBuilder {
-        emails: Arc::new(SqlxEmailRepository { db: db.clone() }) as Arc<dyn EmailRepository>,
-        subs: Arc::new(SqlxSubscriptionRepository { db: db.clone() })
+        emails: Arc::new(SeaOrmEmailRepository { db: db.clone() }) as Arc<dyn EmailRepository>,
+        subs: Arc::new(SeaOrmSubscriptionRepository { db: db.clone() })
             as Arc<dyn SubscriptionRepository>,
-        clusters: Arc::new(SqlxClusterRepository { db: db.clone() }) as Arc<dyn ClusterRepository>,
-        rules: Arc::new(SqlxRuleEvaluator { db: db.clone() }) as Arc<dyn RuleEvaluator>,
-        accounts: Arc::new(SqlxAccountStateProvider { db: db.clone() })
+        clusters: Arc::new(SeaOrmClusterRepository { db: db.clone() })
+            as Arc<dyn ClusterRepository>,
+        rules: Arc::new(SeaOrmRuleEvaluator { db: db.clone() }) as Arc<dyn RuleEvaluator>,
+        accounts: Arc::new(SeaOrmAccountStateProvider { db: db.clone() })
             as Arc<dyn AccountStateProvider>,
         classifier: Arc::new(RiskClassifier::new()),
         provider_for: Arc::new(move |account_id: &str| {
