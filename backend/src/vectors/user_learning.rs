@@ -9,6 +9,12 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
+use sea_orm::sea_query::OnConflict;
+use sea_orm::ActiveValue::Set;
+use sea_orm::{
+    ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder,
+    QuerySelect,
+};
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 use tracing::debug;
@@ -16,9 +22,10 @@ use tracing::debug;
 use super::error::VectorError;
 use super::learning::{FeedbackAction, LearningConfig};
 
-/// Row tuple for user learning model queries.
-type UserModelRow = (String, String, i64, DateTime<Utc>, DateTime<Utc>);
+/// Row tuple for user learning model queries (`feedback_count` is INTEGER — `i32`).
+type UserModelRow = (String, String, i32, DateTime<Utc>, DateTime<Utc>);
 use super::types::EmailCategory;
+use crate::db::entities::user_learning_models;
 use crate::db::Database;
 
 // ---------------------------------------------------------------------------
@@ -121,11 +128,13 @@ impl UserLearningModel {
 // ---------------------------------------------------------------------------
 
 /// Manages per-user learning models with database persistence.
+///
+/// Persistence is single-code-path SeaORM (ADR-036).
 pub struct UserLearningStore {
     /// In-memory cache of user models.
     models: RwLock<HashMap<String, UserLearningModel>>,
     /// Database for persistence.
-    db: Arc<Database>,
+    conn: DatabaseConnection,
     /// Shared learning configuration.
     config: LearningConfig,
 }
@@ -135,15 +144,21 @@ impl UserLearningStore {
     pub fn new(db: Arc<Database>, config: LearningConfig) -> Self {
         Self {
             models: RwLock::new(HashMap::new()),
-            db,
+            conn: db.sea_orm(),
             config,
         }
     }
 
     /// Ensure the per-user learning table exists.
+    ///
+    /// Raw-DDL escape hatch (ADR-036 §5): migration 007 is the authoritative
+    /// schema; this defensive `IF NOT EXISTS` replay exists for databases
+    /// that have not run migrations (tests use it). The DDL text is portable
+    /// as-is (composite PK, no auto-increment).
     pub async fn ensure_table(&self) -> Result<(), VectorError> {
-        sqlx::query(
-            "CREATE TABLE IF NOT EXISTS user_learning_models (
+        self.conn
+            .execute_unprepared(
+                "CREATE TABLE IF NOT EXISTS user_learning_models (
                 user_id TEXT NOT NULL,
                 category TEXT NOT NULL,
                 offset_json TEXT NOT NULL,
@@ -152,15 +167,16 @@ impl UserLearningStore {
                 updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY (user_id, category)
             )",
-        )
-        .execute(self.db.pool())
-        .await?;
+            )
+            .await
+            .map_err(VectorError::Db)?;
 
-        sqlx::query(
-            "CREATE INDEX IF NOT EXISTS idx_user_learning_user ON user_learning_models(user_id)",
-        )
-        .execute(self.db.pool())
-        .await?;
+        self.conn
+            .execute_unprepared(
+                "CREATE INDEX IF NOT EXISTS idx_user_learning_user ON user_learning_models(user_id)",
+            )
+            .await
+            .map_err(VectorError::Db)?;
 
         Ok(())
     }
@@ -257,13 +273,21 @@ impl UserLearningStore {
 
     /// Load a user model from the database.
     async fn load_from_db(&self, user_id: &str) -> Result<UserLearningModel, VectorError> {
-        let rows: Vec<UserModelRow> = sqlx::query_as(
-            "SELECT category, offset_json, feedback_count, created_at, updated_at
-             FROM user_learning_models WHERE user_id = ?",
-        )
-        .bind(user_id)
-        .fetch_all(self.db.pool())
-        .await?;
+        // `created_at`/`updated_at` decode as `DateTime<Utc>` leniently on
+        // the SQLite path (RFC3339 rows keep their instant, naive rows read
+        // as UTC).
+        let rows: Vec<UserModelRow> = user_learning_models::Entity::find()
+            .select_only()
+            .column(user_learning_models::Column::Category)
+            .column(user_learning_models::Column::OffsetJson)
+            .column(user_learning_models::Column::FeedbackCount)
+            .column(user_learning_models::Column::CreatedAt)
+            .column(user_learning_models::Column::UpdatedAt)
+            .filter(user_learning_models::Column::UserId.eq(user_id))
+            .into_tuple()
+            .all(&self.conn)
+            .await
+            .map_err(VectorError::Db)?;
 
         if rows.is_empty() {
             return Err(VectorError::NotFound(format!(
@@ -321,31 +345,46 @@ impl UserLearningStore {
         // Remove surrounding quotes from the category string.
         let cat_str = cat_str.trim_matches('"');
 
-        sqlx::query(
-            "INSERT INTO user_learning_models (user_id, category, offset_json, feedback_count, updated_at)
-             VALUES (?, ?, ?, ?, ?)
-             ON CONFLICT(user_id, category) DO UPDATE SET
-                offset_json = excluded.offset_json,
-                feedback_count = excluded.feedback_count,
-                updated_at = excluded.updated_at",
+        // `created_at` stays unset so the DDL default applies (as pre-port);
+        // `updated_at` is a plain TIMESTAMP — naive-UTC bind.
+        user_learning_models::Entity::insert(user_learning_models::ActiveModel {
+            user_id: Set(user_id.to_owned()),
+            category: Set(cat_str.to_owned()),
+            offset_json: Set(offset_json),
+            feedback_count: Set(offset.feedback_count as i32),
+            updated_at: Set(offset.updated_at.naive_utc()),
+            ..Default::default()
+        })
+        .on_conflict(
+            OnConflict::columns([
+                user_learning_models::Column::UserId,
+                user_learning_models::Column::Category,
+            ])
+            .update_columns([
+                user_learning_models::Column::OffsetJson,
+                user_learning_models::Column::FeedbackCount,
+                user_learning_models::Column::UpdatedAt,
+            ])
+            .to_owned(),
         )
-        .bind(user_id)
-        .bind(cat_str)
-        .bind(&offset_json)
-        .bind(offset.feedback_count as i64)
-        .bind(offset.updated_at)
-        .execute(self.db.pool())
-        .await?;
+        .exec_without_returning(&self.conn)
+        .await
+        .map_err(VectorError::Db)?;
 
         Ok(())
     }
 
     /// List all user IDs with learning models.
     pub async fn list_users(&self) -> Result<Vec<String>, VectorError> {
-        let rows: Vec<(String,)> =
-            sqlx::query_as("SELECT DISTINCT user_id FROM user_learning_models ORDER BY user_id")
-                .fetch_all(self.db.pool())
-                .await?;
+        let rows: Vec<(String,)> = user_learning_models::Entity::find()
+            .select_only()
+            .column(user_learning_models::Column::UserId)
+            .distinct()
+            .order_by_asc(user_learning_models::Column::UserId)
+            .into_tuple()
+            .all(&self.conn)
+            .await
+            .map_err(VectorError::Db)?;
 
         Ok(rows.into_iter().map(|(uid,)| uid).collect())
     }
