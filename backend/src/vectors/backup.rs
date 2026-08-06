@@ -7,11 +7,15 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use chrono::Utc;
+use sea_orm::sea_query::OnConflict;
+use sea_orm::ActiveValue::Set;
+use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QuerySelect};
 
 use super::encryption::EncryptedVectorStore;
 use super::error::VectorError;
 use super::store::VectorStoreBackend;
 use super::types::*;
+use crate::db::entities::vector_backups;
 use crate::db::Database;
 
 // ---------------------------------------------------------------------------
@@ -39,7 +43,7 @@ fn bytes_to_f32_vec(b: &[u8]) -> Vec<f32> {
 /// Vectors are serialized as raw `f32` little-endian bytes and optionally
 /// encrypted before storage. On restore, the reverse process is applied.
 pub struct VectorBackupService {
-    db: Arc<Database>,
+    conn: DatabaseConnection,
     store: Arc<dyn VectorStoreBackend>,
     encryption: Option<Arc<EncryptedVectorStore>>,
 }
@@ -52,7 +56,7 @@ impl VectorBackupService {
         encryption: Option<Arc<EncryptedVectorStore>>,
     ) -> Self {
         Self {
-            db,
+            conn: db.sea_orm(),
             store,
             encryption,
         }
@@ -76,24 +80,38 @@ impl VectorBackupService {
 
         let vector_id = doc.id.to_string();
         let collection = doc.collection.to_string();
-        let dimensions = doc.vector.len() as i64;
-        let now = Utc::now();
+        // Every non-key column is in the insert, so the pre-port
+        // `INSERT OR REPLACE` and this DO-UPDATE upsert are observably
+        // identical. `created_at`/`updated_at` are plain TIMESTAMPs —
+        // naive-UTC binds.
+        let now = Utc::now().naive_utc();
 
-        sqlx::query(
-            "INSERT OR REPLACE INTO vector_backups \
-             (vector_id, email_id, collection, dimensions, vector_data, metadata_json, created_at, updated_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        vector_backups::Entity::insert(vector_backups::ActiveModel {
+            vector_id: Set(vector_id),
+            email_id: Set(doc.email_id.clone()),
+            collection: Set(collection),
+            dimensions: Set(doc.vector.len() as i32),
+            vector_data: Set(vector_data),
+            metadata_json: Set(metadata_json),
+            created_at: Set(Some(now)),
+            updated_at: Set(Some(now)),
+        })
+        .on_conflict(
+            OnConflict::column(vector_backups::Column::VectorId)
+                .update_columns([
+                    vector_backups::Column::EmailId,
+                    vector_backups::Column::Collection,
+                    vector_backups::Column::Dimensions,
+                    vector_backups::Column::VectorData,
+                    vector_backups::Column::MetadataJson,
+                    vector_backups::Column::CreatedAt,
+                    vector_backups::Column::UpdatedAt,
+                ])
+                .to_owned(),
         )
-        .bind(&vector_id)
-        .bind(&doc.email_id)
-        .bind(&collection)
-        .bind(dimensions)
-        .bind(&vector_data)
-        .bind(&metadata_json)
-        .bind(now)
-        .bind(now)
-        .execute(self.db.pool())
-        .await?;
+        .exec_without_returning(&self.conn)
+        .await
+        .map_err(VectorError::Db)?;
 
         Ok(())
     }
@@ -148,13 +166,18 @@ impl VectorBackupService {
         &self,
         vector_id: &str,
     ) -> Result<Option<VectorDocument>, VectorError> {
-        let row: Option<BackupRow> = sqlx::query_as(
-            "SELECT vector_id, email_id, collection, dimensions, vector_data, metadata_json \
-             FROM vector_backups WHERE vector_id = ?1",
-        )
-        .bind(vector_id)
-        .fetch_optional(self.db.pool())
-        .await?;
+        let row: Option<BackupRow> = vector_backups::Entity::find()
+            .select_only()
+            .column(vector_backups::Column::VectorId)
+            .column(vector_backups::Column::EmailId)
+            .column(vector_backups::Column::Collection)
+            .column(vector_backups::Column::VectorData)
+            .column(vector_backups::Column::MetadataJson)
+            .filter(vector_backups::Column::VectorId.eq(vector_id))
+            .into_tuple()
+            .one(&self.conn)
+            .await
+            .map_err(VectorError::Db)?;
 
         match row {
             Some(r) => Ok(Some(self.row_to_document(r)?)),
@@ -164,12 +187,17 @@ impl VectorBackupService {
 
     /// Restore all vectors from the SQLite backup.
     pub async fn restore_all(&self) -> Result<Vec<VectorDocument>, VectorError> {
-        let rows: Vec<BackupRow> = sqlx::query_as(
-            "SELECT vector_id, email_id, collection, dimensions, vector_data, metadata_json \
-             FROM vector_backups",
-        )
-        .fetch_all(self.db.pool())
-        .await?;
+        let rows: Vec<BackupRow> = vector_backups::Entity::find()
+            .select_only()
+            .column(vector_backups::Column::VectorId)
+            .column(vector_backups::Column::EmailId)
+            .column(vector_backups::Column::Collection)
+            .column(vector_backups::Column::VectorData)
+            .column(vector_backups::Column::MetadataJson)
+            .into_tuple()
+            .all(&self.conn)
+            .await
+            .map_err(VectorError::Db)?;
 
         let mut docs = Vec::with_capacity(rows.len());
         for row in rows {
@@ -180,10 +208,11 @@ impl VectorBackupService {
 
     /// Delete a backup entry by vector ID.
     pub async fn delete_backup(&self, vector_id: &str) -> Result<(), VectorError> {
-        sqlx::query("DELETE FROM vector_backups WHERE vector_id = ?1")
-            .bind(vector_id)
-            .execute(self.db.pool())
-            .await?;
+        vector_backups::Entity::delete_many()
+            .filter(vector_backups::Column::VectorId.eq(vector_id))
+            .exec(&self.conn)
+            .await
+            .map_err(VectorError::Db)?;
 
         Ok(())
     }
@@ -192,25 +221,27 @@ impl VectorBackupService {
 
     /// Convert a database row into a `VectorDocument`.
     fn row_to_document(&self, row: BackupRow) -> Result<VectorDocument, VectorError> {
+        let (vector_id, email_id, collection, vector_data, metadata_json) = row;
+
         let vector = match &self.encryption {
-            Some(enc) => enc.decrypt_vector(&row.vector_data)?,
-            None => bytes_to_f32_vec(&row.vector_data),
+            Some(enc) => enc.decrypt_vector(&vector_data)?,
+            None => bytes_to_f32_vec(&vector_data),
         };
 
-        let metadata: HashMap<String, String> = match &row.metadata_json {
+        let metadata: HashMap<String, String> = match &metadata_json {
             Some(json) => serde_json::from_str(json)?,
             None => HashMap::new(),
         };
 
-        let collection = parse_collection(&row.collection)?;
+        let collection = parse_collection(&collection)?;
 
-        let id = uuid::Uuid::parse_str(&row.vector_id)
+        let id = uuid::Uuid::parse_str(&vector_id)
             .map(VectorId)
             .map_err(|e| VectorError::BackupError(format!("invalid vector_id UUID: {e}")))?;
 
         Ok(VectorDocument {
             id,
-            email_id: row.email_id,
+            email_id,
             vector,
             metadata,
             collection,
@@ -230,17 +261,10 @@ fn parse_collection(s: &str) -> Result<VectorCollection, VectorError> {
     }
 }
 
-/// Internal row type for reading from the `vector_backups` table.
-#[derive(sqlx::FromRow)]
-struct BackupRow {
-    vector_id: String,
-    email_id: String,
-    collection: String,
-    #[allow(dead_code)]
-    dimensions: i64,
-    vector_data: Vec<u8>,
-    metadata_json: Option<String>,
-}
+/// Row tuple for reading from the `vector_backups` table:
+/// `(vector_id, email_id, collection, vector_data, metadata_json)` — the
+/// unread `dimensions` column is no longer selected.
+type BackupRow = (String, String, String, Vec<u8>, Option<String>);
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -258,6 +282,7 @@ mod tests {
     /// to insert parent rows into the `emails` table. We use a single
     /// max-connection pool and set the pragma before schema creation.
     async fn test_db() -> Database {
+        use sea_orm::ConnectionTrait;
         use sqlx::sqlite::SqlitePoolOptions;
 
         let pool = SqlitePoolOptions::new()
@@ -265,20 +290,33 @@ mod tests {
             .connect("sqlite::memory:")
             .await
             .unwrap();
+        let db = Database::Sqlite(pool);
+        let conn = db.sea_orm();
 
-        sqlx::query("PRAGMA foreign_keys = OFF")
-            .execute(&pool)
+        conn.execute_unprepared("PRAGMA foreign_keys = OFF")
             .await
             .unwrap();
 
-        sqlx::query(include_str!(
-            "../../migrations/sqlite/001_initial_schema.sql"
-        ))
-        .execute(&pool)
-        .await
-        .unwrap();
+        let raw = include_str!("../../migrations/sqlite/001_initial_schema.sql");
+        let cleaned: String = raw
+            .lines()
+            .map(|l| {
+                if let Some(idx) = l.find("--") {
+                    &l[..idx]
+                } else {
+                    l
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        for stmt in cleaned.split(';') {
+            let s = stmt.trim();
+            if !s.is_empty() {
+                conn.execute_unprepared(s).await.unwrap();
+            }
+        }
 
-        Database::Sqlite(pool)
+        db
     }
 
     /// Create a test vector document.
