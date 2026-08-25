@@ -33,10 +33,12 @@ use crate::cleanup::domain::plan::{CleanupPlan, PlanId, WizardSelections};
 use crate::cleanup::domain::ports::{
     AccountStateProvider, ClusterRepository, EmailRepository, RuleEvaluator, SubscriptionRepository,
 };
-use crate::cleanup::repository::{
-    CleanupPlanRepository, OpsFilter, SqlxAccountStateProvider, SqlxClusterRepository,
-    SqlxEmailRepository, SqlxRuleEvaluator, SqlxSubscriptionRepository,
+use crate::cleanup::repository::adapters::{
+    SeaOrmAccountStateProvider, SeaOrmClusterRepository, SeaOrmEmailRepository,
+    SeaOrmRuleEvaluator, SeaOrmSubscriptionRepository,
 };
+use crate::cleanup::repository::{CleanupPlanRepository, OpsFilter};
+use crate::db::entities::connected_accounts;
 use crate::AppState;
 
 pub fn routes() -> Router<AppState> {
@@ -76,38 +78,50 @@ fn err(code: StatusCode, error: &str, message: &str) -> (StatusCode, Json<ErrorB
     )
 }
 
-async fn build_plan_builder(state: &AppState) -> Result<PlanBuilder, sqlx::Error> {
-    let pool = state.db.pool.clone();
+/// `(id, provider)` projection of a `connected_accounts` row.
+#[derive(sea_orm::FromQueryResult)]
+struct AccountProviderRow {
+    id: String,
+    provider: String,
+}
 
-    // Load per-account providers once so the closure is sync.
-    let rows = sqlx::query("SELECT id, provider FROM connected_accounts")
-        .fetch_all(&pool)
+async fn build_plan_builder(state: &AppState) -> Result<PlanBuilder, sea_orm::DbErr> {
+    use sea_orm::{EntityTrait, QuerySelect};
+
+    let db = (*state.db).clone();
+
+    // Load per-account providers once so the closure is sync. One typed
+    // projection for both backends (ADR-036), read through the SeaORM handle
+    // `AppState` already carries.
+    let rows = connected_accounts::Entity::find()
+        .select_only()
+        .column(connected_accounts::Column::Id)
+        .column(connected_accounts::Column::Provider)
+        .into_model::<AccountProviderRow>()
+        .all(&state.orm)
         .await?;
     let provider_map: Arc<HashMap<String, Provider>> = Arc::new(
-        rows.iter()
-            .map(|r| {
-                use sqlx::Row;
-                let id: String = r.get("id");
-                let prov: String = r.get("provider");
-                let p = match prov.as_str() {
+        rows.into_iter()
+            .map(|row| {
+                let p = match row.provider.as_str() {
                     "outlook" => Provider::Outlook,
                     "imap" => Provider::Imap,
                     "pop3" => Provider::Pop3,
                     _ => Provider::Gmail,
                 };
-                (id, p)
+                (row.id, p)
             })
             .collect(),
     );
 
     Ok(PlanBuilder {
-        emails: Arc::new(SqlxEmailRepository { pool: pool.clone() }) as Arc<dyn EmailRepository>,
-        subs: Arc::new(SqlxSubscriptionRepository { pool: pool.clone() })
+        emails: Arc::new(SeaOrmEmailRepository { db: db.clone() }) as Arc<dyn EmailRepository>,
+        subs: Arc::new(SeaOrmSubscriptionRepository { db: db.clone() })
             as Arc<dyn SubscriptionRepository>,
-        clusters: Arc::new(SqlxClusterRepository { pool: pool.clone() })
+        clusters: Arc::new(SeaOrmClusterRepository { db: db.clone() })
             as Arc<dyn ClusterRepository>,
-        rules: Arc::new(SqlxRuleEvaluator { pool: pool.clone() }) as Arc<dyn RuleEvaluator>,
-        accounts: Arc::new(SqlxAccountStateProvider { pool }) as Arc<dyn AccountStateProvider>,
+        rules: Arc::new(SeaOrmRuleEvaluator { db: db.clone() }) as Arc<dyn RuleEvaluator>,
+        accounts: Arc::new(SeaOrmAccountStateProvider { db }) as Arc<dyn AccountStateProvider>,
         classifier: Arc::new(RiskClassifier::new()),
         provider_for: Arc::new(move |account_id: &str| {
             *provider_map.get(account_id).unwrap_or(&Provider::Gmail)

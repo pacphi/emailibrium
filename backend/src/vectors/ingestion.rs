@@ -9,11 +9,15 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use futures::stream::{self, StreamExt};
+use sea_orm::sea_query::{Expr, OnConflict};
+use sea_orm::ActiveValue::Set;
+use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, QuerySelect};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, mpsc, Notify, RwLock};
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
+use crate::db::entities::{emails, ingestion_checkpoints};
 use crate::db::Database;
 
 use super::categorizer::VectorCategorizer;
@@ -24,8 +28,8 @@ use super::thread;
 use super::types::{EmbeddingStatus, VectorCollection, VectorDocument, VectorId};
 use super::yaml_config::ClassificationConfig;
 
-/// Row tuple for ingestion checkpoint queries.
-type CheckpointRow = (String, String, String, i64, i64, i64, Option<String>);
+/// Row tuple for ingestion checkpoint queries (counters are INTEGER — `i32`).
+type CheckpointRow = (String, String, String, i32, i32, i32, Option<String>);
 
 /// Row tuple for full ingestion checkpoint queries (with account_id, status, etc.).
 type FullCheckpointRow = (
@@ -34,9 +38,9 @@ type FullCheckpointRow = (
     String,
     String,
     String,
-    i64,
-    i64,
-    i64,
+    i32,
+    i32,
+    i32,
     Option<String>,
     Option<String>,
 );
@@ -343,7 +347,7 @@ pub struct IngestionPipeline {
     embedding: Arc<EmbeddingPipeline>,
     store: Arc<dyn VectorStoreBackend>,
     categorizer: Arc<VectorCategorizer>,
-    db: Arc<Database>,
+    conn: DatabaseConnection,
     generative: Option<Arc<dyn crate::vectors::generative::GenerativeModel>>,
     cluster_engine: Option<Arc<crate::vectors::clustering::ClusterEngine>>,
     classification_config: ClassificationConfig,
@@ -372,7 +376,7 @@ impl IngestionPipeline {
             embedding,
             store,
             categorizer,
-            db,
+            conn: db.sea_orm(),
             generative: None,
             cluster_engine: None,
             classification_config: ClassificationConfig::default(),
@@ -453,7 +457,7 @@ impl IngestionPipeline {
             embedding: self.embedding.clone(),
             store: self.store.clone(),
             categorizer: self.categorizer.clone(),
-            db: self.db.clone(),
+            conn: self.conn.clone(),
             generative: self.generative.clone(),
             cluster_engine: self.cluster_engine.clone(),
             classification_config: self.classification_config.clone(),
@@ -532,17 +536,22 @@ impl IngestionPipeline {
         account_id: &str,
     ) -> Result<Option<String>, VectorError> {
         // Find the most recent incomplete checkpoint for this account.
-        let checkpoint: Option<CheckpointRow> = sqlx::query_as(
-            r#"SELECT id, batch_id, stage, total, processed, failed, last_processed_id
-                   FROM ingestion_checkpoints
-                   WHERE account_id = ? AND status IN ('running', 'failed', 'paused')
-                   ORDER BY created_at DESC
-                   LIMIT 1"#,
-        )
-        .bind(account_id)
-        .fetch_optional(&self.db.pool)
-        .await
-        .map_err(VectorError::DatabaseError)?;
+        let checkpoint: Option<CheckpointRow> = ingestion_checkpoints::Entity::find()
+            .select_only()
+            .column(ingestion_checkpoints::Column::Id)
+            .column(ingestion_checkpoints::Column::BatchId)
+            .column(ingestion_checkpoints::Column::Stage)
+            .column(ingestion_checkpoints::Column::Total)
+            .column(ingestion_checkpoints::Column::Processed)
+            .column(ingestion_checkpoints::Column::Failed)
+            .column(ingestion_checkpoints::Column::LastProcessedId)
+            .filter(ingestion_checkpoints::Column::AccountId.eq(account_id))
+            .filter(ingestion_checkpoints::Column::Status.is_in(["running", "failed", "paused"]))
+            .order_by_desc(ingestion_checkpoints::Column::CreatedAt)
+            .into_tuple()
+            .one(&self.conn)
+            .await
+            .map_err(VectorError::Db)?;
 
         let Some((cp_id, batch_id, stage, total, processed, failed, last_id)) = checkpoint else {
             return Ok(None);
@@ -558,15 +567,19 @@ impl IngestionPipeline {
         );
 
         // Update checkpoint status to running.
-        sqlx::query(
-            r#"UPDATE ingestion_checkpoints
-               SET status = 'running', updated_at = datetime('now')
-               WHERE id = ?"#,
-        )
-        .bind(&cp_id)
-        .execute(&self.db.pool)
-        .await
-        .map_err(VectorError::DatabaseError)?;
+        ingestion_checkpoints::Entity::update_many()
+            .col_expr(
+                ingestion_checkpoints::Column::Status,
+                Expr::value("running"),
+            )
+            .col_expr(
+                ingestion_checkpoints::Column::UpdatedAt,
+                Expr::value(crate::db::now_text()),
+            )
+            .filter(ingestion_checkpoints::Column::Id.eq(&cp_id))
+            .exec(&self.conn)
+            .await
+            .map_err(VectorError::Db)?;
 
         // Create a new job that picks up where we left off.
         let mut state = self.state.write().await;
@@ -608,7 +621,7 @@ impl IngestionPipeline {
             embedding: self.embedding.clone(),
             store: self.store.clone(),
             categorizer: self.categorizer.clone(),
-            db: self.db.clone(),
+            conn: self.conn.clone(),
             generative: self.generative.clone(),
             cluster_engine: self.cluster_engine.clone(),
             classification_config: self.classification_config.clone(),
@@ -637,18 +650,24 @@ impl IngestionPipeline {
         &self,
         account_id: &str,
     ) -> Result<Option<IngestionCheckpoint>, VectorError> {
-        let row: Option<FullCheckpointRow> = sqlx::query_as(
-            r#"SELECT id, batch_id, account_id, stage, status, total, processed, failed,
-                      last_processed_id, error_msg
-               FROM ingestion_checkpoints
-               WHERE account_id = ?
-               ORDER BY created_at DESC
-               LIMIT 1"#,
-        )
-        .bind(account_id)
-        .fetch_optional(&self.db.pool)
-        .await
-        .map_err(VectorError::DatabaseError)?;
+        let row: Option<FullCheckpointRow> = ingestion_checkpoints::Entity::find()
+            .select_only()
+            .column(ingestion_checkpoints::Column::Id)
+            .column(ingestion_checkpoints::Column::BatchId)
+            .column(ingestion_checkpoints::Column::AccountId)
+            .column(ingestion_checkpoints::Column::Stage)
+            .column(ingestion_checkpoints::Column::Status)
+            .column(ingestion_checkpoints::Column::Total)
+            .column(ingestion_checkpoints::Column::Processed)
+            .column(ingestion_checkpoints::Column::Failed)
+            .column(ingestion_checkpoints::Column::LastProcessedId)
+            .column(ingestion_checkpoints::Column::ErrorMsg)
+            .filter(ingestion_checkpoints::Column::AccountId.eq(account_id))
+            .order_by_desc(ingestion_checkpoints::Column::CreatedAt)
+            .into_tuple()
+            .one(&self.conn)
+            .await
+            .map_err(VectorError::Db)?;
 
         Ok(row.map(|r| IngestionCheckpoint {
             id: r.0,
@@ -671,7 +690,7 @@ struct IngestionPipelineHandle {
     embedding: Arc<EmbeddingPipeline>,
     store: Arc<dyn VectorStoreBackend>,
     categorizer: Arc<VectorCategorizer>,
-    db: Arc<Database>,
+    conn: DatabaseConnection,
     generative: Option<Arc<dyn crate::vectors::generative::GenerativeModel>>,
     cluster_engine: Option<Arc<crate::vectors::clustering::ClusterEngine>>,
     classification_config: ClassificationConfig,
@@ -820,7 +839,7 @@ impl IngestionPipelineHandle {
 
         // Clone Arcs for the producer task.
         let embedding = self.embedding.clone();
-        let db = self.db.clone();
+        let conn = self.conn.clone();
         let state_ref = self.state.clone();
         let resume_notify = self.resume_notify.clone();
         let max_retries = self.error_recovery_tuning.max_retries;
@@ -928,9 +947,12 @@ impl IngestionPipelineHandle {
                             metadata.insert("thread_key".to_string(), thread_key.clone());
 
                             // Persist thread_key to the emails table.
-                            if let Err(err) =
-                                update_thread_key_standalone(&db, &batch.email_ids[i], &thread_key)
-                                    .await
+                            if let Err(err) = update_thread_key_standalone(
+                                &conn,
+                                &batch.email_ids[i],
+                                &thread_key,
+                            )
+                            .await
                             {
                                 warn!(email_id = %batch.email_ids[i], "Failed to set thread_key: {err}");
                             }
@@ -947,7 +969,7 @@ impl IngestionPipelineHandle {
 
                             // Update DB embedding status in the producer.
                             if let Err(err) = update_embedding_status_standalone(
-                                &db,
+                                &conn,
                                 &batch.email_ids[i],
                                 &vector_id.to_string(),
                                 &model_name,
@@ -1242,7 +1264,7 @@ impl IngestionPipelineHandle {
     /// pipeline. Processes in configurable batches with throttling to avoid
     /// overloading the LLM provider.
     fn spawn_backfill_task(&self, job_id: String, account_id: String) {
-        let db = self.db.clone();
+        let conn = self.conn.clone();
         let categorizer = self.categorizer.clone();
         let generative = self.generative.clone();
         let classification_config = self.classification_config.clone();
@@ -1262,13 +1284,19 @@ impl IngestionPipelineHandle {
             );
 
             // Count total pending_backfill emails for progress tracking.
-            let total_count: u64 = sqlx::query_scalar(
-                "SELECT COUNT(*) FROM emails WHERE account_id = ? AND category_method = 'pending_backfill'",
-            )
-            .bind(&account_id)
-            .fetch_one(&db.pool)
-            .await
-            .unwrap_or(0i64) as u64;
+            // Best-effort like the pre-port query: errors count as zero.
+            let total_count: u64 = emails::Entity::find()
+                .select_only()
+                .expr_as(Expr::cust("COUNT(*)"), "cnt")
+                .filter(emails::Column::AccountId.eq(account_id.as_str()))
+                .filter(emails::Column::CategoryMethod.eq("pending_backfill"))
+                .into_tuple::<(i64,)>()
+                .one(&conn)
+                .await
+                .ok()
+                .flatten()
+                .map(|(c,)| c)
+                .unwrap_or(0) as u64;
 
             {
                 let mut bs = backfill_state.write().await;
@@ -1285,18 +1313,20 @@ impl IngestionPipelineHandle {
 
             loop {
                 // Fetch next batch of pending_backfill emails.
-                type BackfillRow = (String, Option<String>, Option<String>, Option<String>);
-                let rows: Result<Vec<BackfillRow>, _> = sqlx::query_as(
-                    r#"SELECT id, subject, from_addr, body_text
-                       FROM emails
-                       WHERE account_id = ? AND category_method = 'pending_backfill'
-                       ORDER BY received_at DESC
-                       LIMIT ?"#,
-                )
-                .bind(&account_id)
-                .bind(batch_size as i64)
-                .fetch_all(&db.pool)
-                .await;
+                type BackfillRow = (String, String, String, Option<String>);
+                let rows: Result<Vec<BackfillRow>, _> = emails::Entity::find()
+                    .select_only()
+                    .column(emails::Column::Id)
+                    .column(emails::Column::Subject)
+                    .column(emails::Column::FromAddr)
+                    .column(emails::Column::BodyText)
+                    .filter(emails::Column::AccountId.eq(account_id.as_str()))
+                    .filter(emails::Column::CategoryMethod.eq("pending_backfill"))
+                    .order_by_desc(emails::Column::ReceivedAt)
+                    .limit(batch_size as u64)
+                    .into_tuple()
+                    .all(&conn)
+                    .await;
 
                 let batch = match rows {
                     Ok(b) => b,
@@ -1328,14 +1358,14 @@ impl IngestionPipelineHandle {
                     .into_iter()
                     .map(|(id, subject, from_addr, body_text)| {
                         let text = EmbeddingPipeline::prepare_email_text(
-                            &subject.unwrap_or_default(),
-                            &from_addr.clone().unwrap_or_default(),
+                            &subject,
+                            &from_addr,
                             &body_text.unwrap_or_default(),
                             None,
                             None,
                             None,
                         );
-                        (id, from_addr.unwrap_or_default(), text)
+                        (id, from_addr, text)
                     })
                     .collect();
 
@@ -1367,17 +1397,22 @@ impl IngestionPipelineHandle {
                 for (email_id, result) in &results {
                     match result {
                         Ok(cat_result) => {
-                            let update_result = sqlx::query(
-                                r#"UPDATE emails
-                                   SET category = ?, category_confidence = ?, category_method = ?
-                                   WHERE id = ?"#,
-                            )
-                            .bind(cat_result.category.to_string())
-                            .bind(cat_result.confidence)
-                            .bind(&cat_result.method)
-                            .bind(email_id)
-                            .execute(&db.pool)
-                            .await;
+                            let update_result = emails::Entity::update_many()
+                                .col_expr(
+                                    emails::Column::Category,
+                                    Expr::value(cat_result.category.to_string()),
+                                )
+                                .col_expr(
+                                    emails::Column::CategoryConfidence,
+                                    Expr::value(cat_result.confidence),
+                                )
+                                .col_expr(
+                                    emails::Column::CategoryMethod,
+                                    Expr::value(cat_result.method.as_str()),
+                                )
+                                .filter(emails::Column::Id.eq(email_id.as_str()))
+                                .exec(&conn)
+                                .await;
 
                             if let Err(err) = update_result {
                                 warn!(email_id = %email_id, "Backfill DB update failed: {err}");
@@ -1443,37 +1478,51 @@ impl IngestionPipelineHandle {
     ) -> Result<Vec<PendingEmail>, VectorError> {
         type EmailRow = (
             String,
+            String,
+            String,
             Option<String>,
             Option<String>,
-            Option<String>,
-            Option<String>,
-            Option<String>,
+            chrono::NaiveDateTime,
             Option<String>,
             Option<String>,
             Option<String>,
         );
-        let rows: Vec<EmailRow> = sqlx::query_as(
-            r#"SELECT id, subject, from_addr, body_text, from_name, received_at, category,
-                      message_id, thread_id
-               FROM emails
-               WHERE account_id = ? AND embedding_status IN ('pending', 'stale')
-                 AND COALESCE(is_trash, 0) = 0 AND COALESCE(is_spam, 0) = 0 AND deleted_at IS NULL
-               ORDER BY received_at DESC"#,
-        )
-        .bind(account_id)
-        .fetch_all(&self.db.pool)
-        .await
-        .map_err(VectorError::DatabaseError)?;
+        // `is_trash`/`is_spam` are NOT NULL DEFAULT 0 (migration 016), so the
+        // pre-port `COALESCE(x, 0) = 0` is exactly `x = 0`.
+        let rows: Vec<EmailRow> = emails::Entity::find()
+            .select_only()
+            .column(emails::Column::Id)
+            .column(emails::Column::Subject)
+            .column(emails::Column::FromAddr)
+            .column(emails::Column::BodyText)
+            .column(emails::Column::FromName)
+            .column(emails::Column::ReceivedAt)
+            .column(emails::Column::Category)
+            .column(emails::Column::MessageId)
+            .column(emails::Column::ThreadId)
+            .filter(emails::Column::AccountId.eq(account_id))
+            .filter(emails::Column::EmbeddingStatus.is_in(["pending", "stale"]))
+            .filter(emails::Column::IsTrash.eq(0))
+            .filter(emails::Column::IsSpam.eq(0))
+            .filter(emails::Column::DeletedAt.is_null())
+            .order_by_desc(emails::Column::ReceivedAt)
+            .into_tuple()
+            .all(&self.conn)
+            .await
+            .map_err(VectorError::Db)?;
 
         Ok(rows
             .into_iter()
             .map(|r| PendingEmail {
                 id: r.0,
-                subject: r.1.unwrap_or_default(),
-                from_addr: r.2.unwrap_or_default(),
+                subject: r.1,
+                from_addr: r.2,
                 body_text: r.3.unwrap_or_default(),
                 from_name: r.4,
-                received_at: r.5,
+                // Embedding-text input, not a wire format: RFC3339 output is
+                // byte-identical for legacy RFC3339 rows and normalizes naive
+                // DDL-default rows (same policy as `tools::readonly::emails`).
+                received_at: Some(r.5.and_utc().to_rfc3339()),
                 category: r.6,
                 message_id: r.7,
                 provider_thread_id: r.8,
@@ -1488,18 +1537,14 @@ impl IngestionPipelineHandle {
         confidence: f32,
         method: &str,
     ) -> Result<(), VectorError> {
-        sqlx::query(
-            r#"UPDATE emails
-               SET category = ?, category_confidence = ?, category_method = ?
-               WHERE id = ?"#,
-        )
-        .bind(category)
-        .bind(confidence)
-        .bind(method)
-        .bind(email_id)
-        .execute(&self.db.pool)
-        .await
-        .map_err(VectorError::DatabaseError)?;
+        emails::Entity::update_many()
+            .col_expr(emails::Column::Category, Expr::value(category))
+            .col_expr(emails::Column::CategoryConfidence, Expr::value(confidence))
+            .col_expr(emails::Column::CategoryMethod, Expr::value(method))
+            .filter(emails::Column::Id.eq(email_id))
+            .exec(&self.conn)
+            .await
+            .map_err(VectorError::Db)?;
         Ok(())
     }
 
@@ -1543,36 +1588,45 @@ impl IngestionPipelineHandle {
         let (total, processed, failed) = {
             let state = self.state.read().await;
             match &state.current_job {
-                Some(job) => (job.total as i64, job.processed as i64, job.failed as i64),
+                Some(job) => (job.total as i32, job.processed as i32, job.failed as i32),
                 None => (0, 0, 0),
             }
         };
 
         let checkpoint_id = format!("{}-{}", job_id, stage);
-        let result = sqlx::query(
-            r#"INSERT INTO ingestion_checkpoints (id, batch_id, account_id, stage, status, total, processed, failed, last_processed_id, error_msg, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
-               ON CONFLICT(id) DO UPDATE SET
-                   stage = excluded.stage,
-                   status = excluded.status,
-                   total = excluded.total,
-                   processed = excluded.processed,
-                   failed = excluded.failed,
-                   last_processed_id = excluded.last_processed_id,
-                   error_msg = excluded.error_msg,
-                   updated_at = datetime('now')"#,
+        // Upsert: on conflict every mutable column takes the excluded value,
+        // including `updated_at` — the excluded row carries the fresh
+        // timestamp, so `updated_at = excluded.updated_at` is observably the
+        // pre-port `updated_at = datetime('now')`.
+        let result = ingestion_checkpoints::Entity::insert(ingestion_checkpoints::ActiveModel {
+            id: Set(checkpoint_id),
+            batch_id: Set(job_id.to_owned()),
+            account_id: Set(account_id.to_owned()),
+            stage: Set(stage.to_owned()),
+            status: Set(status.to_owned()),
+            total: Set(total),
+            processed: Set(processed),
+            failed: Set(failed),
+            last_processed_id: Set(last_processed_id.map(str::to_owned)),
+            error_msg: Set(error_msg.map(str::to_owned)),
+            updated_at: Set(crate::db::now_text()),
+            ..Default::default()
+        })
+        .on_conflict(
+            OnConflict::column(ingestion_checkpoints::Column::Id)
+                .update_columns([
+                    ingestion_checkpoints::Column::Stage,
+                    ingestion_checkpoints::Column::Status,
+                    ingestion_checkpoints::Column::Total,
+                    ingestion_checkpoints::Column::Processed,
+                    ingestion_checkpoints::Column::Failed,
+                    ingestion_checkpoints::Column::LastProcessedId,
+                    ingestion_checkpoints::Column::ErrorMsg,
+                    ingestion_checkpoints::Column::UpdatedAt,
+                ])
+                .to_owned(),
         )
-        .bind(&checkpoint_id)
-        .bind(job_id)
-        .bind(account_id)
-        .bind(stage)
-        .bind(status)
-        .bind(total)
-        .bind(processed)
-        .bind(failed)
-        .bind(last_processed_id)
-        .bind(error_msg)
-        .execute(&self.db.pool)
+        .exec_without_returning(&self.conn)
         .await;
 
         if let Err(err) = result {
@@ -1603,28 +1657,28 @@ impl IngestionPipelineHandle {
 
 /// Standalone helper for updating embedding status from a spawned task.
 ///
-/// This mirrors `IngestionPipelineHandle::update_embedding_status` but takes a
-/// `Database` reference directly so it can be called from the producer task
-/// without requiring `&self`.
+/// Takes a `DatabaseConnection` directly so it can be called from the
+/// producer task without requiring `&self`. `embedded_at` is a real
+/// TIMESTAMP column, so the pre-port RFC3339 string bind becomes a naive-UTC
+/// bind (closes pl-timestamp-write-tz for this write site).
 async fn update_embedding_status_standalone(
-    db: &Database,
+    conn: &DatabaseConnection,
     email_id: &str,
     vector_id: &str,
     model: &str,
 ) -> Result<(), VectorError> {
-    let now = Utc::now().to_rfc3339();
-    sqlx::query(
-        r#"UPDATE emails
-           SET embedding_status = 'embedded', embedded_at = ?, vector_id = ?, embedding_model = ?
-           WHERE id = ?"#,
-    )
-    .bind(&now)
-    .bind(vector_id)
-    .bind(model)
-    .bind(email_id)
-    .execute(&db.pool)
-    .await
-    .map_err(VectorError::DatabaseError)?;
+    emails::Entity::update_many()
+        .col_expr(emails::Column::EmbeddingStatus, Expr::value("embedded"))
+        .col_expr(
+            emails::Column::EmbeddedAt,
+            Expr::value(Utc::now().naive_utc()),
+        )
+        .col_expr(emails::Column::VectorId, Expr::value(vector_id))
+        .col_expr(emails::Column::EmbeddingModel, Expr::value(model))
+        .filter(emails::Column::Id.eq(email_id))
+        .exec(conn)
+        .await
+        .map_err(VectorError::Db)?;
     Ok(())
 }
 
@@ -1633,16 +1687,16 @@ async fn update_embedding_status_standalone(
 /// Standalone helper (same pattern as `update_embedding_status_standalone`) so
 /// it can be called from the producer task without borrowing `self`.
 async fn update_thread_key_standalone(
-    db: &Database,
+    conn: &DatabaseConnection,
     email_id: &str,
     thread_key: &str,
 ) -> Result<(), VectorError> {
-    sqlx::query(r#"UPDATE emails SET thread_key = ? WHERE id = ?"#)
-        .bind(thread_key)
-        .bind(email_id)
-        .execute(&db.pool)
+    emails::Entity::update_many()
+        .col_expr(emails::Column::ThreadKey, Expr::value(thread_key))
+        .filter(emails::Column::Id.eq(email_id))
+        .exec(conn)
         .await
-        .map_err(VectorError::DatabaseError)?;
+        .map_err(VectorError::Db)?;
     Ok(())
 }
 
@@ -1662,6 +1716,8 @@ fn compute_eta(job: &IngestionJob) -> Option<u64> {
 
 #[cfg(test)]
 mod tests {
+    use sea_orm::ConnectionTrait;
+
     use super::*;
     use crate::vectors::categorizer::VectorCategorizer;
     use crate::vectors::config::EmbeddingConfig;
@@ -1705,22 +1761,26 @@ mod tests {
 
     async fn insert_test_emails(db: &Database, account_id: &str, count: usize) {
         for i in 0..count {
-            let id = format!("email-{}", i);
+            // Account-prefixed ids so multi-account tests can seed bystanders.
+            let id = format!("{account_id}-email-{i}");
             let subject = format!("Test Subject {}", i);
             let from_addr = format!("sender{}@example.com", i);
             let body_text = format!("This is the body of test email number {}", i);
-            sqlx::query(
-                r#"INSERT INTO emails (id, account_id, provider, subject, from_addr, body_text, embedding_status)
+            db.sea_orm()
+                .execute_raw(sea_orm::Statement::from_sql_and_values(
+                    sea_orm::DatabaseBackend::Sqlite,
+                    r#"INSERT INTO emails (id, account_id, provider, subject, from_addr, body_text, embedding_status)
                    VALUES (?, ?, 'test', ?, ?, ?, 'pending')"#,
-            )
-            .bind(&id)
-            .bind(account_id)
-            .bind(&subject)
-            .bind(&from_addr)
-            .bind(&body_text)
-            .execute(&db.pool)
-            .await
-            .unwrap();
+                    [
+                        id.as_str().into(),
+                        account_id.into(),
+                        subject.as_str().into(),
+                        from_addr.as_str().into(),
+                        body_text.as_str().into(),
+                    ],
+                ))
+                .await
+                .unwrap();
         }
     }
 
@@ -1790,6 +1850,132 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     }
 
+    /// Conflict-path pin for `save_checkpoint`'s DO-UPDATE column set: a
+    /// multi-batch run re-saves the same `{job}-embedding` checkpoint row once
+    /// per batch, so a dropped update column freezes the row at its
+    /// first-batch values. (`status` itself only diverges on the
+    /// failed→running transition, which needs an embedding-failure fake —
+    /// recorded as an accepted gap in the phase-3 court record.)
+    #[tokio::test]
+    async fn test_checkpoint_conflict_updates_advance_progress() {
+        let db = Arc::new(test_db().await);
+        insert_test_emails(&db, "acct-1", 130).await; // 3 batches at the default 64
+        let (pipeline, _, _) = make_pipeline(db.clone());
+
+        let _job_id = pipeline.start_ingestion("acct-1").await.unwrap();
+        for _ in 0..40 {
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            let done = pipeline
+                .get_progress()
+                .await
+                .map(|p| p.phase == "complete")
+                .unwrap_or(false);
+            if done {
+                break;
+            }
+        }
+
+        let row: Option<(i32, Option<String>)> = ingestion_checkpoints::Entity::find()
+            .select_only()
+            .column(ingestion_checkpoints::Column::Processed)
+            .column(ingestion_checkpoints::Column::LastProcessedId)
+            .filter(ingestion_checkpoints::Column::Stage.eq("embedding"))
+            .into_tuple()
+            .one(&db.sea_orm())
+            .await
+            .unwrap();
+        let (processed, last_id) = row.expect("embedding checkpoint row exists");
+        assert_eq!(
+            processed, 130,
+            "the conflict update advances `processed` past the first batch's 64"
+        );
+        assert!(last_id.is_some(), "last_processed_id is carried forward");
+    }
+
+    /// Exclusion pin for `fetch_pending_emails`: soft-deleted, trashed, and
+    /// spam emails must NOT be re-ingested — dropping any of those filters
+    /// resurrects deleted content into search and insights.
+    #[tokio::test]
+    async fn test_ingestion_skips_deleted_trashed_and_spam_emails() {
+        let db = Arc::new(test_db().await);
+        insert_test_emails(&db, "acct-1", 2).await;
+        let conn = db.sea_orm();
+        for (id, extra_cols, extra_vals) in [
+            (
+                "excl-deleted",
+                ", deleted_at",
+                ", '2026-08-01T00:00:00+00:00'",
+            ),
+            ("excl-trash", ", is_trash", ", 1"),
+            ("excl-spam", ", is_spam", ", 1"),
+        ] {
+            conn.execute_unprepared(&format!(
+                "INSERT INTO emails (id, account_id, provider, subject, from_addr, to_addrs, \
+                 received_at, embedding_status{extra_cols}) VALUES ('{id}', 'acct-1', 'test', \
+                 's', 'a@x.com', 'b@x.com', '2026-08-01T00:00:00+00:00', 'pending'{extra_vals})"
+            ))
+            .await
+            .unwrap();
+        }
+        let (pipeline, store, _) = make_pipeline(db.clone());
+
+        let _job_id = pipeline.start_ingestion("acct-1").await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+        assert_eq!(
+            store.count().await.unwrap(),
+            2,
+            "deleted/trashed/spam emails must not be embedded"
+        );
+        // The excluded rows keep their pending status — they were never picked up.
+        let untouched: Vec<(String,)> = emails::Entity::find()
+            .select_only()
+            .column(emails::Column::Id)
+            .filter(emails::Column::EmbeddingStatus.eq("pending"))
+            .filter(emails::Column::Id.is_in(["excl-deleted", "excl-trash", "excl-spam"]))
+            .into_tuple()
+            .all(&conn)
+            .await
+            .unwrap();
+        assert_eq!(untouched.len(), 3);
+    }
+
+    /// Two-owner scoping pin: ingestion for one account must not consume the
+    /// bystander account's pending emails, and checkpoints stay per-account.
+    #[tokio::test]
+    async fn test_ingestion_scopes_to_the_target_account() {
+        let db = Arc::new(test_db().await);
+        insert_test_emails(&db, "acct-1", 2).await;
+        insert_test_emails(&db, "acct-2", 3).await;
+        let (pipeline, store, _) = make_pipeline(db.clone());
+
+        let _job_id = pipeline.start_ingestion("acct-1").await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+        // Only acct-1's two emails were embedded into the store.
+        assert_eq!(
+            store.count().await.unwrap(),
+            2,
+            "ingestion of acct-1 must not touch acct-2's pending emails"
+        );
+
+        // The bystander's rows are still pending in the database.
+        let pending_b: Vec<(String,)> = emails::Entity::find()
+            .select_only()
+            .column(emails::Column::Id)
+            .filter(emails::Column::AccountId.eq("acct-2"))
+            .filter(emails::Column::EmbeddingStatus.eq("pending"))
+            .into_tuple()
+            .all(&db.sea_orm())
+            .await
+            .unwrap();
+        assert_eq!(pending_b.len(), 3, "acct-2's emails stay pending");
+
+        // Checkpoints are per-account: acct-1 has one, acct-2 has none.
+        assert!(pipeline.get_checkpoint("acct-1").await.unwrap().is_some());
+        assert!(pipeline.get_checkpoint("acct-2").await.unwrap().is_none());
+    }
+
     #[tokio::test]
     async fn test_ingestion_embeds_emails() {
         let db = Arc::new(test_db().await);
@@ -1806,12 +1992,15 @@ mod tests {
         assert_eq!(count, 3, "Expected 3 vectors in store, got {}", count);
 
         // Verify DB was updated
-        let row: (String,) =
-            sqlx::query_as("SELECT embedding_status FROM emails WHERE id = 'email-0'")
-                .fetch_one(&db.pool)
-                .await
-                .unwrap();
-        assert_eq!(row.0, "embedded");
+        let row: Option<(Option<String>,)> = emails::Entity::find()
+            .select_only()
+            .column(emails::Column::EmbeddingStatus)
+            .filter(emails::Column::Id.eq("acct-1-email-0"))
+            .into_tuple()
+            .one(&db.sea_orm())
+            .await
+            .unwrap();
+        assert_eq!(row.unwrap().0.as_deref(), Some("embedded"));
     }
 
     #[tokio::test]
@@ -1831,11 +2020,14 @@ mod tests {
         assert_eq!(progress.categorized, 2);
 
         // Verify DB category was updated
-        let row: (Option<String>,) =
-            sqlx::query_as("SELECT category FROM emails WHERE id = 'email-0'")
-                .fetch_one(&db.pool)
-                .await
-                .unwrap();
-        assert!(row.0.is_some());
+        let row: Option<(Option<String>,)> = emails::Entity::find()
+            .select_only()
+            .column(emails::Column::Category)
+            .filter(emails::Column::Id.eq("acct-1-email-0"))
+            .into_tuple()
+            .one(&db.sea_orm())
+            .await
+            .unwrap();
+        assert!(row.unwrap().0.is_some());
     }
 }

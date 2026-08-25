@@ -516,26 +516,46 @@ async fn disconnect_account(
         )
     })?;
 
-    // 1. Collect vector IDs, then delete emails + sync state from SQLite (fast).
-    let vector_ids: Vec<(String,)> = sqlx::query_as(
-        "SELECT vector_id FROM emails WHERE account_id = ?1 AND vector_id IS NOT NULL",
-    )
-    .bind(&id)
-    .fetch_all(&state.db.pool)
-    .await
-    .unwrap_or_default();
+    // 1. Collect vector IDs, then delete emails + sync state from the local DB (fast).
+    let vector_ids: Vec<(String,)> = {
+        use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QuerySelect};
 
-    let emails_deleted = sqlx::query("DELETE FROM emails WHERE account_id = ?1")
-        .bind(&id)
-        .execute(&state.db.pool)
-        .await
-        .map(|r| r.rows_affected())
-        .unwrap_or(0);
+        use crate::db::entities::emails;
 
-    let _ = sqlx::query("DELETE FROM sync_state WHERE account_id = ?1")
-        .bind(&id)
-        .execute(&state.db.pool)
-        .await;
+        emails::Entity::find()
+            .select_only()
+            .column(emails::Column::VectorId)
+            .filter(emails::Column::AccountId.eq(id.as_str()))
+            .filter(emails::Column::VectorId.is_not_null())
+            .into_tuple()
+            .all(&state.orm)
+            .await
+            .unwrap_or_default()
+    };
+
+    let emails_deleted = {
+        use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+
+        use crate::db::entities::emails;
+
+        emails::Entity::delete_many()
+            .filter(emails::Column::AccountId.eq(id.as_str()))
+            .exec(&state.orm)
+            .await
+            .map(|r| r.rows_affected)
+            .unwrap_or(0)
+    };
+
+    {
+        use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+
+        use crate::db::entities::sync_state;
+
+        let _ = sync_state::Entity::delete_many()
+            .filter(sync_state::Column::AccountId.eq(id.as_str()))
+            .exec(&state.orm)
+            .await;
+    }
 
     // 2. Batch-delete vectors (async, non-blocking to the user).
     let vectors_deleted = vector_ids.len() as u64;

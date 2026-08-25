@@ -86,9 +86,9 @@ pub struct ApplyOrchestrator {
     pub audit: Arc<dyn CleanupAuditWriter>,
     /// Telemetry emitter (Phase D).
     pub telemetry: Arc<TelemetryEmitter>,
-    /// Optional DB pool — when present, workers update `is_archived` locally
+    /// Optional DB handle — when present, workers update `is_archived` locally
     /// after a successful provider archive so the Archive view stays in sync.
-    pub db: Option<sqlx::SqlitePool>,
+    pub db: Option<crate::db::Database>,
     /// Active jobs keyed by job_id, exposing the broadcast::Sender + cancel token.
     job_channels: Arc<RwLock<HashMap<JobId, JobChannels>>>,
 }
@@ -118,9 +118,9 @@ impl ApplyOrchestrator {
         }
     }
 
-    /// Builder-style setter for the local DB pool (used to sync archive state).
-    pub fn with_db(mut self, pool: sqlx::SqlitePool) -> Self {
-        self.db = Some(pool);
+    /// Builder-style setter for the local DB handle (used to sync archive state).
+    pub fn with_db(mut self, db: crate::db::Database) -> Self {
+        self.db = Some(db);
         self
     }
 
@@ -937,45 +937,26 @@ mod tests {
     //
     // Verify that running a multi-account apply writes one audit row per
     // (seq, outcome) for every operation that left Pending. Uses a real
-    // SqliteCleanupAuditWriter against in-memory SQLite.
+    // SeaOrmCleanupAuditWriter against in-memory SQLite.
 
     #[tokio::test]
     async fn audit_rows_written_for_each_apply_outcome() {
-        use crate::cleanup::audit::{AuditOutcome, CleanupAuditWriter, SqliteCleanupAuditWriter};
-        use sqlx::sqlite::SqlitePoolOptions;
+        use crate::cleanup::audit::{AuditOutcome, CleanupAuditWriter, SeaOrmCleanupAuditWriter};
 
-        // Set up a SQLite pool with migrations 024 + 025 applied so the
-        // audit writer has its table.
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect(":memory:")
-            .await
-            .expect("connect");
-        for raw in [
-            include_str!("../../../migrations/024_cleanup_planning.sql"),
-            include_str!("../../../migrations/025_cleanup_audit_log.sql"),
-        ] {
-            let cleaned: String = raw
-                .lines()
-                .map(|l| {
-                    if let Some(idx) = l.find("--") {
-                        &l[..idx]
-                    } else {
-                        l
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
-            for stmt in cleaned.split(';') {
-                let s = stmt.trim();
-                if !s.is_empty() {
-                    sqlx::query(crate::db::audited_sql(s))
-                        .execute(&pool)
-                        .await
-                        .expect("migrate");
-                }
-            }
-        }
+        // Set up an in-memory database with migrations 024 + 025 applied so
+        // the audit writer has its table.
+
+        let db = crate::db::test_sqlite_database().await;
+        let conn = db.sea_orm();
+        crate::db::apply_sqlite_migrations(
+            &conn,
+            &[
+                include_str!("../../../migrations/sqlite/024_cleanup_planning.sql"),
+                include_str!("../../../migrations/sqlite/025_cleanup_audit_log.sql"),
+            ],
+        )
+        .await
+        .expect("migrate");
 
         let plan_repo = Arc::new(InMemPlanRepo::default());
         let job_repo = Arc::new(InMemJobRepo::default());
@@ -992,7 +973,7 @@ mod tests {
             Arc::new(StubEmailRepo) as Arc<dyn EmailRepository>,
         ));
         let audit: Arc<dyn CleanupAuditWriter> =
-            Arc::new(SqliteCleanupAuditWriter::new(pool.clone()));
+            Arc::new(SeaOrmCleanupAuditWriter::new(db.clone()));
         let orch = Arc::new(
             ApplyOrchestrator::new(
                 plan_repo.clone() as Arc<dyn CleanupPlanRepository>,

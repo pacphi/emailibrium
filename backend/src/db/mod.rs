@@ -1,57 +1,262 @@
-//! Database layer — SQLite with SQLx.
+//! Database layer — SQLite or PostgreSQL via SQLx, selected by the connection URL's scheme.
+//!
+//! See `docs/ADRs/ADR-033-postgresql-backend-support.md` for why URL-scheme dispatch (not a
+//! separate config flag) is the one backend-selection mechanism, applied consistently across
+//! every deploy/run mode (native, Docker dev, Docker prod).
 
+use sqlx::postgres::{PgPool, PgPoolOptions};
 use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
 
-/// Database connection pool wrapper.
+pub mod entities;
+
+/// Does this URL select PostgreSQL? Both documented spellings do; everything else —
+/// including the default `sqlite:...?mode=rwc` — selects SQLite (ADR-033 §2).
+///
+/// Extracted from [`Database::connect`] so the selector is testable without a live
+/// server. `connect` itself cannot be, and the consequence was that the `postgresql://`
+/// half of the documented contract had no test at all: it could be deleted with the
+/// whole suite green, silently putting a deployer who used that spelling on SQLite —
+/// the exact failure class this pipeline exists to eliminate.
+fn selects_postgres(url: &str) -> bool {
+    url.starts_with("postgres://") || url.starts_with("postgresql://")
+}
+
+/// A connection URL with every credential-bearing part removed, safe to log.
+///
+/// Exists because this pipeline made `EMAILIBRIUM_DATABASE_URL` actually work. It was
+/// inert before — set it and nothing happened — so anyone who still has it lingering in
+/// a shell profile or a Compose `.env` from an earlier attempt now gets that database
+/// instead of the one they have been running on. Naming only the driver ("PostgreSQL")
+/// makes such a switch invisible: the log looks correct while the app is attached to a
+/// different server entirely. Naming the endpoint makes it loud.
+///
+/// Redaction has to survive two competing pressures, and getting either wrong defeats
+/// the purpose:
+/// - Redact too little and a password lands in the log permanently. So userinfo is
+///   redacted whether or not the URL has a `://` (a bare `user:pass@host/db` is not a
+///   shape this app should ever see, but "should never" is not a redaction strategy),
+///   and the split is on the LAST `@` in the whole remainder rather than within a
+///   pre-computed authority. Locating the authority first looked more precise and was
+///   strictly worse: an unencoded `/` in a password (`postgres://alice:s3/cret@host/db`)
+///   moved the `@` out of the "authority" and defeated redaction entirely. Anything
+///   before the last `@` is now treated as credential material.
+///   The cost is paid by SQLite paths: a filename containing `@` is displayed redacted.
+///   That is the trade accepted deliberately — showing less than the truth is survivable,
+///   printing a password is not.
+/// - Redact too much and the endpoint is hidden, which is the very thing this exists to
+///   prevent. PostgreSQL accepts `?host=`/`?port=` as the connection target, so dropping
+///   the whole query string would silently erase the identity of the database being
+///   reported. Those two parameters are kept; every other parameter is dropped, because
+///   `?password=` is also legal there and an allowlist is the only safe direction.
+///
+/// The marker is `***@` rather than deletion so a reader can tell redaction happened.
+fn sanitized_endpoint(url: &str) -> String {
+    // ORDER IS LOAD-BEARING: redact first, split the query second.
+    //
+    // Splitting the query first re-created the bug this function was rewritten to fix,
+    // one delimiter over: an unencoded '?' in a password (`postgres://user:p?ss@host/db`)
+    // made the split land INSIDE the credential, leaving `postgres://user:p` with no '@'
+    // to redact against — so the password's prefix went to the log. Redacting against the
+    // last '@' in the WHOLE url first means no credential text survives to be parsed.
+    let (scheme, rest) = match url.split_once("://") {
+        Some((scheme, rest)) => (format!("{scheme}://"), rest),
+        None => (String::new(), url),
+    };
+    // LAST '@' in the whole remainder — see the doc comment: narrowing to an authority
+    // first is what let an unencoded '/' inside a password escape redaction.
+    let remainder = match rest.rsplit_once('@') {
+        Some((_userinfo, after)) => format!("***@{after}"),
+        None => rest.to_string(),
+    };
+
+    let (base, query) = match remainder.split_once('?') {
+        Some((base, query)) => (base.to_string(), Some(query.to_string())),
+        None => (remainder, None),
+    };
+
+    // Allowlist, never a denylist: an unknown future parameter is dropped, not exposed.
+    let identifying: Vec<&str> = query
+        .as_deref()
+        .map(|q| {
+            q.split('&')
+                .filter(|param| {
+                    let key = param.split('=').next().unwrap_or_default();
+                    key.eq_ignore_ascii_case("host") || key.eq_ignore_ascii_case("port")
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let mut endpoint = format!("{scheme}{base}");
+    if !identifying.is_empty() {
+        endpoint.push('?');
+        endpoint.push_str(&identifying.join("&"));
+    }
+    endpoint
+}
+
+/// Database connection pool, dispatched to SQLite or PostgreSQL by the connection URL's scheme
+/// (`sqlite:...` vs `postgres://...` / `postgresql://...`) — see ADR-033.
+///
+/// Application code talks to the database exclusively through [`Database::sea_orm`], the
+/// single dialect-dispatching code path (ADR-036). This enum's own surface is just the
+/// connection layer: [`Database::connect`], [`Database::run_migrations`], and the
+/// `sea_orm()` wrap.
 #[derive(Debug, Clone)]
-pub struct Database {
-    pub pool: SqlitePool,
+pub enum Database {
+    Sqlite(SqlitePool),
+    Postgres(PgPool),
 }
 
 impl Database {
-    /// Connect to SQLite database.
+    /// Connect to SQLite or PostgreSQL, chosen by `url`'s scheme.
+    ///
+    /// `postgres://` or `postgresql://` selects PostgreSQL; anything else (including the
+    /// default `sqlite:...?mode=rwc`) selects SQLite. See ADR-033 for why the URL scheme alone
+    /// is the selector — no separate feature flag exists, or should be added, for this choice.
     pub async fn connect(url: &str) -> Result<Self, sqlx::Error> {
-        let pool = SqlitePoolOptions::new()
-            .max_connections(5)
-            .connect(url)
-            .await?;
-        Ok(Self { pool })
+        if selects_postgres(url) {
+            let pool = PgPoolOptions::new().max_connections(5).connect(url).await?;
+            Ok(Self::Postgres(pool))
+        } else {
+            let pool = SqlitePoolOptions::new()
+                .max_connections(5)
+                .connect(url)
+                .await?;
+            Ok(Self::Sqlite(pool))
+        }
     }
 
-    /// Run all pending migrations.
+    /// Run all pending migrations for the connected backend.
+    ///
+    /// Each backend has its own migration directory (`migrations/sqlite/`,
+    /// `migrations/postgres/`) rather than one shared, dialect-straddling set — see ADR-033
+    /// §2.3 for why. The two directories carry the same relational schema under matching
+    /// filenames/numbers, with one deliberate exception: `migrations/postgres/` omits the 3
+    /// SQLite FTS5 migrations (005/019/020), since PostgreSQL has no FTS5 equivalent — full-text
+    /// search there is a separate, later capability (ADR-034), not part of this phase's schema
+    /// port. Connecting to PostgreSQL and running migrations works end to end for everything
+    /// except full-text search.
     pub async fn run_migrations(&self) -> Result<(), sqlx::Error> {
-        sqlx::migrate!("./migrations").run(&self.pool).await?;
+        match self {
+            Self::Sqlite(pool) => sqlx::migrate!("./migrations/sqlite").run(pool).await?,
+            Self::Postgres(pool) => sqlx::migrate!("./migrations/postgres").run(pool).await?,
+        }
         Ok(())
+    }
+
+    /// The name of the backend this connection actually opened — `"SQLite"` or
+    /// `"PostgreSQL"`.
+    ///
+    /// Derived from the connected variant, deliberately NOT by re-reading
+    /// `config.database_url`: a diagnostic that re-parses the requested URL agrees
+    /// with the config even when the app is running on something else, which is the
+    /// exact failure this exists to make visible (a `postgres://` URL silently
+    /// serving SQLite went unnoticed for the life of the smoke workflow — ADR-033
+    /// Context). `.github/workflows/smoke.yml` asserts on the startup line built from
+    /// this, so it is a load-bearing string, not decoration.
+    ///
+    /// Safe to log: it names the driver only. The endpoint is logged too, but through
+    /// [`sanitized_endpoint`] — the raw URL is never logged, because it carries the
+    /// database password.
+    pub fn backend_name(&self) -> &'static str {
+        match self {
+            Self::Sqlite(_) => "SQLite",
+            Self::Postgres(_) => "PostgreSQL",
+        }
+    }
+
+    /// The startup diagnostic line, whose `Database backend: <name>` prefix
+    /// `.github/workflows/smoke.yml` greps for verbatim.
+    ///
+    /// It lives here, next to [`Database::backend_name`], so the string smoke asserts on
+    /// is pinned by a unit test instead of only by a ten-minute CI leg — a silent rename
+    /// would otherwise turn that leg's grep into a check of nothing.
+    ///
+    /// The endpoint follows the name so "which database am I actually on" is answerable
+    /// from the log, not just "which driver" — see [`sanitized_endpoint`] for why that
+    /// distinction became load-bearing, and for what is stripped before it is logged.
+    pub fn startup_backend_line(&self, url: &str) -> String {
+        format!(
+            "Database backend: {} ({})",
+            self.backend_name(),
+            sanitized_endpoint(url)
+        )
+    }
+
+    /// A SeaORM handle over the SAME underlying pool this enum already holds (ADR-036).
+    ///
+    /// `sea_orm::DatabaseConnection` is itself a backend-dispatching wrapper, so this match
+    /// is the one place application code still branches on the backend — the composition-root
+    /// wrap proven by the ADR-036 spike (§3 check #2): legacy sqlx call sites and SeaORM share the
+    /// identical pool during the incremental port, so there is no second pool to configure,
+    /// exhaust, or keep consistent. Cloning the returned handle is cheap (it wraps the pool,
+    /// itself a cheap-clone handle); repositories hold their own clone.
+    pub fn sea_orm(&self) -> sea_orm::DatabaseConnection {
+        match self {
+            Self::Sqlite(pool) => sea_orm::SqlxSqliteConnector::from_sqlx_sqlite_pool(pool.clone()),
+            Self::Postgres(pool) => {
+                sea_orm::SqlxPostgresConnector::from_sqlx_postgres_pool(pool.clone())
+            }
+        }
     }
 }
 
-// ---------------------------------------------------------------------------
-// Dynamic SQL safety (sqlx 0.9 `SqlSafeStr`)
-// ---------------------------------------------------------------------------
+/// Test-only constructor: an in-memory SQLite [`Database`] on a single
+/// connection (so `:memory:` state survives across pooled acquires).
+///
+/// This helper — together with [`Database::connect`] — is deliberately the
+/// ONE place in the crate that names the SQLite pool types; every test module
+/// builds its database here rather than assembling a pool by hand (ADR-036 —
+/// the phase-3 sweep removes all other `SqlitePool` call sites). Gated on
+/// `test-vectors` like `embedding.rs`'s mock provider: the binary's and
+/// `backend/tests/`' test targets reach it through the self-dev-dependency's
+/// feature (Cargo.toml), while production builds never compile it.
+#[cfg(any(test, feature = "test-vectors"))]
+pub async fn test_sqlite_database() -> Database {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect(":memory:")
+        .await
+        .expect("in-memory sqlite");
+    Database::Sqlite(pool)
+}
 
-/// Mark a runtime-built SQL string as safe for sqlx 0.9's [`SqlSafeStr`] guard.
-///
-/// sqlx 0.9 only implements `SqlSafeStr` for `&'static str`. Any query whose
-/// text is assembled at runtime — dynamic `IN (?, ?, …)` placeholder lists,
-/// optional `WHERE` fragments, retention-window `DELETE`s, etc. — must be
-/// explicitly asserted safe via [`sqlx::AssertSqlSafe`].
-///
-/// This function is the crate's single audited choke point for that assertion,
-/// so the invariant is documented and reviewed in one place instead of being
-/// repeated at every call site. Every caller composes SQL the same vetted way:
-/// the query *structure* is built only from string literals and bind-parameter
-/// markers (`?` / `?N`) — never from caller- or user-supplied values, which are
-/// always passed through `.bind(...)`. Bare integer literals that appear inline
-/// (e.g. `bool as i32`, config-derived retention day counts) are never user
-/// input.
-///
-/// Do **not** route a string through here that interpolates untrusted data;
-/// doing so reintroduces the SQL-injection risk the guard exists to prevent.
-///
-/// [`SqlSafeStr`]: sqlx::SqlSafeStr
-#[inline]
-pub fn audited_sql(sql: &str) -> sqlx::AssertSqlSafe<String> {
-    sqlx::AssertSqlSafe(sql.to_owned())
+/// Test-only migration replay: strip `--` line comments, split on `;`, and
+/// execute each statement. The ONE copy of the replay loop every test module
+/// used to hand-roll (the naive splitter is fine for these migration files —
+/// no semicolons or `--` inside string literals).
+#[cfg(any(test, feature = "test-vectors"))]
+pub async fn apply_sqlite_migrations(
+    conn: &sea_orm::DatabaseConnection,
+    migrations: &[&str],
+) -> Result<(), sea_orm::DbErr> {
+    use sea_orm::ConnectionTrait;
+
+    for raw in migrations {
+        let cleaned: String = raw
+            .lines()
+            .map(|l| l.find("--").map_or(l, |idx| &l[..idx]))
+            .collect::<Vec<_>>()
+            .join("\n");
+        for stmt in cleaned.split(';') {
+            let s = stmt.trim();
+            if !s.is_empty() {
+                conn.execute_unprepared(s).await?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The application-owned `YYYY-MM-DD HH:MM:SS` UTC wall-clock string written
+/// to TEXT timestamp columns (ADR-035 §2.5) — the Rust-side replacement for
+/// the `datetime('now')` / `to_char(now() AT TIME ZONE 'UTC', ...)` SQL the
+/// ADR-036 port deleted. ONE copy on purpose: this format string is the
+/// on-disk compatibility contract for every TEXT-timestamp table, so write
+/// sites call this instead of spelling the format locally.
+pub fn now_text() -> String {
+    chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string()
 }
 
 // ---------------------------------------------------------------------------
@@ -64,28 +269,33 @@ pub fn audited_sql(sql: &str) -> sqlx::AssertSqlSafe<String> {
 /// This is the single authoritative function for mutating email folder/state
 /// columns and is called from both the delta-sync path and the API endpoints.
 ///
+/// `is_trash`/`is_spam` are INTEGER 0/1 columns (migration 016), so the bool
+/// arguments are widened to `i32` here — the entity mirrors the DDL (ADR-036).
+///
 /// Returns the number of rows affected (0 if the email was not found).
 pub async fn update_email_state(
-    pool: &SqlitePool,
+    conn: &sea_orm::DatabaseConnection,
     email_id: &str,
     is_trash: bool,
     is_spam: bool,
     folder: &str,
     deleted_at: Option<&str>,
-) -> Result<u64, sqlx::Error> {
-    let result = sqlx::query(
-        "UPDATE emails SET is_trash = ?1, is_spam = ?2, folder = ?3, deleted_at = ?4 \
-         WHERE id = ?5",
-    )
-    .bind(is_trash)
-    .bind(is_spam)
-    .bind(folder)
-    .bind(deleted_at)
-    .bind(email_id)
-    .execute(pool)
-    .await?;
+) -> Result<u64, sea_orm::DbErr> {
+    use sea_orm::sea_query::Expr;
+    use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 
-    Ok(result.rows_affected())
+    use entities::emails;
+
+    let result = emails::Entity::update_many()
+        .col_expr(emails::Column::IsTrash, Expr::value(is_trash as i32))
+        .col_expr(emails::Column::IsSpam, Expr::value(is_spam as i32))
+        .col_expr(emails::Column::Folder, Expr::value(folder))
+        .col_expr(emails::Column::DeletedAt, Expr::value(deleted_at))
+        .filter(emails::Column::Id.eq(email_id))
+        .exec(conn)
+        .await?;
+
+    Ok(result.rows_affected)
 }
 
 /// Derive `(is_trash, is_spam, folder)` from a comma-separated label string.
@@ -119,6 +329,157 @@ pub fn derive_state_from_labels(labels: &[String]) -> (bool, bool, &'static str)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The startup diagnostic must report the backend that was CONNECTED. Both arms
+    /// are covered without infrastructure: `connect_lazy` builds a `PgPool` handle
+    /// without contacting a server, so the PostgreSQL arm is exercised in the default
+    /// suite rather than only in the live-Postgres job.
+    #[tokio::test]
+    async fn backend_name_reports_the_connected_variant() {
+        let sqlite = test_sqlite_database().await;
+        assert_eq!(sqlite.backend_name(), "SQLite");
+
+        let postgres = Database::Postgres(
+            PgPoolOptions::new()
+                .connect_lazy("postgres://user:pw@localhost:5432/db")
+                .expect("lazy postgres pool"),
+        );
+        assert_eq!(postgres.backend_name(), "PostgreSQL");
+    }
+
+    /// The startup line is a contract with `.github/workflows/smoke.yml`, which greps
+    /// for its prefix verbatim in both legs. Asserting the whole string here means a
+    /// rename fails in seconds rather than silently reducing that CI leg to a no-op grep.
+    #[tokio::test]
+    async fn startup_backend_line_matches_what_smoke_greps_for() {
+        let sqlite = test_sqlite_database().await;
+        assert_eq!(
+            sqlite.startup_backend_line("sqlite:emailibrium.db?mode=rwc"),
+            "Database backend: SQLite (sqlite:emailibrium.db)"
+        );
+
+        let postgres = Database::Postgres(
+            PgPoolOptions::new()
+                .connect_lazy("postgres://user:pw@localhost:5432/db")
+                .expect("lazy postgres pool"),
+        );
+        assert_eq!(
+            postgres.startup_backend_line("postgres://user:pw@localhost:5432/db"),
+            "Database backend: PostgreSQL (postgres://***@localhost:5432/db)"
+        );
+        // The prefix smoke greps for must survive the endpoint being appended.
+        assert!(postgres
+            .startup_backend_line("postgres://user:pw@localhost:5432/db")
+            .starts_with("Database backend: PostgreSQL"));
+    }
+
+    /// This string is logged, so a leak here writes a database password into the log
+    /// permanently. Every credential-bearing shape gets its own case, including the
+    /// awkward ones: a password containing `@` and `:`, and PostgreSQL's `?password=`
+    /// query parameter.
+    #[test]
+    fn sanitized_endpoint_never_leaks_a_credential() {
+        for (raw, expected) in [
+            (
+                "postgres://emailibrium:s3cret@postgres:5432/emailibrium",
+                "postgres://***@postgres:5432/emailibrium",
+            ),
+            // Password containing the delimiters — the LAST '@' in the authority wins.
+            (
+                "postgres://user:p@ss:w0rd@db.internal:5432/app",
+                "postgres://***@db.internal:5432/app",
+            ),
+            // PostgreSQL accepts the password as a query parameter too.
+            (
+                "postgres://user@host:5432/db?password=s3cret&sslmode=require",
+                "postgres://***@host:5432/db",
+            ),
+            // ...and accepts the HOST as one, which is identity, not secret. Dropping the
+            // whole query would hide the very endpoint this line exists to reveal.
+            (
+                "postgresql:///app?host=db.internal&port=5432&password=s3cret",
+                "postgresql:///app?host=db.internal&port=5432",
+            ),
+            // No credentials at all — nothing to redact, everything else preserved.
+            (
+                "postgres://host:5432/emailibrium",
+                "postgres://host:5432/emailibrium",
+            ),
+            // No scheme. Not a shape this app should produce, but "should not" is not a
+            // redaction strategy — the credential must not survive it either.
+            ("alice:s3cret@db.internal/app", "***@db.internal/app"),
+            // SQLite: no authority, so the path IS the identity; the query is dropped.
+            ("sqlite:emailibrium.db?mode=rwc", "sqlite:emailibrium.db"),
+            (
+                "sqlite:/app/data/emailibrium.db",
+                "sqlite:/app/data/emailibrium.db",
+            ),
+            // Password containing an unencoded '/', which defeated an earlier version
+            // that located the authority before looking for the '@'.
+            (
+                "postgres://alice:s3/cret@db.internal/app",
+                "postgres://***@db.internal/app",
+            ),
+            // Password containing an unencoded '?', which defeated the version that
+            // split the query string before redacting.
+            (
+                "postgres://alice:s3?cret@db.internal/app",
+                "postgres://***@db.internal/app",
+            ),
+            // Percent-encoded '@' inside the password must not be mistaken for the
+            // delimiter — the LAST '@' is still the real one.
+            (
+                "postgres://alice:p%40s3cret@db.internal/app",
+                "postgres://***@db.internal/app",
+            ),
+            // Empty password, and no password at all: both still redact the userinfo.
+            (
+                "postgres://alice:@db.internal/app",
+                "postgres://***@db.internal/app",
+            ),
+            (
+                "postgres://alice@db.internal/app",
+                "postgres://***@db.internal/app",
+            ),
+            // The accepted cost of that fix: a '@' in a SQLite FILENAME is redacted too,
+            // taking the `sqlite:` prefix with it because nothing distinguishes a scheme
+            // from a username without a heuristic that could be wrong in the leaking
+            // direction. Deliberate, and cheap — the same log line already names the
+            // backend as SQLite, so the prefix carried no information the reader lacks.
+            ("sqlite:/app/data/mail@home.db", "***@home.db"),
+            // Bracketed IPv6 authority.
+            (
+                "postgres://user:s3cret@[::1]:5432/db",
+                "postgres://***@[::1]:5432/db",
+            ),
+        ] {
+            let sanitized = sanitized_endpoint(raw);
+            assert_eq!(sanitized, expected, "sanitizing {raw}");
+            assert!(
+                !sanitized.contains("s3cret")
+                    && !sanitized.contains("p@ss:w0rd")
+                    && !sanitized.contains("s3/cret"),
+                "credential survived sanitizing {raw}: {sanitized}"
+            );
+        }
+    }
+
+    /// ADR-033 §2 names TWO PostgreSQL spellings, and `connect` cannot be tested
+    /// without a live server — so before this, `postgresql://` could be dropped from
+    /// the selector with the entire suite green, silently routing a deployer who used
+    /// that spelling to SQLite.
+    #[test]
+    fn both_documented_postgres_spellings_select_postgres() {
+        assert!(selects_postgres("postgres://user:pw@host:5432/db"));
+        assert!(selects_postgres("postgresql://user:pw@host:5432/db"));
+
+        assert!(!selects_postgres("sqlite:emailibrium.db?mode=rwc"));
+        assert!(!selects_postgres("emailibrium.db"));
+        // Near-misses must NOT match: a typo has to fail loudly on connect, not
+        // quietly open the other backend.
+        assert!(!selects_postgres("postgre://user@host/db"));
+        assert!(!selects_postgres("sqlite:postgres://not-a-scheme"));
+    }
 
     #[test]
     fn test_derive_state_inbox() {
@@ -181,5 +542,81 @@ mod tests {
         assert!(trash);
         assert!(!spam);
         assert_eq!(folder, "TRASH");
+    }
+
+    /// Two-row pin for `update_email_state`: the `Id` filter is the only thing
+    /// standing between "trash this email" and "rewrite the state of every
+    /// email in the table" — a lost per-row filter in the `update_many` port
+    /// must fail here.
+    #[tokio::test]
+    async fn update_email_state_touches_only_the_target_row() {
+        use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QuerySelect};
+
+        let db = test_sqlite_database().await;
+        let conn = db.sea_orm();
+        for raw in [
+            include_str!("../../migrations/sqlite/001_initial_schema.sql"),
+            include_str!("../../migrations/sqlite/016_soft_delete_trash_spam.sql"),
+        ] {
+            let cleaned: String = raw
+                .lines()
+                .map(|l| l.find("--").map_or(l, |idx| &l[..idx]))
+                .collect::<Vec<_>>()
+                .join("\n");
+            for stmt in cleaned.split(';') {
+                let s = stmt.trim();
+                if !s.is_empty() {
+                    conn.execute_unprepared(s).await.expect("migrate");
+                }
+            }
+        }
+        for id in ["target", "bystander"] {
+            conn.execute_unprepared(&format!(
+                "INSERT INTO emails (id, account_id, provider, subject, from_addr, to_addrs, \
+                 received_at) VALUES ('{id}', 'acct-1', 'gmail', 's', 'a@x.com', 'b@x.com', \
+                 '2026-08-01T10:00:00+00:00')"
+            ))
+            .await
+            .expect("seed");
+        }
+
+        let n = update_email_state(&conn, "target", true, false, "TRASH", Some("2026-08-02"))
+            .await
+            .expect("update");
+        assert_eq!(n, 1, "exactly one row updated");
+
+        let rows: Vec<(String, i32, i32, String, Option<String>)> =
+            entities::emails::Entity::find()
+                .select_only()
+                .column(entities::emails::Column::Id)
+                .column(entities::emails::Column::IsTrash)
+                .column(entities::emails::Column::IsSpam)
+                .column(entities::emails::Column::Folder)
+                .column(entities::emails::Column::DeletedAt)
+                .filter(entities::emails::Column::Id.is_in(["target", "bystander"]))
+                .into_tuple()
+                .all(&conn)
+                .await
+                .expect("read back");
+        let target = rows.iter().find(|r| r.0 == "target").expect("target row");
+        let bystander = rows
+            .iter()
+            .find(|r| r.0 == "bystander")
+            .expect("bystander row");
+        assert_eq!(
+            (target.1, target.2, target.3.as_str(), target.4.as_deref()),
+            (1, 0, "TRASH", Some("2026-08-02")),
+            "target takes the new state"
+        );
+        assert_eq!(
+            (
+                bystander.1,
+                bystander.2,
+                bystander.3.as_str(),
+                bystander.4.as_deref()
+            ),
+            (0, 0, "INBOX", None),
+            "the bystander row keeps its defaults untouched"
+        );
     }
 }

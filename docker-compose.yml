@@ -25,11 +25,41 @@ services:
     ports:
       - "${BACKEND_PORT:-8080}:8080"
     environment:
+      # ── Which database? ────────────────────────────────────────────────
+      # SQLite (default) vs PostgreSQL is decided by ONE value: the connection
+      # URL's scheme (ADR-033). There is no separate backend flag.
+      #
+      #   SQLite (default)  docker compose up -d
+      #   PostgreSQL        EMAILIBRIUM_DATABASE_URL=postgres://emailibrium:<pw>@postgres:5432/emailibrium \
+      #                       docker compose --profile postgres up -d
+      #
+      # The --profile flag is what starts the `postgres` service (see its comment
+      # below); this variable is what points the app at it. Leaving the variable
+      # unset falls back to the `database_url` secret, then to the SQLite default in
+      # config/environments/config.*.yaml — entrypoint.sh explains the precedence.
+      #
+      # BEHAVIOR CHANGE, read this if you are upgrading: this variable used to be inert.
+      # Setting it did nothing (the app never read it), so a value left in your shell or
+      # in this project's `.env` from an earlier attempt was harmless. It is live now, and
+      # Compose substitutes `.env` here — so a stale value will silently move you onto a
+      # different database. The startup log names the endpoint, not just the driver, so
+      # check the backend's first lines after upgrading if you are unsure which one you
+      # are on.
+      EMAILIBRIUM_DATABASE_URL: ${EMAILIBRIUM_DATABASE_URL:-}
       # Non-secret config via env vars (12-factor)
       APP_ENV: ${APP_ENV:-development}
       RUST_LOG: ${RUST_LOG:-emailibrium=info,tower_http=info}
       REDIS_URL: redis://redis:6379
       EMAILIBRIUM_STORE_BACKEND: ${STORE_BACKEND:-ruvector}
+      # KNOWN DEAD, disclosed rather than quietly left looking functional: this value
+      # never reaches the app. `store.qdrant_url` is a flat multi-word field INSIDE a
+      # nested struct, and neither env provider can address that shape — the split one
+      # resolves it to `store.qdrant.url`, the unsplit one to `store_qdrant_url`, and
+      # serde ignores both. Overriding QDRANT_URL therefore changes nothing; the app
+      # keeps the compiled default. Same failure class this phase fixed for
+      # EMAILIBRIUM_DATABASE_URL above, but the general fix changes the env contract for
+      # several documented knobs at once, so it is recorded as
+      # `pl-nested-flat-env-keys-dropped` rather than folded in here.
       EMAILIBRIUM_STORE_QDRANT_URL: ${QDRANT_URL:-http://qdrant:6334}
       VECTOR_STORE_PATH: /app/data/vectors
       CONFIG_PATH: /app/config.yaml
@@ -47,6 +77,17 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+        # `required: false` is load-bearing, not a hedge: `postgres` is behind a
+        # profile now, and Compose rejects the whole project ("service backend
+        # depends on undefined service postgres: invalid compose project") if a
+        # depended-on service isn't enabled. With this, the SQLite default —
+        # `docker compose up` with no profile — is a valid project again, while
+        # `--profile postgres` still orders backend AFTER postgres is healthy.
+        # The one thing it gives up: with the profile active but postgres failing
+        # to start, backend is no longer held back — it starts, fails to connect,
+        # and the stack goes red through backend's own healthcheck instead of
+        # through the dependency.
+        required: false
       redis:
         condition: service_healthy
     healthcheck:
@@ -120,10 +161,25 @@ services:
         max-size: "5m"
         max-file: "3"
 
-  # ─── PostgreSQL ───────────────────────────────────────────
+  # ─── PostgreSQL (optional, enable with --profile postgres) ─
+  #
+  # Opt-in, mirroring the `qdrant` service below. A SQLite deployment — the default —
+  # never pulls, starts, or health-checks a database container it will not talk to:
+  #
+  #   SQLite (default)  docker compose up -d
+  #   PostgreSQL        EMAILIBRIUM_DATABASE_URL=postgres://emailibrium:<pw>@postgres:5432/emailibrium \
+  #                       docker compose --profile postgres up -d
+  #
+  # The profile starts this container; EMAILIBRIUM_DATABASE_URL (see the backend
+  # service's environment block) is what points the app at it. Both are needed —
+  # starting the container alone leaves the app on SQLite, and pointing the app at a
+  # container that was never started fails to connect. <pw> must match the
+  # `db_password` secret this service reads.
   postgres:
     image: postgres:16-alpine
     container_name: emailibrium-postgres
+    profiles:
+      - postgres
     # 70, not 999. postgres:16-alpine runs postgres as uid 70 and owns
     # /var/lib/postgresql as 70:70; 999 is the DEBIAN postgres uid, so this was
     # presumably written for postgres:16 and later switched to -alpine.
