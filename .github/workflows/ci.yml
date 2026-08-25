@@ -87,7 +87,7 @@ jobs:
       # Pin the version: the archive producer and consumer must be the same
       # nextest, and an unpinned install lets a release landing between the two
       # jobs mismatch them (nextest's own archiving docs call this out).
-      - uses: taiki-e/install-action@v2.85.5
+      - uses: taiki-e/install-action@v2.86.5
         with:
           tool: cargo-nextest@0.9.140
       - uses: Swatinem/rust-cache@v2
@@ -164,7 +164,7 @@ jobs:
       # Must match rust-build's pinned version exactly — the archive is produced
       # and consumed by nextest, and a version skew between the two jobs is a
       # confusing failure mode nextest's archiving docs warn about.
-      - uses: taiki-e/install-action@v2.85.5
+      - uses: taiki-e/install-action@v2.86.5
         with:
           tool: cargo-nextest@0.9.140
       - uses: actions/download-artifact@v8
@@ -194,7 +194,7 @@ jobs:
       # Prebuilt binary. This previously used a from-source `cargo install`,
       # which recompiled the tool on every run.
       - name: Install cargo-audit
-        uses: taiki-e/install-action@v2.85.5
+        uses: taiki-e/install-action@v2.86.5
         with:
           tool: cargo-audit
       # Fetch the RUSTSEC advisory DB with retry so a transient GitHub 500
@@ -278,7 +278,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: DavidAnson/markdownlint-cli2-action@v24.1.0
+      - uses: DavidAnson/markdownlint-cli2-action@v24.2.0
         with:
           globs: "**/*.md"
           config: .markdownlint.yaml
