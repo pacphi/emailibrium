@@ -115,7 +115,7 @@ ruvector-core = { path = "../ruvector/crates/ruvector-core", default-features = 
 ruvector-gnn = { path = "../ruvector/crates/ruvector-gnn", default-features = false }
 
 # Built-in local LLM (ADR-021 addendum, opt-in via --features builtin-llm)
-llama-cpp-4 = { version = "0.3.1", optional = true }
+llama-cpp-4 = { version = "0.6.1", optional = true }
 hf-hub = { version = "0.5", optional = true }
 shellexpand = "3"
 dirs = "6"
