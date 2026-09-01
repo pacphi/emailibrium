@@ -56,7 +56,7 @@ async-trait = "0.1"
 futures = "0.3"
 tokio-stream = { version = "0.1", features = ["sync"] }
 tokio-util = { version = "0.7", features = ["io", "compat", "rt"] }
-async_zip = { version = "0.0.18", features = ["tokio", "deflate"] }
+async_zip = { version = "0.0.19", features = ["tokio", "deflate"] }
 
 # IMAP
 async-imap = { version = "0.11", default-features = false, features = ["runtime-tokio"] }
