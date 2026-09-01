@@ -101,7 +101,7 @@ tracing-appender = "0.2"
 # Config
 figment = { version = "0.10", features = ["yaml", "env", "toml"] }
 serde_yaml = "0.9"
-fastembed = "5.16.0"
+fastembed = "6.0.2"
 
 # MCP (Model Context Protocol) server (ADR-028)
 # `transport-io` gates `rmcp::transport::io::stdio()`, which the stdio mode
