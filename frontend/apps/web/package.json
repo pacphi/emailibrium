@@ -54,8 +54,8 @@
     "@storybook/react": "^10.4.6",
     "storybook": "^10.4.6",
     "@tailwindcss/postcss": "^4.3.2",
-    "@testing-library/jest-dom": "^7.0.0",
-    "@testing-library/react": "^16.3.2",
+    "@testing-library/jest-dom": "^7.0.1",
+    "@testing-library/react": "^16.3.3",
     "@types/node": "^25.9.2",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.4",
@@ -71,6 +71,6 @@
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.62.1",
     "vite": "^8.0.16",
-    "vitest": "^4.1.10"
+    "vitest": "^4.1.11"
   }
 }
