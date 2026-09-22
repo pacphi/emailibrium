@@ -80,11 +80,9 @@ ci:
   # `main` or `develop`. Widened from `[main]` to `[main, develop]` on 2026-07-31 when the
   # ci-build-optimization pipeline switched to base=develop (see .autopilot/pipeline.yml) — without
   # it, phase PRs into develop would run zero checks and orchestrate would refuse to merge them.
-  # NOTE: CI's frontend-quality job currently runs typecheck/format/lint/build but NOT Vitest
-  # unit tests — frontend test coverage in CI is a gap independent of this gate (the local gate
-  # above does run frontend tests via commands.test/test_frontend, so pr_ci phases are still
-  # protected, but the base→trunk integration PR's CI checks alone won't catch a frontend
-  # regression). Consider adding a frontend test job to ci.yml.
+  # CI now has distinct frontend-unit-tests and frontend-browser-tests jobs.
+  # Browser tests use a synthetic API boundary; they do not prove live provider,
+  # OAuth, or real-model behavior. See frontend/apps/web/e2e/README.md.
   base_coverage: covered # covered | trunk-only | none
 
 # ─────────────────────────────────────────────────────────────────────────────

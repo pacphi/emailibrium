@@ -1,0 +1,114 @@
+{
+  "base_revision": "881868f7c57ef98552612a6cf15edde15cdd43aa",
+  "tested_code_revision": "d41136ed2cfd2d73387b9bb8593b52ca28b4f51b",
+  "tested_lockfile_sha256": "99b6bba2f9c99c90415a44d5553c0cfba166644829b51a93e961aed6cc3c19fd",
+  "date": "2026-09-22",
+  "checks": {
+    "backend-integrated-test": {
+      "exit_code": 0,
+      "passed": 1318,
+      "ignored": 7
+    },
+    "postgres-test": {
+      "exit_code": 0
+    },
+    "postgres-audit-test": {
+      "exit_code": 0
+    },
+    "proptest": {
+      "exit_code": 0,
+      "passed": 21
+    },
+    "builtin-check": {
+      "exit_code": 0
+    },
+    "clippy": {
+      "exit_code": 0
+    },
+    "frontend-integrated-test": {
+      "exit_code": 0,
+      "passed": 400
+    },
+    "frontend-integrated-typecheck": {
+      "exit_code": 0
+    },
+    "frontend-integrated-build": {
+      "exit_code": 0
+    },
+    "browser-integrated-test": {
+      "exit_code": 0,
+      "passed": 26,
+      "retries": 0,
+      "provider_boundary": "synthetic HTTP/SSE; external HTTP blocked"
+    },
+    "aqe-web-integrated": {
+      "exit_code": 0,
+      "runId": "ebcd7043-b651-4cfd-9794-f053eb581638",
+      "status": "passed",
+      "total": 333,
+      "passed": 333,
+      "failed": 0,
+      "skipped": 0,
+      "duration": 1408,
+      "failedTests": []
+    },
+    "backend-audit-after": {
+      "exit_code": 0
+    },
+    "frontend-audit": {
+      "exit_code": 0
+    },
+    "actionlint": {
+      "exit_code": 0
+    },
+    "yamllint": {
+      "exit_code": 0
+    },
+    "postgres_migrations": 26,
+    "backend_advisory_warnings": {
+      "unmaintained": [
+        {
+          "package": "bincode",
+          "version": "1.3.3"
+        },
+        {
+          "package": "bincode",
+          "version": "2.0.1"
+        },
+        {
+          "package": "chrono-english",
+          "version": "0.1.8"
+        },
+        {
+          "package": "paste",
+          "version": "1.0.15"
+        },
+        {
+          "package": "ttf-parser",
+          "version": "0.25.1"
+        }
+      ],
+      "yanked": [
+        {
+          "package": "chacha20",
+          "version": "0.10.0"
+        },
+        {
+          "package": "der",
+          "version": "0.8.0"
+        },
+        {
+          "package": "spin",
+          "version": "0.9.8"
+        }
+      ]
+    }
+  },
+  "limits": [
+    "No live mailbox/OAuth or model inference test",
+    "No throughput or complete accessibility measurement",
+    "Seven default Rust tests ignored; PG-only roundtrip bodies separately executed",
+    "AQE MCP health timed out; Rust mechanical branch output rejected for wrong language",
+    "No remote GitHub CI run for integrated commits"
+  ]
+}
