@@ -15,6 +15,8 @@ use super::operation::{AccountStateEtag, EmailRef, UnsubscribeMethodKind};
 pub enum RepoError {
     #[error("not found")]
     NotFound,
+    #[error("conflict: {0}")]
+    Conflict(&'static str),
     #[error("db: {0}")]
     Db(#[from] sea_orm::DbErr),
     #[error("internal: {0}")]

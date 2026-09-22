@@ -174,12 +174,15 @@ impl CleanupPlanRepository for SeaOrmCleanupPlanRepo {
     }
 
     async fn release_apply(&self, id: PlanId, status: PlanStatus) -> Result<(), RepoError> {
-        plans::Entity::update_many()
+        let result = plans::Entity::update_many()
             .col_expr(plans::Column::Status, Expr::value(status.as_str()))
             .filter(plans::Column::Id.eq(id.as_bytes().to_vec()))
             .filter(plans::Column::Status.eq(PlanStatus::Applying.as_str()))
             .exec(&self.conn)
             .await?;
+        if result.rows_affected != 1 {
+            return Err(RepoError::Conflict("cleanup plan claim is no longer held"));
+        }
         Ok(())
     }
 
@@ -224,10 +227,17 @@ impl CleanupPlanRepository for SeaOrmCleanupPlanRepo {
                         plans::Column::RiskJson,
                         plans::Column::WarningsJson,
                     ])
+                    .action_and_where(plans::Column::Status.ne(PlanStatus::Applying.as_str()))
                     .to_owned(),
             )
             .exec(&txn)
-            .await?;
+            .await
+            .map_err(|error| match error {
+                sea_orm::DbErr::RecordNotInserted => {
+                    RepoError::Conflict("claimed cleanup plan cannot be overwritten")
+                }
+                error => RepoError::Db(error),
+            })?;
 
         etags::Entity::delete_many()
             .filter(etags::Column::PlanId.eq(plan.id.as_bytes().to_vec()))
@@ -467,17 +477,63 @@ impl CleanupPlanRepository for SeaOrmCleanupPlanRepo {
         account_id: &str,
         new_rows: Vec<PlannedOperation>,
     ) -> Result<(), RepoError> {
-        let txn = self.conn.begin().await?;
-        ops::Entity::delete_many()
-            .filter(ops::Column::PlanId.eq(id.as_bytes().to_vec()))
-            .filter(ops::Column::AccountId.eq(account_id.as_bytes().to_vec()))
-            .exec(&txn)
-            .await?;
-        for op in &new_rows {
-            insert_operation(&txn, id, op).await?;
+        let previous = plans::Entity::find_by_id(id.as_bytes().to_vec())
+            .one(&self.conn)
+            .await?
+            .ok_or(RepoError::NotFound)?;
+        let restore_status = PlanStatus::from_str_opt(&previous.status)
+            .ok_or_else(|| RepoError::Internal("invalid cleanup plan status".into()))?;
+        if restore_status == PlanStatus::Applying {
+            return Err(RepoError::Conflict("cleanup plan is claimed"));
         }
-        txn.commit().await?;
-        Ok(())
+        // Publish exclusive ownership before row mutations. Other instances see
+        // Applying even before a job/channel exists, and cannot refresh, cancel,
+        // overwrite, purge or begin apply while this operation owns the plan.
+        let claimed = plans::Entity::update_many()
+            .col_expr(
+                plans::Column::Status,
+                Expr::value(PlanStatus::Applying.as_str()),
+            )
+            .filter(plans::Column::Id.eq(id.as_bytes().to_vec()))
+            .filter(plans::Column::Status.eq(previous.status))
+            .filter(plans::Column::PlanHash.eq(previous.plan_hash))
+            .exec(&self.conn)
+            .await?;
+        if claimed.rows_affected != 1 {
+            return Err(RepoError::Conflict("cleanup plan changed or was claimed"));
+        }
+        let txn = match self.conn.begin().await {
+            Ok(txn) => txn,
+            Err(error) => {
+                self.release_apply(id, restore_status).await?;
+                return Err(error.into());
+            }
+        };
+        let mutation: Result<(), RepoError> = async {
+            ops::Entity::delete_many()
+                .filter(ops::Column::PlanId.eq(id.as_bytes().to_vec()))
+                .filter(ops::Column::AccountId.eq(account_id.as_bytes().to_vec()))
+                .exec(&txn)
+                .await?;
+            for op in &new_rows {
+                insert_operation(&txn, id, op).await?;
+            }
+            Ok(())
+        }
+        .await;
+        // Await transaction completion explicitly. An unverified commit or
+        // rollback leaves Applying held for reconciliation rather than guessing.
+        match mutation {
+            Ok(()) => {
+                txn.commit().await?;
+                self.release_apply(id, restore_status).await
+            }
+            Err(error) => {
+                txn.rollback().await?;
+                self.release_apply(id, restore_status).await?;
+                Err(error)
+            }
+        }
     }
 
     async fn update_operation_status(
@@ -604,11 +660,21 @@ impl CleanupPlanRepository for SeaOrmCleanupPlanRepo {
     }
 
     async fn cancel(&self, id: PlanId) -> Result<(), RepoError> {
-        plans::Entity::update_many()
+        let result = plans::Entity::update_many()
             .col_expr(plans::Column::Status, Expr::value("cancelled"))
             .filter(plans::Column::Id.eq(id.as_bytes().to_vec()))
+            .filter(plans::Column::Status.ne(PlanStatus::Applying.as_str()))
             .exec(&self.conn)
             .await?;
+        if result.rows_affected == 0 {
+            return match plans::Entity::find_by_id(id.as_bytes().to_vec())
+                .one(&self.conn)
+                .await?
+            {
+                Some(_) => Err(RepoError::Conflict("cleanup plan is claimed")),
+                None => Err(RepoError::NotFound),
+            };
+        }
         Ok(())
     }
 
@@ -625,6 +691,7 @@ impl CleanupPlanRepository for SeaOrmCleanupPlanRepo {
     async fn purge_older_than(&self, cutoff: DateTime<Utc>) -> Result<u32, RepoError> {
         let res = plans::Entity::delete_many()
             .filter(plans::Column::ValidUntil.lt(cutoff.timestamp_millis()))
+            .filter(plans::Column::Status.ne(PlanStatus::Applying.as_str()))
             .exec(&self.conn)
             .await?;
         Ok(res.rows_affected as u32)
@@ -1453,9 +1520,46 @@ mod tests {
             repo.load(&user, plan_id).await.unwrap().unwrap().status,
             PlanStatus::Applying
         );
+        let peer = SeaOrmCleanupPlanRepo::new(db.sea_orm());
+        assert!(matches!(
+            peer.replace_account_rows(plan_id, "acct-a", Vec::new())
+                .await,
+            Err(RepoError::Conflict(_))
+        ));
+        assert!(matches!(
+            peer.cancel(plan_id).await,
+            Err(RepoError::Conflict(_))
+        ));
+        assert!(matches!(
+            peer.save(&plan).await,
+            Err(RepoError::Conflict(_))
+        ));
         repo.release_apply(plan_id, PlanStatus::Ready)
             .await
             .expect("release claim");
+        assert!(matches!(
+            peer.release_apply(plan_id, PlanStatus::Ready).await,
+            Err(RepoError::Conflict(_))
+        ));
+        assert_eq!(
+            repo.load(&user, plan_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .operations
+                .len(),
+            2
+        );
+
+        let duplicate = plan.operations[0].clone();
+        assert!(peer
+            .replace_account_rows(plan_id, "acct-a", vec![duplicate.clone(), duplicate])
+            .await
+            .is_err());
+        assert_eq!(
+            repo.load(&user, plan_id).await.unwrap().unwrap().status,
+            PlanStatus::Ready
+        );
         assert_eq!(
             repo.load(&user, plan_id)
                 .await
@@ -1637,5 +1741,180 @@ mod tests {
             .expect("tail");
         assert_eq!(tail.len(), 5);
         assert!(tail.iter().all(|op| op.account_id() == "acct-b"));
+    }
+    async fn boundary_claimed_plan() -> (SeaOrmCleanupPlanRepo, SeaOrmCleanupPlanRepo, CleanupPlan)
+    {
+        let conn = fresh_conn().await;
+        let owner = SeaOrmCleanupPlanRepo::new(conn.clone());
+        let peer = SeaOrmCleanupPlanRepo::new(conn);
+        let plan = sample_plan("boundary-owner");
+        owner.save(&plan).await.unwrap();
+        assert!(owner.claim_apply(&plan, Utc::now()).await.unwrap());
+        owner
+            .update_operation_status(plan.id, 1, OperationStatus::Applied, Utc::now())
+            .await
+            .unwrap();
+        (owner, peer, plan)
+    }
+
+    #[tokio::test]
+    async fn claim_boundary_refresh_preserves_an_active_plans_rows() {
+        let (owner, peer, plan) = boundary_claimed_plan().await;
+        let before = owner.load(&plan.user_id, plan.id).await.unwrap().unwrap();
+        assert!(peer
+            .replace_account_rows(plan.id, "acct-a", Vec::new())
+            .await
+            .is_err());
+        let after = owner.load(&plan.user_id, plan.id).await.unwrap().unwrap();
+        assert_eq!(after.status, PlanStatus::Applying);
+        assert_eq!(
+            serde_json::to_value(after.operations).unwrap(),
+            serde_json::to_value(before.operations).unwrap()
+        );
+        owner
+            .release_apply(plan.id, PlanStatus::PartiallyApplied)
+            .await
+            .unwrap();
+        peer.replace_account_rows(plan.id, "acct-a", Vec::new())
+            .await
+            .unwrap();
+        let refreshed = owner.load(&plan.user_id, plan.id).await.unwrap().unwrap();
+        assert!(refreshed.operations.is_empty());
+        assert_eq!(refreshed.status, PlanStatus::PartiallyApplied);
+    }
+
+    #[tokio::test]
+    async fn claim_boundary_refresh_holds_ownership_through_delete_and_insert() {
+        use sea_orm::ConnectionTrait;
+        let conn = fresh_conn().await;
+        let owner = SeaOrmCleanupPlanRepo::new(conn.clone());
+        let peer = SeaOrmCleanupPlanRepo::new(conn.clone());
+        let plan = sample_plan("refresh-owner");
+        owner.save(&plan).await.unwrap();
+        conn.execute_unprepared("CREATE TRIGGER require_delete_claim BEFORE DELETE ON cleanup_plan_operations BEGIN SELECT CASE WHEN (SELECT status FROM cleanup_plans WHERE id = OLD.plan_id) != 'applying' THEN RAISE(ABORT, 'refresh deleted without ownership') END; END").await.unwrap();
+        conn.execute_unprepared("CREATE TRIGGER require_insert_claim BEFORE INSERT ON cleanup_plan_operations BEGIN SELECT CASE WHEN (SELECT status FROM cleanup_plans WHERE id = NEW.plan_id) != 'applying' THEN RAISE(ABORT, 'refresh inserted without ownership') END; END").await.unwrap();
+        let mut replacement = plan.operations[0].clone();
+        if let PlannedOperation::Materialized(row) = &mut replacement {
+            row.email_id = Some("replacement".into());
+        }
+        peer.replace_account_rows(plan.id, "acct-a", vec![replacement])
+            .await
+            .expect("refresh owns all row writes");
+        let refreshed = owner.load(&plan.user_id, plan.id).await.unwrap().unwrap();
+        assert_eq!(refreshed.status, PlanStatus::Ready);
+        assert!(
+            matches!(&refreshed.operations[0], PlannedOperation::Materialized(row) if row.email_id.as_deref() == Some("replacement"))
+        );
+        assert!(owner.claim_apply(&refreshed, Utc::now()).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn claim_boundary_failed_refresh_rolls_back_rows_and_releases_ownership() {
+        let conn = fresh_conn().await;
+        let owner = SeaOrmCleanupPlanRepo::new(conn.clone());
+        let peer = SeaOrmCleanupPlanRepo::new(conn);
+        let plan = sample_plan("failed-refresh-owner");
+        owner.save(&plan).await.unwrap();
+        let duplicate = plan.operations[0].clone();
+        assert!(peer
+            .replace_account_rows(plan.id, "acct-a", vec![duplicate.clone(), duplicate])
+            .await
+            .is_err());
+        let stored = owner.load(&plan.user_id, plan.id).await.unwrap().unwrap();
+        assert_eq!(stored.status, PlanStatus::Ready);
+        assert_eq!(
+            serde_json::to_value(&stored.operations).unwrap(),
+            serde_json::to_value(&plan.operations).unwrap()
+        );
+        assert!(owner.claim_apply(&stored, Utc::now()).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn claim_boundary_cancel_cannot_override_an_active_claim_or_win_a_claim_race() {
+        let (owner, peer, plan) = boundary_claimed_plan().await;
+        assert!(peer.cancel(plan.id).await.is_err());
+        assert_eq!(
+            owner
+                .load(&plan.user_id, plan.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .status,
+            PlanStatus::Applying
+        );
+        owner
+            .release_apply(plan.id, PlanStatus::Ready)
+            .await
+            .unwrap();
+        let (claim, cancel) =
+            tokio::join!(owner.claim_apply(&plan, Utc::now()), peer.cancel(plan.id));
+        assert!(
+            matches!((claim, cancel), (Ok(true), Err(_)) | (Ok(false), Ok(()))),
+            "claim and cancel cannot both win"
+        );
+    }
+
+    #[tokio::test]
+    async fn claim_boundary_upsert_cannot_reset_an_active_claim_or_operation_outcome() {
+        let (owner, peer, plan) = boundary_claimed_plan().await;
+        assert!(
+            peer.save(&plan).await.is_err(),
+            "stale save cannot reset Applying or applied rows"
+        );
+        let stored = owner.load(&plan.user_id, plan.id).await.unwrap().unwrap();
+        assert_eq!(stored.status, PlanStatus::Applying);
+        assert!(
+            matches!(&stored.operations[0], PlannedOperation::Materialized(row) if row.status == OperationStatus::Applied)
+        );
+    }
+
+    #[tokio::test]
+    async fn claim_boundary_purge_preserves_claimed_plans_and_removes_unclaimed_plans() {
+        let (owner, peer, plan) = boundary_claimed_plan().await;
+        let bystander = sample_plan("purge-owner");
+        peer.save(&bystander).await.unwrap();
+        assert_eq!(
+            peer.purge_older_than(Utc::now() + Duration::hours(1))
+                .await
+                .unwrap(),
+            1
+        );
+        let stored = owner.load(&plan.user_id, plan.id).await.unwrap().unwrap();
+        assert_eq!(stored.status, PlanStatus::Applying);
+        assert!(
+            matches!(&stored.operations[0], PlannedOperation::Materialized(row) if row.status == OperationStatus::Applied)
+        );
+        assert!(owner
+            .load(&bystander.user_id, bystander.id)
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn claim_boundary_release_requires_an_actual_held_claim() {
+        let repo = SeaOrmCleanupPlanRepo::new(fresh_conn().await);
+        let plan = sample_plan("release-owner");
+        repo.save(&plan).await.unwrap();
+        assert!(repo
+            .release_apply(plan.id, PlanStatus::Ready)
+            .await
+            .is_err());
+        assert!(repo.claim_apply(&plan, Utc::now()).await.unwrap());
+        repo.release_apply(plan.id, PlanStatus::PartiallyApplied)
+            .await
+            .unwrap();
+        assert!(repo
+            .release_apply(plan.id, PlanStatus::Ready)
+            .await
+            .is_err());
+        assert_eq!(
+            repo.load(&plan.user_id, plan.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .status,
+            PlanStatus::PartiallyApplied
+        );
     }
 }

@@ -246,13 +246,23 @@ async fn cancel_plan(
     Path(id): Path<Uuid>,
     Query(_q): Query<UserQuery>,
 ) -> Result<StatusCode, (StatusCode, Json<ErrorBody>)> {
-    state.cleanup_plan_repo.cancel(id).await.map_err(|e| {
-        err(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "cancel_failed",
-            &e.to_string(),
-        )
-    })?;
+    state
+        .cleanup_plan_repo
+        .cancel(id)
+        .await
+        .map_err(|e| match &e {
+            crate::cleanup::domain::ports::RepoError::Conflict(_) => {
+                err(StatusCode::CONFLICT, "plan_claimed", &e.to_string())
+            }
+            crate::cleanup::domain::ports::RepoError::NotFound => {
+                err(StatusCode::NOT_FOUND, "not_found", &e.to_string())
+            }
+            _ => err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "cancel_failed",
+                &e.to_string(),
+            ),
+        })?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -355,9 +365,9 @@ async fn refresh_account(
     Path(id): Path<Uuid>,
     Query(q): Query<RefreshQuery>,
 ) -> Result<StatusCode, (StatusCode, Json<ErrorBody>)> {
-    // Phase C race guard: reject if a job is currently running for this
-    // plan. Otherwise refresh would delete rows whose `applied_at` was
-    // already written, corrupting the audit trail (DDD-008 addendum).
+    // This local check is only an early hint. The repository acquires a
+    // persistent claim for the whole refresh, including across server instances
+    // and the interval before a new apply job publishes its channel.
     if state.apply_orchestrator.is_running_for_plan(id).await {
         return Err(err(
             StatusCode::CONFLICT,
@@ -369,12 +379,18 @@ async fn refresh_account(
         .cleanup_plan_repo
         .replace_account_rows(id, &q.account_id, Vec::new())
         .await
-        .map_err(|e| {
-            err(
+        .map_err(|e| match &e {
+            crate::cleanup::domain::ports::RepoError::Conflict(_) => {
+                err(StatusCode::CONFLICT, "plan_claimed", &e.to_string())
+            }
+            crate::cleanup::domain::ports::RepoError::NotFound => {
+                err(StatusCode::NOT_FOUND, "not_found", &e.to_string())
+            }
+            _ => err(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "refresh_failed",
                 &e.to_string(),
-            )
+            ),
         })?;
     // Phase D telemetry — hashed ids only.
     state.cleanup_telemetry.emit(

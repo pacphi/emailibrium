@@ -547,9 +547,10 @@ mod tests {
             if let Some(plan) = self.plan.lock().unwrap().as_mut() {
                 if plan.id == id && plan.status == PlanStatus::Applying {
                     plan.status = status;
+                    return Ok(());
                 }
             }
-            Ok(())
+            Err(RepoError::Conflict("cleanup plan claim is no longer held"))
         }
         async fn save(&self, plan: &CleanupPlan) -> Result<(), RepoError> {
             *self.plan.lock().unwrap() = Some(plan.clone());
