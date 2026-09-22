@@ -24,8 +24,8 @@ use sea_orm::{
 
 use crate::cleanup::domain::operation::{AccountStateEtag, EmailRef, UnsubscribeMethodKind};
 use crate::cleanup::domain::ports::{
-    AccountStateProvider, ClusterRepository, EmailRepository, RepoError, RuleEvalError,
-    RuleEvaluator, RuleMatchPage, SubscriptionRecord, SubscriptionRepository,
+    AccountStateProvider, BoundRuleEvaluation, ClusterRepository, EmailRepository, RepoError,
+    RuleEvalError, RuleEvaluator, RuleMatchPage, SubscriptionRecord, SubscriptionRepository,
 };
 use crate::db::entities::{connected_accounts, emails, sync_state, topic_clusters};
 use crate::db::Database;
@@ -42,6 +42,59 @@ const ID_CHUNK: usize = 500;
 struct EmailRefRow {
     id: String,
     account_id: String,
+}
+
+#[derive(FromQueryResult)]
+struct ArchiveCandidateRow {
+    id: String,
+    account_id: String,
+    received_at: chrono::NaiveDateTime,
+    folder: String,
+    labels: Option<String>,
+}
+
+/// Exact stored source markers only. Opaque provider folder ids still require
+/// the provider-derived source facts gate; names alone cannot prove all sources.
+fn is_protected_cleanup_source(folder: &str, labels: Option<&str>) -> bool {
+    fn protected(token: &str) -> bool {
+        matches!(
+            token.trim().to_ascii_uppercase().as_str(),
+            "SENT"
+                | "SENT ITEMS"
+                | "SENT MAIL"
+                | "[GMAIL]/SENT MAIL"
+                | "\\SENT"
+                | "DRAFT"
+                | "DRAFTS"
+                | "[GMAIL]/DRAFTS"
+                | "\\DRAFTS"
+                | "OUTBOX"
+                | "CHAT"
+                | "CHATS"
+                | "[GMAIL]/CHATS"
+        )
+    }
+    if protected(folder) {
+        return true;
+    }
+    let Some(labels) = labels.map(str::trim) else {
+        return false;
+    };
+    if labels.starts_with('[') {
+        serde_json::from_str::<Vec<String>>(labels)
+            .map(|labels| labels.iter().any(|label| protected(label)))
+            .unwrap_or(true)
+    } else {
+        labels.split(',').any(protected)
+    }
+}
+
+pub(crate) fn rule_constraint_fingerprint(
+    rule: &crate::rules::types::Rule,
+) -> Result<String, RuleEvalError> {
+    let bytes = serde_json::to_vec(&(&rule.id, &rule.conditions, &rule.actions, rule.enabled))
+        .map_err(|e| RuleEvalError::Engine(e.to_string()))?;
+    Ok(blake3::hash(&bytes).to_hex().to_string())
 }
 
 /// Resolve a cluster's members to the `emails` rows that actually exist.
@@ -125,25 +178,44 @@ impl EmailRepository for SeaOrmEmailRepository {
         page_size: u32,
     ) -> Result<Vec<EmailRef>, RepoError> {
         let page_size = page_size.clamp(1, 1000);
-        let rows = emails::Entity::find()
+        // Legacy SQLite rows contain both RFC3339 and naive timestamp text.
+        // A next-day SQL ceiling is conservative for both; exact comparison and
+        // ordering use decoded UTC values before pagination on either backend.
+        let ceiling = before
+            .date_naive()
+            .succ_opt()
+            .and_then(|day| day.and_hms_opt(0, 0, 0))
+            .ok_or_else(|| RepoError::Internal("archive cutoff is out of range".into()))?;
+        let mut rows = emails::Entity::find()
             .select_only()
             .column(emails::Column::Id)
             .column(emails::Column::AccountId)
+            .column(emails::Column::ReceivedAt)
+            .column(emails::Column::Folder)
+            .column(emails::Column::Labels)
             .filter(emails::Column::AccountId.eq(account_id))
-            .filter(emails::Column::ReceivedAt.lt(before.naive_utc()))
+            .filter(emails::Column::ReceivedAt.lt(ceiling))
             .filter(emails::Column::DeletedAt.is_null())
             .filter(emails::Column::IsArchived.eq(false))
             .filter(emails::Column::IsSpam.eq(0))
             .filter(emails::Column::IsTrash.eq(0))
-            .order_by_asc(emails::Column::ReceivedAt)
-            .order_by_asc(emails::Column::Id)
-            .offset(u64::from(page) * u64::from(page_size))
-            .limit(u64::from(page_size))
-            .into_model::<EmailRefRow>()
+            .into_model::<ArchiveCandidateRow>()
             .all(&self.db.sea_orm())
             .await?;
+        rows.sort_by(|a, b| {
+            a.received_at
+                .cmp(&b.received_at)
+                .then_with(|| a.id.cmp(&b.id))
+        });
+        let offset = u64::from(page) * u64::from(page_size);
         Ok(rows
             .into_iter()
+            .filter(|row| {
+                row.received_at < before.naive_utc()
+                    && !is_protected_cleanup_source(&row.folder, row.labels.as_deref())
+            })
+            .skip(usize::try_from(offset).unwrap_or(usize::MAX))
+            .take(page_size as usize)
             .map(|row| EmailRef {
                 id: row.id,
                 account_id: row.account_id,
@@ -371,6 +443,7 @@ pub type SqlxRuleEvaluator = SeaOrmRuleEvaluator;
 #[derive(FromQueryResult)]
 struct EmailQueryRow {
     id: String,
+    folder: String,
     thread_id: Option<String>,
     from_addr: String,
     to_addrs: String,
@@ -468,6 +541,7 @@ impl RuleEvaluator for SeaOrmRuleEvaluator {
             .column(emails::Column::BodyHtml)
             .column(emails::Column::Labels)
             .column(emails::Column::ReceivedAt)
+            .column(emails::Column::Folder)
             .column(emails::Column::IsRead)
             .column(emails::Column::ListUnsubscribe)
             .column(emails::Column::ListUnsubscribePost)
@@ -484,8 +558,15 @@ impl RuleEvaluator for SeaOrmRuleEvaluator {
             .map_err(|e| RuleEvalError::Engine(e.to_string()))?;
         let page_size = page_size.clamp(1, 1000);
         let offset = u64::from(page) * u64::from(page_size);
+        let mut rows = rows;
+        rows.sort_by(|a, b| {
+            a.received_at
+                .cmp(&b.received_at)
+                .then_with(|| a.id.cmp(&b.id))
+        });
         let emails = rows
             .into_iter()
+            .filter(|row| !is_protected_cleanup_source(&row.folder, row.labels.as_deref()))
             .map(row_to_email_message)
             .filter(|message| crate::rules::rule_processor::evaluate_rule(&rule, message))
             .skip(usize::try_from(offset).unwrap_or(usize::MAX))
@@ -497,6 +578,7 @@ impl RuleEvaluator for SeaOrmRuleEvaluator {
             .collect();
         Ok(RuleMatchPage {
             emails,
+            constraint_fingerprint: rule_constraint_fingerprint(&rule)?,
             actions: rule.actions,
         })
     }
@@ -506,6 +588,19 @@ impl RuleEvaluator for SeaOrmRuleEvaluator {
         mode: RuleExecutionMode,
         scope: EvaluationScope,
     ) -> Result<Vec<RuleEvaluation>, RuleEvalError> {
+        Ok(self
+            .evaluate_bound_scope(mode, scope)
+            .await?
+            .into_iter()
+            .map(|bound| bound.evaluation)
+            .collect())
+    }
+
+    async fn evaluate_bound_scope(
+        &self,
+        mode: RuleExecutionMode,
+        scope: EvaluationScope,
+    ) -> Result<Vec<BoundRuleEvaluation>, RuleEvalError> {
         // `load_rules` takes the `Database` handle (ported in wave 1; it derives
         // its own SeaORM connection internally), which is why this adapter still
         // holds the enum rather than a bare connection.
@@ -525,6 +620,7 @@ impl RuleEvaluator for SeaOrmRuleEvaluator {
             .column(emails::Column::BodyHtml)
             .column(emails::Column::Labels)
             .column(emails::Column::ReceivedAt)
+            .column(emails::Column::Folder)
             .column(emails::Column::IsRead)
             .column(emails::Column::ListUnsubscribe)
             .column(emails::Column::ListUnsubscribePost)
@@ -537,7 +633,21 @@ impl RuleEvaluator for SeaOrmRuleEvaluator {
         let messages: Vec<crate::email::types::EmailMessage> =
             email_rows.into_iter().map(row_to_email_message).collect();
 
-        Ok(evaluate_rules(mode, &rules, &messages, &scope))
+        evaluate_rules(mode, &rules, &messages, &scope)
+            .into_iter()
+            .map(|evaluation| {
+                let rule = rules
+                    .iter()
+                    .find(|rule| rule.id == evaluation.rule_id)
+                    .ok_or_else(|| {
+                        RuleEvalError::Engine("evaluated rule snapshot missing".into())
+                    })?;
+                Ok(BoundRuleEvaluation {
+                    constraint_fingerprint: rule_constraint_fingerprint(rule)?,
+                    evaluation,
+                })
+            })
+            .collect()
     }
 }
 
@@ -1200,6 +1310,7 @@ mod tests {
     fn query_row(labels: Option<&str>, body_text: Option<String>) -> EmailQueryRow {
         EmailQueryRow {
             id: "e1".to_owned(),
+            folder: "INBOX".to_owned(),
             thread_id: None,
             from_addr: "from@example.com".to_owned(),
             to_addrs: String::new(),

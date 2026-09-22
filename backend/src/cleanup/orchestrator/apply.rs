@@ -1265,6 +1265,7 @@ mod tests {
                     predicate_kind:
                         crate::cleanup::domain::operation::PredicateKind::ArchiveStrategy,
                     predicate_id: "older30d".into(),
+                    constraint_fingerprint: None,
                     action: PlanAction::Archive,
                     target: None,
                     source: PlanSource::Manual,

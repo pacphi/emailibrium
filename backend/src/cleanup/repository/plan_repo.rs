@@ -973,6 +973,7 @@ mod tests {
             account_id: "acct-a".into(),
             predicate_kind: PredicateKind::Rule,
             predicate_id: "rule-1".into(),
+            constraint_fingerprint: None,
             action: PlanAction::Archive,
             target: None,
             source: PlanSource::Manual,

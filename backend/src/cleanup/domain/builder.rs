@@ -199,9 +199,10 @@ impl PlanBuilder {
             };
             let evals = self
                 .rules
-                .evaluate_scope(RuleExecutionMode::EvaluateOnly, scope)
+                .evaluate_bound_scope(RuleExecutionMode::EvaluateOnly, scope)
                 .await?;
-            for ev in evals {
+            for bound in evals {
+                let ev = bound.evaluation;
                 let action = ev
                     .intended_actions
                     .first()
@@ -229,6 +230,7 @@ impl PlanBuilder {
                     account_id: account_id.clone(),
                     predicate_kind: PredicateKind::Rule,
                     predicate_id: ev.rule_id.clone(),
+                    constraint_fingerprint: Some(bound.constraint_fingerprint),
                     action,
                     target: None,
                     source: PlanSource::Rule {
@@ -264,6 +266,7 @@ impl PlanBuilder {
                     account_id: account_id.clone(),
                     predicate_kind: PredicateKind::ArchiveStrategy,
                     predicate_id: format!("{strategy:?}"),
+                    constraint_fingerprint: None,
                     action,
                     target: None,
                     source: PlanSource::ArchiveStrategy { strategy },
@@ -492,6 +495,24 @@ mod tests {
 
     #[async_trait]
     impl RuleEvaluator for Fakes {
+        async fn evaluate_bound_scope(
+            &self,
+            mode: RuleExecutionMode,
+            scope: EvaluationScope,
+        ) -> Result<Vec<crate::cleanup::domain::ports::BoundRuleEvaluation>, RuleEvalError>
+        {
+            Ok(self
+                .evaluate_scope(mode, scope)
+                .await?
+                .into_iter()
+                .map(
+                    |evaluation| crate::cleanup::domain::ports::BoundRuleEvaluation {
+                        evaluation,
+                        constraint_fingerprint: "reviewed-test-constraints".into(),
+                    },
+                )
+                .collect())
+        }
         async fn evaluate_scope(
             &self,
             _mode: RuleExecutionMode,

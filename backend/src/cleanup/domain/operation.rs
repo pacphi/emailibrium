@@ -524,6 +524,10 @@ pub struct PlannedOperationPredicate {
     pub account_id: String,
     pub predicate_kind: PredicateKind,
     pub predicate_id: String,
+    /// Rule constraints approved at plan-build time. Legacy rule predicates
+    /// without this binding must be rebuilt before they can expand.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub constraint_fingerprint: Option<String>,
     pub action: PlanAction,
     pub target: Option<FolderOrLabel>,
     pub source: PlanSource,

@@ -49,7 +49,9 @@ impl PredicateExpander {
     ///
     /// Children come back without `seq` populated — the caller must assign
     /// `seq` values; use [`next_seq_hint`](Self::next_seq_hint) to compute
-    /// the starting value.
+    /// the starting value. `as_of` is the fixed UTC apply-time reference for
+    /// all pages of one expansion; archive strategies use rolling 30/90/365-day
+    /// age predicates at execution time, not the plan-preview timestamp.
     pub async fn expand_page(
         &self,
         as_of: chrono::DateTime<chrono::Utc>,
@@ -94,10 +96,20 @@ impl PredicateExpander {
                 && rule_id == &predicate.predicate_id
                 && match_basis == "literal" =>
             {
+                let expected = predicate.constraint_fingerprint.as_deref().ok_or(
+                    ExpandError::InvalidPredicate(
+                        "rule predicate has no approved constraint binding",
+                    ),
+                )?;
                 let matched = self
                     .rules
                     .matching_page(&predicate.account_id, rule_id, page, page_size)
                     .await?;
+                if matched.constraint_fingerprint != expected {
+                    return Err(ExpandError::InvalidPredicate(
+                        "selected rule constraints changed since plan approval",
+                    ));
+                }
                 use crate::rules::types::RuleAction;
                 // The planner records the first action. Do not reinterpret
                 // unsupported or changed actions as an archive at apply time.
@@ -261,6 +273,7 @@ mod tests {
             account_id: account_id.into(),
             predicate_kind: PredicateKind::ArchiveStrategy,
             predicate_id: "older30d".into(),
+            constraint_fingerprint: None,
             action: PlanAction::Archive,
             target: None,
             source: PlanSource::Manual,
@@ -356,6 +369,7 @@ mod tests {
             &db.sea_orm(),
             &[
                 include_str!("../../../migrations/sqlite/001_initial_schema.sql"),
+                include_str!("../../../migrations/sqlite/004_accounts.sql"),
                 include_str!("../../../migrations/sqlite/012_rules.sql"),
                 include_str!("../../../migrations/sqlite/016_soft_delete_trash_spam.sql"),
                 include_str!("../../../migrations/sqlite/018_unsubscribe_headers.sql"),
@@ -435,6 +449,18 @@ mod tests {
             .expect("rule");
         let mut p = make_predicate("acct");
         p.predicate_kind = PredicateKind::Rule;
+        let bound = crate::cleanup::repository::adapters::SeaOrmRuleEvaluator { db: db.clone() }
+            .evaluate_bound_scope(
+                crate::rules::types::RuleExecutionMode::EvaluateOnly,
+                crate::rules::types::EvaluationScope {
+                    account_id: "acct".into(),
+                    rule_ids: vec![rule.id.clone()],
+                    sample_size: 20,
+                },
+            )
+            .await
+            .unwrap();
+        p.constraint_fingerprint = Some(bound[0].constraint_fingerprint.clone());
         p.predicate_id = rule.id.clone();
         p.source = PlanSource::Rule {
             rule_id: rule.id,
@@ -626,7 +652,11 @@ mod tests {
         );
         let pred = safety_rule(
             &db,
-            RuleCondition::And { conditions: vec![] },
+            RuleCondition::FieldMatch {
+                field: crate::rules::types::EmailField::Subject,
+                operator: crate::rules::types::MatchOperator::Contains,
+                value: "message".into(),
+            },
             vec![RuleAction::MarkRead],
         )
         .await;
@@ -661,6 +691,276 @@ mod tests {
                 .await
                 .is_err(),
             "an invalid regex under NOT cannot authorize an archive"
+        );
+    }
+    async fn safety_check_cutoff_formats(db: &crate::db::Database, expander: &PredicateExpander) {
+        use crate::cleanup::domain::operation::ArchiveStrategy;
+        use sea_orm::{ConnectionTrait, DbBackend, Statement};
+        let cutoff = chrono::DateTime::parse_from_rfc3339("2026-01-01T12:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let conn = db.sea_orm();
+        let backend = conn.get_database_backend();
+        let account = format!("cutoff-{}", uuid::Uuid::now_v7());
+        for (suffix, timestamp) in [
+            ("naive-before", "2026-01-01 11:59:59"),
+            ("rfc-before", "2026-01-01T11:59:59Z"),
+            ("naive-equal", "2026-01-01 12:00:00"),
+            ("rfc-equal", "2026-01-01T12:00:00Z"),
+            ("naive-after", "2026-01-01 12:00:01"),
+            ("rfc-after", "2026-01-01T12:00:01Z"),
+        ] {
+            let id = format!("{account}-{suffix}");
+            safety_seed(db, &id, &account, 60, false, "message").await;
+            let sql = if backend == DbBackend::Postgres {
+                "UPDATE emails SET received_at = $1::timestamp WHERE id = $2"
+            } else {
+                "UPDATE emails SET received_at = ? WHERE id = ?"
+            };
+            conn.execute_raw(Statement::from_sql_and_values(
+                backend,
+                sql,
+                [timestamp.into(), id.into()],
+            ))
+            .await
+            .unwrap();
+        }
+        let mut predicate = safety_archive(ArchiveStrategy::OlderThan30d);
+        predicate.account_id = account.clone();
+        let rows = expander
+            .expand_page(cutoff + chrono::Duration::days(30), &predicate, 0, 100)
+            .await
+            .unwrap();
+        let ids: Vec<_> = rows
+            .iter()
+            .map(|row| row.email_id.clone().unwrap())
+            .collect();
+        assert_eq!(
+            ids,
+            vec![
+                format!("{account}-naive-before"),
+                format!("{account}-rfc-before")
+            ],
+            "compare instants, not timestamp encodings"
+        );
+        use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+        crate::db::entities::emails::Entity::delete_many()
+            .filter(crate::db::entities::emails::Column::AccountId.eq(account))
+            .exec(&conn)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn safety_review_cutoff_handles_mixed_sqlite_timestamp_formats() {
+        let (db, expander) = safety_fixture().await;
+        safety_check_cutoff_formats(&db, &expander).await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires isolated EMAILIBRIUM_TEST_PG_URL with migrated schema"]
+    async fn safety_review_cutoff_handles_postgres_timestamp_formats() {
+        let url = std::env::var("EMAILIBRIUM_TEST_PG_URL")
+            .expect("isolated PostgreSQL test database required");
+        let db = crate::db::Database::connect(&url).await.unwrap();
+        let expander = PredicateExpander::new(
+            Arc::new(crate::cleanup::repository::adapters::SeaOrmRuleEvaluator { db: db.clone() }),
+            Arc::new(
+                crate::cleanup::repository::adapters::SeaOrmEmailRepository { db: db.clone() },
+            ),
+        );
+        safety_check_cutoff_formats(&db, &expander).await;
+    }
+
+    #[tokio::test]
+    async fn safety_review_preserves_exact_protected_source_markers() {
+        use crate::cleanup::domain::operation::ArchiveStrategy;
+        use crate::db::entities::emails;
+        use crate::rules::types::{EmailField, MatchOperator, RuleAction, RuleCondition};
+        use sea_orm::sea_query::Expr;
+        use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+        let (db, expander) = safety_fixture().await;
+        for (id, folder, labels) in [
+            ("folder-sent", "Sent Items", None),
+            ("imap-sent", "[Gmail]/Sent Mail", None),
+            ("folder-drafts", "Drafts", None),
+            ("folder-outbox", "Outbox", None),
+            ("folder-chats", "Chats", None),
+            ("label-sent", "INBOX", Some("[\"SENT\",\"Topic/Mail\"]")),
+            ("label-draft", "INBOX", Some("DRAFT, Topic/Mail")),
+            ("malformed-labels", "INBOX", Some("[not valid json")),
+            (
+                "near-label",
+                "INBOX",
+                Some("[\"Topic/Sentimental\",\"Chatbots\"]"),
+            ),
+        ] {
+            safety_seed(&db, id, "acct", 60, false, "promo message").await;
+            emails::Entity::update_many()
+                .col_expr(emails::Column::Folder, Expr::value(folder))
+                .col_expr(emails::Column::Labels, Expr::value(labels))
+                .filter(emails::Column::Id.eq(id))
+                .exec(&db.sea_orm())
+                .await
+                .unwrap();
+        }
+        let rule = safety_rule(
+            &db,
+            RuleCondition::FieldMatch {
+                field: EmailField::Subject,
+                operator: MatchOperator::Contains,
+                value: "promo".into(),
+            },
+            vec![RuleAction::Archive],
+        )
+        .await;
+        for predicate in [safety_archive(ArchiveStrategy::OlderThan30d), rule] {
+            let rows = expander
+                .expand_page(chrono::Utc::now(), &predicate, 0, 100)
+                .await
+                .unwrap();
+            let ids: Vec<_> = rows
+                .iter()
+                .map(|r| r.email_id.as_deref().unwrap())
+                .collect();
+            assert_eq!(
+                ids,
+                vec!["near-label"],
+                "protected source markers apply to every candidate path"
+            );
+        }
+    }
+    #[tokio::test]
+    async fn safety_review_rule_rejects_changed_conditions_with_same_action() {
+        use crate::rules::types::{EmailField, MatchOperator, RuleAction, RuleCondition};
+        let (db, expander) = safety_fixture().await;
+        safety_seed(&db, "approved-match", "acct", 60, false, "promo message").await;
+        safety_seed(&db, "not-approved", "acct", 60, false, "personal message").await;
+        let predicate = safety_rule(
+            &db,
+            RuleCondition::FieldMatch {
+                field: EmailField::Subject,
+                operator: MatchOperator::Contains,
+                value: "promo".into(),
+            },
+            vec![RuleAction::Archive],
+        )
+        .await;
+        let before = expander
+            .expand_page(chrono::Utc::now(), &predicate, 0, 100)
+            .await
+            .unwrap();
+        assert_eq!(
+            before
+                .iter()
+                .map(|r| r.email_id.as_deref().unwrap())
+                .collect::<Vec<_>>(),
+            vec!["approved-match"]
+        );
+        let mut edited = crate::rules::rule_engine::RuleEngine::get_rule(&db, "selected-rule")
+            .await
+            .unwrap()
+            .unwrap();
+        edited.conditions = vec![RuleCondition::FieldMatch {
+            field: EmailField::Subject,
+            operator: MatchOperator::Contains,
+            value: "message".into(),
+        }];
+        crate::rules::rule_engine::RuleEngine::save_rule(&db, &edited)
+            .await
+            .unwrap();
+        assert!(
+            expander
+                .expand_page(chrono::Utc::now(), &predicate, 0, 100)
+                .await
+                .is_err(),
+            "same action does not authorize a broader condition set than the reviewed predicate"
+        );
+    }
+
+    #[tokio::test]
+    async fn safety_review_legacy_rule_without_constraint_binding_is_rejected() {
+        use crate::rules::types::{EmailField, MatchOperator, RuleAction, RuleCondition};
+        let (db, expander) = safety_fixture().await;
+        safety_seed(&db, "must-not-expand", "acct", 60, false, "promo message").await;
+        let predicate = safety_rule(
+            &db,
+            RuleCondition::FieldMatch {
+                field: EmailField::Subject,
+                operator: MatchOperator::Contains,
+                value: "promo".into(),
+            },
+            vec![RuleAction::Archive],
+        )
+        .await;
+        let mut stored = serde_json::to_value(predicate).unwrap();
+        stored
+            .as_object_mut()
+            .unwrap()
+            .remove("constraintFingerprint");
+        let legacy = serde_json::from_value(stored).unwrap();
+        assert!(expander
+            .expand_page(chrono::Utc::now(), &legacy, 0, 100)
+            .await
+            .is_err());
+    }
+    #[tokio::test]
+    async fn safety_review_builder_carries_bound_rule_snapshot_into_expansion() {
+        use crate::cleanup::domain::builder::PlanBuilder;
+        use crate::cleanup::domain::plan::{RuleSelection, WizardSelections};
+        use crate::cleanup::repository::adapters::*;
+        use crate::rules::types::{EmailField, MatchOperator, RuleAction, RuleCondition};
+        let (db, expander) = safety_fixture().await;
+        safety_seed(&db, "approved-match", "acct", 60, false, "promo message").await;
+        let _ = safety_rule(
+            &db,
+            RuleCondition::FieldMatch {
+                field: EmailField::Subject,
+                operator: MatchOperator::Contains,
+                value: "promo".into(),
+            },
+            vec![RuleAction::Archive],
+        )
+        .await;
+        let builder = PlanBuilder {
+            emails: Arc::new(SeaOrmEmailRepository { db: db.clone() }),
+            subs: Arc::new(SeaOrmSubscriptionRepository { db: db.clone() }),
+            clusters: Arc::new(SeaOrmClusterRepository { db: db.clone() }),
+            rules: Arc::new(SeaOrmRuleEvaluator { db: db.clone() }),
+            accounts: Arc::new(SeaOrmAccountStateProvider { db: db.clone() }),
+            classifier: Arc::new(crate::cleanup::domain::classifier::RiskClassifier::new()),
+            provider_for: Arc::new(|_| crate::cleanup::domain::operation::Provider::Gmail),
+            plan_ttl_minutes: 30,
+        };
+        let plan = builder
+            .build(
+                "owner",
+                WizardSelections {
+                    account_ids: vec!["acct".into()],
+                    rule_selections: vec![RuleSelection {
+                        rule_id: "selected-rule".into(),
+                        account_id: "acct".into(),
+                    }],
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        let crate::cleanup::domain::operation::PlannedOperation::Predicate(predicate) =
+            &plan.operations[0]
+        else {
+            panic!("rule predicate required");
+        };
+        assert!(predicate.constraint_fingerprint.is_some());
+        let rows = expander
+            .expand_page(chrono::Utc::now(), predicate, 0, 100)
+            .await
+            .unwrap();
+        assert_eq!(
+            rows.iter()
+                .map(|r| r.email_id.as_deref().unwrap())
+                .collect::<Vec<_>>(),
+            vec!["approved-match"]
         );
     }
 }

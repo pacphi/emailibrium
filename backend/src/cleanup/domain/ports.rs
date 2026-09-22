@@ -87,6 +87,17 @@ pub trait RuleEvaluator: Send + Sync {
         scope: EvaluationScope,
     ) -> Result<Vec<RuleEvaluation>, RuleEvalError>;
 
+    /// Preview and constraint binding produced from the same rule snapshot.
+    async fn evaluate_bound_scope(
+        &self,
+        _mode: RuleExecutionMode,
+        _scope: EvaluationScope,
+    ) -> Result<Vec<BoundRuleEvaluation>, RuleEvalError> {
+        Err(RuleEvalError::Engine(
+            "bound rule evaluation is unavailable".into(),
+        ))
+    }
+
     /// Complete matched results for one selected rule, not its bounded preview.
     async fn matching_page(
         &self,
@@ -104,4 +115,10 @@ pub trait RuleEvaluator: Send + Sync {
 pub struct RuleMatchPage {
     pub emails: Vec<EmailRef>,
     pub actions: Vec<RuleAction>,
+    pub constraint_fingerprint: String,
+}
+
+pub struct BoundRuleEvaluation {
+    pub evaluation: RuleEvaluation,
+    pub constraint_fingerprint: String,
 }
