@@ -80,8 +80,9 @@ The OAuth callback is a narrow exception: only a state issued by an authenticate
 connection request, still pending within ten minutes, can pass. The handler
 consumes it once before contacting a provider. Pending states are bounded to 64
 and disappear on restart. Invalid, expired, and replayed states require restarting
-the connection. Request trace spans log only method and path; query logging also
-redacts OAuth state and authorization codes without changing the real request URI.
+the connection. Request trace spans and middleware error logs omit the entire
+query string, including encoded OAuth parameter names, without changing the real
+request URI.
 
 ## Verification scope
 
@@ -93,3 +94,11 @@ persist nothing and one-time state consumption. Trace tests capture logging outp
 Browser tests simulate the session endpoint and cover setup, bad credentials,
 reload, lock, expiration, offline retry, and stale-response races. They do not prove
 live OAuth-provider authentication or deliver messages to a real mailbox.
+
+`scripts/test-local-http.py` also starts the assembled native backend against an
+empty disposable SQLite database with mock embeddings. Build the backend with
+`--features test-vectors`, then pass the executable as `--binary` and an evidence
+directory as `--output-dir`. It verifies actual route wiring, session issuance and
+revocation, callback rejection, and absence of synthetic credentials in logs. It
+always stops its child process and deletes its temporary database. This check
+does not connect to providers or exercise model inference.

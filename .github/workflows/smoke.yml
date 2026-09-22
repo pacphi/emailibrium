@@ -20,6 +20,12 @@ on:
       - "backend/entrypoint.sh"
       - "backend/migrations/**"
       - "backend/src/main.rs" # owns --healthcheck, which compose depends on
+      - "backend/src/middleware/local_auth.rs"
+      - "backend/src/middleware/credentials.rs"
+      - "backend/src/middleware/log_scrubbing.rs"
+      - "backend/src/email/oauth.rs"
+      - "backend/src/vectors/config.rs"
+      - "config/environments/**"
       - "docker-compose*.yml"
       - "frontend/nginx.conf"
       - ".github/workflows/smoke.yml"
@@ -85,10 +91,24 @@ jobs:
             exit 1
           fi
 
-      - name: Backend answers its health endpoint
+      - name: Backend health and authentication boundary
         run: |
           curl --fail --silent --show-error --retry 10 --retry-delay 3 --retry-all-errors \
+            http://localhost:8080/healthz
+          for path in /api/v1/vectors/health /api/v1/mcp; do
+            status=$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' "http://localhost:8080$path")
+            test "$status" = 401 || { echo "::error::unauthenticated $path returned $status"; exit 1; }
+          done
+          umask 077
+          auth_headers=$(mktemp)
+          trap 'rm -f "$auth_headers"' EXIT
+          printf 'Authorization: Bearer %s\n' "$(cat secrets/dev/jwt_secret)" > "$auth_headers"
+          curl --fail --silent --show-error --header "@$auth_headers" \
             http://localhost:8080/api/v1/vectors/health
+          status=$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+            --header "@$auth_headers" --header 'Origin: https://untrusted.example' \
+            http://localhost:8080/api/v1/mcp)
+          test "$status" = 403 || { echo "::error::cross-origin MCP returned $status"; exit 1; }
 
       # The frontend image cannot serve standalone — nginx proxies to the
       # compose-only `backend` upstream — so this is the only place it can be
@@ -98,6 +118,24 @@ jobs:
           curl --fail --silent --show-error --retry 10 --retry-delay 3 --retry-all-errors \
             http://localhost:3000/ | grep -qi "<!doctype html" \
             || { echo "::error::frontend did not return an HTML document"; exit 1; }
+
+      - name: Browser session works through the frontend proxy
+        run: |
+          umask 077
+          auth_headers=$(mktemp)
+          cookies=$(mktemp)
+          trap 'rm -f "$auth_headers" "$cookies"' EXIT
+          printf 'Authorization: Bearer %s\n' "$(cat secrets/dev/jwt_secret)" > "$auth_headers"
+          curl --fail --silent --show-error --request POST --header "@$auth_headers" \
+            --header 'Origin: http://localhost:3000' --cookie-jar "$cookies" \
+            http://localhost:3000/api/v1/session
+          curl --fail --silent --show-error --cookie "$cookies" \
+            http://localhost:3000/api/v1/auth/accounts
+          curl --fail --silent --show-error --request DELETE --cookie "$cookies" \
+            --header 'Origin: http://localhost:3000' http://localhost:3000/api/v1/session
+          status=$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+            --cookie "$cookies" http://localhost:3000/api/v1/auth/accounts)
+          test "$status" = 401 || { echo "::error::revoked proxy session returned $status"; exit 1; }
 
       # "Healthy" does not mean "on the database you think". This asserts the
       # backend NAMED SQLite at startup — see the Leg 2 comment for why the two
@@ -132,9 +170,18 @@ jobs:
       - name: Bring the PostgreSQL stack up
         run: docker compose --profile postgres up -d --wait --wait-timeout 300
 
-      - name: Backend answers its health endpoint (PostgreSQL)
+      - name: Backend health and authentication boundary (PostgreSQL)
         run: |
           curl --fail --silent --show-error --retry 10 --retry-delay 3 --retry-all-errors \
+            http://localhost:8080/healthz
+          status=$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+            http://localhost:8080/api/v1/vectors/health)
+          test "$status" = 401 || { echo "::error::unauthenticated PostgreSQL health returned $status"; exit 1; }
+          umask 077
+          auth_headers=$(mktemp)
+          trap 'rm -f "$auth_headers"' EXIT
+          printf 'Authorization: Bearer %s\n' "$(cat secrets/dev/jwt_secret)" > "$auth_headers"
+          curl --fail --silent --show-error --header "@$auth_headers" \
             http://localhost:8080/api/v1/vectors/health
 
       - name: Backend reports the PostgreSQL backend
