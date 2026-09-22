@@ -248,16 +248,17 @@ struct OllamaGenerateResponse {
 }
 
 impl OllamaGenerativeModel {
-    /// Internal generation helper that accepts an explicit temperature override.
+    /// Internal generation helper with explicit model and temperature selection.
     async fn generate_internal(
         &self,
+        model: &str,
         prompt: &str,
         max_tokens: u32,
         temperature: f32,
     ) -> Result<String, VectorError> {
         let url = format!("{}/api/generate", self.base_url);
         let body = OllamaGenerateRequest {
-            model: &self.chat_model,
+            model,
             prompt,
             stream: false,
             options: OllamaOptions {
@@ -268,7 +269,7 @@ impl OllamaGenerativeModel {
             },
         };
 
-        debug!(model = %self.chat_model, "Ollama generate request");
+        debug!(model = %model, "Ollama generate request");
 
         let resp = self
             .client
@@ -300,8 +301,13 @@ impl OllamaGenerativeModel {
 #[async_trait]
 impl GenerativeModel for OllamaGenerativeModel {
     async fn generate(&self, prompt: &str, max_tokens: u32) -> Result<String, VectorError> {
-        self.generate_internal(prompt, max_tokens, self.params.temperature)
-            .await
+        self.generate_internal(
+            &self.chat_model,
+            prompt,
+            max_tokens,
+            self.params.temperature,
+        )
+        .await
     }
 
     async fn classify(&self, text: &str, categories: &[&str]) -> Result<String, VectorError> {
@@ -318,6 +324,7 @@ impl GenerativeModel for OllamaGenerativeModel {
         // Use classification-specific temperature and max tokens from config
         let response = self
             .generate_internal(
+                &self.classification_model,
                 &prompt,
                 self.params.classification_max_tokens,
                 self.params.classification_temperature,
@@ -344,7 +351,12 @@ impl GenerativeModel for OllamaGenerativeModel {
         let max_tokens = self.params.classification_max_tokens * texts.len() as u32;
 
         let response = self
-            .generate_internal(&prompt, max_tokens, self.params.classification_temperature)
+            .generate_internal(
+                &self.classification_model,
+                &prompt,
+                max_tokens,
+                self.params.classification_temperature,
+            )
             .await?;
 
         let parsed = parse_batch_response(&response, texts.len(), categories);
@@ -1079,6 +1091,136 @@ fn validate_classification(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct RecordingOllama {
+        model: OllamaGenerativeModel,
+        requests: std::sync::Arc<std::sync::Mutex<Vec<serde_json::Value>>>,
+        server: tokio::task::JoinHandle<()>,
+    }
+
+    impl RecordingOllama {
+        async fn start(responses: &[&str]) -> Self {
+            use axum::{routing::post, Json, Router};
+            use std::collections::VecDeque;
+            use std::sync::{Arc, Mutex};
+
+            let requests = Arc::new(Mutex::new(Vec::new()));
+            let recorded_requests = requests.clone();
+            let responses = Arc::new(Mutex::new(
+                responses
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect::<VecDeque<_>>(),
+            ));
+            let app = Router::new().route(
+                "/api/generate",
+                post(move |Json(request): Json<serde_json::Value>| {
+                    let requests = recorded_requests.clone();
+                    let responses = responses.clone();
+                    async move {
+                        requests.lock().unwrap().push(request);
+                        let response = responses
+                            .lock()
+                            .unwrap()
+                            .pop_front()
+                            .expect("unexpected extra inference request");
+                        Json(serde_json::json!({"response": response, "done": true}))
+                    }
+                }),
+            );
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move {
+                axum::serve(listener, app).await.unwrap();
+            });
+            let mut model = OllamaGenerativeModel::new(&OllamaGenerativeConfig {
+                base_url: format!("http://{address}"),
+                classification_model: "compact-classifier".to_string(),
+                chat_model: "large-chat".to_string(),
+            });
+            // Keep the HTTP contract test local even when the host has a proxy.
+            model.client = reqwest::Client::builder()
+                .no_proxy()
+                .timeout(std::time::Duration::from_secs(5))
+                .build()
+                .unwrap();
+            Self {
+                model,
+                requests,
+                server,
+            }
+        }
+
+        fn requested_models(&self) -> Vec<String> {
+            self.requests
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|request| request["model"].as_str().unwrap().to_string())
+                .collect()
+        }
+    }
+
+    impl Drop for RecordingOllama {
+        fn drop(&mut self) {
+            self.server.abort();
+        }
+    }
+
+    #[tokio::test]
+    async fn test_ollama_classify_sends_classification_model() {
+        let ollama = RecordingOllama::start(&["Work"]).await;
+        let category = ollama
+            .model
+            .classify("Tomorrow's project meeting", &["Work", "Personal"])
+            .await
+            .unwrap();
+
+        assert_eq!(category, "Work");
+        assert_eq!(ollama.requested_models(), ["compact-classifier"]);
+    }
+
+    #[tokio::test]
+    async fn test_ollama_classify_batch_sends_classification_model() {
+        let ollama = RecordingOllama::start(&["Work\nPersonal"]).await;
+        let categories = ollama
+            .model
+            .classify_batch(&["Project meeting", "Family dinner"], &["Work", "Personal"])
+            .await
+            .unwrap();
+
+        assert_eq!(categories, ["Work", "Personal"]);
+        assert_eq!(ollama.requested_models(), ["compact-classifier"]);
+    }
+
+    #[tokio::test]
+    async fn test_ollama_classify_batch_retry_keeps_classification_model() {
+        let ollama = RecordingOllama::start(&["Work\nunknown", "Personal"]).await;
+        let categories = ollama
+            .model
+            .classify_batch(&["Project meeting", "Family dinner"], &["Work", "Personal"])
+            .await
+            .unwrap();
+
+        assert_eq!(categories, ["Work", "Personal"]);
+        assert_eq!(
+            ollama.requested_models(),
+            ["compact-classifier", "compact-classifier"]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_ollama_generate_sends_chat_model() {
+        let ollama = RecordingOllama::start(&["Here is your summary."]).await;
+        let response = ollama
+            .model
+            .generate("Summarize my inbox", 64)
+            .await
+            .unwrap();
+
+        assert_eq!(response, "Here is your summary.");
+        assert_eq!(ollama.requested_models(), ["large-chat"]);
+    }
 
     #[test]
     fn test_rule_based_classifier_github() {
