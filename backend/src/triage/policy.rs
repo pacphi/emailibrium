@@ -61,7 +61,9 @@ pub struct MessageFacts {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Proposal {
+    pub account: String,
     pub message_id: String,
+    pub observed_revision: String,
     pub policy_version: String,
     pub topics: Vec<String>,
     pub attention: Attention,
@@ -152,7 +154,11 @@ impl Policy {
         if facts.message_id.trim().is_empty() || facts.revision.trim().is_empty() {
             return Err(PolicyError::MissingIdentity);
         }
-        if proposal.message_id != facts.message_id || proposal.policy_version != self.version {
+        if proposal.account != facts.account
+            || proposal.message_id != facts.message_id
+            || proposal.observed_revision != facts.revision
+            || proposal.policy_version != self.version
+        {
             return Err(PolicyError::ProposalMismatch);
         }
         let topics: BTreeSet<_> = proposal.topics.iter().collect();
@@ -316,7 +322,9 @@ mod tests {
     }
     fn proposal() -> Proposal {
         Proposal {
+            account: "Business".into(),
             message_id: "exact-message".into(),
+            observed_revision: "rev-1".into(),
             policy_version: "approved-v1".into(),
             topics: vec!["Topic1".into(), "Topic2".into()],
             attention: Attention::ReadLater,
@@ -518,5 +526,34 @@ mod tests {
         let mut f = facts();
         f.owned_attention_labels.clear();
         assert!(file(&f, &proposal()).remove_labels.is_empty());
+    }
+
+    #[test]
+    fn proposal_is_bound_to_its_account_even_when_provider_ids_collide() {
+        let p = Policy::new(
+            "approved-v1".into(),
+            topics(),
+            BTreeMap::from([
+                ("Business".into(), "approved-v1".into()),
+                ("Personal".into(), "approved-v1".into()),
+            ]),
+        )
+        .unwrap();
+        let mut f = facts();
+        f.account = "Personal".into();
+        assert_eq!(
+            p.plan(&f, &proposal(), now()),
+            Err(PolicyError::ProposalMismatch)
+        );
+    }
+
+    #[test]
+    fn stale_proposal_cannot_be_rebound_to_a_fresh_revision() {
+        let mut f = facts();
+        f.revision = "rev-2".into();
+        assert_eq!(
+            policy().plan(&f, &proposal(), now()),
+            Err(PolicyError::ProposalMismatch)
+        );
     }
 }
