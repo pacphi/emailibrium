@@ -141,6 +141,28 @@ impl AccountWorker {
             let op = rows[idx].clone();
             idx += 1;
 
+            // A replay must preserve terminal outcomes before evaluating any
+            // current request's risk or acknowledgement gates.
+            match &op {
+                PlannedOperation::Materialized(row)
+                    if !matches!(row.status, OperationStatus::Pending) =>
+                {
+                    continue;
+                }
+                PlannedOperation::Predicate(predicate)
+                    if matches!(
+                        predicate.status,
+                        PredicateStatus::Expanded
+                            | PredicateStatus::Applied
+                            | PredicateStatus::Failed
+                            | PredicateStatus::Skipped
+                    ) =>
+                {
+                    continue;
+                }
+                _ => {}
+            }
+
             // Skip rows above the risk-max threshold: they remain pending
             // for a follow-up apply with a higher risk_max.
             if !risk_max.includes(op.risk()) {
@@ -204,17 +226,6 @@ impl AccountWorker {
             let row = match op {
                 PlannedOperation::Materialized(r) => r,
                 PlannedOperation::Predicate(p) => {
-                    if matches!(
-                        p.status,
-                        PredicateStatus::Expanded
-                            | PredicateStatus::Applied
-                            | PredicateStatus::Failed
-                            | PredicateStatus::Skipped
-                    ) {
-                        // Already terminal; nothing to do for the predicate
-                        // row itself — children (if any) are independent rows.
-                        continue;
-                    }
                     if let Err(err) = self.expand_predicate_into_plan(plan_id, &p).await {
                         let action_type = plan_action_type_str(&p.action).to_string();
                         let _ = self
@@ -236,11 +247,6 @@ impl AccountWorker {
                     continue;
                 }
             };
-
-            // Skip rows that are already terminal (idempotent re-apply).
-            if !matches!(row.status, OperationStatus::Pending) {
-                continue;
-            }
 
             // Acquire concurrency permit.
             let _permit = match semaphore.clone().acquire_owned().await {

@@ -1218,4 +1218,105 @@ mod tests {
             })
         }))
     }
+    fn terminal_rows() -> Vec<PlannedOperation> {
+        let mut rows: Vec<_> = [
+            OperationStatus::Applied,
+            OperationStatus::Failed,
+            OperationStatus::Skipped,
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(i, status)| {
+            let PlannedOperation::Materialized(mut r) = row(i as u64 + 1, RiskLevel::High) else {
+                unreachable!()
+            };
+            r.status = status;
+            PlannedOperation::Materialized(r)
+        })
+        .collect();
+        use crate::cleanup::domain::operation::PredicateStatus;
+        for (i, status) in [
+            PredicateStatus::Expanded,
+            PredicateStatus::Applied,
+            PredicateStatus::Failed,
+            PredicateStatus::Skipped,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            rows.push(PlannedOperation::Predicate(
+                crate::cleanup::domain::operation::PlannedOperationPredicate {
+                    seq: i as u64 + 4,
+                    account_id: "acct-a".into(),
+                    predicate_kind:
+                        crate::cleanup::domain::operation::PredicateKind::ArchiveStrategy,
+                    predicate_id: "older30d".into(),
+                    action: PlanAction::Archive,
+                    target: None,
+                    source: PlanSource::Manual,
+                    projected_count: 0,
+                    sample_email_ids: vec![],
+                    risk: RiskLevel::High,
+                    status,
+                    partial_applied_count: 0,
+                    error: None,
+                },
+            ));
+        }
+        rows
+    }
+
+    #[tokio::test]
+    async fn terminal_rows_preserve_outcomes_without_reacknowledgement() {
+        let expected = serde_json::to_value(terminal_rows()).expect("expected rows");
+        let (worker, repo, plan) = persisted_worker(terminal_rows()).await;
+        let mut events = worker.ctx.emitter.subscribe();
+        let counts = worker
+            .run(
+                plan.id,
+                RiskMax::High,
+                HashSet::new(),
+                HashSet::new(),
+                CancellationToken::new(),
+            )
+            .await
+            .expect("run worker");
+        let (rows, _) = repo
+            .list_operations(plan.id, OpsFilter::default(), None, 10)
+            .await
+            .expect("rows");
+        assert_eq!(
+            serde_json::to_value(rows).expect("stored rows"),
+            expected,
+            "replaying terminal operations must not rewrite their persisted outcomes"
+        );
+        assert_eq!(
+            counts.applied + counts.failed + counts.skipped + counts.pending,
+            0
+        );
+        assert!(
+            events.try_recv().is_err(),
+            "terminal rows must not emit new outcomes"
+        );
+    }
+
+    #[tokio::test]
+    async fn terminal_rows_are_not_counted_pending_above_risk_max() {
+        let (worker, _, plan) = persisted_worker(terminal_rows()).await;
+        let counts = worker
+            .run(
+                plan.id,
+                RiskMax::Low,
+                HashSet::new(),
+                HashSet::new(),
+                CancellationToken::new(),
+            )
+            .await
+            .expect("run worker");
+        assert_eq!(
+            counts.pending, 0,
+            "completed rows are not awaiting a higher-risk apply"
+        );
+        assert_eq!(counts.applied + counts.failed + counts.skipped, 0);
+    }
 }
