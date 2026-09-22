@@ -518,6 +518,7 @@ async fn main() -> anyhow::Result<()> {
     let tool_calling_provider = vectors::tool_calling_providers::create_tool_calling_provider(
         &config.generative.provider,
         &vector_service.config,
+        vector_service.inference_policy.clone(),
     );
 
     let cleanup_plan_repo = Arc::new(cleanup::repository::SeaOrmCleanupPlanRepo::new(orm.clone()));

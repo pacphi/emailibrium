@@ -22,6 +22,9 @@ pub mod generative;
 pub mod generative_builtin;
 pub mod generative_router;
 pub mod hdbscan;
+pub mod inference_policy;
+#[cfg(test)]
+mod inference_privacy_tests;
 pub mod inference_session;
 pub mod ingestion;
 pub mod insights;
@@ -62,6 +65,7 @@ use embedding::EmbeddingPipeline;
 use evaluation::EvaluationEngine;
 use generative::GenerationParams;
 use generative_router::GenerativeRouter;
+use inference_policy::{InferencePolicy, InferenceTarget};
 use inference_session::InferenceSessionManager;
 use store::VectorStoreBackend;
 use yaml_config::YamlConfig;
@@ -89,6 +93,7 @@ pub struct VectorService {
     #[cfg(feature = "builtin-llm")]
     pub builtin_model: Option<Arc<generative_builtin::BuiltInGenerativeModel>>,
     pub consent_manager: Arc<consent::ConsentManager>,
+    pub inference_policy: Arc<InferencePolicy>,
     pub remote_wipe_service: Arc<remote_wipe::RemoteWipeService>,
     pub privacy_service: Arc<privacy::PrivacyService>,
     pub unsubscribe_service: Option<Arc<crate::email::unsubscribe::UnsubscribeService>>,
@@ -115,9 +120,17 @@ impl VectorService {
         redis: Option<Arc<RedisCache>>,
         yaml_config: Option<&YamlConfig>,
     ) -> Result<Self, error::VectorError> {
+        let consent_manager = Arc::new(consent::ConsentManager::new(db.clone()));
+        let privacy_service = Arc::new(privacy::PrivacyService::new(db.clone()));
+        let inference_policy = Arc::new(InferencePolicy::new(
+            config.inference.allow_cloud,
+            consent_manager.clone(),
+            privacy_service.clone(),
+        ));
         // Initialize embedding pipeline with fallback chain + optional Redis L2 cache
         let embedding = Arc::new(
             EmbeddingPipeline::new(&config.embedding)?
+                .with_inference_policy(inference_policy.clone(), &config.embedding)
                 .with_redis(redis, config.redis.cache_ttl_secs),
         );
 
@@ -386,12 +399,22 @@ impl VectorService {
             Arc<generative_builtin::BuiltInGenerativeModel>,
         > = None;
 
+        let mut generative_target = InferenceTarget::Unverified;
+        let mut classification_target = None;
         let gen_model: Option<Arc<dyn generative::GenerativeModel>> = match config
             .generative
             .provider
             .as_str()
         {
             "ollama" => {
+                generative_target = InferenceTarget::Ollama {
+                    endpoint: config.generative.ollama.base_url.clone(),
+                    model: config.generative.ollama.chat_model.clone(),
+                };
+                classification_target = Some(InferenceTarget::Ollama {
+                    endpoint: config.generative.ollama.base_url.clone(),
+                    model: config.generative.ollama.classification_model.clone(),
+                });
                 let per_model = find_model_tuning("ollama", &config.generative.ollama.chat_model);
                 let params = GenerationParams::resolve(llm_tuning, per_model.as_ref());
                 Some(Arc::new(
@@ -402,18 +425,32 @@ impl VectorService {
                     ),
                 ))
             }
-            "cloud" => match generative::CloudGenerativeModel::with_params_and_prompts(
-                &config.generative.cloud,
-                GenerationParams::resolve(llm_tuning, None),
-                prompts_cfg.clone(),
-            ) {
-                Ok(model) => Some(Arc::new(model)),
-                Err(e) => {
-                    tracing::warn!("Cloud generative model init failed: {e}, falling back to none");
-                    None
+            "cloud" => {
+                let cloud = &config.generative.cloud;
+                generative_target = InferenceTarget::Cloud {
+                    provider: cloud.provider.clone(),
+                    endpoint: if cloud.provider == "gemini" {
+                        cloud.gemini.base_url.clone()
+                    } else {
+                        cloud.base_url.clone()
+                    },
+                };
+                match generative::CloudGenerativeModel::with_params_and_prompts(
+                    &config.generative.cloud,
+                    GenerationParams::resolve(llm_tuning, None),
+                    prompts_cfg.clone(),
+                ) {
+                    Ok(model) => Some(Arc::new(model)),
+                    Err(e) => {
+                        tracing::warn!(
+                            "Cloud generative model init failed: {e}, falling back to none"
+                        );
+                        None
+                    }
                 }
-            },
+            }
             "builtin" => {
+                generative_target = InferenceTarget::InProcess;
                 #[cfg(feature = "builtin-llm")]
                 {
                     let per_model =
@@ -469,6 +506,14 @@ impl VectorService {
                 let base_url = or_provider
                     .and_then(|p| p.base_url.clone())
                     .unwrap_or_else(|| app_or.base_url.clone());
+                generative_target = InferenceTarget::Cloud {
+                    provider: "openrouter".into(),
+                    endpoint: if base_url.is_empty() {
+                        "https://openrouter.ai/api/v1".into()
+                    } else {
+                        base_url.clone()
+                    },
+                };
                 let extra_headers = or_provider
                     .and_then(|p| p.required_headers.clone())
                     .unwrap_or_else(|| app_or.required_headers.clone());
@@ -512,6 +557,10 @@ impl VectorService {
             }
         };
 
+        // Wrap once before distributing any clones to ingestion, chat or fallback routing.
+        let gen_model = gen_model.map(|model| {
+            inference_policy.wrap_generative(model, generative_target, classification_target)
+        });
         // Inject generative model into ingestion pipeline for categorize_with_fallback (DEFECT-2)
         ingestion_pipeline.set_generative(gen_model.clone());
         // Inject classification config from YAML (categories + domain/keyword rules)
@@ -522,9 +571,6 @@ impl VectorService {
         ingestion_pipeline.set_cluster_engine(cluster_engine.clone());
         let ingestion_pipeline = Arc::new(ingestion_pipeline);
 
-        // Initialize consent manager
-        let consent_manager = Arc::new(consent::ConsentManager::new(db.clone()));
-
         // Initialize remote wipe service (ADR-008: device loss mitigation)
         let remote_wipe_service = Arc::new(remote_wipe::RemoteWipeService::new(db.clone()));
         if let Err(e) = remote_wipe_service.ensure_table().await {
@@ -533,7 +579,6 @@ impl VectorService {
 
         // Initialize GDPR privacy service (R-09: consent persistence).
         // Its tables come from migration 010 — no runtime DDL (ADR-036).
-        let privacy_service = Arc::new(privacy::PrivacyService::new(db.clone()));
 
         // Initialize unsubscribe service (R-04: bulk unsubscribe)
         let unsubscribe_service = Some(Arc::new(
@@ -554,7 +599,12 @@ impl VectorService {
             use model_registry::ProviderType;
             let provider_type = match config.generative.provider.as_str() {
                 "ollama" => ProviderType::Ollama,
-                "cloud" => ProviderType::OpenAi,
+                "cloud" => match config.generative.cloud.provider.as_str() {
+                    "openai" => ProviderType::OpenAi,
+                    "anthropic" => ProviderType::Anthropic,
+                    "gemini" => ProviderType::Gemini,
+                    _ => ProviderType::None,
+                },
                 "openrouter" => ProviderType::OpenRouter,
                 "builtin" => ProviderType::BuiltIn,
                 "none" => ProviderType::None,
@@ -604,6 +654,7 @@ impl VectorService {
             #[cfg(feature = "builtin-llm")]
             builtin_model: builtin_model_handle,
             consent_manager,
+            inference_policy,
             remote_wipe_service,
             privacy_service,
             unsubscribe_service,

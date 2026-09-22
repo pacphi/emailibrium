@@ -194,7 +194,7 @@ impl GenerativeRouterService for GenerativeRouter {
         }
 
         for provider in &providers {
-            if !provider.model.is_available().await {
+            if !provider.model.is_available_for_classification().await {
                 continue;
             }
 
@@ -257,6 +257,15 @@ impl GenerativeModel for GenerativeRouter {
 
     async fn is_available(&self) -> bool {
         self.best_provider().await.is_some()
+    }
+
+    async fn is_available_for_classification(&self) -> bool {
+        for provider in self.enabled_providers().await {
+            if provider.model.is_available_for_classification().await {
+                return true;
+            }
+        }
+        false
     }
 
     fn configured_max_tokens(&self) -> Option<u32> {

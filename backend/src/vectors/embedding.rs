@@ -134,12 +134,9 @@ pub struct OllamaEmbeddingModel {
 
 impl OllamaEmbeddingModel {
     pub fn new(base_url: String, model: String, dims: usize) -> Self {
-        let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
-            .build()
-            .unwrap_or_default();
+        let client = super::inference_policy::http_client(std::time::Duration::from_secs(30));
         Self {
-            base_url,
+            base_url: super::inference_policy::canonical_endpoint(&base_url),
             model,
             dims,
             client,
@@ -411,16 +408,13 @@ impl CloudEmbeddingModel {
             )));
         }
 
-        let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
-            .build()
-            .unwrap_or_default();
+        let client = super::inference_policy::http_client(std::time::Duration::from_secs(30));
 
         Ok(Self {
             client,
             api_key,
             model: config.model.clone(),
-            base_url: config.base_url.clone(),
+            base_url: super::inference_policy::canonical_endpoint(&config.base_url),
             dims: config.dimensions,
         })
     }
@@ -589,16 +583,13 @@ impl CohereEmbeddingModel {
             )));
         }
 
-        let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
-            .build()
-            .unwrap_or_default();
+        let client = super::inference_policy::http_client(std::time::Duration::from_secs(30));
 
         Ok(Self {
             client,
             api_key,
             model: config.model.clone(),
-            base_url: config.base_url.clone(),
+            base_url: super::inference_policy::canonical_endpoint(&config.base_url),
             dims: config.dimensions,
             input_type: config.input_type.clone(),
         })
@@ -868,6 +859,40 @@ impl EmbeddingPipeline {
             redis_ttl_secs: 3600,
             min_query_tokens: config.min_query_tokens,
         })
+    }
+
+    /// Guard every provider before any production pipeline clone is distributed.
+    pub fn with_inference_policy(
+        mut self,
+        policy: Arc<super::inference_policy::InferencePolicy>,
+        config: &EmbeddingConfig,
+    ) -> Self {
+        use super::inference_policy::InferenceTarget;
+        let target = match config.provider.as_str() {
+            "onnx" | "mock" => InferenceTarget::InProcess,
+            "ollama" => InferenceTarget::Ollama {
+                endpoint: config.ollama_url.clone(),
+                model: config.model.clone(),
+            },
+            "cloud" => InferenceTarget::Cloud {
+                provider: "openai".into(),
+                endpoint: config.cloud.base_url.clone(),
+            },
+            "cohere" => InferenceTarget::Cloud {
+                provider: "cohere".into(),
+                endpoint: config.cohere.base_url.clone(),
+            },
+            _ => InferenceTarget::Cloud {
+                provider: "unsupported".into(),
+                endpoint: String::new(),
+            },
+        };
+        self.providers = self
+            .providers
+            .into_iter()
+            .map(|inner| policy.wrap_embedding(inner, target.clone()))
+            .collect();
+        self
     }
 
     /// Build a pipeline from an explicit list of providers (useful for tests).

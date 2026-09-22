@@ -49,6 +49,9 @@ pub struct VectorConfig {
     /// Generative AI settings (ADR-012).
     #[serde(default)]
     pub generative: GenerativeConfig,
+    /// Network inference is local-only unless explicitly enabled and consented.
+    #[serde(default)]
+    pub inference: InferencePrivacyConfig,
     /// RAG (Retrieval-Augmented Generation) settings (ADR-022, DDD-010).
     #[serde(default)]
     pub rag: super::rag::RagConfig,
@@ -80,12 +83,20 @@ impl Default for VectorConfig {
             learning: super::learning::LearningConfig::default(),
             quantization: super::quantization::QuantizationConfig::default(),
             generative: GenerativeConfig::default(),
+            inference: InferencePrivacyConfig::default(),
             rag: super::rag::RagConfig::default(),
             oauth: OAuthConfig::default(),
             redis: RedisConfig::default(),
             security: SecurityConfig::default(),
         }
     }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct InferencePrivacyConfig {
+    /// Requires BOTH persisted cloud_ai and provider consent on every request.
+    #[serde(default)]
+    pub allow_cloud: bool,
 }
 
 impl VectorConfig {

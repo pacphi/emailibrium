@@ -84,6 +84,11 @@ pub trait GenerativeModel: Send + Sync {
     /// Check whether the model backend is reachable.
     async fn is_available(&self) -> bool;
 
+    /// Classification may use a different model from chat.
+    async fn is_available_for_classification(&self) -> bool {
+        self.is_available().await
+    }
+
     /// Classify multiple texts in a single LLM call, returning one category per text.
     ///
     /// The default implementation falls back to individual `classify()` calls.
@@ -216,8 +221,8 @@ impl OllamaGenerativeModel {
         prompts: PromptsConfig,
     ) -> Self {
         Self {
-            client: reqwest::Client::new(),
-            base_url: config.base_url.clone(),
+            client: super::inference_policy::http_client(std::time::Duration::from_secs(120)),
+            base_url: super::inference_policy::canonical_endpoint(&config.base_url),
             classification_model: config.classification_model.clone(),
             chat_model: config.chat_model.clone(),
             params,
@@ -450,7 +455,7 @@ impl CloudGenerativeModel {
             let gc = GeminiResolvedConfig {
                 api_key: key.clone(),
                 model: config.gemini.model.clone(),
-                base_url: config.gemini.base_url.clone(),
+                base_url: super::inference_policy::canonical_endpoint(&config.gemini.base_url),
             };
             (key, Some(gc))
         } else {
@@ -464,11 +469,11 @@ impl CloudGenerativeModel {
         };
 
         Ok(Self {
-            client: reqwest::Client::new(),
+            client: super::inference_policy::http_client(std::time::Duration::from_secs(120)),
             provider: config.provider.clone(),
             api_key,
             model: config.model.clone(),
-            base_url: config.base_url.clone(),
+            base_url: super::inference_policy::canonical_endpoint(&config.base_url),
             gemini_config,
             params,
             prompts,
@@ -830,10 +835,10 @@ impl OpenRouterGenerativeModel {
         };
 
         Ok(Self {
-            client: reqwest::Client::new(),
+            client: super::inference_policy::http_client(std::time::Duration::from_secs(120)),
             api_key,
             model: model.to_string(),
-            base_url: resolved_base.to_string(),
+            base_url: super::inference_policy::canonical_endpoint(resolved_base),
             extra_headers,
             params,
             prompts,
