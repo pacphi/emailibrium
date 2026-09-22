@@ -433,12 +433,13 @@ impl AccountWorker {
             .await;
 
         let page_size: u32 = 1000;
+        let expansion_as_of = Utc::now();
         let mut page: u32 = 0;
         loop {
             let children = self
                 .ctx
                 .expander
-                .expand_page(predicate, page, page_size)
+                .expand_page(expansion_as_of, predicate, page, page_size)
                 .await?;
             if children.is_empty() {
                 break;

@@ -25,7 +25,7 @@ use sea_orm::{
 use crate::cleanup::domain::operation::{AccountStateEtag, EmailRef, UnsubscribeMethodKind};
 use crate::cleanup::domain::ports::{
     AccountStateProvider, ClusterRepository, EmailRepository, RepoError, RuleEvalError,
-    RuleEvaluator, SubscriptionRecord, SubscriptionRepository,
+    RuleEvaluator, RuleMatchPage, SubscriptionRecord, SubscriptionRepository,
 };
 use crate::db::entities::{connected_accounts, emails, sync_state, topic_clusters};
 use crate::db::Database;
@@ -117,6 +117,40 @@ pub type SqlxEmailRepository = SeaOrmEmailRepository;
 
 #[async_trait]
 impl EmailRepository for SeaOrmEmailRepository {
+    async fn archive_candidates(
+        &self,
+        account_id: &str,
+        before: chrono::DateTime<chrono::Utc>,
+        page: u32,
+        page_size: u32,
+    ) -> Result<Vec<EmailRef>, RepoError> {
+        let page_size = page_size.clamp(1, 1000);
+        let rows = emails::Entity::find()
+            .select_only()
+            .column(emails::Column::Id)
+            .column(emails::Column::AccountId)
+            .filter(emails::Column::AccountId.eq(account_id))
+            .filter(emails::Column::ReceivedAt.lt(before.naive_utc()))
+            .filter(emails::Column::DeletedAt.is_null())
+            .filter(emails::Column::IsArchived.eq(false))
+            .filter(emails::Column::IsSpam.eq(0))
+            .filter(emails::Column::IsTrash.eq(0))
+            .order_by_asc(emails::Column::ReceivedAt)
+            .order_by_asc(emails::Column::Id)
+            .offset(u64::from(page) * u64::from(page_size))
+            .limit(u64::from(page_size))
+            .into_model::<EmailRefRow>()
+            .all(&self.db.sea_orm())
+            .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| EmailRef {
+                id: row.id,
+                account_id: row.account_id,
+            })
+            .collect())
+    }
+
     async fn list_by_account(&self, account_id: &str) -> Result<Vec<EmailRef>, RepoError> {
         let conn = self.db.sea_orm();
         let rows = emails::Entity::find()
@@ -400,6 +434,73 @@ fn row_to_email_message(row: EmailQueryRow) -> crate::email::types::EmailMessage
 
 #[async_trait]
 impl RuleEvaluator for SeaOrmRuleEvaluator {
+    async fn matching_page(
+        &self,
+        account_id: &str,
+        rule_id: &str,
+        page: u32,
+        page_size: u32,
+    ) -> Result<RuleMatchPage, RuleEvalError> {
+        let rule = crate::rules::rule_engine::RuleEngine::get_rule(&self.db, rule_id)
+            .await
+            .map_err(|e| RuleEvalError::Engine(e.to_string()))?
+            .filter(|rule| rule.enabled)
+            .ok_or_else(|| RuleEvalError::Engine("selected rule is missing or disabled".into()))?;
+        let validation = crate::rules::rule_validator::validate_rule(&rule);
+        if crate::rules::rule_validator::has_errors(&validation) {
+            return Err(RuleEvalError::Engine("selected rule is invalid".into()));
+        }
+        if RuleEvaluation::basis_for(&rule.conditions)
+            != crate::rules::types::RuleMatchBasis::Literal
+        {
+            return Err(RuleEvalError::Engine(
+                "semantic rule eligibility is unavailable for cleanup apply".into(),
+            ));
+        }
+        let rows = emails::Entity::find()
+            .select_only()
+            .column(emails::Column::Id)
+            .column(emails::Column::ThreadId)
+            .column(emails::Column::FromAddr)
+            .column(emails::Column::ToAddrs)
+            .column(emails::Column::Subject)
+            .column(emails::Column::BodyText)
+            .column(emails::Column::BodyHtml)
+            .column(emails::Column::Labels)
+            .column(emails::Column::ReceivedAt)
+            .column(emails::Column::IsRead)
+            .column(emails::Column::ListUnsubscribe)
+            .column(emails::Column::ListUnsubscribePost)
+            .filter(emails::Column::AccountId.eq(account_id))
+            .filter(emails::Column::DeletedAt.is_null())
+            .filter(emails::Column::IsArchived.eq(false))
+            .filter(emails::Column::IsSpam.eq(0))
+            .filter(emails::Column::IsTrash.eq(0))
+            .order_by_asc(emails::Column::ReceivedAt)
+            .order_by_asc(emails::Column::Id)
+            .into_model::<EmailQueryRow>()
+            .all(&self.db.sea_orm())
+            .await
+            .map_err(|e| RuleEvalError::Engine(e.to_string()))?;
+        let page_size = page_size.clamp(1, 1000);
+        let offset = u64::from(page) * u64::from(page_size);
+        let emails = rows
+            .into_iter()
+            .map(row_to_email_message)
+            .filter(|message| crate::rules::rule_processor::evaluate_rule(&rule, message))
+            .skip(usize::try_from(offset).unwrap_or(usize::MAX))
+            .take(page_size as usize)
+            .map(|message| EmailRef {
+                id: message.id,
+                account_id: account_id.to_owned(),
+            })
+            .collect();
+        Ok(RuleMatchPage {
+            emails,
+            actions: rule.actions,
+        })
+    }
+
     async fn evaluate_scope(
         &self,
         mode: RuleExecutionMode,
