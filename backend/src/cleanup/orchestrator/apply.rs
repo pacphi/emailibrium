@@ -78,8 +78,8 @@ pub struct ApplyOrchestrator {
     pub drift: Arc<DriftDetector>,
     pub expander: Arc<PredicateExpander>,
     pub workers_for: Arc<dyn Fn(&str) -> Provider + Send + Sync>,
-    /// Per-account EmailProvider factory (Item #1). Defaults to a no-op
-    /// factory; production wiring installs `OAuthEmailProviderFactory`.
+    /// Per-account EmailProvider factory (Item #1). Defaults to an unavailable
+    /// provider; production wiring installs `OAuthEmailProviderFactory`.
     pub provider_factory: Arc<dyn EmailProviderFactory>,
     pub unsubscribe: Arc<UnsubscribeService>,
     /// Per-operation audit writer (Phase D, ADR-030 §Security).
@@ -713,14 +713,17 @@ mod tests {
             Arc::new(StubRules) as Arc<dyn crate::cleanup::domain::ports::RuleEvaluator>,
             Arc::new(StubEmailRepo) as Arc<dyn EmailRepository>,
         ));
-        Arc::new(ApplyOrchestrator::new(
-            plan_repo as Arc<dyn CleanupPlanRepository>,
-            job_repo as Arc<dyn CleanupApplyJobRepository>,
-            drift,
-            expander,
-            Arc::new(|_| Provider::Gmail),
-            Arc::new(UnsubscribeService::new()),
-        ))
+        Arc::new(
+            ApplyOrchestrator::new(
+                plan_repo as Arc<dyn CleanupPlanRepository>,
+                job_repo as Arc<dyn CleanupApplyJobRepository>,
+                drift,
+                expander,
+                Arc::new(|_| Provider::Gmail),
+                Arc::new(UnsubscribeService::new()),
+            )
+            .with_provider_factory(successful_archive_factory()),
+        )
     }
 
     async fn wait_for_finish(rx: &mut broadcast::Receiver<ApplyEvent>) -> JobCounts {
@@ -983,6 +986,7 @@ mod tests {
                 Arc::new(|_| Provider::Gmail),
                 Arc::new(UnsubscribeService::new()),
             )
+            .with_provider_factory(successful_archive_factory())
             .with_audit(audit.clone()),
         );
 
@@ -1015,10 +1019,7 @@ mod tests {
             assert_eq!(e.plan_id, plan.id);
             assert_eq!(e.user_id, "u");
             assert_eq!(e.account_id, "acct-a");
-            assert!(matches!(
-                e.outcome,
-                AuditOutcome::Applied | AuditOutcome::Skipped | AuditOutcome::Failed
-            ));
+            assert_eq!(e.outcome, AuditOutcome::Applied);
         }
     }
     // Real persistence is intentional: the repository caps every page at 1,000.
@@ -1112,5 +1113,109 @@ mod tests {
             "risk-excluded rows must remain visible in counts"
         );
         assert_eq!(counts.applied + counts.failed + counts.skipped, 0);
+    }
+    #[tokio::test]
+    async fn missing_provider_fails_without_recording_success() {
+        let (worker, repo, plan) = persisted_worker(vec![row(1, RiskLevel::Low)]).await;
+        let mut events = worker.ctx.emitter.subscribe();
+        let counts = worker
+            .run(
+                plan.id,
+                RiskMax::Low,
+                HashSet::new(),
+                HashSet::new(),
+                CancellationToken::new(),
+            )
+            .await
+            .expect("run worker");
+        assert_eq!(counts.applied, 0, "no provider operation was performed");
+        assert_eq!(counts.failed, 1);
+        let (rows, _) = repo
+            .list_operations(plan.id, OpsFilter::default(), None, 10)
+            .await
+            .expect("rows");
+        assert!(matches!(&rows[0], PlannedOperation::Materialized(r)
+            if r.status == OperationStatus::Failed));
+        assert!(matches!(events.try_recv().expect("failure event"),
+            ApplyEvent::OpFailed { seq: 1, error, .. } if error.code == "account_not_found"));
+        while let Ok(event) = events.try_recv() {
+            assert!(!matches!(event, ApplyEvent::OpApplied { .. }));
+        }
+    }
+
+    // The external mailbox is the only fake; worker persistence and events stay real.
+    struct SuccessfulArchiveProvider;
+
+    #[async_trait]
+    impl crate::email::provider::EmailProvider for SuccessfulArchiveProvider {
+        async fn authenticate(
+            &self,
+            _: &str,
+        ) -> Result<crate::email::types::OAuthTokens, crate::email::provider::ProviderError>
+        {
+            unreachable!("archive fixture does not authenticate")
+        }
+        async fn refresh_token(
+            &self,
+            _: &str,
+        ) -> Result<crate::email::types::OAuthTokens, crate::email::provider::ProviderError>
+        {
+            unreachable!("archive fixture does not refresh tokens")
+        }
+        async fn list_messages(
+            &self,
+            _: &str,
+            _: &crate::email::types::ListParams,
+        ) -> Result<crate::email::types::EmailPage, crate::email::provider::ProviderError> {
+            unreachable!("archive fixture does not list messages")
+        }
+        async fn get_message(
+            &self,
+            _: &str,
+            _: &str,
+        ) -> Result<crate::email::types::EmailMessage, crate::email::provider::ProviderError>
+        {
+            unreachable!("archive fixture does not fetch messages")
+        }
+        async fn archive_message(
+            &self,
+            _: &str,
+            _: &str,
+        ) -> Result<(), crate::email::provider::ProviderError> {
+            Ok(())
+        }
+        async fn label_message(
+            &self,
+            _: &str,
+            _: &str,
+            _: &[String],
+        ) -> Result<(), crate::email::provider::ProviderError> {
+            unreachable!("archive fixture does not label messages")
+        }
+        async fn remove_labels(
+            &self,
+            _: &str,
+            _: &str,
+            _: &[String],
+        ) -> Result<(), crate::email::provider::ProviderError> {
+            unreachable!("archive fixture does not remove labels")
+        }
+        async fn create_label(
+            &self,
+            _: &str,
+            _: &str,
+        ) -> Result<String, crate::email::provider::ProviderError> {
+            unreachable!("archive fixture does not create labels")
+        }
+    }
+
+    fn successful_archive_factory() -> Arc<dyn EmailProviderFactory> {
+        Arc::new(MockEmailProviderFactory::new(|_| {
+            Ok(super::super::factory::ResolvedProvider {
+                provider: Arc::new(SuccessfulArchiveProvider),
+                access_token: "test-token".into(),
+                kind: crate::email::types::ProviderKind::Gmail,
+            })
+        }))
     }
 }

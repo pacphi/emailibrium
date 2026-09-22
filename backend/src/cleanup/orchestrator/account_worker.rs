@@ -465,10 +465,8 @@ impl AccountWorker {
     }
 
     /// Dispatch an action via the provider port. The factory yields a
-    /// per-account `(EmailProvider, access_token)` pair (Item #1). When
-    /// the factory has no provider for this account (Mock no-op default
-    /// used in unit tests) we treat the call as a success so the
-    /// orchestrator + SSE plumbing remains exercisable.
+    /// per-account `(EmailProvider, access_token)` pair (Item #1). Missing
+    /// accounts fail closed: no provider operation means no applied outcome.
     async fn dispatch(&self, row: &PlannedOperationRow) -> Result<(), DispatchError> {
         // Unsubscribe is sender-level and routes through UnsubscribeService,
         // independent of the per-account provider.
@@ -484,12 +482,10 @@ impl AccountWorker {
         {
             Ok(r) => r,
             Err(FactoryError::NotFound(_)) => {
-                tracing::debug!(
-                    account_id = %self.account_id,
-                    seq = row.seq,
-                    "dispatch: factory has no provider for account — treating as success",
-                );
-                return Ok(());
+                return Err(DispatchError::Failed(ErrorCode {
+                    code: "account_not_found".into(),
+                    message: "provider account is no longer available".into(),
+                }));
             }
             Err(FactoryError::OAuth(msg)) => {
                 tracing::warn!(
@@ -739,10 +735,8 @@ fn group_key(op: &PlannedOperation) -> String {
 // ---------------------------------------------------------------------------
 // Tests — behavior pins for the two local-cache helpers.
 //
-// These reach the database directly rather than through `AccountWorker::run`:
-// the orchestrator-level tests all run with `MockEmailProviderFactory::no_op()`,
-// whose `NotFound` short-circuits `dispatch` before either helper is reached,
-// so nothing above this line exercises them.
+// These reach the database directly rather than through `AccountWorker::run`
+// so each local cache mutation is verified independently of provider resolution.
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
