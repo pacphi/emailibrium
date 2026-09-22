@@ -698,10 +698,12 @@ impl CloudGenerativeModel {
             .as_ref()
             .ok_or_else(|| VectorError::ConfigError("Gemini config not initialised".to_string()))?;
 
-        let url = format!(
-            "{}/v1beta/models/{}:generateContent?key={}",
-            gc.base_url, gc.model, gc.api_key
-        );
+        let url = format!("{}/v1beta/models/{}:generateContent", gc.base_url, gc.model);
+        // Google documents header authentication: https://ai.google.dev/api#authentication
+        let mut api_key = reqwest::header::HeaderValue::from_str(&gc.api_key).map_err(|_| {
+            VectorError::ConfigError("Gemini API key is not a valid HTTP header value".into())
+        })?;
+        api_key.set_sensitive(true);
 
         let body = serde_json::json!({
             "contents": [{"parts": [{"text": prompt}]}],
@@ -717,12 +719,16 @@ impl CloudGenerativeModel {
         let resp = self
             .client
             .post(&url)
+            .header("x-goog-api-key", api_key)
             .header("Content-Type", "application/json")
             .json(&body)
             .send()
             .await
             .map_err(|e| {
-                VectorError::CategorizationFailed(format!("Gemini request failed: {e}"))
+                VectorError::CategorizationFailed(format!(
+                    "Gemini request failed: {}",
+                    e.without_url()
+                ))
             })?;
 
         if !resp.status().is_success() {
@@ -733,10 +739,9 @@ impl CloudGenerativeModel {
             )));
         }
 
-        let parsed: serde_json::Value = resp
-            .json()
-            .await
-            .map_err(|e| VectorError::CategorizationFailed(format!("Gemini parse error: {e}")))?;
+        let parsed: serde_json::Value = resp.json().await.map_err(|e| {
+            VectorError::CategorizationFailed(format!("Gemini parse error: {}", e.without_url()))
+        })?;
 
         parsed["candidates"][0]["content"]["parts"][0]["text"]
             .as_str()
@@ -1096,6 +1101,76 @@ fn validate_classification(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const GEMINI_TEST_SECRET: &str = "synthetic-gemini-private-key-123456";
+
+    fn gemini_transport_model(base_url: &str) -> CloudGenerativeModel {
+        let mut config = CloudGenerativeConfig::default();
+        config.provider = "gemini".into();
+        config.gemini.base_url = base_url.into();
+        config.gemini.model = "synthetic-model".into();
+        config.gemini.api_key_env = "EMAILIBRIUM_GEMINI_TRANSPORT_TEST_KEY".into();
+        std::env::set_var("EMAILIBRIUM_GEMINI_TRANSPORT_TEST_KEY", GEMINI_TEST_SECRET);
+        CloudGenerativeModel::new(&config).unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_gemini_transport_sends_key_in_header_not_url() {
+        use axum::{
+            http::{HeaderMap, Uri},
+            routing::post,
+            Json, Router,
+        };
+        use std::sync::{Arc, Mutex};
+        let captured = Arc::new(Mutex::new(None));
+        let capture = captured.clone();
+        let app = Router::new().route("/v1beta/models/synthetic-model:generateContent", post(move |uri: Uri, headers: HeaderMap| {
+            let capture = capture.clone();
+            async move {
+                *capture.lock().unwrap() = Some((uri, headers));
+                Json(serde_json::json!({"candidates":[{"content":{"parts":[{"text":"safe answer"}]}}]}))
+            }
+        }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let model = gemini_transport_model(&format!("http://{}", listener.local_addr().unwrap()));
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        assert_eq!(
+            model.generate("synthetic prompt", 16).await.unwrap(),
+            "safe answer"
+        );
+        server.abort();
+        let guard = captured.lock().unwrap();
+        let (uri, headers) = guard.as_ref().unwrap();
+        assert!(
+            uri.query().is_none(),
+            "credentials must not be placed in the request URL"
+        );
+        assert_eq!(headers.get("x-goog-api-key").unwrap(), GEMINI_TEST_SECRET);
+    }
+
+    #[tokio::test]
+    async fn test_gemini_transport_error_omits_credentials_and_url() {
+        // Accept and close the synthetic connection without an HTTP response.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let model = gemini_transport_model(&format!("http://{}", listener.local_addr().unwrap()));
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            drop(socket);
+        });
+        let error = model.generate("synthetic prompt", 16).await.unwrap_err();
+        server.await.unwrap();
+        let loggable = format!("{error}; {error:?}");
+        assert!(
+            !loggable.contains(GEMINI_TEST_SECRET),
+            "transport diagnostics must not expose credentials"
+        );
+        assert!(
+            !loggable.contains("127.0.0.1"),
+            "transport diagnostics should omit full request URLs"
+        );
+    }
 
     struct RecordingOllama {
         model: OllamaGenerativeModel,
