@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
-import { Command } from 'cmdk';
+import { Command, defaultFilter } from 'cmdk';
 import { useCommandPalette } from './hooks/useCommandPalette';
 import { useDebounce } from './hooks/useDebounce';
 import { useSearch } from './hooks/useSearch';
@@ -52,7 +52,15 @@ export function CommandPalette() {
     limit: 8,
   };
 
-  const { data: searchResponse, isLoading: isSearching } = useSearch(searchQuery);
+  const {
+    data: fetchedSearchResponse,
+    isLoading: isSearching,
+    isPlaceholderData,
+  } = useSearch(searchQuery);
+  // A previous response is useful in full-page search, but must not remain
+  // selectable when a palette query has changed to a command or another email.
+  const searchResponse =
+    inputValue === debouncedQuery && !isPlaceholderData ? fetchedSearchResponse : undefined;
 
   const handleSelect = useCallback(
     (value: string) => {
@@ -100,7 +108,14 @@ export function CommandPalette() {
         aria-label="Command palette"
         aria-modal="true"
       >
-        <Command className="rounded-xl border border-gray-200 bg-white shadow-2xl dark:border-gray-700 dark:bg-gray-800">
+        <Command
+          // Email results have already been ranked by server-side hybrid search.
+          // Filtering their opaque IDs again hides valid semantic matches.
+          filter={(value, search, keywords) =>
+            value.startsWith('email:') ? 1 : defaultFilter(value, search, keywords)
+          }
+          className="rounded-xl border border-gray-200 bg-white shadow-2xl dark:border-gray-700 dark:bg-gray-800"
+        >
           <div className="flex items-center border-b border-gray-200 px-4 dark:border-gray-700">
             <SearchIcon />
             <Command.Input
