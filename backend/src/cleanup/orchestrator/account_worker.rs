@@ -103,25 +103,35 @@ impl AccountWorker {
         let semaphore = Arc::new(Semaphore::new(per_provider_concurrency(self.provider)));
         let throttle_ms = per_provider_throttle_ms(self.provider);
 
-        // Read all rows for this account once, then iterate seq order. For
-        // huge plans the production wiring should cursor-paginate; Phase C
-        // accepts the upper bound (10k expansion test) since rows live in
-        // SQLite already.
+        // Load the complete initial snapshot in bounded repository pages.
+        // Predicate children appended during this run keep the existing
+        // follow-up-apply semantics rather than changing this snapshot.
         let mut counts = JobCounts::default();
-
-        let (rows, _) = self
-            .ctx
-            .repo
-            .list_operations(
-                plan_id,
-                crate::cleanup::repository::OpsFilter {
-                    account_id: Some(self.account_id.clone()),
-                    ..Default::default()
-                },
-                None,
-                u32::MAX,
-            )
-            .await?;
+        let mut rows = Vec::new();
+        let mut cursor = None;
+        loop {
+            if cancel.is_cancelled() {
+                return Err(WorkerError::Cancelled);
+            }
+            let (page, next_cursor) = self
+                .ctx
+                .repo
+                .list_operations(
+                    plan_id,
+                    crate::cleanup::repository::OpsFilter {
+                        account_id: Some(self.account_id.clone()),
+                        ..Default::default()
+                    },
+                    cursor,
+                    1000,
+                )
+                .await?;
+            rows.extend(page);
+            if next_cursor.is_none() || next_cursor == cursor {
+                break;
+            }
+            cursor = next_cursor;
+        }
 
         let mut idx = 0usize;
         while idx < rows.len() {

@@ -254,10 +254,21 @@ impl CleanupPlanRepository for SeaOrmCleanupPlanRepo {
             account_state_etags.insert(acct, etag);
         }
 
-        // Operations (full list; Phase B will paginate)
-        let (operations, _) = self
-            .list_operations(id, OpsFilter::default(), None, u32::MAX)
-            .await?;
+        // The aggregate must carry every operation, including accounts whose
+        // first row is beyond the repository's 1,000-row page limit. Saving a
+        // truncated aggregate would otherwise delete the omitted operations.
+        let mut operations = Vec::new();
+        let mut cursor = None;
+        loop {
+            let (page, next_cursor) = self
+                .list_operations(id, OpsFilter::default(), cursor, 1000)
+                .await?;
+            operations.extend(page);
+            if next_cursor.is_none() || next_cursor == cursor {
+                break;
+            }
+            cursor = next_cursor;
+        }
 
         let account_ids: Vec<String> = account_state_etags.keys().cloned().collect();
 
@@ -1500,5 +1511,43 @@ mod tests {
             .expect("purge");
         assert!(purged >= 1);
         assert!(repo.load(&user2, overdue_id).await.expect("load").is_none());
+    }
+    #[tokio::test]
+    async fn load_preserves_operations_beyond_repository_page_limit() {
+        let repo = SeaOrmCleanupPlanRepo::new(fresh_conn().await);
+        let mut plan = sample_plan("user-large-plan");
+        let PlannedOperation::Materialized(template) = plan.operations[0].clone() else {
+            unreachable!();
+        };
+        plan.operations = (1..=1005)
+            .map(|seq| {
+                let mut row = template.clone();
+                row.seq = seq;
+                row.email_id = Some(format!("email-{seq}"));
+                if seq > 1000 {
+                    row.account_id = "acct-b".into();
+                }
+                PlannedOperation::Materialized(row)
+            })
+            .collect();
+        plan.account_ids.push("acct-b".into());
+        plan.account_state_etags
+            .insert("acct-b".into(), AccountStateEtag::None);
+        repo.save(&plan).await.expect("save");
+        let loaded = repo
+            .load(&plan.user_id, plan.id)
+            .await
+            .expect("load")
+            .expect("plan");
+        assert_eq!(loaded.operations.len(), 1005);
+        assert_eq!(loaded.operations.last().unwrap().seq(), 1005);
+        // A load/save round trip must not delete rows that were beyond page one.
+        repo.save(&loaded).await.expect("save loaded");
+        let (tail, _) = repo
+            .list_operations(plan.id, OpsFilter::default(), Some(1000), 10)
+            .await
+            .expect("tail");
+        assert_eq!(tail.len(), 5);
+        assert!(tail.iter().all(|op| op.account_id() == "acct-b"));
     }
 }

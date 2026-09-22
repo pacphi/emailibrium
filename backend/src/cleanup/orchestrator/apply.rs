@@ -1021,4 +1021,96 @@ mod tests {
             ));
         }
     }
+    // Real persistence is intentional: the repository caps every page at 1,000.
+    async fn persisted_worker(
+        rows: Vec<PlannedOperation>,
+    ) -> (
+        AccountWorker,
+        Arc<crate::cleanup::repository::SeaOrmCleanupPlanRepo>,
+        CleanupPlan,
+    ) {
+        let db = crate::db::test_sqlite_database().await;
+        crate::db::apply_sqlite_migrations(
+            &db.sea_orm(),
+            &[include_str!(
+                "../../../migrations/sqlite/024_cleanup_planning.sql"
+            )],
+        )
+        .await
+        .expect("migrate");
+        let repo = Arc::new(crate::cleanup::repository::SeaOrmCleanupPlanRepo::new(
+            db.sea_orm(),
+        ));
+        let plan = sample_plan_with_rows(rows);
+        repo.save(&plan).await.expect("save plan");
+        let (emitter, _) = EventEmitter::new(4096);
+        let worker = AccountWorker {
+            account_id: "acct-a".into(),
+            provider: Provider::Outlook,
+            ctx: AccountWorkerCtx {
+                repo: repo.clone(),
+                provider_factory: Arc::new(MockEmailProviderFactory::no_op()),
+                unsubscribe: Arc::new(UnsubscribeService::new()),
+                expander: Arc::new(PredicateExpander::new(
+                    Arc::new(StubRules),
+                    Arc::new(StubEmailRepo),
+                )),
+                emitter,
+                audit: Arc::new(NoopCleanupAuditWriter),
+                user_id: plan.user_id.clone(),
+                job_id: Uuid::now_v7(),
+                db: None,
+            },
+        };
+        (worker, repo, plan)
+    }
+
+    #[tokio::test]
+    async fn worker_visits_operations_beyond_repository_page_limit() {
+        let (worker, repo, plan) =
+            persisted_worker((1..=1005).map(|seq| row(seq, RiskLevel::High)).collect()).await;
+        let counts = worker
+            .run(
+                plan.id,
+                RiskMax::High,
+                HashSet::new(),
+                HashSet::new(),
+                CancellationToken::new(),
+            )
+            .await
+            .expect("run worker");
+        assert_eq!(
+            counts.skipped, 1005,
+            "all unacknowledged rows must be visited"
+        );
+        let (tail, _) = repo
+            .list_operations(plan.id, OpsFilter::default(), Some(1000), 10)
+            .await
+            .expect("tail");
+        assert_eq!(tail.len(), 5);
+        assert!(tail.iter().all(|op| matches!(op,
+            PlannedOperation::Materialized(r) if r.status == OperationStatus::Skipped
+        )));
+    }
+
+    #[tokio::test]
+    async fn worker_counts_pending_operations_beyond_repository_page_limit() {
+        let (worker, _, plan) =
+            persisted_worker((1..=1005).map(|seq| row(seq, RiskLevel::High)).collect()).await;
+        let counts = worker
+            .run(
+                plan.id,
+                RiskMax::Low,
+                HashSet::new(),
+                HashSet::new(),
+                CancellationToken::new(),
+            )
+            .await
+            .expect("run worker");
+        assert_eq!(
+            counts.pending, 1005,
+            "risk-excluded rows must remain visible in counts"
+        );
+        assert_eq!(counts.applied + counts.failed + counts.skipped, 0);
+    }
 }
