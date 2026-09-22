@@ -456,6 +456,8 @@ mod tests {
     struct InMemPlanRepo {
         plan: Mutex<Option<CleanupPlan>>,
         status_log: Mutex<Vec<(u64, OperationStatus)>>,
+        cursor_backstep: Option<u64>,
+        empty_cursor_regression: bool,
     }
 
     #[async_trait]
@@ -502,7 +504,19 @@ mod tests {
                         .collect()
                 })
                 .unwrap_or_default();
-            Ok((ops, None))
+            if self.empty_cursor_regression && _cursor.is_some() {
+                return if _cursor == Some(1) {
+                    Ok((Vec::new(), Some(0)))
+                } else {
+                    Ok((ops, None))
+                };
+            }
+            let next_cursor = self.cursor_backstep.map(|backstep| {
+                _cursor
+                    .map(|cursor| cursor.saturating_sub(backstep))
+                    .unwrap_or(1)
+            });
+            Ok((ops, next_cursor))
         }
         async fn sample_operations(
             &self,
@@ -1318,5 +1332,41 @@ mod tests {
             "completed rows are not awaiting a higher-risk apply"
         );
         assert_eq!(counts.applied + counts.failed + counts.skipped, 0);
+    }
+    #[tokio::test]
+    async fn worker_rejects_non_advancing_cursor_before_dispatch() {
+        for (backstep, empty_cursor_regression) in [(0, false), (1, false), (1, true)] {
+            let (mut worker, _, plan) = persisted_worker(vec![row(1, RiskLevel::Low)]).await;
+            let repo = Arc::new(InMemPlanRepo {
+                cursor_backstep: Some(backstep),
+                empty_cursor_regression,
+                ..Default::default()
+            });
+            repo.save(&plan).await.expect("save");
+            worker.ctx.repo = repo.clone();
+            let result = tokio::time::timeout(
+                std::time::Duration::from_secs(1),
+                worker.run(
+                    plan.id,
+                    RiskMax::Low,
+                    HashSet::new(),
+                    HashSet::new(),
+                    CancellationToken::new(),
+                ),
+            )
+            .await
+            .expect("faulty pagination must terminate");
+            assert!(
+                matches!(
+                    result,
+                    Err(super::super::account_worker::WorkerError::Repo(_))
+                ),
+                "stalled nonempty pages and regressing cursors must not look complete"
+            );
+            assert!(
+                repo.status_log.lock().unwrap().is_empty(),
+                "no operation may be dispatched from an incomplete snapshot"
+            );
+        }
     }
 }

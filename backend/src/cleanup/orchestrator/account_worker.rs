@@ -126,6 +126,16 @@ impl AccountWorker {
                     1000,
                 )
                 .await?;
+            // An empty page may repeat the cursor at normal repository EOF.
+            // Cursors cannot regress, and nonempty pages must make progress.
+            if next_cursor.is_some_and(|next| {
+                next < cursor.unwrap_or(0) || (!page.is_empty() && next == cursor.unwrap_or(0))
+            }) {
+                return Err(crate::cleanup::domain::ports::RepoError::Internal(
+                    "cleanup operations cursor did not advance".into(),
+                )
+                .into());
+            }
             rows.extend(page);
             if next_cursor.is_none() || next_cursor == cursor {
                 break;
