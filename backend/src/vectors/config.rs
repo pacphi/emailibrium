@@ -1250,13 +1250,15 @@ mod tests {
     fn test_security_config_defaults() {
         let config = SecurityConfig::default();
         assert!(config.csp_enabled);
-        assert_eq!(config.allowed_origins.len(), 2);
-        assert!(config
-            .allowed_origins
-            .contains(&"http://localhost:3000".to_string()));
-        assert!(config
-            .allowed_origins
-            .contains(&"http://localhost:5173".to_string()));
+        assert_eq!(
+            config.allowed_origins,
+            vec![
+                "http://localhost:3000".to_string(),
+                "http://127.0.0.1:3000".to_string(),
+                "http://localhost:5173".to_string(),
+                "http://127.0.0.1:5173".to_string(),
+            ]
+        );
     }
 
     #[test]
