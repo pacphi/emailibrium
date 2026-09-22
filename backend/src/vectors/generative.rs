@@ -1105,11 +1105,15 @@ mod tests {
     const GEMINI_TEST_SECRET: &str = "synthetic-gemini-private-key-123456";
 
     fn gemini_transport_model(base_url: &str) -> CloudGenerativeModel {
-        let mut config = CloudGenerativeConfig::default();
-        config.provider = "gemini".into();
-        config.gemini.base_url = base_url.into();
-        config.gemini.model = "synthetic-model".into();
-        config.gemini.api_key_env = "EMAILIBRIUM_GEMINI_TRANSPORT_TEST_KEY".into();
+        let config = CloudGenerativeConfig {
+            provider: "gemini".into(),
+            gemini: crate::vectors::config::GeminiGenerativeConfig {
+                base_url: base_url.into(),
+                model: "synthetic-model".into(),
+                api_key_env: "EMAILIBRIUM_GEMINI_TRANSPORT_TEST_KEY".into(),
+            },
+            ..Default::default()
+        };
         std::env::set_var("EMAILIBRIUM_GEMINI_TRANSPORT_TEST_KEY", GEMINI_TEST_SECRET);
         CloudGenerativeModel::new(&config).unwrap()
     }
