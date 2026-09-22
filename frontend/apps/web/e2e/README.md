@@ -43,6 +43,7 @@ provider or full-stack integration.
 | Settings | 2 | Persist general/appearance choices across reload, update account strategy, model catalog/provider choices, privacy and consent tabs |
 | Chat | 2 | Stream answer, clear conversation, service error and readiness to retry |
 | App navigation | 1 | Sidebar links reach feature content including cleanup history and chat |
+| Engine connection | 6 | Required session, incorrect token, unlock/reload/lock, expiry, offline retry, late-response race |
 | Fixture isolation | 1 | Unmocked API writes are rejected by the test server |
 
 ## Regression evidence

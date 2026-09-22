@@ -166,6 +166,7 @@ export class Mailbox {
     );
   }
   response(method: string, path: string, request: Request): unknown {
+    if (path === 'session') return { authenticated: true };
     if (path === 'auth/accounts' && method === 'GET') return this.accounts;
     if (path === 'auth/imap/connect' && method === 'POST') {
       const connected = {

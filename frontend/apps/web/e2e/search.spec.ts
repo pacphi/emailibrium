@@ -18,6 +18,7 @@ test('command palette searches the mailbox and opens the matching thread', async
 
 test('command palette can navigate with keyboard and dismiss with Escape', async ({ page }) => {
   await page.goto('/email');
+  await expect(page.getByRole('heading', { name: 'Inbox', exact: true })).toBeVisible();
   await page.keyboard.press('ControlOrMeta+k');
   const palette = page.getByRole('dialog', { name: 'Command palette' });
   await expect(palette).toBeVisible();
@@ -52,6 +53,7 @@ test('dashboard search changes modes and distinguishes empty results from servic
 
 test('typing a command after a search cannot select stale email results', async ({ page }) => {
   await page.goto('/command-center');
+  await expect(page.getByRole('heading', { name: 'Command Center' })).toBeVisible();
   await page.keyboard.press('ControlOrMeta+k');
   const palette = page.getByRole('dialog', { name: 'Command palette' });
   await palette.getByRole('combobox').fill('Atlas');
