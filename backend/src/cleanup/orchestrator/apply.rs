@@ -28,7 +28,9 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::cleanup::audit::{CleanupAuditWriter, NoopCleanupAuditWriter};
-use crate::cleanup::domain::operation::{JobState, PlanStatus, Provider, RiskMax};
+use crate::cleanup::domain::operation::{
+    JobState, OperationStatus, PlanStatus, PlannedOperation, PredicateStatus, Provider, RiskMax,
+};
 use crate::cleanup::domain::plan::{CleanupApplyJob, CleanupPlan, JobCounts, JobId, PlanId};
 use crate::cleanup::repository::{CleanupApplyJobRepository, CleanupPlanRepository};
 use crate::cleanup::telemetry::{hash_user_id, CleanupTelemetryEvent, TelemetryEmitter};
@@ -46,6 +48,8 @@ pub enum BeginApplyError {
     BadStatus(PlanStatus),
     #[error("plan expired")]
     Expired,
+    #[error("plan was already claimed or changed since it was loaded")]
+    ClaimConflict,
     #[error("hard drift on accounts: {0:?}")]
     HardDrift(Vec<String>),
     #[error("repo: {0}")]
@@ -168,6 +172,12 @@ impl ApplyOrchestrator {
             return Err(BeginApplyError::HardDrift(hard_accounts));
         }
 
+        // This persisted compare-and-set is the concurrency boundary across
+        // independent server instances, not merely this process's channel map.
+        if !self.plan_repo.claim_apply(plan, Utc::now()).await? {
+            return Err(BeginApplyError::ClaimConflict);
+        }
+
         // Build per-account totals for Started event.
         let mut totals_by_account: BTreeMap<String, JobCounts> = BTreeMap::new();
         for op in &plan.operations {
@@ -184,16 +194,6 @@ impl ApplyOrchestrator {
         let job_id: JobId = Uuid::now_v7();
         let (emitter, sender) = EventEmitter::new(1024);
         let cancel = CancellationToken::new();
-        {
-            let mut guard = self.job_channels.write().await;
-            guard.insert(
-                job_id,
-                JobChannels {
-                    sender: sender.clone(),
-                    cancel: cancel.clone(),
-                },
-            );
-        }
 
         // Persist queued job.
         let job_row = CleanupApplyJob {
@@ -205,7 +205,20 @@ impl ApplyOrchestrator {
             risk_max: opts.risk_max,
             counts: JobCounts::default(),
         };
-        self.job_repo.create(&job_row).await?;
+        if let Err(error) = self.job_repo.create(&job_row).await {
+            self.plan_repo.release_apply(plan.id, plan.status).await?;
+            return Err(error.into());
+        }
+        {
+            let mut guard = self.job_channels.write().await;
+            guard.insert(
+                job_id,
+                JobChannels {
+                    sender: sender.clone(),
+                    cancel: cancel.clone(),
+                },
+            );
+        }
 
         // Emit Started.
         emitter.emit(ApplyEvent::Started {
@@ -281,21 +294,65 @@ impl ApplyOrchestrator {
                 }
             }
 
-            // Determine terminal state.
-            let final_state = if cancel.is_cancelled() {
+            // Read the authoritative rows, including children appended during
+            // predicate expansion. Never save the request's stale aggregate.
+            let mut unresolved_failures = false;
+            match me.plan_repo.load(&user_id_for_audit, plan_id).await {
+                Ok(Some(current)) => {
+                    combined.pending = current
+                        .operations
+                        .iter()
+                        .filter(|op| match op {
+                            PlannedOperation::Materialized(row) => {
+                                row.status == OperationStatus::Pending
+                            }
+                            PlannedOperation::Predicate(row) => matches!(
+                                row.status,
+                                PredicateStatus::Pending
+                                    | PredicateStatus::Expanding
+                                    | PredicateStatus::PartiallyApplied
+                            ),
+                        })
+                        .count() as u64;
+                    unresolved_failures = current.operations.iter().any(|op| match op {
+                        PlannedOperation::Materialized(row) => {
+                            row.status == OperationStatus::Failed
+                        }
+                        PlannedOperation::Predicate(row) => row.status == PredicateStatus::Failed,
+                    });
+                }
+                Ok(None) => any_failed = true,
+                Err(error) => {
+                    tracing::error!(%error, "could not inspect cleanup plan after apply");
+                    any_failed = true;
+                }
+            }
+            let mut final_state = if cancel.is_cancelled() {
                 JobState::Cancelled
-            } else if any_failed && combined.applied == 0 {
+            } else if any_failed || combined.failed > 0 || unresolved_failures {
                 JobState::Failed
             } else {
                 JobState::Finished
             };
+            let plan_status = if final_state == JobState::Finished && combined.pending == 0 {
+                PlanStatus::Applied
+            } else {
+                PlanStatus::PartiallyApplied
+            };
+            if let Err(error) = me.plan_repo.release_apply(plan_id, plan_status).await {
+                tracing::error!(%error, "could not release cleanup apply claim");
+                final_state = JobState::Failed;
+            }
 
-            // Persist job + plan envelopes.
             let now = Utc::now();
-            let _ = me
+            if let Err(error) = me
                 .job_repo
                 .update_state(job_id, final_state, combined.clone(), Some(now))
-                .await;
+                .await
+            {
+                tracing::error!(%error, "could not persist cleanup job result");
+                final_state = JobState::Failed;
+            }
 
             emitter_outer.emit_progress_now(combined.clone());
             emitter_outer.emit(ApplyEvent::Finished {
@@ -462,6 +519,38 @@ mod tests {
 
     #[async_trait]
     impl CleanupPlanRepository for InMemPlanRepo {
+        async fn claim_apply(
+            &self,
+            expected: &CleanupPlan,
+            now: chrono::DateTime<Utc>,
+        ) -> Result<bool, RepoError> {
+            let mut stored = self.plan.lock().unwrap();
+            let Some(plan) = stored.as_mut() else {
+                return Ok(false);
+            };
+            if matches!(
+                plan.status,
+                PlanStatus::Ready | PlanStatus::PartiallyApplied
+            ) && plan.id == expected.id
+                && plan.user_id == expected.user_id
+                && plan.plan_hash == expected.plan_hash
+                && plan.status == expected.status
+                && plan.valid_until > now
+            {
+                plan.status = PlanStatus::Applying;
+                Ok(true)
+            } else {
+                Ok(false)
+            }
+        }
+        async fn release_apply(&self, id: PlanId, status: PlanStatus) -> Result<(), RepoError> {
+            if let Some(plan) = self.plan.lock().unwrap().as_mut() {
+                if plan.id == id && plan.status == PlanStatus::Applying {
+                    plan.status = status;
+                }
+            }
+            Ok(())
+        }
         async fn save(&self, plan: &CleanupPlan) -> Result<(), RepoError> {
             *self.plan.lock().unwrap() = Some(plan.clone());
             Ok(())
@@ -819,7 +908,7 @@ mod tests {
         // Apply Medium with manual ack (Manual source has empty group key
         // so no ack is needed for medium-risk rows here).
         let plan2 = plan_repo.plan.lock().unwrap().clone().unwrap();
-        let _jid2 = orch
+        let jid2 = orch
             .clone()
             .begin_apply(
                 &plan2,
@@ -831,8 +920,9 @@ mod tests {
             )
             .await
             .unwrap();
-        // Run to completion.
-        // Apply High with explicit ack.
+        let mut rx2 = orch.subscribe(jid2).await.unwrap();
+        let _ = wait_for_finish(&mut rx2).await;
+        // Apply High with explicit ack after the second claim has finished.
         let plan3 = plan_repo.plan.lock().unwrap().clone().unwrap();
         let _jid3 = orch
             .clone()
@@ -1369,5 +1459,221 @@ mod tests {
                 "no operation may be dispatched from an incomplete snapshot"
             );
         }
+    }
+    async fn persistent_apply_fixture() -> (crate::db::Database, Arc<ApplyOrchestrator>, CleanupPlan)
+    {
+        let db = crate::db::test_sqlite_database().await;
+        crate::db::apply_sqlite_migrations(
+            &db.sea_orm(),
+            &[include_str!(
+                "../../../migrations/sqlite/024_cleanup_planning.sql"
+            )],
+        )
+        .await
+        .expect("migrate");
+        let plan_repo = Arc::new(crate::cleanup::repository::SeaOrmCleanupPlanRepo::new(
+            db.sea_orm(),
+        ));
+        let job_repo = Arc::new(crate::cleanup::repository::SeaOrmCleanupApplyJobRepo::new(
+            db.sea_orm(),
+        ));
+        let plan = sample_plan_with_rows(vec![row(1, RiskLevel::Low), row(2, RiskLevel::Low)]);
+        plan_repo.save(&plan).await.expect("save");
+        let orch = Arc::new(
+            ApplyOrchestrator::new(
+                plan_repo,
+                job_repo,
+                Arc::new(DriftDetector::new(Arc::new(CleanProvider))),
+                Arc::new(PredicateExpander::new(
+                    Arc::new(StubRules),
+                    Arc::new(StubEmailRepo),
+                )),
+                Arc::new(|_| Provider::Gmail),
+                Arc::new(UnsubscribeService::new()),
+            )
+            .with_provider_factory(successful_archive_factory()),
+        );
+        (db, orch, plan)
+    }
+
+    async fn persistent_wait(orch: &ApplyOrchestrator, job_id: JobId) -> CleanupApplyJob {
+        tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            loop {
+                let job = orch
+                    .job_repo
+                    .load(job_id)
+                    .await
+                    .expect("job")
+                    .expect("present");
+                if !matches!(job.state, JobState::Running | JobState::Queued) {
+                    break job;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("job finishes")
+    }
+
+    fn low_options() -> ApplyOptions {
+        ApplyOptions {
+            risk_max: RiskMax::Low,
+            acknowledged_high_risk_seqs: vec![],
+            acknowledged_medium_groups: vec![],
+        }
+    }
+
+    #[tokio::test]
+    async fn persistent_apply_claim_allows_only_one_concurrent_request() {
+        let (_, orch, plan) = persistent_apply_fixture().await;
+        // Independent channel maps model two server instances sharing only persistence.
+        let peer = Arc::new(
+            ApplyOrchestrator::new(
+                orch.plan_repo.clone(),
+                orch.job_repo.clone(),
+                orch.drift.clone(),
+                orch.expander.clone(),
+                orch.workers_for.clone(),
+                orch.unsubscribe.clone(),
+            )
+            .with_provider_factory(successful_archive_factory()),
+        );
+        let (a, b) = tokio::join!(
+            orch.clone().begin_apply(&plan, low_options()),
+            peer.begin_apply(&plan, low_options())
+        );
+        let winners: Vec<_> = [a, b].into_iter().filter_map(Result::ok).collect();
+        assert_eq!(
+            winners.len(),
+            1,
+            "exactly one apply may own the stored plan"
+        );
+        let job = persistent_wait(&orch, winners[0]).await;
+        assert_eq!(job.state, JobState::Finished);
+        assert_eq!(job.counts.applied, 2);
+        let stored = orch.plan_repo.load("u", plan.id).await.unwrap().unwrap();
+        assert_eq!(stored.status, PlanStatus::Applied);
+        assert_eq!(orch.job_repo.list_by_plan(plan.id).await.unwrap().len(), 1);
+        assert!(
+            orch.clone()
+                .begin_apply(&plan, low_options())
+                .await
+                .is_err(),
+            "stale ready snapshot cannot replay a completed plan"
+        );
+    }
+
+    #[tokio::test]
+    async fn persistent_apply_cancellation_releases_claim_for_resume() {
+        let (_, orch, plan) = persistent_apply_fixture().await;
+        let first = orch
+            .clone()
+            .begin_apply(&plan, low_options())
+            .await
+            .unwrap();
+        orch.cancel(first).await.unwrap();
+        let cancelled = persistent_wait(&orch, first).await;
+        assert_eq!(cancelled.state, JobState::Cancelled);
+        let remaining = orch.plan_repo.load("u", plan.id).await.unwrap().unwrap();
+        assert_eq!(remaining.status, PlanStatus::PartiallyApplied);
+        let resumed = orch
+            .clone()
+            .begin_apply(&remaining, low_options())
+            .await
+            .unwrap();
+        let completed = persistent_wait(&orch, resumed).await;
+        assert_eq!(completed.state, JobState::Finished);
+        let stored = orch.plan_repo.load("u", plan.id).await.unwrap().unwrap();
+        assert_eq!(stored.status, PlanStatus::Applied);
+        assert!(stored.operations.iter().all(|op| matches!(op, PlannedOperation::Materialized(r) if r.status == OperationStatus::Applied)));
+    }
+
+    #[tokio::test]
+    async fn persistent_apply_job_creation_error_releases_claim_without_rewriting_rows() {
+        use sea_orm::ConnectionTrait;
+        let (db, orch, plan) = persistent_apply_fixture().await;
+        db.sea_orm().execute_unprepared("CREATE TRIGGER reject_job BEFORE INSERT ON cleanup_apply_jobs BEGIN SELECT RAISE(FAIL, 'injected job error'); END").await.unwrap();
+        assert!(orch
+            .clone()
+            .begin_apply(&plan, low_options())
+            .await
+            .is_err());
+        let stored = orch.plan_repo.load("u", plan.id).await.unwrap().unwrap();
+        assert_eq!(stored.status, PlanStatus::Ready);
+        assert_eq!(
+            serde_json::to_value(&stored.operations).unwrap(),
+            serde_json::to_value(&plan.operations).unwrap()
+        );
+        db.sea_orm()
+            .execute_unprepared("DROP TRIGGER reject_job")
+            .await
+            .unwrap();
+        let job = orch
+            .clone()
+            .begin_apply(&stored, low_options())
+            .await
+            .unwrap();
+        assert_eq!(persistent_wait(&orch, job).await.state, JobState::Finished);
+    }
+
+    #[tokio::test]
+    async fn persistent_apply_reports_failed_job_when_all_operations_fail() {
+        let (_, mut orch, plan) = persistent_apply_fixture().await;
+        Arc::get_mut(&mut orch).unwrap().provider_factory =
+            Arc::new(MockEmailProviderFactory::no_op());
+        let job = orch
+            .clone()
+            .begin_apply(&plan, low_options())
+            .await
+            .unwrap();
+        let completed = persistent_wait(&orch, job).await;
+        assert_eq!(completed.counts.failed, 2);
+        assert_eq!(completed.state, JobState::Failed);
+        assert_eq!(
+            orch.plan_repo
+                .load("u", plan.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .status,
+            PlanStatus::PartiallyApplied
+        );
+    }
+    #[tokio::test]
+    async fn persistent_apply_replay_does_not_hide_unresolved_failures() {
+        let (_, mut orch, plan) = persistent_apply_fixture().await;
+        Arc::get_mut(&mut orch).unwrap().provider_factory =
+            Arc::new(MockEmailProviderFactory::no_op());
+        let first = orch
+            .clone()
+            .begin_apply(&plan, low_options())
+            .await
+            .unwrap();
+        assert_eq!(persistent_wait(&orch, first).await.state, JobState::Failed);
+        let remaining = orch.plan_repo.load("u", plan.id).await.unwrap().unwrap();
+        let second = orch
+            .clone()
+            .begin_apply(&remaining, low_options())
+            .await
+            .unwrap();
+        let replay = persistent_wait(&orch, second).await;
+        assert_eq!(
+            replay.counts.failed, 0,
+            "terminal rows are not dispatched a second time"
+        );
+        assert_eq!(
+            replay.state,
+            JobState::Failed,
+            "existing failures still prevent successful completion"
+        );
+        assert_eq!(
+            orch.plan_repo
+                .load("u", plan.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .status,
+            PlanStatus::PartiallyApplied
+        );
     }
 }

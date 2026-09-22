@@ -62,6 +62,22 @@ pub struct OpsFilter {
 #[async_trait]
 pub trait CleanupPlanRepository: Send + Sync {
     async fn save(&self, plan: &CleanupPlan) -> Result<(), RepoError>;
+    /// Atomically claim the exact reviewed envelope before any apply work starts.
+    async fn claim_apply(
+        &self,
+        _plan: &CleanupPlan,
+        _now: DateTime<Utc>,
+    ) -> Result<bool, RepoError> {
+        Err(RepoError::Internal(
+            "persistent apply claims are unavailable".into(),
+        ))
+    }
+    /// Release only the lifecycle field; never rewrite a stale operation snapshot.
+    async fn release_apply(&self, _id: PlanId, _status: PlanStatus) -> Result<(), RepoError> {
+        Err(RepoError::Internal(
+            "persistent apply claims are unavailable".into(),
+        ))
+    }
     async fn load(&self, user_id: &str, id: PlanId) -> Result<Option<CleanupPlan>, RepoError>;
     async fn list_by_user(
         &self,
@@ -135,6 +151,38 @@ impl SeaOrmCleanupPlanRepo {
 
 #[async_trait]
 impl CleanupPlanRepository for SeaOrmCleanupPlanRepo {
+    async fn claim_apply(&self, plan: &CleanupPlan, now: DateTime<Utc>) -> Result<bool, RepoError> {
+        if !matches!(
+            plan.status,
+            PlanStatus::Ready | PlanStatus::PartiallyApplied
+        ) {
+            return Ok(false);
+        }
+        let result = plans::Entity::update_many()
+            .col_expr(
+                plans::Column::Status,
+                Expr::value(PlanStatus::Applying.as_str()),
+            )
+            .filter(plans::Column::Id.eq(plan.id.as_bytes().to_vec()))
+            .filter(plans::Column::UserId.eq(plan.user_id.as_bytes().to_vec()))
+            .filter(plans::Column::PlanHash.eq(plan.plan_hash.to_vec()))
+            .filter(plans::Column::Status.eq(plan.status.as_str()))
+            .filter(plans::Column::ValidUntil.gt(now.timestamp_millis()))
+            .exec(&self.conn)
+            .await?;
+        Ok(result.rows_affected == 1)
+    }
+
+    async fn release_apply(&self, id: PlanId, status: PlanStatus) -> Result<(), RepoError> {
+        plans::Entity::update_many()
+            .col_expr(plans::Column::Status, Expr::value(status.as_str()))
+            .filter(plans::Column::Id.eq(id.as_bytes().to_vec()))
+            .filter(plans::Column::Status.eq(PlanStatus::Applying.as_str()))
+            .exec(&self.conn)
+            .await?;
+        Ok(())
+    }
+
     async fn save(&self, plan: &CleanupPlan) -> Result<(), RepoError> {
         let totals_json = serde_json::to_string(&PersistedTotals {
             totals: &plan.totals,
@@ -1378,6 +1426,45 @@ mod tests {
             .await
             .expect("list_by_user");
         assert_eq!(summaries.len(), 1);
+
+        // Persistent claims use a single conditional UPDATE on PostgreSQL too.
+        let mut stale = plan.clone();
+        stale.plan_hash[0] ^= 1;
+        assert!(!repo
+            .claim_apply(&stale, Utc::now())
+            .await
+            .expect("stale hash rejected"));
+        stale = plan.clone();
+        stale.user_id = format!("other-{user}");
+        assert!(!repo
+            .claim_apply(&stale, Utc::now())
+            .await
+            .expect("wrong owner rejected"));
+        assert!(!repo
+            .claim_apply(&plan, plan.valid_until)
+            .await
+            .expect("expired claim rejected"));
+        let (first, second) = tokio::join!(
+            repo.claim_apply(&plan, Utc::now()),
+            repo.claim_apply(&plan, Utc::now())
+        );
+        assert_ne!(first.expect("first claim"), second.expect("second claim"));
+        assert_eq!(
+            repo.load(&user, plan_id).await.unwrap().unwrap().status,
+            PlanStatus::Applying
+        );
+        repo.release_apply(plan_id, PlanStatus::Ready)
+            .await
+            .expect("release claim");
+        assert_eq!(
+            repo.load(&user, plan_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .operations
+                .len(),
+            2
+        );
 
         // Cursor pagination + filters.
         let (page, cursor) = repo
