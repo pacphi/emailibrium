@@ -1,37 +1,35 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures/mailbox';
 
-test.describe('Search & Command Palette', () => {
-  test('command palette opens with Cmd+K', async ({ page }) => {
-    await page.goto('/command-center');
-    await page.keyboard.press('Meta+k');
-    // The command palette dialog should appear
-    const dialog = page.getByRole('dialog').first();
-    await expect(dialog).toBeVisible({ timeout: 3000 });
-  });
+test('command palette can navigate with keyboard and dismiss with Escape', async ({ page }) => {
+  await page.goto('/email');
+  await page.keyboard.press('ControlOrMeta+k');
+  const palette = page.getByRole('dialog', { name: 'Command palette' });
+  await expect(palette).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(palette).toBeHidden();
+  await page.keyboard.press('ControlOrMeta+k');
+  await palette.getByText('Manage Rules', { exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Rules Studio' })).toBeVisible();
+});
 
-  test('can type search query', async ({ page }) => {
-    await page.goto('/command-center');
-    await page.keyboard.press('Meta+k');
-    const searchInput = page
-      .getByRole('combobox')
-      .or(page.getByPlaceholder(/search/i))
-      .first();
-    await searchInput.fill('test query');
-    await expect(searchInput).toHaveValue('test query');
-  });
-
-  test('search results display', async ({ page }) => {
-    await page.goto('/command-center');
-    await page.keyboard.press('Meta+k');
-    const searchInput = page
-      .getByRole('combobox')
-      .or(page.getByPlaceholder(/search/i))
-      .first();
-    await searchInput.fill('inbox');
-    // Allow time for results to load
-    await page.waitForTimeout(500);
-    // The command palette should still be visible with results or empty state
-    const dialog = page.getByRole('dialog').first();
-    await expect(dialog).toBeVisible();
-  });
+test('dashboard search changes modes and distinguishes empty results from service errors', async ({
+  page,
+  mailbox,
+}) => {
+  await page.goto('/command-center');
+  await page.getByRole('button', { name: 'Search', exact: true }).click();
+  await page.getByRole('textbox', { name: 'Search emails', exact: true }).fill('Atlas');
+  await expect(page.getByRole('list', { name: 'Search results' })).toContainText(
+    'Project Atlas review',
+  );
+  await page.getByRole('button', { name: 'Keyword', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Keyword', exact: true })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
+  await page.getByRole('textbox', { name: 'Search emails', exact: true }).fill('missing');
+  await expect(page.getByRole('heading', { name: 'No results found' })).toBeVisible();
+  mailbox.failures.set('vectors/search/hybrid', 400);
+  await page.getByRole('textbox', { name: 'Search emails', exact: true }).fill('unavailable');
+  await expect(page.getByRole('alert')).toContainText('Failed to load search results');
 });
