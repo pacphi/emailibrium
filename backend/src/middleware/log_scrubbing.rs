@@ -15,6 +15,12 @@ use regex::Regex;
 use std::sync::OnceLock;
 use tracing::{error, warn};
 
+/// Trace spans contain only the route path. OAuth codes/state and bearer
+/// credentials must never reach the default full-URI tracing span.
+pub fn safe_request_span(request: &Request<Body>) -> tracing::Span {
+    tracing::info_span!("http.request", method = %request.method(), path = request.uri().path())
+}
+
 /// Regex patterns for detecting tokens and sensitive data
 static TOKEN_PATTERNS: OnceLock<Vec<Regex>> = OnceLock::new();
 
@@ -119,6 +125,7 @@ pub fn scrub_query_params(url: &str) -> String {
     // Remove common sensitive query parameters
     let sensitive_params = [
         "access_token",
+        "state",
         "refresh_token",
         "token",
         "code",
@@ -276,7 +283,7 @@ mod tests {
         let result = scrub_query_params(url);
         assert!(result.contains("access_token=[REDACTED]"));
         assert!(!result.contains("secret123"));
-        assert!(result.contains("state=abc"));
+        assert!(result.contains("state=[REDACTED]"));
     }
 
     #[test]
@@ -337,5 +344,55 @@ mod tests {
         let err = std::io::Error::other("Connection refused on port 8080");
         let result = scrub_error_message(&err);
         assert_eq!(result, "Connection refused on port 8080");
+    }
+    #[test]
+    fn oauth_callback_state_and_code_are_redacted_without_rewriting_request_uri() {
+        let request = Request::builder()
+            .uri("/api/v1/auth/callback?code=synthetic-code&state=gmail:synthetic-state")
+            .body(Body::empty())
+            .unwrap();
+        let safe = scrub_query_params(&request.uri().to_string());
+        assert!(!safe.contains("synthetic-code"));
+        assert!(!safe.contains("synthetic-state"));
+        assert!(request
+            .uri()
+            .query()
+            .unwrap()
+            .contains("state=gmail:synthetic-state"));
+    }
+
+    #[test]
+    fn safe_request_trace_span_omits_callback_secrets() {
+        use std::sync::{Arc, Mutex};
+        #[derive(Clone)]
+        struct Buffer(Arc<Mutex<Vec<u8>>>);
+        impl std::io::Write for Buffer {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let bytes = Arc::new(Mutex::new(Vec::new()));
+        let writer = bytes.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .without_time()
+            .with_ansi(false)
+            .with_span_events(tracing_subscriber::fmt::format::FmtSpan::NEW)
+            .with_writer(move || Buffer(writer.clone()))
+            .finish();
+        let request = Request::builder()
+            .uri("/api/v1/auth/callback?code=synthetic-code&state=synthetic-state")
+            .body(Body::empty())
+            .unwrap();
+        tracing::subscriber::with_default(subscriber, || {
+            drop(safe_request_span(&request));
+        });
+        let log = String::from_utf8(bytes.lock().unwrap().clone()).unwrap();
+        assert!(log.contains("/api/v1/auth/callback"));
+        assert!(!log.contains("synthetic-code"));
+        assert!(!log.contains("synthetic-state"));
     }
 }
