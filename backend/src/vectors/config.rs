@@ -1122,7 +1122,9 @@ fn default_hsts_max_age() -> u64 {
 fn default_allowed_origins() -> Vec<String> {
     vec![
         "http://localhost:3000".to_string(),
+        "http://127.0.0.1:3000".to_string(),
         "http://localhost:5173".to_string(),
+        "http://127.0.0.1:5173".to_string(),
     ]
 }
 

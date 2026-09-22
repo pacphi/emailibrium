@@ -3,13 +3,9 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::{
-    http::{header, HeaderValue, Method},
-    Router,
-};
+use axum::Router;
 use tokio::net::TcpListener;
 use tokio::sync::Mutex;
-use tower_http::cors::CorsLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Layer};
 
 // Shared modules are imported from the library rather than re-declared with
@@ -221,7 +217,7 @@ async fn main() -> anyhow::Result<()> {
     if args.iter().any(|a| a == "--healthcheck") {
         let config = VectorConfig::load()?;
         // Bind host may be 0.0.0.0; always probe loopback from inside the container.
-        let url = format!("http://127.0.0.1:{}/api/v1/vectors/health", config.port);
+        let url = format!("http://127.0.0.1:{}/healthz", config.port);
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(5))
             .build()?;
@@ -317,6 +313,20 @@ async fn main() -> anyhow::Result<()> {
     // app.yaml path overrides as fallback defaults.
     let mut config = VectorConfig::load()?;
     config.apply_yaml_path_defaults(&yaml_config.app.paths);
+
+    // Fail before opening the mailbox or initializing models if HTTP access
+    // has no operator-managed credential. Stdio retains its process boundary.
+    let http_auth = if mcp_mode == McpMode::Http {
+        Some(
+            middleware::local_auth::LocalAuth::from_environment(
+                &yaml_config.app.security.jwt_secret_env,
+                &config.security.allowed_origins,
+            )
+            .map_err(anyhow::Error::msg)?,
+        )
+    } else {
+        None
+    };
 
     // Initialize database
     let db = Arc::new(db::Database::connect(&config.database_url).await?);
@@ -463,10 +473,23 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // Initialize OAuth manager for email account connections (DDD-005)
+    // Consume the existing encryption-secret delivery explicitly. Figment's
+    // underscore splitting cannot resolve this nested multi-word field.
+    let encryption_env = if yaml_config.app.security.encryption_key_env.is_empty() {
+        "EMAILIBRIUM_ENCRYPTION_MASTER_PASSWORD"
+    } else {
+        &yaml_config.app.security.encryption_key_env
+    };
+    let oauth_key = middleware::credentials::resolve_encryption_password(
+        config.encryption.master_password.as_deref(),
+        std::env::var(encryption_env).ok(),
+        std::env::var("OAUTH_ENCRYPTION_KEY").ok(),
+    );
     let oauth_manager = Arc::new(email::oauth::OAuthManager::new(
         (*db).clone(),
-        config.encryption.master_password.as_deref(),
+        oauth_key.as_ref().map(|secret| secret.as_str()),
     ));
+    drop(oauth_key);
 
     // Initialize domain event bus (Audit Item #20)
     let event_bus = events::EventBus::default_capacity();
@@ -865,26 +888,6 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    // ── CORS middleware (audit item #6) ────────────────────────────────
-    let origins: Vec<HeaderValue> = config
-        .security
-        .allowed_origins
-        .iter()
-        .filter_map(|o| o.parse::<HeaderValue>().ok())
-        .collect();
-
-    let cors = CorsLayer::new()
-        .allow_origin(origins)
-        .allow_methods([
-            Method::GET,
-            Method::POST,
-            Method::PUT,
-            Method::DELETE,
-            Method::OPTIONS,
-        ])
-        .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION, header::ACCEPT])
-        .allow_credentials(true);
-
     // ── MCP server (ADR-028) ────────────────────────────────────────────
     // Mount the MCP Streamable HTTP transport at /api/v1/mcp so tool-calling
     // LLMs can access email operations via the Model Context Protocol.
@@ -900,13 +903,26 @@ async fn main() -> anyhow::Result<()> {
     let mcp_service = mcp::mcp_service(tool_ctx, state.tools.clone());
     tracing::info!("MCP server mounted at /api/v1/mcp");
 
-    // Build router
-    let mut app = Router::new()
+    // OAuth redirects cannot carry the browser's same-site session cookie.
+    // Only a pending, expiring state can cross this narrow callback exception;
+    // the callback handler consumes it before any provider network request.
+    let callback_manager = state.oauth_manager.clone();
+    let auth = http_auth
+        .expect("HTTP auth initialized before services")
+        .with_oauth_state_validator(Arc::new(move |state| {
+            callback_manager.is_pending_state(state)
+        }));
+
+    // Mount BOTH route trees before applying the shared authentication boundary.
+    let app = Router::new()
         .nest("/api/v1", api::routes())
         .nest_service("/api/v1/mcp", mcp_service)
         .with_state(state)
-        .layer(tower_http::trace::TraceLayer::new_for_http())
-        .layer(cors);
+        .layer(
+            tower_http::trace::TraceLayer::new_for_http()
+                .make_span_with(middleware::log_scrubbing::safe_request_span),
+        );
+    let mut app = middleware::local_auth::protect_http_router(app, auth);
 
     // ── Security headers (audit item #13 — CSP + hardening) ──────────
     // Uses the comprehensive security_headers_middleware which sets CSP,
@@ -977,7 +993,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Start server
     let addr = format!("{}:{}", config.host, config.port);
-    tracing::info!("Listening on {}", addr);
+    tracing::info!(address = %addr, authentication = "required", session_hours = 8, "Listening with local engine authentication");
     let listener = TcpListener::bind(&addr).await?;
     axum::serve(
         listener,

@@ -81,7 +81,6 @@ pub struct OAuthCallbackParams {
     pub code: Option<String>,
     pub state: Option<String>,
     pub error: Option<String>,
-    pub error_description: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -356,14 +355,19 @@ async fn oauth_callback(
     Query(params): Query<OAuthCallbackParams>,
 ) -> Result<Redirect, (StatusCode, String)> {
     let frontend_url = &state.vector_service.config.oauth.frontend_url;
+    let callback_state = params.state.as_deref().unwrap_or("");
+    if !state.oauth_manager.consume_state(callback_state) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "OAuth request expired or invalid; restart the account connection".into(),
+        ));
+    }
 
     // Check for OAuth errors from the provider.
-    if let Some(ref error) = params.error {
-        let desc = params.error_description.as_deref().unwrap_or("Unknown");
-        tracing::warn!("OAuth callback error: {error} - {desc}");
+    if params.error.is_some() {
+        tracing::warn!("OAuth provider declined the account connection");
         return Ok(Redirect::temporary(&format!(
-            "{frontend_url}/?error=oauth_denied&message={}",
-            urlencoding::encode(desc)
+            "{frontend_url}/?error=oauth_denied"
         )));
     }
 

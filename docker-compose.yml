@@ -23,7 +23,8 @@ services:
     tmpfs:
       - /tmp:size=100M,mode=1777
     ports:
-      - "${BACKEND_PORT:-8080}:8080"
+      # Local engine ports stay on host loopback; all API routes also require auth.
+      - "127.0.0.1:${BACKEND_PORT:-8080}:8080"
     environment:
       # ── Which database? ────────────────────────────────────────────────
       # SQLite (default) vs PostgreSQL is decided by ONE value: the connection
@@ -48,6 +49,8 @@ services:
       EMAILIBRIUM_DATABASE_URL: ${EMAILIBRIUM_DATABASE_URL:-}
       # Non-secret config via env vars (12-factor)
       APP_ENV: ${APP_ENV:-development}
+      # Explicit container-only bind: required for the private compose proxy network.
+      EMAILIBRIUM_HOST: 0.0.0.0
       RUST_LOG: ${RUST_LOG:-emailibrium=info,tower_http=info}
       REDIS_URL: redis://redis:6379
       EMAILIBRIUM_STORE_BACKEND: ${STORE_BACKEND:-ruvector}
@@ -137,7 +140,7 @@ services:
       backend:
         condition: service_healthy
     ports:
-      - "${FRONTEND_PORT:-3000}:80"
+      - "127.0.0.1:${FRONTEND_PORT:-3000}:80"
     environment:
       VITE_API_URL: ${VITE_API_URL:-http://localhost:8080}
     healthcheck:

@@ -6,6 +6,7 @@
 
 use aes_gcm::aead::Aead;
 use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
+#[cfg(test)]
 use base64::Engine;
 use chrono::{DateTime, Duration, Utc};
 use rand::Rng;
@@ -14,6 +15,7 @@ use sea_orm::{
     ActiveValue::Set, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder,
     QuerySelect,
 };
+use std::{collections::HashMap, sync::Mutex, time::Instant};
 use zeroize::Zeroizing;
 
 use super::types::{AccountStatus, ConnectedAccount, OAuthTokens, ProviderConfig, ProviderKind};
@@ -105,26 +107,48 @@ pub struct OAuthManager {
     conn: DatabaseConnection,
     encryption_key: Option<Zeroizing<[u8; 32]>>,
     http: reqwest::Client,
+    pending_states: Mutex<HashMap<String, Instant>>,
 }
 
 impl OAuthManager {
     /// Create a new OAuthManager.
     ///
     /// If `master_password` is provided, tokens are encrypted at rest using
-    /// AES-256-GCM with an Argon2id-derived key. If `None`, tokens are stored
-    /// as plaintext (development only).
+    /// AES-256-GCM with an Argon2id-derived key. Without a key, credential
+    /// writes and reads fail closed; existing accounts must be reconnected.
     ///
     /// `db.sea_orm()` only wraps the pool this `Database` already holds — no second pool, and
     /// no connection is opened here, so a lazily-connected pool stays lazy.
     pub fn new(db: Database, master_password: Option<&str>) -> Self {
         let encryption_key = master_password
+            .filter(|password| !password.is_empty())
             .and_then(|pw| crate::vectors::encryption::derive_key(pw, TOKEN_KEY_SALT).ok());
 
         Self {
             conn: db.sea_orm(),
             encryption_key,
             http: reqwest::Client::new(),
+            pending_states: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Check whether an OAuth callback state is pending and unexpired.
+    pub fn is_pending_state(&self, state: &str) -> bool {
+        let mut pending = self
+            .pending_states
+            .lock()
+            .expect("OAuth state lock poisoned");
+        pending.retain(|_, deadline| *deadline > Instant::now());
+        pending.contains_key(state)
+    }
+
+    /// Consume a callback state once, before contacting an OAuth provider.
+    pub fn consume_state(&self, state: &str) -> bool {
+        self.pending_states
+            .lock()
+            .expect("OAuth state lock poisoned")
+            .remove(state)
+            .is_some_and(|deadline| deadline > Instant::now())
     }
 
     /// Build the authorization URL that the user's browser should be redirected to.
@@ -135,6 +159,25 @@ impl OAuthManager {
     pub fn authorization_url(&self, config: &ProviderConfig, provider: &str) -> (String, String) {
         let nonce = uuid::Uuid::new_v4().to_string();
         let state = format!("{provider}:{nonce}");
+        let now = Instant::now();
+        let mut pending = self
+            .pending_states
+            .lock()
+            .expect("OAuth state lock poisoned");
+        pending.retain(|_, deadline| *deadline > now);
+        // Bound authenticated initiation traffic, and expire callbacks after ten
+        // minutes. Evicted or restarted flows safely require a fresh initiation.
+        if pending.len() >= 64 {
+            if let Some(oldest) = pending
+                .iter()
+                .min_by_key(|(_, deadline)| *deadline)
+                .map(|(state, _)| state.clone())
+            {
+                pending.remove(&oldest);
+            }
+        }
+        pending.insert(state.clone(), now + std::time::Duration::from_secs(600));
+        drop(pending);
         let scopes = config.scopes.join(" ");
 
         let url = format!(
@@ -858,12 +901,9 @@ impl OAuthManager {
                 output.extend_from_slice(&ciphertext);
                 Ok(output)
             }
-            None => {
-                // No encryption key: store as base64 (dev mode only).
-                Ok(base64::engine::general_purpose::STANDARD
-                    .encode(plaintext)
-                    .into_bytes())
-            }
+            None => Err(OAuthError::EncryptionError(
+                "Configure the OAuth encryption key before connecting an account; reconnect any legacy account".into(),
+            )),
         }
     }
 
@@ -872,7 +912,7 @@ impl OAuthManager {
             Some(key) => {
                 if encrypted.len() < NONCE_SIZE {
                     return Err(OAuthError::DecryptionError(
-                        "Ciphertext too short".to_string(),
+                        "Stored credential is incomplete; configure the encryption key and reconnect the account".to_string(),
                     ));
                 }
 
@@ -884,16 +924,13 @@ impl OAuthManager {
 
                 let plaintext = cipher
                     .decrypt(&nonce, ciphertext)
-                    .map_err(|e| OAuthError::DecryptionError(e.to_string()))?;
+                    .map_err(|_| OAuthError::DecryptionError("Stored credential cannot be decrypted; check the encryption key and reconnect the account".into()))?;
 
                 String::from_utf8(plaintext).map_err(|e| OAuthError::DecryptionError(e.to_string()))
             }
-            None => {
-                let decoded = base64::engine::general_purpose::STANDARD
-                    .decode(encrypted)
-                    .map_err(|e| OAuthError::DecryptionError(e.to_string()))?;
-                String::from_utf8(decoded).map_err(|e| OAuthError::DecryptionError(e.to_string()))
-            }
+            None => Err(OAuthError::DecryptionError(
+                "OAuth encryption key unavailable; configure it and reconnect the account. Legacy unencrypted credentials are not accepted".into(),
+            )),
         }
     }
 }
@@ -904,18 +941,85 @@ mod tests {
     use sea_orm::ConnectionTrait;
 
     #[tokio::test]
-    async fn test_encrypt_decrypt_roundtrip_no_key() {
-        // Without encryption key, tokens are base64 encoded.
+    async fn missing_key_rejects_legacy_base64_tokens_with_reconnect_guidance() {
         let mgr = OAuthManager {
             conn: crate::db::test_sqlite_database().await.sea_orm(),
             encryption_key: None,
             http: reqwest::Client::new(),
+            pending_states: Mutex::new(HashMap::new()),
         };
+        let legacy = base64::engine::general_purpose::STANDARD.encode("synthetic-secret-token");
+        let error = mgr.decrypt_token(legacy.as_bytes()).unwrap_err();
+        assert!(error.to_string().contains("reconnect"));
+        assert!(mgr.encrypt_token("synthetic-secret-token").is_err());
+    }
 
-        let token = "my-secret-access-token";
-        let encrypted = mgr.encrypt_token(token).unwrap();
-        let decrypted = mgr.decrypt_token(&encrypted).unwrap();
-        assert_eq!(decrypted, token);
+    #[tokio::test]
+    async fn missing_key_rejects_token_storage_without_persisting_credentials() {
+        let conn = crate::db::test_sqlite_database().await.sea_orm();
+        conn.execute_unprepared(include_str!("../../migrations/sqlite/004_accounts.sql"))
+            .await
+            .unwrap();
+        let manager = OAuthManager {
+            conn: conn.clone(),
+            encryption_key: None,
+            http: reqwest::Client::new(),
+            pending_states: Mutex::new(HashMap::new()),
+        };
+        let tokens = OAuthTokens {
+            access_token: "synthetic-secret-token".into(),
+            refresh_token: Some("synthetic-refresh-token".into()),
+            expires_at: None,
+            email: None,
+        };
+        let error = manager
+            .save_account("unsafe", ProviderKind::Gmail, "test@example.test", &tokens)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(error, OAuthError::EncryptionError(_)),
+            "must fail before attempting a credential write: {error}"
+        );
+        let row = conn
+            .query_one_raw(sea_orm::Statement::from_string(
+                sea_orm::DatabaseBackend::Sqlite,
+                "SELECT COUNT(*) AS count FROM connected_accounts",
+            ))
+            .await
+            .unwrap()
+            .unwrap();
+        let count: i64 = row.try_get("", "count").unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[tokio::test]
+    async fn oauth_callback_state_is_issued_and_consumed_once() {
+        let manager = OAuthManager::new(crate::db::test_sqlite_database().await, None);
+        let config = ProviderConfig {
+            client_id: "synthetic-client".into(),
+            client_secret: "synthetic-secret".into(),
+            redirect_uri: "http://localhost:8080/api/v1/auth/callback".into(),
+            auth_url: "https://accounts.example.test/auth".into(),
+            token_url: "https://accounts.example.test/token".into(),
+            scopes: vec!["mail".into()],
+        };
+        let (_, state) = manager.authorization_url(&config, "gmail");
+        assert!(!manager.is_pending_state("gmail:invented"));
+        assert!(manager.is_pending_state(&state));
+        assert!(manager.consume_state(&state));
+        assert!(!manager.consume_state(&state));
+        assert!(!manager.is_pending_state(&state));
+        let (_, expired) = manager.authorization_url(&config, "gmail");
+        manager.pending_states.lock().unwrap().insert(
+            expired.clone(),
+            Instant::now() - std::time::Duration::from_secs(1),
+        );
+        assert!(!manager.is_pending_state(&expired));
+        assert!(!manager.consume_state(&expired));
+        for _ in 0..70 {
+            manager.authorization_url(&config, "gmail");
+        }
+        assert_eq!(manager.pending_states.lock().unwrap().len(), 64);
     }
 
     #[tokio::test]
@@ -925,6 +1029,7 @@ mod tests {
             conn: crate::db::test_sqlite_database().await.sea_orm(),
             encryption_key: Some(key),
             http: reqwest::Client::new(),
+            pending_states: Mutex::new(HashMap::new()),
         };
 
         let token = "ya29.a0AfH6SMBx_secrettoken123";
@@ -961,6 +1066,7 @@ mod tests {
             conn: conn.clone(),
             encryption_key: Some(key),
             http: reqwest::Client::new(),
+            pending_states: Mutex::new(HashMap::new()),
         };
 
         mgr.save_imap_account(
@@ -1029,6 +1135,7 @@ mod tests {
             conn: conn.clone(),
             encryption_key: Some(key),
             http: reqwest::Client::new(),
+            pending_states: Mutex::new(HashMap::new()),
         };
 
         for (id, email) in [("acct-a", "a@example.com"), ("acct-b", "b@example.com")] {
@@ -1094,6 +1201,7 @@ mod tests {
             conn: crate::db::test_sqlite_database().await.sea_orm(),
             encryption_key: None,
             http: reqwest::Client::new(),
+            pending_states: Mutex::new(HashMap::new()),
         };
 
         let config = ProviderConfig {
