@@ -1,19 +1,32 @@
 #!/usr/bin/env node
-// Load local configuration with Node itself:
-// node --env-file-if-exists=.env.integration scripts/test-integration.mjs MODE
+// Read selected test settings from secrets/integration/; explicit environment wins.
+// node scripts/test-integration.mjs MODE
 import { spawn } from 'node:child_process';
 import { realpathSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const MODES = ['local', 'postgres', 'gmail', 'outlook', 'providers'];
-const USAGE = 'Usage: node --env-file-if-exists=.env.integration scripts/test-integration.mjs MODE [--check-config]\nModes: local, postgres, gmail, outlook, providers';
+const USAGE = 'Usage: node scripts/test-integration.mjs MODE [--check-config]\nModes: local, postgres, gmail, outlook, providers';
 const PG_KEY = 'EMAILIBRIUM_TEST_PG_URL';
 const TENANT_KEY = 'EMAILIBRIUM_TEST_MICROSOFT_TENANT_ID';
 export const PROVIDER_KEYS = Object.freeze({
   gmail: Object.freeze(['CLIENT_ID', 'CLIENT_SECRET', 'REFRESH_TOKEN', 'EXPECTED_EMAIL'].map(key => `EMAILIBRIUM_TEST_GOOGLE_${key}`)),
   outlook: Object.freeze(['CLIENT_ID', 'CLIENT_SECRET', 'REFRESH_TOKEN', 'EXPECTED_EMAIL'].map(key => `EMAILIBRIUM_TEST_MICROSOFT_${key}`)),
+});
+const SECRET_FILES = Object.freeze({
+  [PG_KEY]: 'database_url',
+  EMAILIBRIUM_TEST_GOOGLE_CLIENT_ID: 'google_client_id',
+  EMAILIBRIUM_TEST_GOOGLE_CLIENT_SECRET: 'google_client_secret',
+  EMAILIBRIUM_TEST_GOOGLE_REFRESH_TOKEN: 'google_refresh_token',
+  EMAILIBRIUM_TEST_GOOGLE_EXPECTED_EMAIL: 'google_expected_email',
+  EMAILIBRIUM_TEST_MICROSOFT_CLIENT_ID: 'microsoft_client_id',
+  EMAILIBRIUM_TEST_MICROSOFT_CLIENT_SECRET: 'microsoft_client_secret',
+  EMAILIBRIUM_TEST_MICROSOFT_REFRESH_TOKEN: 'microsoft_refresh_token',
+  EMAILIBRIUM_TEST_MICROSOFT_EXPECTED_EMAIL: 'microsoft_expected_email',
+  [TENANT_KEY]: 'microsoft_tenant_id',
 });
 const TOOL_KEYS = [
   'PATH', 'Path', 'HOME', 'USER', 'LOGNAME', 'TMPDIR', 'TMP', 'TEMP',
@@ -50,6 +63,26 @@ function requiredKeys(mode) {
   if (mode === 'providers') return [...PROVIDER_KEYS.gmail, ...PROVIDER_KEYS.outlook];
   if (mode === 'postgres') return [PG_KEY];
   return [...(PROVIDER_KEYS[mode] ?? [])];
+}
+
+async function configurationFromFiles(mode, env, root) {
+  const selected = requiredKeys(mode);
+  if (mode === 'outlook' || mode === 'providers') selected.push(TENANT_KEY);
+  const settings = { ...env };
+  for (const key of selected) {
+    // Empty explicit values must fail validation, never resurrect a local secret.
+    if (env[key] !== undefined) continue;
+    const filename = SECRET_FILES[key];
+    try {
+      settings[key] = (await readFile(join(root, 'secrets', 'integration', filename), 'utf8'))
+        .replace(/[\r\n]+$/u, '');
+    } catch (error) {
+      if (error.code !== 'ENOENT') {
+        throw new IntegrationError(`Cannot read integration secret file: ${filename}`);
+      }
+    }
+  }
+  return settings;
 }
 
 export function validateConfiguration(mode, env) {
@@ -206,6 +239,7 @@ export function runCommand(command, args, {
 }
 
 export async function runIntegration(mode, { env = process.env, root = REPO_ROOT, checkConfig = false, execute = runCommand, log = console.log } = {}) {
+  env = await configurationFromFiles(mode, env, root);
   const keys = validateConfiguration(mode, env);
   if (checkConfig) {
     log(`Configuration ready: ${mode}`);

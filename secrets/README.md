@@ -1,9 +1,10 @@
 # Secrets Management
 
-For local dotenv configuration and GitHub test-account secrets, see
+For local integration-test files and GitHub test-account secrets, see
 [Integration environments](../docs/testing/integration-environments.md).
-Those test commands generate disposable engine credentials and use separately
-configured provider accounts only when explicitly selected.
+Integration tests use `secrets/integration/` independently of the development and
+production application secrets. Only explicitly selected provider suites connect
+to their dedicated test accounts.
 
 ## Quick Start
 
@@ -45,7 +46,49 @@ secrets/
 │   ├── google_client_secret     # Google OAuth Client Secret
 │   ├── microsoft_client_id      # Microsoft Entra App Registration Client ID
 │   └── microsoft_client_secret  # Microsoft Entra App Registration Client Secret
-└── .gitignore               # Ignores everything except dev.example/ and README
+├── integration/                # Integration-test secrets (gitignored)
+│   ├── database_url            # Disposable PostgreSQL test database
+│   ├── google_client_id
+│   ├── google_client_secret
+│   ├── google_refresh_token
+│   ├── google_expected_email
+│   ├── microsoft_client_id
+│   ├── microsoft_client_secret
+│   ├── microsoft_refresh_token
+│   ├── microsoft_expected_email
+│   └── microsoft_tenant_id      # Optional; common by default
+├── integration.example/        # Empty required files; tenant is common (committed)
+└── .gitignore                  # Allows the example directories and README
+```
+
+## Integration Test Secrets
+
+Create the test-secret directory without overwriting existing files:
+
+```bash
+umask 077
+mkdir -p secrets/integration
+chmod 700 secrets/integration
+cp -n secrets/integration.example/* secrets/integration/
+chmod 600 secrets/integration/*
+```
+
+Fill the selected mode's files in a local editor with literal values. Do not add
+variable names, quote delimiters, comments, or shell commands. Terminal newlines
+are trimmed. The [integration guide](../docs/testing/integration-environments.md)
+lists the file-to-environment mapping and account setup steps.
+
+Explicit `EMAILIBRIUM_TEST_*` environment variables override files, including an
+explicit empty value, which fails validation. The runner does not load dotenv
+files or fall back to development or production secrets. An existing
+`.env.integration` remains ignored; manually copy any needed values in your
+editor without its dotenv syntax. No automatic migration reads or deletes it.
+
+Validate selected settings without connecting, then run a mode when ready:
+
+```bash
+node scripts/test-integration.mjs gmail --check-config
+just test-integration local
 ```
 
 ## Production Secrets
@@ -55,7 +98,7 @@ For production, use your CI/CD pipeline or secret management tool (Vault, AWS Se
 ## Security Notes
 
 - Never commit actual secrets to version control
-- The `secrets/dev/` directory is gitignored by default
-- All secret files should have `chmod 600` permissions
-- Secrets are mounted as files at `/run/secrets/` inside containers (per OWASP recommendation)
-- The backend entrypoint resolves file-based secrets into environment variables at startup
+- The `secrets/dev/`, `secrets/production/`, and `secrets/integration/` directories are gitignored
+- Use `chmod 700` for local secret directories and `chmod 600` for their files
+- Application secrets are mounted as files at `/run/secrets/` inside containers
+- The backend entrypoint resolves application secret files into environment variables at startup; integration tests use only their selected test files or explicit test environment variables

@@ -330,10 +330,10 @@ build:
     @{{BACKEND}} build
     @{{FRONTEND}} build
 
-# Explicit local configuration for isolated or opt-in provider integration tests.
+# Loads selected test settings from secrets/integration/ or explicit environment.
 [group('test')]
 test-integration $mode="local":
-    node --env-file-if-exists=.env.integration scripts/test-integration.mjs "$mode"
+    node scripts/test-integration.mjs "$mode"
 
 # Check the integration runner without providers, databases, or Cargo.
 [group('test')]

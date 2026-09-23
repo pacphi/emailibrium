@@ -51,10 +51,11 @@ Do not use a generated score or configuration marker as a substitute for executi
 
 ### Local and hosted integration configuration
 
-The September 22 follow-up requested explicit local dotenv loading and GitHub
-secrets for real integration tests. Add a Node-built-in dotenv entry point, a
-committed empty example, and a manual workflow backed by a dedicated
-`live-integration` environment. Generated HTTP/database credentials stay ephemeral.
+The September 22 follow-up requested local configuration and GitHub secrets for
+real integration tests. The September 23 correction follows the existing secret-file
+pattern: `secrets/integration/`, a committed `secrets/integration.example/` template,
+and explicit environment overrides for CI. Use a manual workflow backed by a
+dedicated `live-integration` environment. Generated HTTP/database credentials stay ephemeral.
 Dedicated provider tests refresh tokens, verify expected account identity, and
 read label/category metadata through the actual adapters. They never mutate mail.
 Missing credentials and zero selected tests must fail. Local runner contracts run

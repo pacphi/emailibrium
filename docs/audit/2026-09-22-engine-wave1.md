@@ -7,6 +7,16 @@ worker. The 150,000-message / ten-hour objective remains unmeasured.
 The [verification record](2026-09-22-engine-verification.json) pins the validated
 code revision, lockfile hashes, executed checks, and untested boundaries.
 
+**September 23 configuration correction:** The current integration runner uses
+`secrets/integration/` with explicit environment overrides, following the existing
+repository convention. The dotenv implementation and its measurements below
+describe the September 22 snapshot. See the current
+[setup guide](../testing/integration-environments.md).
+The correction passed 26 runner contracts (seven expected failures before file
+loading was implemented, plus a reproduced CR-only line-ending regression), a
+synthetic file-backed CLI preflight, and the local command's 1,398 Rust tests and
+ten native HTTP/MCP checks. Real credential files and live providers were not used.
+
 Scheduled filing and its recovery monitor were paused at the user's request.
 The initial audit and daily briefing schedules were already paused. No provider
 write or live account cutover was performed during this implementation.

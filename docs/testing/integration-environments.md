@@ -8,39 +8,54 @@ that filing 150,000 messages is correct or fast enough.
 
 ## Local configuration
 
-The development app already loads `secrets/dev/` through `just dev`, while Compose
-mounts secret files. Plain `cargo test` does not load a dotenv file. The integration
-entry point uses Node's built-in dotenv support explicitly:
+Integration tests use `secrets/integration/`, following the application's existing
+one-value-per-file secrets pattern. The runner reads only files mapped to the
+selected mode. It never falls back to `secrets/dev/`, `secrets/production/`, or a
+dotenv file.
+
+From the repository root, copy the example without overwriting existing files:
 
 ```bash
-cp -n .env.integration.example .env.integration
-chmod 600 .env.integration
-just test-integration local
+umask 077
+mkdir -p secrets/integration
+chmod 700 secrets/integration
+cp -n secrets/integration.example/* secrets/integration/
+chmod 600 secrets/integration/*
 ```
+
+Open the copied files under `secrets/integration/` for your selected mode in a
+local editor. Enter only the literal value: no `KEY=` prefix, surrounding quotes, comments, or shell commands.
+Terminal newline characters are removed; the remaining content is used literally.
+Leave unused provider files empty. The example's required files are empty, and its
+optional `microsoft_tenant_id` contains `common`.
+
+`secrets/integration/` is ignored by Git; `secrets/integration.example/` is the
+committed template. An explicitly set `EMAILIBRIUM_TEST_*` environment variable
+wins over its file, **even when the variable is empty**. Empty required values
+fail validation rather than falling back to a saved file. Unset the variable if
+you intend to use its file value. GitHub continues to inject the same environment
+variable names directly.
 
 Requirements: the repository's pinned Rust toolchain, Node 24 or newer, Python
 3.11 or newer for the native HTTP probe, and the initialized RuVector submodule.
-Fill `.env.integration` in a local editor. It is ignored by Git; only the empty
-example is committed. Existing shell environment values override file values.
-Values are dotenv data, not shell commands; there is no `source` or shell
-substitution. See [Node's environment-file documentation](https://nodejs.org/api/cli.html#--env-filefile).
-
-Validate a provider's selected settings without building or connecting:
+Run the local suite, or validate a provider's selected settings without building
+or connecting:
 
 ```bash
-node --env-file-if-exists=.env.integration scripts/test-integration.mjs gmail --check-config
+just test-integration local
+node scripts/test-integration.mjs gmail --check-config
 ```
 
 Equivalent direct invocation:
 
 ```bash
-node --env-file-if-exists=.env.integration scripts/test-integration.mjs local
+node scripts/test-integration.mjs local
 ```
 
 | Mode | What executes | Required configuration |
 | --- | --- | --- |
 | `local` | Default Rust tests, then the assembled HTTP engine with temporary SQLite and mock embeddings | No account credentials; HTTP/encryption keys are generated per probe |
-| `postgres` | Plan, job, audit, and timestamp-boundary contracts against PostgreSQL | `EMAILIBRIUM_TEST_PG_URL`, pointing only to a disposable database |
+| `postgres` | Plan, job, audit, and timestamp-boundary contracts against PostgreSQL | `secrets/integration/database_url` or `EMAILIBRIUM_TEST_PG_URL`, pointing only to a disposable database |
 | `gmail` | Real token refresh, expected identity, Gmail label listing | Four Google test-account values below |
 | `outlook` | Real token refresh, expected identity, Outlook category listing | Four Microsoft test-account values below; optional tenant |
 | `providers` | Both provider credential suites | Both sets |
@@ -61,15 +76,23 @@ docker run --rm -d --name emailibrium-integration-postgres \
   -e POSTGRES_DB=emailibrium_test postgres:16-alpine
 ```
 
-Set this test-only value in `.env.integration`:
+Enter this test-only value in `secrets/integration/database_url` using your editor:
 
-```dotenv
-EMAILIBRIUM_TEST_PG_URL=postgres://emailibrium:integration-only@127.0.0.1:55499/emailibrium_test
+```text
+postgres://emailibrium:integration-only@127.0.0.1:55499/emailibrium_test
 ```
 
 Then run `just test-integration postgres`; stop the disposable server with
 `docker stop emailibrium-integration-postgres`. These tests migrate the database
 and write test rows. Never point them at your application database.
+
+### Moving values from an existing dotenv file
+
+If you already have `.env.integration`, open it yourself in a local editor and
+copy each needed value into the matching file listed below. Copy the actual value
+without its variable-name prefix or dotenv quote delimiters. The setup does not
+read, modify, delete, or automatically migrate your existing dotenv file, and the
+runner no longer loads it. It remains ignored by Git.
 
 ## Dedicated provider accounts and credentials
 
@@ -79,20 +102,23 @@ token locally. A client ID and client secret identify the application; the refre
 token represents the account's delegated authorization. An access token alone is
 short lived and unsuitable as the stored CI credential.
 
-| Local environment variable / GitHub secret | Purpose |
-| --- | --- |
-| `EMAILIBRIUM_TEST_GOOGLE_CLIENT_ID` | Google OAuth application's client ID |
-| `EMAILIBRIUM_TEST_GOOGLE_CLIENT_SECRET` | Its client secret |
-| `EMAILIBRIUM_TEST_GOOGLE_REFRESH_TOKEN` | Refresh token authorized by the dedicated Gmail account |
-| `EMAILIBRIUM_TEST_GOOGLE_EXPECTED_EMAIL` | Account identity the test must match |
-| `EMAILIBRIUM_TEST_MICROSOFT_CLIENT_ID` | Microsoft Entra application's client ID |
-| `EMAILIBRIUM_TEST_MICROSOFT_CLIENT_SECRET` | Its client secret value, not the secret's identifier |
-| `EMAILIBRIUM_TEST_MICROSOFT_REFRESH_TOKEN` | Refresh token authorized by the dedicated Outlook account |
-| `EMAILIBRIUM_TEST_MICROSOFT_EXPECTED_EMAIL` | Account identity the test must match |
+| File under `secrets/integration/` | Environment variable / GitHub secret | Purpose |
+| --- | --- | --- |
+| `database_url` | `EMAILIBRIUM_TEST_PG_URL` | Disposable PostgreSQL database used by `postgres` mode |
+| `google_client_id` | `EMAILIBRIUM_TEST_GOOGLE_CLIENT_ID` | Google OAuth application's client ID |
+| `google_client_secret` | `EMAILIBRIUM_TEST_GOOGLE_CLIENT_SECRET` | Its client secret |
+| `google_refresh_token` | `EMAILIBRIUM_TEST_GOOGLE_REFRESH_TOKEN` | Refresh token authorized by the dedicated Gmail account |
+| `google_expected_email` | `EMAILIBRIUM_TEST_GOOGLE_EXPECTED_EMAIL` | Account identity the test must match |
+| `microsoft_client_id` | `EMAILIBRIUM_TEST_MICROSOFT_CLIENT_ID` | Microsoft Entra application's client ID |
+| `microsoft_client_secret` | `EMAILIBRIUM_TEST_MICROSOFT_CLIENT_SECRET` | Its client secret value, not the secret's identifier |
+| `microsoft_refresh_token` | `EMAILIBRIUM_TEST_MICROSOFT_REFRESH_TOKEN` | Refresh token authorized by the dedicated Outlook account |
+| `microsoft_expected_email` | `EMAILIBRIUM_TEST_MICROSOFT_EXPECTED_EMAIL` | Account identity the test must match |
+| `microsoft_tenant_id` | `EMAILIBRIUM_TEST_MICROSOFT_TENANT_ID` | Optional tenant; defaults to `common` when neither source is present |
 
-`EMAILIBRIUM_TEST_MICROSOFT_TENANT_ID` is optional and defaults to `common`.
-It accepts a tenant GUID, `common`, `organizations`, or `consumers`; on GitHub,
-store it as an environment **variable**, rather than a secret.
+The Microsoft tenant accepts a tenant GUID, `common`, `organizations`, or
+`consumers`; an explicitly empty value is invalid. On GitHub, store it as an
+environment **variable**, rather than a secret. The committed template supplies
+`common` for local use.
 
 For Gmail, enable the Gmail API and authorize `gmail.readonly`, requesting offline
 access to obtain a refresh token. Use a server/desktop OAuth flow whose registered
@@ -130,7 +156,7 @@ gh secret list --repo pacphi/emailibrium --env live-integration
 ```
 
 GitHub injects each `${{ secrets.NAME }}` as the corresponding environment variable;
-CI does not need to write a `.env` file. See [GitHub's secrets documentation](https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/use-secrets).
+CI does not need a local `secrets/integration/` directory. See [GitHub's secrets documentation](https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/use-secrets).
 
 Once `live-integration.yml` is available on the repository's default branch, select
 **Actions → Live Provider Integration → Run workflow**, choose a permitted branch

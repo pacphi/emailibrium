@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, writeFile, readFile, rm, access } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, rm, access } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -150,20 +150,6 @@ test('local invokes only the existing native HTTP probe with the actual built ar
   for (const call of calls) for (const key of [...PROVIDER_KEYS.gmail, ...PROVIDER_KEYS.outlook, pgKey]) assert.equal(call.options.env[key], undefined);
 });
 
-test('Node builtin env-file handling preserves environment precedence and literal values', async () => {
-  const directory = await mkdtemp(join(tmpdir(), 'integration-env-test-'));
-  try {
-    const file = join(directory, '.env.integration');
-    await writeFile(file, 'TEST_PRECEDENCE=file-value\nTEST_ONLY_FILE=file-only\nTEST_LITERAL="$(touch should-not-exist)"\n');
-    const result = spawnSync(process.execPath, [`--env-file-if-exists=${file}`, '-e', 'process.stdout.write(JSON.stringify([process.env.TEST_PRECEDENCE, process.env.TEST_ONLY_FILE, process.env.TEST_LITERAL]))'], {
-      cwd: directory, env: { PATH: process.env.PATH, TEST_PRECEDENCE: 'environment-value' }, encoding: 'utf8', shell: false,
-    });
-    assert.equal(result.status, 0);
-    assert.deepEqual(JSON.parse(result.stdout), ['environment-value', 'file-only', '$(touch should-not-exist)']);
-    await assert.rejects(access(join(directory, 'should-not-exist')));
-  } finally { await rm(directory, { recursive: true, force: true }); }
-});
-
 test('the command executor passes shell metacharacters as an inert argument', async () => {
   const literal = '$(echo not-executed); literal argument';
   const result = await runCommand(process.execPath, ['-e', 'process.stdout.write(process.argv[1])', literal], { cwd: REPO_ROOT, env: childEnvironment('local', process.env) });
@@ -236,4 +222,130 @@ test('signal handlers forward cancellation and are removed when the child closes
   } finally { await pending; }
   assert.deepEqual(process.listeners('SIGINT'), beforeInt);
   assert.deepEqual(process.listeners('SIGTERM'), beforeTerm);
+});
+
+// Real files at the runner boundary; the external Cargo process is the only double.
+async function secretFixture(run) {
+  const directory = await mkdtemp(join(tmpdir(), 'integration-secret-test-'));
+  const secrets = join(directory, 'secrets', 'integration');
+  await mkdir(secrets, { recursive: true });
+  try { await run(directory, secrets); }
+  finally { await rm(directory, { recursive: true, force: true }); }
+}
+
+async function gmailFiles(directory) {
+  for (const [name, value] of Object.entries({
+    google_client_id: 'test-client\n', google_client_secret: 'file-secret\r\n',
+    google_refresh_token: 'file-refresh\n', google_expected_email: 'owner@example.test\n',
+  })) await writeFile(join(directory, name), value);
+}
+
+test('Gmail file credentials reach the existing provider test without leaking in logs', async () => {
+  await secretFixture(async (directory, secrets) => {
+    await gmailFiles(secrets);
+    const calls = [], logs = [];
+    await runIntegration('gmail', { root: directory, env: {}, log: line => logs.push(line), execute: async (...args) => { calls.push(args); return successful(); } });
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0][2].env.EMAILIBRIUM_TEST_GOOGLE_CLIENT_ID, 'test-client');
+    assert.equal(calls[0][2].env.EMAILIBRIUM_TEST_GOOGLE_CLIENT_SECRET, 'file-secret');
+    assert.equal(calls[0][2].env.EMAILIBRIUM_TEST_GOOGLE_REFRESH_TOKEN, 'file-refresh');
+    assert.equal(calls[0][2].env.EMAILIBRIUM_TEST_GOOGLE_EXPECTED_EMAIL, 'owner@example.test');
+    assert.ok(!logs.join('\n').includes('file-secret'));
+    assert.ok(!logs.join('\n').includes('owner@example.test'));
+  });
+});
+
+test('explicit environment values win and an empty value cannot fall back to a file', async () => {
+  await secretFixture(async (directory, secrets) => {
+    await gmailFiles(secrets);
+    const key = 'EMAILIBRIUM_TEST_GOOGLE_CLIENT_SECRET';
+    let observed;
+    await runIntegration('gmail', { root: directory, env: { [key]: 'environment-secret' }, log() {}, execute: async (_command, _args, options) => { observed = options.env[key]; return successful(); } });
+    assert.equal(observed, 'environment-secret');
+    await assert.rejects(runIntegration('gmail', { root: directory, env: { [key]: '' }, log() {}, execute() { assert.fail('invalid configuration must not spawn'); } }), error => error.message.includes(key) && !error.message.includes('file-secret'));
+  });
+});
+
+test('file contents remain literal and only terminal line endings are removed', async () => {
+  await secretFixture(async (directory, secrets) => {
+    await gmailFiles(secrets);
+    const marker = join(directory, 'must-not-exist');
+    const value = `  $(touch ${marker}) 'quoted' #literal  `;
+    await writeFile(join(secrets, 'google_client_secret'), value + '\r\n\n\r');
+    let observed;
+    await runIntegration('gmail', { root: directory, env: {}, log() {}, execute: async (_command, _args, options) => { observed = options.env.EMAILIBRIUM_TEST_GOOGLE_CLIENT_SECRET; return successful(); } });
+    assert.equal(observed, value);
+    await assert.rejects(access(marker));
+  });
+});
+
+test('selected provider loads no unrelated account or database secret files', async () => {
+  await secretFixture(async (directory, secrets) => {
+    await gmailFiles(secrets);
+    await mkdir(join(secrets, 'microsoft_client_secret'));
+    await mkdir(join(secrets, 'database_url'));
+    await runIntegration('gmail', { root: directory, env: {}, log() {}, execute: async (_command, _args, options) => {
+      assert.equal(options.env.EMAILIBRIUM_TEST_MICROSOFT_CLIENT_SECRET, undefined);
+      assert.equal(options.env.EMAILIBRIUM_TEST_PG_URL, undefined);
+      return successful();
+    } });
+  });
+});
+
+test('file-backed preflight makes no process calls and prints only configuration names', async () => {
+  await secretFixture(async (directory, secrets) => {
+    await gmailFiles(secrets);
+    const logs = [];
+    await runIntegration('gmail', { root: directory, env: {}, checkConfig: true, log: line => logs.push(line), execute() { assert.fail('preflight cannot spawn'); } });
+    assert.ok(logs.join('\n').includes('EMAILIBRIUM_TEST_GOOGLE_REFRESH_TOKEN: present'));
+    assert.ok(!logs.join('\n').includes('file-refresh'));
+  });
+});
+
+test('missing integration files never fall back to dev, production, or old dotenv values', async () => {
+  await secretFixture(async (directory, secrets) => {
+    await rm(secrets, { recursive: true });
+    for (const location of ['dev', 'production']) {
+      const other = join(directory, 'secrets', location);
+      await mkdir(other, { recursive: true });
+      await gmailFiles(other);
+    }
+    await writeFile(join(directory, '.env.integration'), PROVIDER_KEYS.gmail.map(key => `${key}=old-dotenv-secret`).join('\n'));
+    await assert.rejects(runIntegration('gmail', { root: directory, env: {}, log() {}, execute() { assert.fail('missing integration secrets cannot spawn'); } }), /EMAILIBRIUM_TEST_GOOGLE_CLIENT_ID/);
+  });
+});
+
+test('unreadable selected files fail with the setting name and no raw path or payload', async () => {
+  await secretFixture(async (directory, secrets) => {
+    await gmailFiles(secrets);
+    await rm(join(secrets, 'google_client_secret'));
+    await mkdir(join(secrets, 'google_client_secret'));
+    await assert.rejects(runIntegration('gmail', { root: directory, env: {}, checkConfig: true, log() {} }), error => error.message.includes('google_client_secret') && !error.message.includes(directory));
+    // Environment-only CI must not need readable local files.
+    await runIntegration('gmail', { root: directory, env: populated, checkConfig: true, log() {} });
+  });
+});
+
+test('PostgreSQL and Outlook filenames map into their existing test variable contracts', async () => {
+  await secretFixture(async (directory, secrets) => {
+    await writeFile(join(secrets, 'database_url'), 'postgres://synthetic@localhost/test\n');
+    const pg = [];
+    await runIntegration('postgres', { root: directory, env: {}, log() {}, execute: async (_command, _args, options) => { pg.push(options.env.EMAILIBRIUM_TEST_PG_URL); return successful(); } });
+    assert.deepEqual(pg, Array(3).fill('postgres://synthetic@localhost/test'));
+    for (const [name, value] of Object.entries({ microsoft_client_id: 'ms-client', microsoft_client_secret: 'ms-secret', microsoft_refresh_token: 'ms-refresh', microsoft_expected_email: 'ms@example.test', microsoft_tenant_id: 'organizations' })) await writeFile(join(secrets, name), value + '\n');
+    await runIntegration('outlook', { root: directory, env: {}, log() {}, execute: async (_command, _args, options) => {
+      assert.equal(options.env.EMAILIBRIUM_TEST_MICROSOFT_CLIENT_SECRET, 'ms-secret');
+      assert.equal(options.env.EMAILIBRIUM_TEST_MICROSOFT_TENANT_ID, 'organizations');
+      assert.equal(options.env.EMAILIBRIUM_TEST_PG_URL, undefined);
+      return successful();
+    } });
+  });
+});
+
+test('local mode does not require or read the integration secret directory', async () => {
+  await secretFixture(async (directory, secrets) => {
+    await rm(secrets, { recursive: true });
+    await writeFile(secrets, 'not a directory');
+    await runIntegration('local', { root: directory, env: {}, checkConfig: true, log() {}, execute() { assert.fail('local preflight cannot spawn'); } });
+  });
 });
