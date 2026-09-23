@@ -6,9 +6,15 @@
 //! `vectors::ingestion` with a provider-sync–scoped checkpoint lifecycle.
 
 use chrono::{DateTime, Utc};
+use sea_orm::sea_query::{Expr, OnConflict};
+use sea_orm::{
+    ActiveValue::Set, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder,
+};
 use serde::{Deserialize, Serialize};
-use sqlx::SqlitePool;
 use tracing::warn;
+
+use crate::db::entities::processing_checkpoints as checkpoints;
+use crate::db::Database;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -72,70 +78,63 @@ pub struct ProcessingCheckpoint {
     pub updated_at: DateTime<Utc>,
 }
 
-/// Row type returned by SQLite queries.
-type CheckpointRow = (
-    String,         // job_id
-    String,         // provider
-    String,         // account_id
-    Option<String>, // last_processed_id
-    Option<i64>,    // total_count
-    i64,            // processed_count
-    String,         // state
-    Option<String>, // error_message
-    String,         // updated_at
-);
-
 // ---------------------------------------------------------------------------
 // Service
 // ---------------------------------------------------------------------------
 
-/// Checkpoint service backed by SQLite for crash-recovery state tracking.
+/// Checkpoint service for crash-recovery state tracking (SQLite or PostgreSQL).
 pub struct CheckpointService {
-    pool: SqlitePool,
+    conn: DatabaseConnection,
 }
 
 impl CheckpointService {
-    /// Create a new checkpoint service using the provided connection pool.
-    pub fn new(pool: SqlitePool) -> Self {
-        Self { pool }
+    /// Create a new checkpoint service using the provided database handle.
+    pub fn new(db: Database) -> Self {
+        Self { conn: db.sea_orm() }
     }
 
     /// Create or update a checkpoint for a job.
     ///
     /// Uses `INSERT ... ON CONFLICT DO UPDATE` (upsert) so callers can
     /// simply call `save_checkpoint` on every progress tick without
-    /// worrying about whether the row already exists.
+    /// worrying about whether the row already exists. `provider` and
+    /// `account_id` are deliberately absent from the conflict branch: an
+    /// existing row keeps the values it was created with.
+    ///
+    /// `updated_at` is written as RFC3339 even though the column's DDL default
+    /// produces `YYYY-MM-DD HH:MM:SS` — a pre-existing format mix preserved
+    /// bug-for-bug; see [`CheckpointService::cleanup_old`] for why it matters.
     pub async fn save_checkpoint(
         &self,
         checkpoint: &ProcessingCheckpoint,
-    ) -> Result<(), sqlx::Error> {
-        let state_str = checkpoint.state.as_str();
-        let updated = Utc::now().to_rfc3339();
+    ) -> Result<(), sea_orm::DbErr> {
+        let row = checkpoints::ActiveModel {
+            job_id: Set(checkpoint.job_id.clone()),
+            provider: Set(checkpoint.provider.clone()),
+            account_id: Set(checkpoint.account_id.clone()),
+            last_processed_id: Set(checkpoint.last_processed_id.clone()),
+            total_count: Set(checkpoint.total_count.map(|v| v as i32)),
+            processed_count: Set(checkpoint.processed_count as i32),
+            state: Set(checkpoint.state.as_str().to_owned()),
+            error_message: Set(checkpoint.error_message.clone()),
+            updated_at: Set(Utc::now().to_rfc3339()),
+        };
 
-        sqlx::query(
-            r#"INSERT INTO processing_checkpoints
-                   (job_id, provider, account_id, last_processed_id,
-                    total_count, processed_count, state, error_message, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-               ON CONFLICT(job_id) DO UPDATE SET
-                   last_processed_id = excluded.last_processed_id,
-                   total_count       = excluded.total_count,
-                   processed_count   = excluded.processed_count,
-                   state             = excluded.state,
-                   error_message     = excluded.error_message,
-                   updated_at        = excluded.updated_at"#,
-        )
-        .bind(&checkpoint.job_id)
-        .bind(&checkpoint.provider)
-        .bind(&checkpoint.account_id)
-        .bind(&checkpoint.last_processed_id)
-        .bind(checkpoint.total_count)
-        .bind(checkpoint.processed_count)
-        .bind(state_str)
-        .bind(&checkpoint.error_message)
-        .bind(&updated)
-        .execute(&self.pool)
-        .await?;
+        checkpoints::Entity::insert(row)
+            .on_conflict(
+                OnConflict::column(checkpoints::Column::JobId)
+                    .update_columns([
+                        checkpoints::Column::LastProcessedId,
+                        checkpoints::Column::TotalCount,
+                        checkpoints::Column::ProcessedCount,
+                        checkpoints::Column::State,
+                        checkpoints::Column::ErrorMessage,
+                        checkpoints::Column::UpdatedAt,
+                    ])
+                    .to_owned(),
+            )
+            .exec_without_returning(&self.conn)
+            .await?;
 
         Ok(())
     }
@@ -144,66 +143,56 @@ impl CheckpointService {
     pub async fn get_checkpoint(
         &self,
         job_id: &str,
-    ) -> Result<Option<ProcessingCheckpoint>, sqlx::Error> {
-        let row: Option<CheckpointRow> = sqlx::query_as(
-            r#"SELECT job_id, provider, account_id, last_processed_id,
-                      total_count, processed_count, state, error_message, updated_at
-               FROM processing_checkpoints
-               WHERE job_id = ?"#,
-        )
-        .bind(job_id)
-        .fetch_optional(&self.pool)
-        .await?;
+    ) -> Result<Option<ProcessingCheckpoint>, sea_orm::DbErr> {
+        let row = checkpoints::Entity::find_by_id(job_id.to_owned())
+            .one(&self.conn)
+            .await?;
 
-        Ok(row.map(row_to_checkpoint))
+        Ok(row.map(map_checkpoint_model))
     }
 
     /// Get all incomplete checkpoints (for startup resume).
     ///
     /// Returns checkpoints in states `running`, `paused`, `resuming`, or
     /// `failed` — anything that was not cleanly completed.
-    pub async fn get_resumable(&self) -> Result<Vec<ProcessingCheckpoint>, sqlx::Error> {
-        let rows: Vec<CheckpointRow> = sqlx::query_as(
-            r#"SELECT job_id, provider, account_id, last_processed_id,
-                      total_count, processed_count, state, error_message, updated_at
-               FROM processing_checkpoints
-               WHERE state IN ('running', 'paused', 'resuming', 'failed')
-               ORDER BY updated_at DESC"#,
-        )
-        .fetch_all(&self.pool)
-        .await?;
+    pub async fn get_resumable(&self) -> Result<Vec<ProcessingCheckpoint>, sea_orm::DbErr> {
+        let rows = checkpoints::Entity::find()
+            .filter(checkpoints::Column::State.is_in(["running", "paused", "resuming", "failed"]))
+            .order_by_desc(checkpoints::Column::UpdatedAt)
+            .all(&self.conn)
+            .await?;
 
-        Ok(rows.into_iter().map(row_to_checkpoint).collect())
+        Ok(rows.into_iter().map(map_checkpoint_model).collect())
     }
 
     /// Mark a job as completed.
-    pub async fn complete(&self, job_id: &str) -> Result<(), sqlx::Error> {
-        let now = Utc::now().to_rfc3339();
-        sqlx::query(
-            r#"UPDATE processing_checkpoints
-               SET state = 'completed', updated_at = ?
-               WHERE job_id = ?"#,
-        )
-        .bind(&now)
-        .bind(job_id)
-        .execute(&self.pool)
-        .await?;
+    pub async fn complete(&self, job_id: &str) -> Result<(), sea_orm::DbErr> {
+        // update_many (not ActiveModel::update) so an unknown job stays a
+        // silent zero-rows no-op, exactly as the old UPDATE behaved.
+        checkpoints::Entity::update_many()
+            .col_expr(checkpoints::Column::State, Expr::value("completed"))
+            .col_expr(
+                checkpoints::Column::UpdatedAt,
+                Expr::value(Utc::now().to_rfc3339()),
+            )
+            .filter(checkpoints::Column::JobId.eq(job_id))
+            .exec(&self.conn)
+            .await?;
         Ok(())
     }
 
     /// Mark a job as failed with error info.
-    pub async fn fail(&self, job_id: &str, error: &str) -> Result<(), sqlx::Error> {
-        let now = Utc::now().to_rfc3339();
-        sqlx::query(
-            r#"UPDATE processing_checkpoints
-               SET state = 'failed', error_message = ?, updated_at = ?
-               WHERE job_id = ?"#,
-        )
-        .bind(error)
-        .bind(&now)
-        .bind(job_id)
-        .execute(&self.pool)
-        .await?;
+    pub async fn fail(&self, job_id: &str, error: &str) -> Result<(), sea_orm::DbErr> {
+        checkpoints::Entity::update_many()
+            .col_expr(checkpoints::Column::State, Expr::value("failed"))
+            .col_expr(checkpoints::Column::ErrorMessage, Expr::value(error))
+            .col_expr(
+                checkpoints::Column::UpdatedAt,
+                Expr::value(Utc::now().to_rfc3339()),
+            )
+            .filter(checkpoints::Column::JobId.eq(job_id))
+            .exec(&self.conn)
+            .await?;
         Ok(())
     }
 
@@ -211,16 +200,30 @@ impl CheckpointService {
     ///
     /// Removes completed checkpoints older than `retention_days` days.
     /// Returns the number of rows deleted.
-    pub async fn cleanup_old(&self, retention_days: u32) -> Result<u64, sqlx::Error> {
-        let result = sqlx::query(
-            r#"DELETE FROM processing_checkpoints
-               WHERE state = 'completed'
-                 AND updated_at < datetime('now', ? || ' days')"#,
-        )
-        .bind(-(retention_days as i64))
-        .execute(&self.pool)
-        .await?;
-        Ok(result.rows_affected())
+    ///
+    /// The cutoff is computed in Rust and compared as a string, because
+    /// `updated_at` is TEXT storing a `'YYYY-MM-DD HH:MM:SS'`-shaped string
+    /// (no 'T', no offset — matching SQLite's own `datetime()` output, NOT the
+    /// RFC3339 strings the app itself writes via `save_checkpoint`), so the
+    /// cutoff is formatted identically rather than in the app's usual RFC3339
+    /// shape. That is precisely the value both hand-written dialect variants
+    /// used to compute — `datetime('now', ? || ' days')` on SQLite,
+    /// `to_char(now() - make_interval(days => ?), ...)` on PostgreSQL (ADR-035
+    /// §2.3) — so this deliberately reproduces SQLite's existing format quirk
+    /// (and its narrow same-day lexicographic edge case) rather than silently
+    /// fixing unrelated pre-existing behavior during a dialect port.
+    pub async fn cleanup_old(&self, retention_days: u32) -> Result<u64, sea_orm::DbErr> {
+        let cutoff = (Utc::now() - chrono::Duration::days(retention_days as i64))
+            .format("%Y-%m-%d %H:%M:%S")
+            .to_string();
+
+        let result = checkpoints::Entity::delete_many()
+            .filter(checkpoints::Column::State.eq("completed"))
+            .filter(checkpoints::Column::UpdatedAt.lt(cutoff))
+            .exec(&self.conn)
+            .await?;
+
+        Ok(result.rows_affected)
     }
 }
 
@@ -228,25 +231,31 @@ impl CheckpointService {
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn row_to_checkpoint(row: CheckpointRow) -> ProcessingCheckpoint {
-    let state = row.6.parse::<CheckpointState>().unwrap_or_else(|e| {
-        warn!("Invalid checkpoint state '{}': {e}", row.6);
+/// Decode a `processing_checkpoints` entity row into a [`ProcessingCheckpoint`].
+///
+/// The entity's declared types (not a backend-concrete `Row`) are what make this
+/// portable across SQLite and PostgreSQL — see ADR-036. `total_count`/
+/// `processed_count` are `i32` there because the column is INTEGER/INT4 in both
+/// dialects; the public struct's `i64` fields are a safe widen on the way out.
+fn map_checkpoint_model(row: checkpoints::Model) -> ProcessingCheckpoint {
+    let state = row.state.parse::<CheckpointState>().unwrap_or_else(|e| {
+        warn!("Invalid checkpoint state '{}': {e}", row.state);
         CheckpointState::Failed
     });
 
-    let updated_at = chrono::DateTime::parse_from_rfc3339(&row.8)
+    let updated_at = chrono::DateTime::parse_from_rfc3339(&row.updated_at)
         .map(|dt| dt.with_timezone(&Utc))
         .unwrap_or_else(|_| Utc::now());
 
     ProcessingCheckpoint {
-        job_id: row.0,
-        provider: row.1,
-        account_id: row.2,
-        last_processed_id: row.3,
-        total_count: row.4,
-        processed_count: row.5,
+        job_id: row.job_id,
+        provider: row.provider,
+        account_id: row.account_id,
+        last_processed_id: row.last_processed_id,
+        total_count: row.total_count.map(|v| v as i64),
+        processed_count: row.processed_count as i64,
         state,
-        error_message: row.7,
+        error_message: row.error_message,
         updated_at,
     }
 }
@@ -258,12 +267,14 @@ fn row_to_checkpoint(row: CheckpointRow) -> ProcessingCheckpoint {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sea_orm::ConnectionTrait;
 
     /// Create an in-memory SQLite database with the processing_checkpoints table.
-    async fn test_pool() -> SqlitePool {
-        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
-        sqlx::query(
-            r#"CREATE TABLE processing_checkpoints (
+    async fn test_db() -> Database {
+        let db = crate::db::test_sqlite_database().await;
+        db.sea_orm()
+            .execute_unprepared(
+                r#"CREATE TABLE processing_checkpoints (
                 job_id           TEXT PRIMARY KEY,
                 provider         TEXT NOT NULL,
                 account_id       TEXT NOT NULL,
@@ -274,11 +285,10 @@ mod tests {
                 error_message    TEXT,
                 updated_at       TEXT NOT NULL DEFAULT (datetime('now'))
             )"#,
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-        pool
+            )
+            .await
+            .unwrap();
+        db
     }
 
     fn make_checkpoint(job_id: &str, state: CheckpointState) -> ProcessingCheckpoint {
@@ -297,8 +307,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_save_and_get_checkpoint() {
-        let pool = test_pool().await;
-        let svc = CheckpointService::new(pool);
+        let svc = CheckpointService::new(test_db().await);
 
         let cp = make_checkpoint("job-1", CheckpointState::Running);
         svc.save_checkpoint(&cp).await.unwrap();
@@ -313,8 +322,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_upsert_updates_existing() {
-        let pool = test_pool().await;
-        let svc = CheckpointService::new(pool);
+        let svc = CheckpointService::new(test_db().await);
 
         let mut cp = make_checkpoint("job-2", CheckpointState::Running);
         svc.save_checkpoint(&cp).await.unwrap();
@@ -330,17 +338,42 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_nonexistent_returns_none() {
-        let pool = test_pool().await;
-        let svc = CheckpointService::new(pool);
+        let svc = CheckpointService::new(test_db().await);
 
         let loaded = svc.get_checkpoint("no-such-job").await.unwrap();
         assert!(loaded.is_none());
     }
 
     #[tokio::test]
+    async fn test_operations_scope_to_job_id() {
+        let svc = CheckpointService::new(test_db().await);
+
+        let mut job_a = make_checkpoint("job-acct-a", CheckpointState::Running);
+        job_a.account_id = "acct-a".to_string();
+        job_a.processed_count = 7;
+        svc.save_checkpoint(&job_a).await.unwrap();
+
+        let mut job_b = make_checkpoint("job-acct-b", CheckpointState::Paused);
+        job_b.account_id = "acct-b".to_string();
+        job_b.processed_count = 11;
+        svc.save_checkpoint(&job_b).await.unwrap();
+
+        // A read returns only its own job's checkpoint.
+        let loaded = svc.get_checkpoint("job-acct-a").await.unwrap().unwrap();
+        assert_eq!(loaded.account_id, "acct-a");
+        assert_eq!(loaded.processed_count, 7);
+
+        // ...and a write touches only its own job's row.
+        svc.complete("job-acct-a").await.unwrap();
+        let other = svc.get_checkpoint("job-acct-b").await.unwrap().unwrap();
+        assert_eq!(other.state, CheckpointState::Paused);
+        assert_eq!(other.account_id, "acct-b");
+        assert_eq!(other.processed_count, 11);
+    }
+
+    #[tokio::test]
     async fn test_complete_marks_state() {
-        let pool = test_pool().await;
-        let svc = CheckpointService::new(pool);
+        let svc = CheckpointService::new(test_db().await);
 
         let cp = make_checkpoint("job-3", CheckpointState::Running);
         svc.save_checkpoint(&cp).await.unwrap();
@@ -352,8 +385,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_fail_stores_error() {
-        let pool = test_pool().await;
-        let svc = CheckpointService::new(pool);
+        let svc = CheckpointService::new(test_db().await);
 
         let cp = make_checkpoint("job-4", CheckpointState::Running);
         svc.save_checkpoint(&cp).await.unwrap();
@@ -366,8 +398,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_resumable_excludes_completed() {
-        let pool = test_pool().await;
-        let svc = CheckpointService::new(pool);
+        let svc = CheckpointService::new(test_db().await);
 
         svc.save_checkpoint(&make_checkpoint("running-1", CheckpointState::Running))
             .await
@@ -393,18 +424,18 @@ mod tests {
 
     #[tokio::test]
     async fn test_cleanup_old_removes_completed() {
-        let pool = test_pool().await;
-        let svc = CheckpointService::new(pool.clone());
+        let db = test_db().await;
+        let svc = CheckpointService::new(db.clone());
 
         // Insert a completed checkpoint with an old timestamp.
-        sqlx::query(
-            r#"INSERT INTO processing_checkpoints
+        db.sea_orm()
+            .execute_unprepared(
+                r#"INSERT INTO processing_checkpoints
                    (job_id, provider, account_id, processed_count, state, updated_at)
                VALUES ('old-job', 'gmail', 'acct', 0, 'completed', '2020-01-01T00:00:00+00:00')"#,
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
+            )
+            .await
+            .unwrap();
 
         // Insert a recent completed checkpoint.
         svc.save_checkpoint(&make_checkpoint("new-job", CheckpointState::Completed))

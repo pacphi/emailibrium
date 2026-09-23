@@ -9,14 +9,36 @@ use super::params::{
     CountEmailsRequest, FindSimilarEmailsRequest, GetEmailRequest, GetEmailThreadRequest,
     ListAttachmentsRequest, ListRecentEmailsRequest, SearchEmailsRequest,
 };
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect};
+
 use super::{validate_date, validate_id, validate_limit};
+use crate::db::entities::{attachments, emails};
 use crate::tools::{ToolContext, ToolError};
 use crate::vectors::search::{HybridSearchQuery, SearchMode};
 use crate::vectors::types::SearchParams;
 
+/// Render `emails.received_at` for MCP JSON output.
+///
+/// The entity reads the column as `NaiveDateTime` (plain `TIMESTAMP`, ADR-036);
+/// output is RFC3339 UTC. For rows the ingestion path wrote (RFC3339 `+00:00`
+/// strings on SQLite — the dominant case), this is byte-identical to the raw
+/// `String` read it replaces. Rows written by the DDL's `CURRENT_TIMESTAMP`
+/// default (naive `YYYY-MM-DD HH:MM:SS`) are normalized to RFC3339 rather than
+/// echoed raw — a deliberate output normalization, so `date` has one shape.
+fn format_received_at(ts: chrono::NaiveDateTime) -> String {
+    ts.and_utc().to_rfc3339()
+}
+
 /// Row shape for the enrichment lookup: id, subject, from_addr, from_name,
 /// received_at, category.
-type EmailMetaRow = (String, String, String, Option<String>, String, String);
+type EmailMetaRow = (
+    String,
+    String,
+    String,
+    Option<String>,
+    chrono::NaiveDateTime,
+    Option<String>,
+);
 
 /// Find emails semantically similar to a given email.
 ///
@@ -109,26 +131,36 @@ pub(super) async fn fetch_email_meta(
         return HashMap::new();
     }
 
-    let placeholders: Vec<String> = (1..=ids.len()).map(|i| format!("?{i}")).collect();
-    let sql = format!(
-        "SELECT id, subject, from_addr, from_name, received_at, category \
-         FROM emails WHERE id IN ({})",
-        placeholders.join(", ")
-    );
-
-    let mut query = sqlx::query_as::<_, EmailMetaRow>(crate::db::audited_sql(&sql));
-    for id in ids {
-        query = query.bind(id);
-    }
-
-    query
-        .fetch_all(ctx.pool())
+    let rows: Vec<EmailMetaRow> = emails::Entity::find()
+        .select_only()
+        .column(emails::Column::Id)
+        .column(emails::Column::Subject)
+        .column(emails::Column::FromAddr)
+        .column(emails::Column::FromName)
+        .column(emails::Column::ReceivedAt)
+        .column(emails::Column::Category)
+        .filter(emails::Column::Id.is_in(ids.iter().map(String::as_str)))
+        .into_tuple()
+        .all(&ctx.conn())
         .await
-        .unwrap_or_default()
-        .into_iter()
+        .unwrap_or_default();
+
+    rows.into_iter()
         .map(
             |(id, subject, from_addr, from_name, received_at, category)| {
-                (id, (subject, from_addr, from_name, received_at, category))
+                (
+                    id,
+                    (
+                        subject,
+                        from_addr,
+                        from_name,
+                        format_received_at(received_at),
+                        // NULL category reads as the column's own default rather
+                        // than erroring the whole batch (the lenient unification
+                        // this phase settled on).
+                        category.unwrap_or_else(|| "Uncategorized".to_string()),
+                    ),
+                )
             },
         )
         .collect()
@@ -146,37 +178,33 @@ pub async fn list_attachments(
     validate_id("email_id", &req.email_id).map_err(ToolError::Invalid)?;
     let include_inline = req.include_inline.unwrap_or(false);
 
-    // Two static statements rather than a built string: no dynamic SQL here.
-    let sql = if include_inline {
-        "SELECT id, email_id, filename, content_type, size_bytes, is_inline, fetch_status \
-         FROM attachments WHERE email_id = ?1 ORDER BY filename"
-    } else {
-        "SELECT id, email_id, filename, content_type, size_bytes, is_inline, fetch_status \
-         FROM attachments WHERE email_id = ?1 AND is_inline = FALSE ORDER BY filename"
-    };
-
-    let rows = sqlx::query_as::<_, (String, String, String, String, i64, bool, String)>(sql)
-        .bind(&req.email_id)
-        .fetch_all(ctx.pool())
+    let mut query =
+        attachments::Entity::find().filter(attachments::Column::EmailId.eq(req.email_id.as_str()));
+    if !include_inline {
+        query = query.filter(attachments::Column::IsInline.eq(false));
+    }
+    let rows = query
+        .order_by_asc(attachments::Column::Filename)
+        .all(&ctx.conn())
         .await
         .map_err(|e| super::db_error("Listing attachments", e))?;
 
-    let total_bytes: i64 = rows.iter().map(|r| r.4).sum();
+    // `size_bytes` is a real 4-byte INTEGER on PostgreSQL — the old direct
+    // `i64` decode was the ADR-035 width class; the entity's i32 widens here.
+    let total_bytes: i64 = rows.iter().map(|r| i64::from(r.size_bytes)).sum();
     let items: Vec<Value> = rows
         .iter()
-        .map(
-            |(id, email_id, filename, content_type, size_bytes, is_inline, fetch_status)| {
-                json!({
-                    "id": id,
-                    "email_id": email_id,
-                    "filename": filename,
-                    "content_type": content_type,
-                    "size_bytes": size_bytes,
-                    "is_inline": is_inline,
-                    "fetch_status": fetch_status,
-                })
-            },
-        )
+        .map(|r| {
+            json!({
+                "id": r.id,
+                "email_id": r.email_id,
+                "filename": r.filename,
+                "content_type": r.content_type,
+                "size_bytes": i64::from(r.size_bytes),
+                "is_inline": r.is_inline,
+                "fetch_status": r.fetch_status,
+            })
+        })
         .collect();
 
     Ok(json!({
@@ -220,26 +248,17 @@ pub struct ThreadEmail {
     pub category: String,
 }
 
-#[derive(Debug, sqlx::FromRow)]
-struct EmailRow {
-    id: String,
-    subject: String,
-    from_name: Option<String>,
-    from_addr: String,
-    received_at: String,
-    body_text: Option<String>,
-    category: String,
-}
-
-#[derive(Debug, sqlx::FromRow)]
-struct ThreadEmailRow {
-    id: String,
-    subject: String,
-    from_name: Option<String>,
-    from_addr: String,
-    received_at: String,
-    category: String,
-}
+/// (id, subject, from_name, from_addr, received_at, category) — the listing
+/// projection. `category` is nullable in the DDL; NULL reads as the column's
+/// default (lenient unification).
+type ThreadEmailTuple = (
+    String,
+    String,
+    Option<String>,
+    String,
+    chrono::NaiveDateTime,
+    Option<String>,
+);
 
 /// Render a display sender, preferring `Name <addr>` when a name is stored.
 fn format_sender(from_name: Option<&String>, from_addr: &str) -> String {
@@ -249,37 +268,66 @@ fn format_sender(from_name: Option<&String>, from_addr: &str) -> String {
     }
 }
 
-fn thread_email(row: ThreadEmailRow) -> ThreadEmail {
+fn thread_email(row: ThreadEmailTuple) -> ThreadEmail {
+    let (id, subject, from_name, from_addr, received_at, category) = row;
     ThreadEmail {
-        from: format_sender(row.from_name.as_ref(), &row.from_addr),
-        id: row.id,
-        subject: row.subject,
-        date: row.received_at,
-        category: row.category,
+        from: format_sender(from_name.as_ref(), &from_addr),
+        id,
+        subject,
+        date: format_received_at(received_at),
+        category: category.unwrap_or_else(|| "Uncategorized".to_string()),
     }
+}
+
+/// The shared listing projection, in `ThreadEmailTuple` column order.
+fn thread_email_query() -> sea_orm::Select<emails::Entity> {
+    emails::Entity::find()
+        .select_only()
+        .column(emails::Column::Id)
+        .column(emails::Column::Subject)
+        .column(emails::Column::FromName)
+        .column(emails::Column::FromAddr)
+        .column(emails::Column::ReceivedAt)
+        .column(emails::Column::Category)
 }
 
 /// Load one email including its body.
 pub async fn fetch_email(ctx: &ToolContext, email_id: &str) -> Result<EmailRecord, ToolError> {
     validate_id("email_id", email_id).map_err(ToolError::Invalid)?;
 
-    let row = sqlx::query_as::<_, EmailRow>(
-        "SELECT id, subject, from_name, from_addr, received_at, body_text, category \
-         FROM emails WHERE id = ?1",
-    )
-    .bind(email_id)
-    .fetch_optional(ctx.pool())
-    .await
-    .map_err(|e| super::db_error("Email lookup", e))?
-    .ok_or_else(|| ToolError::NotFound("Email not found".to_string()))?;
+    type Row = (
+        String,
+        String,
+        Option<String>,
+        String,
+        chrono::NaiveDateTime,
+        Option<String>,
+        Option<String>,
+    );
+    let (id, subject, from_name, from_addr, received_at, body_text, category): Row =
+        emails::Entity::find()
+            .select_only()
+            .column(emails::Column::Id)
+            .column(emails::Column::Subject)
+            .column(emails::Column::FromName)
+            .column(emails::Column::FromAddr)
+            .column(emails::Column::ReceivedAt)
+            .column(emails::Column::BodyText)
+            .column(emails::Column::Category)
+            .filter(emails::Column::Id.eq(email_id))
+            .into_tuple()
+            .one(&ctx.conn())
+            .await
+            .map_err(|e| super::db_error("Email lookup", e))?
+            .ok_or_else(|| ToolError::NotFound("Email not found".to_string()))?;
 
     Ok(EmailRecord {
-        from: format_sender(row.from_name.as_ref(), &row.from_addr),
-        id: row.id,
-        subject: row.subject,
-        date: row.received_at,
-        category: row.category,
-        body: row.body_text.unwrap_or_default(),
+        from: format_sender(from_name.as_ref(), &from_addr),
+        id,
+        subject,
+        date: format_received_at(received_at),
+        category: category.unwrap_or_else(|| "Uncategorized".to_string()),
+        body: body_text.unwrap_or_default(),
     })
 }
 
@@ -291,12 +339,21 @@ pub async fn fetch_email(ctx: &ToolContext, email_id: &str) -> Result<EmailRecor
 pub async fn resolve_thread_key(ctx: &ToolContext, email_id: &str) -> Result<String, ToolError> {
     validate_id("email_id", email_id).map_err(ToolError::Invalid)?;
 
-    sqlx::query_scalar::<_, String>("SELECT thread_key FROM emails WHERE id = ?1")
-        .bind(email_id)
-        .fetch_optional(ctx.pool())
+    let row: Option<(Option<String>,)> = emails::Entity::find()
+        .select_only()
+        .column(emails::Column::ThreadKey)
+        .filter(emails::Column::Id.eq(email_id))
+        .into_tuple()
+        .one(&ctx.conn())
         .await
-        .map_err(|e| super::db_error("Thread lookup", e))?
-        .ok_or_else(|| ToolError::NotFound("Email not found".to_string()))
+        .map_err(|e| super::db_error("Thread lookup", e))?;
+    match row {
+        // A NULL thread_key was a decode error under the old non-optional
+        // String read — an internal error, not NotFound. Preserve that class.
+        Some((Some(key),)) => Ok(key),
+        Some((None,)) => Err(super::db_error("Thread lookup", "email has no thread_key")),
+        None => Err(ToolError::NotFound("Email not found".to_string())),
+    }
 }
 
 /// Every email sharing a thread key, oldest first.
@@ -304,14 +361,13 @@ pub async fn fetch_thread_by_key(
     ctx: &ToolContext,
     thread_key: &str,
 ) -> Result<Vec<ThreadEmail>, ToolError> {
-    let rows = sqlx::query_as::<_, ThreadEmailRow>(
-        "SELECT id, subject, from_name, from_addr, received_at, category \
-         FROM emails WHERE thread_key = ?1 ORDER BY received_at ASC",
-    )
-    .bind(thread_key)
-    .fetch_all(ctx.pool())
-    .await
-    .map_err(|e| super::db_error("Thread lookup", e))?;
+    let rows: Vec<ThreadEmailTuple> = thread_email_query()
+        .filter(emails::Column::ThreadKey.eq(thread_key))
+        .order_by_asc(emails::Column::ReceivedAt)
+        .into_tuple()
+        .all(&ctx.conn())
+        .await
+        .map_err(|e| super::db_error("Thread lookup", e))?;
 
     Ok(rows.into_iter().map(thread_email).collect())
 }
@@ -378,14 +434,13 @@ pub async fn list_recent_emails(
 ) -> Result<Value, ToolError> {
     let limit = validate_limit(req.limit.unwrap_or(20), 100) as i64;
 
-    let rows = sqlx::query_as::<_, ThreadEmailRow>(
-        "SELECT id, subject, from_name, from_addr, received_at, category \
-         FROM emails ORDER BY received_at DESC LIMIT ?1",
-    )
-    .bind(limit)
-    .fetch_all(ctx.pool())
-    .await
-    .map_err(|e| super::db_error("Email listing", e))?;
+    let rows: Vec<ThreadEmailTuple> = thread_email_query()
+        .order_by_desc(emails::Column::ReceivedAt)
+        .limit(limit as u64)
+        .into_tuple()
+        .all(&ctx.conn())
+        .await
+        .map_err(|e| super::db_error("Email listing", e))?;
 
     let items: Vec<ThreadEmail> = rows.into_iter().map(thread_email).collect();
     Ok(json!({ "count": items.len(), "emails": items }))
@@ -403,33 +458,36 @@ pub async fn count_emails(
         validate_date(date).map_err(ToolError::Invalid)?;
     }
 
-    let mut sql = String::from("SELECT COUNT(*) as cnt FROM emails WHERE 1=1");
-    let mut binds: Vec<String> = Vec::new();
+    // `received_at` is a typed temporal column at the entity (ADR-036), so the
+    // validated `YYYY-MM-DD` bounds become midnight instants. The old code
+    // compared strings lexicographically, which was incoherent across the
+    // column's two legacy on-disk shapes (RFC3339 vs space-separated); the
+    // typed comparison behaves identically at date granularity and is coherent
+    // for both.
+    fn midnight(date: &str) -> Option<chrono::NaiveDateTime> {
+        chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d")
+            .ok()
+            .and_then(|d| d.and_hms_opt(0, 0, 0))
+    }
 
+    let mut query = emails::Entity::find();
     if let Some(ref from) = req.from_filter {
-        sql.push_str(&format!(" AND from_addr LIKE ?{}", binds.len() + 1));
-        binds.push(format!("%{from}%"));
+        query = query.filter(emails::Column::FromAddr.contains(from.as_str()));
     }
     if let Some(ref category) = req.category {
-        sql.push_str(&format!(" AND category = ?{}", binds.len() + 1));
-        binds.push(category.clone());
+        query = query.filter(emails::Column::Category.eq(category.as_str()));
     }
-    if let Some(ref after) = req.after {
-        sql.push_str(&format!(" AND received_at >= ?{}", binds.len() + 1));
-        binds.push(after.clone());
+    if let Some(ts) = req.after.as_deref().and_then(midnight) {
+        query = query.filter(emails::Column::ReceivedAt.gte(ts));
     }
-    if let Some(ref before) = req.before {
-        sql.push_str(&format!(" AND received_at <= ?{}", binds.len() + 1));
-        binds.push(before.clone());
-    }
-
-    let mut query = sqlx::query_scalar::<_, i64>(crate::db::audited_sql(&sql));
-    for b in &binds {
-        query = query.bind(b);
+    if let Some(ts) = req.before.as_deref().and_then(midnight) {
+        // Strictly-less-than: the pre-port text compare against a bare
+        // `YYYY-MM-DD` excluded the ENTIRE boundary day (every stored shape
+        // sorts above the bare date), so midnight itself is out too.
+        query = query.filter(emails::Column::ReceivedAt.lt(ts));
     }
 
-    let count = query
-        .fetch_one(ctx.pool())
+    let count = sea_orm::PaginatorTrait::count(query, &ctx.conn())
         .await
         .map_err(|e| super::db_error("Email count", e))?;
 
@@ -449,4 +507,101 @@ pub async fn get_email_thread(
         "count": emails.len(),
         "emails": emails,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use sea_orm::ConnectionTrait;
+
+    use super::*;
+
+    /// In-memory context with the full emails-table schema (001 + the ALTERs
+    /// from 016/018/021/027 the entity's columns require).
+    async fn ctx() -> Arc<ToolContext> {
+        let db = crate::db::test_sqlite_database().await;
+        let conn = db.sea_orm();
+        crate::db::apply_sqlite_migrations(
+            &conn,
+            &[
+                include_str!("../../../migrations/sqlite/001_initial_schema.sql"),
+                include_str!("../../../migrations/sqlite/016_soft_delete_trash_spam.sql"),
+                include_str!("../../../migrations/sqlite/018_unsubscribe_headers.sql"),
+                include_str!("../../../migrations/sqlite/021_thread_key.sql"),
+                include_str!("../../../migrations/sqlite/027_is_archived.sql"),
+            ],
+        )
+        .await
+        .expect("migrate");
+        Arc::new(ToolContext::new(Arc::new(db)))
+    }
+
+    async fn seed_email(ctx: &ToolContext, id: &str, received_at_literal: &str) {
+        ctx.conn()
+            .execute_unprepared(&format!(
+                "INSERT INTO emails (id, account_id, provider, subject, from_addr, to_addrs, \
+                 received_at, thread_key) VALUES ('{id}', 'a1', 'gmail', 'subj-{id}', \
+                 's@example.com', 'r@example.com', '{received_at_literal}', 'tk-{id}')"
+            ))
+            .await
+            .expect("seed");
+    }
+
+    /// Legacy RFC3339 rows (what the pre-port ingestion String binds wrote)
+    /// decode through the NaiveDateTime entity and emit byte-identically.
+    #[tokio::test]
+    async fn rfc3339_utc_rows_round_trip_byte_identically() {
+        let ctx = ctx().await;
+        seed_email(&ctx, "e1", "2026-08-01T10:30:00+00:00").await;
+        let rec = fetch_email(&ctx, "e1").await.expect("fetch");
+        assert_eq!(rec.date, "2026-08-01T10:30:00+00:00");
+    }
+
+    /// Rows in the DDL default's naive shape are normalized to RFC3339 UTC —
+    /// the one deliberate output normalization of this port (documented on
+    /// `format_received_at`).
+    #[tokio::test]
+    async fn naive_default_shape_rows_normalize_to_rfc3339() {
+        let ctx = ctx().await;
+        seed_email(&ctx, "e2", "2026-08-01 10:30:00").await;
+        let rec = fetch_email(&ctx, "e2").await.expect("fetch");
+        assert_eq!(rec.date, "2026-08-01T10:30:00+00:00");
+    }
+
+    /// Typed date filters count coherently across BOTH legacy stored shapes —
+    /// the old lexicographic compare could not.
+    #[tokio::test]
+    async fn count_filters_span_both_legacy_shapes() {
+        let ctx = ctx().await;
+        seed_email(&ctx, "e1", "2026-08-01T09:00:00+00:00").await;
+        seed_email(&ctx, "e2", "2026-08-01 23:00:00").await;
+        seed_email(&ctx, "e3", "2026-07-20T12:00:00+00:00").await;
+
+        let v = count_emails(
+            ctx.clone(),
+            CountEmailsRequest {
+                from_filter: None,
+                category: None,
+                after: Some("2026-08-01".into()),
+                before: None,
+            },
+        )
+        .await
+        .expect("count");
+        assert_eq!(v["count"], 2);
+
+        let v = count_emails(
+            ctx,
+            CountEmailsRequest {
+                from_filter: None,
+                category: None,
+                after: None,
+                before: Some("2026-07-31".into()),
+            },
+        )
+        .await
+        .expect("count");
+        assert_eq!(v["count"], 1);
+    }
 }

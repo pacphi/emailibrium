@@ -8,7 +8,59 @@
 # env var." This folded new deliverables/DoD into phases 0, 3, and 4 (see their comments below)
 # rather than adding a phase — it is the same coherent concern (dual-backend support), just
 # with "convenient" made a checkable property instead of an implicit assumption.
+#
+# RE-PLAN 2 (2026-08-03, mid-phase-2, per ADR-036): the call-site migration pivots from the
+# hand-rolled Database-enum dispatch (ADR-035 strategy) to SeaORM 2.0 as the dialect layer.
+# Trigger: 15 of the (revised) 51 files in, four additional dialect-divergence classes had
+# surfaced (ADR-035 §2.5–§2.7), each needing more custom per-backend code — the user directed
+# complete minimization of custom dialect code, a spike (recorded in ADR-036 §3) passed 11/11
+# checks against both live backends, and the pipeline was re-decomposed: phase 2 becomes the
+# SeaORM foundation + exemplar ports, a new phase 3 carries the full port, and the old phases
+# 3/4/5 renumber to 4/5/6 with bodies unchanged. Phases 0/1 keep their gate-PASSED markers.
+# Phase 2's in-flight branch (autopilot/postgres-support/phase-2, 11 wip commits of hand-rolled
+# conversion + real bug fixes) is the STARTING POINT for the re-planned phase 2, not discarded —
+# the enum and DatabaseConnection coexist during the port. Schema modernization (TIMESTAMPTZ
+# normalization, JSON-array→join-table, sea-orm-migration for future migrations) is queued
+# separately as .autopilot/queued/db-schema-modernization.pipeline.yml — separable,
+# data-migration-sensitive, not required for this pipeline's goal.
+#
+# RE-PLAN 3 (2026-08-03, post-phase-2, user-directed after the phase-2 qe-court): the court's
+# discovered work is folded in rather than left to rot in the parking-lot. Phase 3 gains
+# explicit sweep/TZ/test-pattern requirements (pl-partial-pool-conversions,
+# pl-timestamp-write-tz); phase 4 gains the EMAILIBRIUM_TEST_PG_URL CI export
+# (pl-phase4-test-pg-env); NEW phase 7 (apply-lifecycle concurrency: begin_apply CAS +
+# terminal-persist handling; from pl-concurrent-apply-guard + part of
+# pl-legacy-enum-file-classes) and NEW phase 8 (cleanup-domain latent-bug fixes; from
+# pl-sample-ids-unwritten, pl-action-filter-json, pl-applied-at-payload-unsynced,
+# pl-pred-status-case, pl-load-1000-cap) are appended with depends_on [3] — deliberately AFTER
+# the port so phase 3 stays behavior-preserving and each fix is reviewed as a behavior change.
+# pl-plan-id-only-authz is deliberately NOT folded in: user-scoping the repository trait is a
+# design decision that belongs to the ADR-031 multi-tenancy track (record stays open).
+# Appended ids (7, 8) avoid renumbering — the ready-set is dependency-aware, so id order
+# doesn't constrain execution order.
 
+# RE-PLAN 4 (2026-08-06, post-phase-4, user-directed): the pipeline now ENDS at phase 5, and
+# the old phases 6/7/8 are removed from the active plan and re-homed as queued lineages. This
+# is a scope decision, not a cancellation — nothing is dropped:
+#
+#   * phase 6 (PostgreSQL FTS via ruvector-postgres) -> .autopilot/queued/postgres-fulltext-search
+#     .pipeline.yml, moved INTACT. It is a capability addition, not "make Postgres work": the
+#     pipeline's goal — a real, working, CI-verified second backend — is met at phase 5, which
+#     already documents the FTS gap citing ADR-034. Keeping it here would hold phases 0–5
+#     unmerged to trunk behind a new compiled Postgres extension, a third-party image whose
+#     availability is unproven, and hand-written TF/DF maintenance queries (it was in
+#     risk_phases for exactly those reasons).
+#   * phases 7 (apply-lifecycle races) and 8 (cleanup latent bugs) -> .autopilot/queued/
+#     correctness-debt.pipeline.yml, moved INTACT as its phases 2 and 4. Neither is about
+#     PostgreSQL; both were folded in opportunistically because the phase-2 court happened to
+#     find them during the port. Leaving them here produced a priority inversion: they would
+#     have run FIRST, ahead of a CONFIRMED-broken GDPR erasure path
+#     (pl-wipe-interactions-phantom-column) that had no phase at all. correctness-debt re-orders
+#     everything by severity instead of by discovery order.
+#
+# risk_phases drops 6 and 7 with them; the remaining entries [2, 3, 4] are unchanged and all
+# gate-PASSED. Phase 5 is the last unit, after which orchestrate opens the base->trunk
+# integration PR — which the phase-4 qe-court's binding condition requires phase 5 to precede.
 feature_id: "postgres-support"
 goal: "Make PostgreSQL a real, working, CI-verified second database backend — not just a docker-compose service and an aspirational doc claim."
 spec: |
@@ -47,19 +99,26 @@ spec: |
       they believed production Postgres support already existed. This pipeline makes that
       belief true instead of correcting the doc a second time.
 
-  Non-goals: no new database features, no ORM swap, no change to the SQLite happy path's
-  behavior or performance. This is additive backend capability, gated by URL scheme
-  (`postgres://` vs `sqlite:`), landing alongside the existing default.
+  Non-goals: no new database features, no change to the SQLite happy path's behavior or
+  performance. This is additive backend capability, gated by URL scheme (`postgres://` vs
+  `sqlite:`), landing alongside the existing default.
+
+  [RE-PLAN 2 amendment] The original "no ORM swap" non-goal was written when the call-site
+  surface was estimated at 22 files and zero divergence classes were catalogued. With the
+  real surface at 51 files and nine classes (ADR-035), the hand-rolled strategy's custom-code
+  cost inverted the tradeoff; ADR-036 records the decision and spike evidence for adopting
+  SeaORM 2.0 as the dialect layer. URL-scheme selection (ADR-033) is unchanged. Schema
+  changes remain a non-goal here (queued: db-schema-modernization).
 
 references:
-  prd:     ""
-  plan:    ""
+  prd: ""
+  plan: ""
   adr_dir: "docs/ADRs"
   ddd_dir: "docs/DDDs"
-  extra:   ["docker-compose.yml", ".github/workflows/smoke.yml"]
+  extra: ["docker-compose.yml", ".github/workflows/smoke.yml"]
 
 trunk: main
-base:  develop
+base: develop
 
 autonomy: pr_ci
 
@@ -67,11 +126,16 @@ fix_budget: 5
 max_parallel: 1
 requeue_budget: 2
 
-# 2 (call-site migration touches ~22 files across the whole backend — wide blast radius) and
-# 3 (CI + entrypoint secret-plumbing change — merge-adjacent, and the exact class of "green
-# build, broken runtime" gap the smoke.yml workflow itself was built to catch, per its own
-# header comment).
-risk_phases: [2, 3]
+# 2 (introduces the SeaORM dialect layer at the architecture's core — foundational change),
+# 3 (the full port touches ~51 files across the whole backend — widest blast radius in the
+# pipeline), 4 (CI + entrypoint secret-plumbing change — merge-adjacent, and the exact class
+# of "green build, broken runtime" gap the smoke.yml workflow itself was built to catch, per
+# its own header comment), and 6 (adopts a new compiled Postgres extension (ruvector-postgres)
+# plus hand-written term/document-frequency maintenance queries feeding a SQL scoring
+# function — new attack surface + new place to get query construction wrong, per ADR-034).
+# RE-PLAN 3: 7 added (concurrency-correctness change in the apply path — the exact class the
+# phase-2 court flagged as needing adversarial review).
+risk_phases: [2, 3, 4]
 
 court: auto
 
@@ -93,52 +157,112 @@ phases:
       - "prose: docs/ADRs/ADR-033-postgresql-backend-support.md exists and documents the URL-scheme dispatch decision, and explicitly states that it is the ONE mechanism used to select a backend across every deploy/run mode (native, docker dev, docker prod) — later phases must not invent a second, mode-specific selection mechanism"
     conventions: "Match backend/src/db/mod.rs's existing doc-comment style (see the audited_sql() block); keep the abstraction minimal — this phase is plumbing, not the migration of the 22 call sites (that's phase 2). Match config.yaml's existing inline-comment style for enumerating valid values (see the `store.backend` line)."
     depends_on: []
-    touches: ["backend/Cargo.toml", "backend/src/db/mod.rs", "backend/config.yaml", "docs/ADRs/ADR-033-postgresql-backend-support.md"]
+    touches:
+      [
+        "backend/Cargo.toml",
+        "backend/src/db/mod.rs",
+        "backend/config.yaml",
+        "docs/ADRs/ADR-033-postgresql-backend-support.md",
+      ]
     adrs: []
     ddd: []
 
   - id: 1
-    goal: "All 29 migrations run clean against a real PostgreSQL 16 instance, producing a schema equivalent to the SQLite one."
+    goal: "All migrations except the 3 FTS5-only ones run clean against a real PostgreSQL 16 instance, via parallel per-backend migration directories, producing a relationally-equivalent schema. Full-text search parity is explicitly out of scope here (ADR-034 — lands in phase 3)."
     track: "database"
     deliverables:
-      - "The 6 SQLite-specific migrations (AUTOINCREMENT/PRAGMA/etc.) ported to Postgres-compatible SQL, via whatever dual-migration strategy phase 0's ADR settled on (parallel per-backend migration dirs, or portable SQL where feasible)."
-      - "Database::run_migrations() (backend/src/db/mod.rs) picks the correct migration set for the connected backend."
+      - "backend/migrations/ split into backend/migrations/sqlite/ (the existing 29 files, moved verbatim — zero content change) and backend/migrations/postgres/ (26 files: every migration except 005_fts5_search.sql, 019_fts5_add_from_name.sql, 020_fts5_bm25_weights.sql, ported to Postgres dialect: AUTOINCREMENT -> GENERATED ALWAYS AS IDENTITY, BLOB -> BYTEA, DATETIME -> TIMESTAMPTZ, datetime('now') -> now(), same numbering/filenames as their sqlite/ counterparts)."
+      - "Database::run_migrations() (backend/src/db/mod.rs) picks the correct migrations directory (two separate sqlx::migrate! embedded migrators, one per backend) based on the connected variant."
+      - "ADR-034 (already written) is referenced at the call site explaining why Postgres has no FTS-equivalent migrations yet."
     definition_of_done:
-      - "cmd: a throwaway postgres:16-alpine container (e.g. via docker run or docker compose) accepts `sqlx::migrate!` cleanly end to end for all 29 migrations"
-      - "grep:absent: AUTOINCREMENT|PRAGMA in the Postgres-targeted migration SQL"
+      - "cmd: a throwaway postgres:16-alpine container (docker run) accepts `sqlx::migrate!` cleanly end to end for all 26 Postgres-targeted migrations"
+      - "grep:absent: AUTOINCREMENT|BLOB\\b|\\bDATETIME\\b in backend/migrations/postgres/**/*.sql"
       - "cmd: cd backend && cargo test db:: passes"
-      - "prose: the migration-set-selection logic is documented at the call site in backend/src/db/mod.rs"
-    conventions: "Follow the existing migrations/ numbering and header-comment conventions (see 028_imap_accounts.sql for the current house style)."
+      - "cmd: cd backend && cargo build --features vectors passes (both migrators compile in)"
+      - "prose: the migration-set-selection logic is documented at the call site in backend/src/db/mod.rs, citing ADR-034 for the FTS exclusion"
+    conventions: "Follow the existing migrations/ numbering and header-comment conventions (see 028_imap_accounts.sql for the current house style). Postgres files keep the same filename/number as their sqlite/ counterpart so the two directories stay easy to diff side by side."
     depends_on: [0]
     touches: ["backend/migrations/**", "backend/src/db/mod.rs"]
-    adrs: ["ADR-033-postgresql-backend-support"]
+    adrs: ["ADR-033-postgresql-backend-support", "ADR-034-postgresql-fulltext-search-ruvector-bm25"]
     ddd: []
 
+  # RE-PLAN 2: phase 2 rewritten from "hand-rolled call-site migration" to "SeaORM foundation".
+  # Continues on the existing in-flight branch autopilot/postgres-support/phase-2 (11 wip
+  # commits of hand-rolled conversion stay — they compile, test green, and fixed real bugs;
+  # the enum and DatabaseConnection coexist until phase 3 finishes the port).
   - id: 2
-    goal: "Every backend call site that talks to the database works against either backend through the phase-0 abstraction — no code path still assumes SqlitePool."
+    goal: "SeaORM 2.0 is wired in as the dialect layer (ADR-036) and proven in-tree: entities for the cleanup domain, DatabaseConnection available app-wide alongside the legacy Database enum, and the two hardest already-hand-converted repositories re-ported to SeaORM as the exemplar pattern every phase-3 port follows."
     track: "database"
     deliverables:
-      - "The 22 files currently importing/using SqlitePool directly migrated onto the Database abstraction from phase 0."
-      - "Any query that relied on SQLite-specific SQL syntax (not just the migrations) ported or branched per backend."
+      - "sea-orm 2.0 moved from dev-dependencies to dependencies in backend/Cargo.toml, features trimmed to what is used (sqlx-sqlite, sqlx-postgres, runtime-tokio, with-chrono, with-uuid, macros; no arrow)."
+      - "docs/ADRs/ADR-036-seaorm-dialect-layer.md committed (decision + spike evidence); ADR-035 status updated to superseded-as-strategy/retained-as-catalog."
+      - "backend/src/db/entities/ module: SeaORM entities for the cleanup-domain tables (cleanup_plans, cleanup_plan_account_etags, cleanup_plan_operations, cleanup_apply_jobs), types matching the migration DDL exactly (i32 for INT4, Vec<u8> for BLOB/BYTEA, per-column temporal types per ADR-035's catalog)."
+      - "Database gains an into_sea_orm()/sea_orm() accessor producing a shared sea_orm::DatabaseConnection wrapping the SAME underlying pool (SqlxSqliteConnector/SqlxPostgresConnector, per spike Q2); AppState carries it alongside the legacy enum during the transition."
+      - "cleanup/repository/plan_repo.rs and cleanup/repository/job_repo.rs re-ported from hand-rolled match-dispatch to SeaORM (upserts via OnConflict, transactions via TransactionTrait, json_set call sites become read-modify-write per ADR-036 §2.4) — the exemplar PRs phase 3 mimics."
+      - "backend/examples/spike_seaorm.rs deleted (its content graduated into the real port; ADR-036 §3 records its results)."
     definition_of_done:
       - "cmd: cd backend && cargo build --features vectors passes"
       - "cmd: cd backend && cargo test passes"
       - "cmd: cd backend && cargo clippy --all-targets --features vectors -- -D warnings passes"
-      - "grep:absent: SqlitePool in backend/src (outside the phase-0 abstraction's own internals in backend/src/db/mod.rs)"
-    conventions: "Mechanical, file-by-file migration — no behavior change intended. Match the existing bind-parameter and error-handling patterns already in each file."
-    depends_on: [0]
-    touches: ["backend/src/**/*.rs"]
-    adrs: ["ADR-033-postgresql-backend-support"]
+      - "cmd: cargo tree -e no-build --prefix none | grep -E '^sqlx v' | sort -u prints exactly one version line (no dual sqlx stack)"
+      - "grep: sea-orm in backend/Cargo.toml's [dependencies] section (not only dev-dependencies)"
+      - "grep:absent: json_set|jsonb_set in backend/src/cleanup/repository/plan_repo.rs"
+      - "prose: plan_repo.rs and job_repo.rs contain no per-backend match on Database variants — their bodies are single-code-path SeaORM, verified against a live postgres:16-alpine container (documented reproduction command in the PR)"
+      - "prose: ADR-036 exists, records the 11-point spike table, and names the raw-escape-hatch policy phase 6 will use"
+    conventions: "Entity modules follow the spike's structure (partial models over existing tables; empty Relation enums until needed). Repository trait signatures do NOT change — only bodies. Keep the legacy enum working untouched for every not-yet-ported file."
+    depends_on: [0, 1]
+    touches:
+      [
+        "backend/Cargo.toml",
+        "backend/src/db/**",
+        "backend/src/cleanup/repository/**",
+        "backend/src/main.rs",
+        "docs/ADRs/ADR-036-seaorm-dialect-layer.md",
+        "docs/ADRs/ADR-035-postgresql-call-site-migration-placeholder-translation.md",
+      ]
+    adrs:
+      [
+        "ADR-033-postgresql-backend-support",
+        "ADR-035-postgresql-call-site-migration-placeholder-translation",
+        "ADR-036-seaorm-dialect-layer",
+      ]
     ddd: []
 
   - id: 3
+    goal: "Every remaining backend call site talks to the database through SeaORM's single code path — the hand-rolled dispatch (per-backend match arms, Database::adapt(), audited_sql() wrapping, the pool() bridge) is deleted, not merely bypassed."
+    track: "database"
+    deliverables:
+      - "All remaining files using SqlitePool, .pool(), Database::adapt(), or per-backend match dispatch ported to SeaORM entities/queries (entities added per table as each file ports), including the 13 files hand-converted before RE-PLAN 2 (their width/temporal bug fixes carry into entity definitions). The sweep is grep-driven, never commit-message-driven: the wip commits claimed files converted that still carry raw .pool() sites (api/rules.rs ~5 — incl. a to_rfc3339 String bound into TIMESTAMPTZ at run_rule — and api/ingestion.rs ~13; see pl-partial-pool-conversions)."
+      - "Write-side timestamp handling matches the hardened read side at each entity port: files reading PostgreSQL TIMESTAMP (no tz) columns as NaiveDateTime + and_utc() (vectors/audit.rs, vectors/consent.rs) get NaiveDateTime entity fields / naive_utc() binds on writes, so a non-UTC server session can no longer shift stored timestamps — closes pl-timestamp-write-tz."
+      - "backend/src/db/mod.rs shrunk to: URL-scheme connect (ADR-033), run_migrations, the sea_orm() accessor, and nothing else — adapt(), audited_sql(), sqlite_placeholders_to_postgres(), and pool() deleted with their unit tests."
+      - "Raw-SQL escape hatches (ADR-036 policy) only where ADR-035's catalog proves them irreducible (e.g. AVG casts), each carrying a comment citing the catalog section."
+    definition_of_done:
+      - "cmd: cd backend && cargo build --features vectors passes"
+      - "cmd: cd backend && cargo test passes"
+      - "cmd: cd backend && cargo clippy --all-targets --features vectors -- -D warnings passes"
+      - "grep:absent: SqlitePool in backend/src (outside backend/src/db/mod.rs's connect internals)"
+      - "grep:absent: Database::adapt|audited_sql|sqlite_placeholders_to_postgres in backend/src"
+      - "grep:absent: \\.pool\\(\\) in backend/src"
+      - "prose: at least the repository-layer ports are verified against a live postgres:16-alpine container (documented reproduction command in the PR)"
+    conventions: "File-by-file, mimicking phase 2's exemplar ports exactly — including its two-owner scoping test pattern for every ported repository file (the phase-2 mutation court proved owner-scoping is otherwise unasserted: dropped user_id/plan_id filters survived the old suite). Repository/service public signatures unchanged. Any file whose queries are genuinely irreducible per-backend gets the escape hatch, never a revived match-dispatch. Behavior is PRESERVED bug-for-bug: unchecked as-i32 narrowing disappears naturally via entity types, but the dequeue races (email/offline_queue.rs, content/jobs.rs) and similar behavioral gaps in pl-legacy-enum-file-classes are ported as-is and left recorded — phases 7/8 and the parking-lot own behavior changes."
+    depends_on: [2]
+    touches: ["backend/src/**/*.rs"]
+    adrs:
+      [
+        "ADR-035-postgresql-call-site-migration-placeholder-translation",
+        "ADR-036-seaorm-dialect-layer",
+      ]
+    ddd: []
+
+  # RE-PLAN 2: renumbered 3 -> 4 (body unchanged).
+  - id: 4
     goal: "CI actually proves PostgreSQL works, and choosing SQLite vs PostgreSQL is a one-flag decision in every deploy/run mode — not just something that works if you already know the right env var."
     track: "ci"
     deliverables:
       - "backend/entrypoint.sh (or the compose secret name) fixed so the postgres:// URL smoke.yml already writes actually reaches EMAILIBRIUM_DATABASE_URL."
-      - "A new job in .github/workflows/ci.yml running the backend test suite against a live postgres:16-alpine service container (mirroring the sqlite-path job)."
+      - "A new job in .github/workflows/ci.yml running the backend test suite against a live postgres:16-alpine service container (mirroring the sqlite-path job). The job exports EMAILIBRIUM_TEST_PG_URL in addition to EMAILIBRIUM_DATABASE_URL — the dedicated live-Postgres round-trip tests from phase 2 (plan_repo/job_repo postgres_* tests) skip-and-pass when that variable is unset, so without it the job would run against Postgres while silently skipping the strongest Postgres assertions (pl-phase4-test-pg-env)."
       - "smoke.yml updated/verified to assert it is genuinely exercising Postgres post-fix (e.g. a diagnostic log line or health-endpoint field naming the active backend)."
-      - "docker-compose.yml's `postgres` service gated behind a compose profile (`profiles: [\"postgres\"]`), mirroring the existing `qdrant` service's opt-in pattern (same file, ~line 204) — so `docker compose up` (no profile) is a valid, fully-working SQLite-only deployment that never has to pull/start/health-check a Postgres container it won't use. The backend service's `depends_on: postgres: condition: service_healthy` is adjusted (e.g. moved to a profile-scoped override, or made conditional per whatever mechanism the phase's own research into current Compose profile+depends_on semantics confirms actually works — verify empirically, do not assume) so backend still starts cleanly with no profile active."
+      - 'docker-compose.yml''s `postgres` service gated behind a compose profile (`profiles: ["postgres"]`), mirroring the existing `qdrant` service''s opt-in pattern (same file, ~line 204) — so `docker compose up` (no profile) is a valid, fully-working SQLite-only deployment that never has to pull/start/health-check a Postgres container it won''t use. The backend service''s `depends_on: postgres: condition: service_healthy` is adjusted (e.g. moved to a profile-scoped override, or made conditional per whatever mechanism the phase''s own research into current Compose profile+depends_on semantics confirms actually works — verify empirically, do not assume) so backend still starts cleanly with no profile active.'
       - "docker-compose.yml (or docker-compose.dev.yml) documents, at the point of use, the one env var / profile flag that switches a docker deployment from SQLite to Postgres — e.g. a header comment on the `postgres` service and/or the `backend.environment` block, not just prose in a separate doc file."
       - "justfile's `docker-up` / `docker-up-dev` recipe help text (the `help` recipe's printed Quick Start / Deploy sections) names the exact toggle for running each mode against Postgres instead of the SQLite default, so the answer is visible from `just` / `just --list` itself."
     definition_of_done:
@@ -149,26 +273,38 @@ phases:
       - "cmd: docker compose config succeeds with no profile flags and does not include the postgres service"
       - "cmd: docker compose --profile postgres config succeeds and includes the postgres service, wired the same way it is today"
       - "prose: justfile's help text (or the docker-up/docker-up-dev recipe comments) documents the SQLite-vs-Postgres toggle for docker deployments"
+      - "grep: EMAILIBRIUM_TEST_PG_URL in .github/workflows/ci.yml (the postgres job's env — see the deliverable's rationale)"
     conventions: "Match ci.yml's existing job structure and docker.yml/smoke.yml's service-container + healthcheck conventions. Match the qdrant service's existing `profiles:` pattern exactly (docker-compose.yml ~line 200-223) rather than inventing a new opt-in mechanism."
-    depends_on: [1, 2]
-    touches: [".github/workflows/ci.yml", ".github/workflows/smoke.yml", "backend/entrypoint.sh", "docker-compose.yml", "docker-compose.dev.yml", "justfile"]
+    depends_on: [1, 3]
+    touches:
+      [
+        ".github/workflows/ci.yml",
+        ".github/workflows/smoke.yml",
+        "backend/entrypoint.sh",
+        "docker-compose.yml",
+        "docker-compose.dev.yml",
+        "justfile",
+      ]
     adrs: ["ADR-033-postgresql-backend-support"]
     ddd: []
 
-  - id: 4
+  # RE-PLAN 2: renumbered 4 -> 5 (body unchanged).
+  - id: 5
     goal: "The operator docs describe PostgreSQL support accurately now that it's real, closing the loop the docs-accuracy-audit pipeline opened, and every deploy/run mode has an explicit, findable answer for 'how do I use Postgres here instead of SQLite.'"
     track: "docs"
     deliverables:
       - "docs/deployment-guide.md Database Strategy section rewritten: remove the 'SQLite is currently the only database...' language, document real Postgres setup + the actual multi-user/HA guidance now that it applies."
       - "docs/deployment-guide.md gains a per-mode subsection or table covering all four ways emailibrium is actually run — native (`just dev` / `just dev-llm`), `just docker-up-dev`, and `just docker-up` — each row/entry stating the exact one-line toggle (the `EMAILIBRIUM_DATABASE_URL` value and/or the compose `--profile postgres` flag from phase 3) to run that mode against SQLite vs PostgreSQL. This is the single place a user checks instead of re-deriving it from config.yaml + docker-compose.yml + the ADR."
       - "docs/configuration-reference.md's EMAILIBRIUM_DATABASE_URL entry updated with a working postgres:// example."
+      - "docs/deployment-guide.md's Postgres section explicitly notes the interim full-text-search gap (no keyword search on Postgres until the queued postgres-fulltext-search pipeline ships ruvector-postgres BM25 — semantic/vector search is unaffected), citing ADR-034, so this is a documented tradeoff rather than a surprise a user discovers themselves."
     definition_of_done:
       - "grep:absent: planned, not implemented in docs/deployment-guide.md (the specific phrase this pipeline makes obsolete)"
       - "cmd: just lint (or the docs-only subset: markdownlint + lychee) passes"
       - "prose: docs/deployment-guide.md's Database Strategy table reflects PostgreSQL as an available option with accurate operational notes"
       - "prose: docs/deployment-guide.md explicitly documents the SQLite-vs-Postgres toggle for each of native dev, docker dev, and docker prod modes, consistent with what phase 3 actually shipped (not a generic restatement of the ADR)"
+      - "prose: docs/deployment-guide.md documents the full-text-search gap on Postgres, naming the queued postgres-fulltext-search pipeline as where it closes, citing ADR-034"
     conventions: "Match docs-accuracy-audit's phase-2 prose style in these same two files — this phase is a direct continuation of that edit, now describing working code instead of documenting its absence."
-    depends_on: [3]
+    depends_on: [4]
     touches: ["docs/deployment-guide.md", "docs/configuration-reference.md"]
-    adrs: ["ADR-033-postgresql-backend-support"]
+    adrs: ["ADR-033-postgresql-backend-support", "ADR-034-postgresql-fulltext-search-ruvector-bm25"]
     ddd: []

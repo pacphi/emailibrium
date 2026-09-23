@@ -26,8 +26,12 @@
 
 use async_trait::async_trait;
 use chrono::Utc;
+use sea_orm::sea_query::OnConflict;
+use sea_orm::{
+    ActiveValue::Set, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder,
+    QuerySelect,
+};
 use serde::{Deserialize, Serialize};
-use sqlx::SqlitePool;
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -35,6 +39,8 @@ use crate::cleanup::domain::operation::{
     ErrorCode, PlanAction, PlanSource, PlannedOperation, PlannedOperationRow, SkipReason,
 };
 use crate::cleanup::domain::plan::{JobId, PlanId};
+use crate::db::entities::cleanup_audit_log as audit_log;
+use crate::db::Database;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -42,8 +48,8 @@ use crate::cleanup::domain::plan::{JobId, PlanId};
 
 #[derive(Debug, Error)]
 pub enum AuditError {
-    #[error("sqlx: {0}")]
-    Sqlx(#[from] sqlx::Error),
+    #[error("db: {0}")]
+    Db(#[from] sea_orm::DbErr),
     #[error("invalid uuid: {0}")]
     Uuid(#[from] uuid::Error),
     #[error("invalid value: {0}")]
@@ -194,13 +200,13 @@ fn source_kind(s: &PlanSource) -> &'static str {
 }
 
 // ---------------------------------------------------------------------------
-// Writer trait + SQLite impl
+// Writer trait + SeaORM impl
 // ---------------------------------------------------------------------------
 
 #[async_trait]
 pub trait CleanupAuditWriter: Send + Sync {
     /// Write a single audit entry. Idempotent on
-    /// `(plan_id, job_id, seq, outcome)` via `INSERT OR IGNORE`.
+    /// `(plan_id, job_id, seq, outcome)`: a duplicate write is a silent no-op.
     async fn write(&self, entry: CleanupAuditEntry) -> Result<(), AuditError>;
 
     /// Surface entries for a single plan, ordered by (timestamp, seq).
@@ -215,64 +221,85 @@ pub trait CleanupAuditWriter: Send + Sync {
     ) -> Result<Vec<CleanupAuditEntry>, AuditError>;
 }
 
-pub struct SqliteCleanupAuditWriter {
-    pool: SqlitePool,
+/// Single-code-path SeaORM audit writer (ADR-036) — the same bodies run against
+/// SQLite and PostgreSQL. See `cleanup/repository/plan_repo.rs` for the exemplar
+/// this follows.
+pub struct SeaOrmCleanupAuditWriter {
+    conn: DatabaseConnection,
 }
 
-impl SqliteCleanupAuditWriter {
-    pub fn new(pool: SqlitePool) -> Self {
-        Self { pool }
+/// Pre-port name, kept so `main.rs`'s construction site keeps compiling.
+/// DELETE IN PHASE 3G together with the last caller that spells it this way.
+pub type SqliteCleanupAuditWriter = SeaOrmCleanupAuditWriter;
+
+impl SeaOrmCleanupAuditWriter {
+    /// Takes the [`Database`] handle the composition root already holds and keeps
+    /// a SeaORM handle over the SAME pool (ADR-036 §2.1).
+    pub fn new(db: Database) -> Self {
+        Self { conn: db.sea_orm() }
     }
 }
 
 #[async_trait]
-impl CleanupAuditWriter for SqliteCleanupAuditWriter {
+impl CleanupAuditWriter for SeaOrmCleanupAuditWriter {
     async fn write(&self, entry: CleanupAuditEntry) -> Result<(), AuditError> {
-        let plan_id_b: &[u8] = entry.plan_id.as_bytes();
-        let job_id_b: &[u8] = entry.job_id.as_bytes();
-        let user_id_b = entry.user_id.as_bytes();
-        let account_id_b = entry.account_id.as_bytes();
-        let skip = entry.skip_reason.map(|r| r.as_str());
-        let (err_code, err_msg) = match &entry.error {
-            Some(e) => (Some(e.code.as_str()), Some(e.message.as_str())),
+        let (err_code, err_msg) = match entry.error {
+            Some(e) => (Some(e.code), Some(e.message)),
             None => (None, None),
         };
-
-        sqlx::query(
-            "INSERT OR IGNORE INTO cleanup_audit_log
-             (timestamp, plan_id, job_id, user_id, account_id, seq, op_kind,
-              action_type, source_type, outcome, skip_reason, error_code, error_message)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        )
-        .bind(entry.timestamp_ms)
-        .bind(plan_id_b)
-        .bind(job_id_b)
-        .bind(user_id_b)
-        .bind(account_id_b)
-        .bind(entry.seq as i64)
-        .bind(entry.op_kind)
-        .bind(&entry.action_type)
-        .bind(&entry.source_type)
-        .bind(entry.outcome.as_str())
-        .bind(skip)
-        .bind(err_code)
-        .bind(err_msg)
-        .execute(&self.pool)
-        .await?;
+        // `seq as i32` matches the INTEGER/INT4 column the entity declares — the
+        // pre-port cast, preserved: plan-side inserts already reject seqs beyond
+        // INT4 range, so an out-of-range audit seq is unreachable.
+        let row = audit_log::ActiveModel {
+            timestamp: Set(entry.timestamp_ms),
+            plan_id: Set(entry.plan_id.as_bytes().to_vec()),
+            job_id: Set(entry.job_id.as_bytes().to_vec()),
+            user_id: Set(entry.user_id.into_bytes()),
+            account_id: Set(entry.account_id.into_bytes()),
+            seq: Set(entry.seq as i32),
+            op_kind: Set(entry.op_kind.to_owned()),
+            action_type: Set(entry.action_type),
+            source_type: Set(entry.source_type),
+            outcome: Set(entry.outcome.as_str().to_owned()),
+            skip_reason: Set(entry.skip_reason.map(|r| r.as_str().to_owned())),
+            error_code: Set(err_code),
+            error_message: Set(err_msg),
+            ..Default::default()
+        };
+        // One `OnConflict … DO NOTHING` for both backends, against the same
+        // UNIQUE(plan_id, job_id, seq, outcome) constraint. Formerly SQLite
+        // `INSERT OR IGNORE` versus a hand-written PostgreSQL upsert — one of
+        // ADR-035's genuinely-different-SQL-text divergence classes its §2.3
+        // translation algorithm could not cover, now library-owned.
+        //
+        // `exec_without_returning` (not `exec`) because a conflicting insert has
+        // no row to return: `exec` reports that as `DbErr::RecordNotInserted`,
+        // which we would have to swallow — and swallowing it would also swallow
+        // unrelated zero-row causes. This variant reports rows-affected instead,
+        // so "duplicate write is a silent no-op" needs no error suppression.
+        audit_log::Entity::insert(row)
+            .on_conflict(
+                OnConflict::columns([
+                    audit_log::Column::PlanId,
+                    audit_log::Column::JobId,
+                    audit_log::Column::Seq,
+                    audit_log::Column::Outcome,
+                ])
+                .do_nothing()
+                .to_owned(),
+            )
+            .exec_without_returning(&self.conn)
+            .await?;
         Ok(())
     }
 
     async fn list_for_plan(&self, plan_id: PlanId) -> Result<Vec<CleanupAuditEntry>, AuditError> {
-        let rows: Vec<AuditRow> = sqlx::query_as::<_, AuditRow>(
-            "SELECT timestamp, plan_id, job_id, user_id, account_id, seq, op_kind,
-                    action_type, source_type, outcome, skip_reason, error_code, error_message
-             FROM cleanup_audit_log
-             WHERE plan_id = ?
-             ORDER BY timestamp ASC, seq ASC",
-        )
-        .bind(plan_id.as_bytes().as_slice())
-        .fetch_all(&self.pool)
-        .await?;
+        let rows = audit_log::Entity::find()
+            .filter(audit_log::Column::PlanId.eq(plan_id.as_bytes().to_vec()))
+            .order_by_asc(audit_log::Column::Timestamp)
+            .order_by_asc(audit_log::Column::Seq)
+            .all(&self.conn)
+            .await?;
         rows.into_iter().map(|r| r.try_into()).collect()
     }
 
@@ -281,43 +308,20 @@ impl CleanupAuditWriter for SqliteCleanupAuditWriter {
         user_id: &str,
         limit: u32,
     ) -> Result<Vec<CleanupAuditEntry>, AuditError> {
-        let rows: Vec<AuditRow> = sqlx::query_as::<_, AuditRow>(
-            "SELECT timestamp, plan_id, job_id, user_id, account_id, seq, op_kind,
-                    action_type, source_type, outcome, skip_reason, error_code, error_message
-             FROM cleanup_audit_log
-             WHERE user_id = ?
-             ORDER BY timestamp DESC
-             LIMIT ?",
-        )
-        .bind(user_id.as_bytes())
-        .bind(limit as i64)
-        .fetch_all(&self.pool)
-        .await?;
+        let rows = audit_log::Entity::find()
+            .filter(audit_log::Column::UserId.eq(user_id.as_bytes().to_vec()))
+            .order_by_desc(audit_log::Column::Timestamp)
+            .limit(u64::from(limit))
+            .all(&self.conn)
+            .await?;
         rows.into_iter().map(|r| r.try_into()).collect()
     }
 }
 
-#[derive(sqlx::FromRow)]
-struct AuditRow {
-    timestamp: i64,
-    plan_id: Vec<u8>,
-    job_id: Vec<u8>,
-    user_id: Vec<u8>,
-    account_id: Vec<u8>,
-    seq: i64,
-    op_kind: String,
-    action_type: String,
-    source_type: String,
-    outcome: String,
-    skip_reason: Option<String>,
-    error_code: Option<String>,
-    error_message: Option<String>,
-}
-
-impl TryFrom<AuditRow> for CleanupAuditEntry {
+impl TryFrom<audit_log::Model> for CleanupAuditEntry {
     type Error = AuditError;
 
-    fn try_from(r: AuditRow) -> Result<Self, Self::Error> {
+    fn try_from(r: audit_log::Model) -> Result<Self, Self::Error> {
         let plan_id = Uuid::from_slice(&r.plan_id)
             .map_err(|e| AuditError::Invalid(format!("plan_id: {e}")))?;
         let job_id =
@@ -402,48 +406,20 @@ mod tests {
     use crate::cleanup::domain::operation::{
         MoveKind, OperationStatus, PlanAction, PlanSource, PlannedOperationRow, RiskLevel,
     };
-    use sqlx::sqlite::SqlitePoolOptions;
-
-    async fn fresh_pool() -> SqlitePool {
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect(":memory:")
-            .await
-            .expect("connect");
+    async fn fresh_db() -> Database {
+        let db = crate::db::test_sqlite_database().await;
+        let conn = db.sea_orm();
         // Apply migration 024 (referenced by ON DELETE CASCADE) plus 025.
-        for path in [
-            "../../../migrations/024_cleanup_planning.sql",
-            "../../../migrations/025_cleanup_audit_log.sql",
-        ] {
-            // include_str! requires literal paths.
-            let raw = match path {
-                "../../../migrations/024_cleanup_planning.sql" => {
-                    include_str!("../../migrations/024_cleanup_planning.sql")
-                }
-                _ => include_str!("../../migrations/025_cleanup_audit_log.sql"),
-            };
-            let cleaned: String = raw
-                .lines()
-                .map(|l| {
-                    if let Some(idx) = l.find("--") {
-                        &l[..idx]
-                    } else {
-                        l
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
-            for stmt in cleaned.split(';') {
-                let s = stmt.trim();
-                if !s.is_empty() {
-                    sqlx::query(crate::db::audited_sql(s))
-                        .execute(&pool)
-                        .await
-                        .expect("migrate");
-                }
-            }
-        }
-        pool
+        crate::db::apply_sqlite_migrations(
+            &conn,
+            &[
+                include_str!("../../migrations/sqlite/024_cleanup_planning.sql"),
+                include_str!("../../migrations/sqlite/025_cleanup_audit_log.sql"),
+            ],
+        )
+        .await
+        .expect("migrate");
+        db
     }
 
     fn sample_row(seq: u64) -> PlannedOperationRow {
@@ -467,8 +443,7 @@ mod tests {
 
     #[tokio::test]
     async fn audit_write_then_list_for_plan() {
-        let pool = fresh_pool().await;
-        let writer = SqliteCleanupAuditWriter::new(pool);
+        let writer = SeaOrmCleanupAuditWriter::new(fresh_db().await);
         let plan_id = Uuid::now_v7();
         let job_id = Uuid::now_v7();
 
@@ -496,8 +471,7 @@ mod tests {
 
     #[tokio::test]
     async fn audit_write_idempotent_on_duplicate_seq() {
-        let pool = fresh_pool().await;
-        let writer = SqliteCleanupAuditWriter::new(pool);
+        let writer = SeaOrmCleanupAuditWriter::new(fresh_db().await);
         let plan_id = Uuid::now_v7();
         let job_id = Uuid::now_v7();
         let row = sample_row(7);
@@ -546,8 +520,8 @@ mod tests {
     async fn audit_excludes_email_content() {
         // Compile-time + runtime guard: the entry struct + the SELECT we
         // issue must not surface email_id, body, target name, etc.
-        let pool = fresh_pool().await;
-        let writer = SqliteCleanupAuditWriter::new(pool.clone());
+        let db = fresh_db().await;
+        let writer = SeaOrmCleanupAuditWriter::new(db.clone());
         let plan_id = Uuid::now_v7();
         let job_id = Uuid::now_v7();
         let row = PlannedOperationRow {
@@ -564,16 +538,21 @@ mod tests {
         writer.write(entry).await.expect("write");
 
         // Schema introspection: verify no columns leak email content.
-        #[derive(sqlx::FromRow, Debug)]
-        struct ColInfo {
-            name: String,
-        }
-        let cols: Vec<ColInfo> =
-            sqlx::query_as::<_, ColInfo>("SELECT name FROM pragma_table_info('cleanup_audit_log')")
-                .fetch_all(&pool)
-                .await
-                .expect("pragma");
-        let names: Vec<&str> = cols.iter().map(|c| c.name.as_str()).collect();
+        // `pragma_table_info` is deliberately SQLite-only (ADR-030): this
+        // privacy assertion runs against the test schema, not production.
+        use sea_orm::{ConnectionTrait, Statement};
+        let cols: Vec<String> = db
+            .sea_orm()
+            .query_all_raw(Statement::from_string(
+                sea_orm::DatabaseBackend::Sqlite,
+                "SELECT name FROM pragma_table_info('cleanup_audit_log')".to_owned(),
+            ))
+            .await
+            .expect("pragma")
+            .iter()
+            .map(|row| row.try_get::<String>("", "name").expect("name column"))
+            .collect();
+        let names: Vec<&str> = cols.iter().map(|c| c.as_str()).collect();
         for forbidden in [
             "email_id",
             "email",
@@ -614,8 +593,7 @@ mod tests {
 
     #[tokio::test]
     async fn audit_records_skip_reason() {
-        let pool = fresh_pool().await;
-        let writer = SqliteCleanupAuditWriter::new(pool);
+        let writer = SeaOrmCleanupAuditWriter::new(fresh_db().await);
         let plan_id = Uuid::now_v7();
         let job_id = Uuid::now_v7();
 
@@ -637,8 +615,7 @@ mod tests {
 
     #[tokio::test]
     async fn audit_action_type_camelcase() {
-        let pool = fresh_pool().await;
-        let writer = SqliteCleanupAuditWriter::new(pool);
+        let writer = SeaOrmCleanupAuditWriter::new(fresh_db().await);
         let plan_id = Uuid::now_v7();
         let job_id = Uuid::now_v7();
 
@@ -656,5 +633,190 @@ mod tests {
         writer.write(entry).await.expect("write");
         let rows = writer.list_for_plan(plan_id).await.expect("list");
         assert_eq!(rows[0].action_type, "addLabel");
+    }
+
+    #[tokio::test]
+    async fn audit_list_for_plan_is_scoped_to_its_plan() {
+        // The GDPR right-to-explanation surface must not leak one plan's
+        // outcomes into another's — the WHERE clause is load-bearing, and a
+        // dropped filter would still return rows and still look "green" to
+        // every single-plan test above.
+        let writer = SeaOrmCleanupAuditWriter::new(fresh_db().await);
+        let plan_a = Uuid::now_v7();
+        let plan_b = Uuid::now_v7();
+        let job_id = Uuid::now_v7();
+
+        for seq in 1..=2 {
+            writer
+                .write(CleanupAuditEntry::from_materialized(
+                    plan_a,
+                    job_id,
+                    "user-a",
+                    &sample_row(seq),
+                    AuditOutcome::Applied,
+                ))
+                .await
+                .expect("write a");
+        }
+        writer
+            .write(CleanupAuditEntry::from_materialized(
+                plan_b,
+                job_id,
+                "user-b",
+                &sample_row(9),
+                AuditOutcome::Applied,
+            ))
+            .await
+            .expect("write b");
+
+        let a_rows = writer.list_for_plan(plan_a).await.expect("list a");
+        assert_eq!(a_rows.len(), 2);
+        assert!(a_rows.iter().all(|r| r.plan_id == plan_a));
+        assert_eq!(a_rows.iter().map(|r| r.seq).collect::<Vec<_>>(), vec![1, 2]);
+
+        let b_rows = writer.list_for_plan(plan_b).await.expect("list b");
+        assert_eq!(b_rows.len(), 1);
+        assert_eq!(b_rows[0].plan_id, plan_b);
+        assert_eq!(b_rows[0].seq, 9);
+    }
+
+    #[tokio::test]
+    async fn audit_list_for_user_is_scoped_newest_first_and_capped() {
+        let writer = SeaOrmCleanupAuditWriter::new(fresh_db().await);
+        let plan_id = Uuid::now_v7();
+        let job_id = Uuid::now_v7();
+
+        // Explicit, distinct timestamps: the ORDER BY is on `timestamp`, and
+        // three writes in one test can otherwise land on the same millisecond.
+        for (seq, ts) in [(1u64, 1_000i64), (2, 2_000), (3, 3_000)] {
+            let mut entry = CleanupAuditEntry::from_materialized(
+                plan_id,
+                job_id,
+                "user-mine",
+                &sample_row(seq),
+                AuditOutcome::Applied,
+            );
+            entry.timestamp_ms = ts;
+            writer.write(entry).await.expect("write mine");
+        }
+        let mut other = CleanupAuditEntry::from_materialized(
+            plan_id,
+            job_id,
+            "user-theirs",
+            &sample_row(4),
+            AuditOutcome::Applied,
+        );
+        other.timestamp_ms = 9_000;
+        writer.write(other).await.expect("write theirs");
+
+        let all = writer.list_for_user("user-mine", 100).await.expect("list");
+        assert_eq!(all.len(), 3, "another user's rows must not be returned");
+        assert!(all.iter().all(|r| r.user_id == "user-mine"));
+        assert_eq!(
+            all.iter().map(|r| r.timestamp_ms).collect::<Vec<_>>(),
+            vec![3_000, 2_000, 1_000],
+            "newest first"
+        );
+
+        let capped = writer.list_for_user("user-mine", 2).await.expect("list");
+        assert_eq!(capped.len(), 2);
+        assert_eq!(capped[0].timestamp_ms, 3_000);
+    }
+
+    /// Live-PostgreSQL verification of the audit writer (ADR-036 exemplar
+    /// proof, matching `plan_repo`/`job_repo`). The load-bearing case is the
+    /// idempotent write: `ON CONFLICT … DO NOTHING` against a
+    /// `GENERATED ALWAYS AS IDENTITY` primary key is the one construct in this
+    /// file with no SQLite-side equivalent to fall back on. Skips (trivially
+    /// passing) when `EMAILIBRIUM_TEST_PG_URL` is unset. Reproduction:
+    ///
+    /// ```sh
+    /// docker run -d --rm --name emailibrium-pg-test -p 55434:5432 \
+    ///   -e POSTGRES_PASSWORD=test -e POSTGRES_DB=emailibrium_test postgres:16-alpine
+    /// EMAILIBRIUM_TEST_PG_URL='postgres://postgres:test@localhost:55434/emailibrium_test' \
+    ///   cargo test --features vectors cleanup::audit -- --nocapture
+    /// docker rm -f emailibrium-pg-test
+    /// ```
+    #[tokio::test]
+    async fn postgres_audit_round_trip() {
+        let Ok(url) = std::env::var("EMAILIBRIUM_TEST_PG_URL") else {
+            eprintln!("skipping postgres_audit_round_trip: EMAILIBRIUM_TEST_PG_URL unset");
+            return;
+        };
+        let db = Database::connect(&url).await.expect("pg connect");
+        db.run_migrations().await.expect("pg migrations");
+        let writer = SeaOrmCleanupAuditWriter::new(db);
+
+        // Unique ids so reruns against a persistent database stay clean.
+        let user = format!("pg-audit-user-{}", Uuid::new_v4());
+        let plan_a = Uuid::now_v7();
+        let plan_b = Uuid::now_v7();
+        let job_id = Uuid::now_v7();
+
+        let applied = |plan_id, user_id: &str, seq| {
+            CleanupAuditEntry::from_materialized(
+                plan_id,
+                job_id,
+                user_id,
+                &sample_row(seq),
+                AuditOutcome::Applied,
+            )
+        };
+
+        for seq in 1..=3 {
+            writer
+                .write(applied(plan_a, &user, seq))
+                .await
+                .expect("write");
+        }
+        // Idempotency: re-writing the same (plan, job, seq, outcome) is a
+        // silent no-op, not an error and not a duplicate row.
+        writer
+            .write(applied(plan_a, &user, 2))
+            .await
+            .expect("duplicate write must be a silent no-op");
+        let rows = writer.list_for_plan(plan_a).await.expect("list a");
+        assert_eq!(rows.len(), 3);
+        assert_eq!(
+            rows.iter().map(|r| r.seq).collect::<Vec<_>>(),
+            vec![1, 2, 3]
+        );
+        assert_eq!(rows[0].user_id, user);
+        assert_eq!(rows[0].account_id, "acct-a");
+
+        // Same seq, DIFFERENT outcome is a distinct row (the unique key
+        // includes `outcome`).
+        let mut failed_row = sample_row(2);
+        failed_row.error = Some(ErrorCode {
+            code: "x".into(),
+            message: "y".into(),
+        });
+        writer
+            .write(CleanupAuditEntry::from_materialized(
+                plan_a,
+                job_id,
+                &user,
+                &failed_row,
+                AuditOutcome::Failed,
+            ))
+            .await
+            .expect("failed write");
+        assert_eq!(writer.list_for_plan(plan_a).await.expect("list a").len(), 4);
+
+        // Plan scoping.
+        writer
+            .write(applied(plan_b, &user, 9))
+            .await
+            .expect("write b");
+        let b_rows = writer.list_for_plan(plan_b).await.expect("list b");
+        assert_eq!(b_rows.len(), 1);
+        assert_eq!(b_rows[0].seq, 9);
+
+        // User scoping + cap. This user's rows span both plans (4 + 1).
+        let mine = writer.list_for_user(&user, 100).await.expect("list user");
+        assert_eq!(mine.len(), 5);
+        assert!(mine.iter().all(|r| r.user_id == user));
+        let capped = writer.list_for_user(&user, 2).await.expect("list capped");
+        assert_eq!(capped.len(), 2);
     }
 }

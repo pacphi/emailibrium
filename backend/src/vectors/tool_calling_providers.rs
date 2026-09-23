@@ -30,10 +30,10 @@ pub struct AnthropicToolCallingProvider {
 impl AnthropicToolCallingProvider {
     pub fn new(api_key: String, model: String, base_url: String) -> Self {
         Self {
-            client: reqwest::Client::new(),
+            client: super::inference_policy::http_client(std::time::Duration::from_secs(120)),
             api_key,
             model,
-            base_url,
+            base_url: super::inference_policy::canonical_endpoint(&base_url),
         }
     }
 
@@ -217,10 +217,10 @@ pub struct OpenAiToolCallingProvider {
 impl OpenAiToolCallingProvider {
     pub fn new(api_key: String, model: String, base_url: String) -> Self {
         Self {
-            client: reqwest::Client::new(),
+            client: super::inference_policy::http_client(std::time::Duration::from_secs(120)),
             api_key,
             model,
-            base_url,
+            base_url: super::inference_policy::canonical_endpoint(&base_url),
         }
     }
 
@@ -390,9 +390,9 @@ pub struct OllamaToolCallingProvider {
 impl OllamaToolCallingProvider {
     pub fn new(model: String, base_url: String) -> Self {
         Self {
-            client: reqwest::Client::new(),
+            client: super::inference_policy::http_client(std::time::Duration::from_secs(120)),
             model,
-            base_url,
+            base_url: super::inference_policy::canonical_endpoint(&base_url),
         }
     }
 
@@ -554,8 +554,9 @@ impl ToolCallingProvider for OllamaToolCallingProvider {
 pub fn create_tool_calling_provider(
     provider_name: &str,
     config: &crate::vectors::config::VectorConfig,
+    policy: Arc<super::inference_policy::InferencePolicy>,
 ) -> Option<Arc<dyn ToolCallingProvider>> {
-    match provider_name {
+    let inner: Option<Arc<dyn ToolCallingProvider>> = match provider_name {
         "cloud" => {
             let cloud = &config.generative.cloud;
             let api_key = std::env::var(&cloud.api_key_env).ok()?;
@@ -582,7 +583,19 @@ pub fn create_tool_calling_provider(
             )))
         }
         _ => None,
-    }
+    };
+    let target = match provider_name {
+        "ollama" => super::inference_policy::InferenceTarget::Ollama {
+            endpoint: config.generative.ollama.base_url.clone(),
+            model: config.generative.ollama.chat_model.clone(),
+        },
+        "cloud" => super::inference_policy::InferenceTarget::Cloud {
+            provider: config.generative.cloud.provider.clone(),
+            endpoint: config.generative.cloud.base_url.clone(),
+        },
+        _ => return None,
+    };
+    inner.map(|provider| policy.wrap_tools(provider, target))
 }
 
 // ---------------------------------------------------------------------------

@@ -1,7 +1,8 @@
 import { useEffect } from 'react';
 import { Providers } from './Providers';
 import { AppRouter } from './Router';
-import { useSettings, hydrateFromBackend } from '../features/settings/hooks/useSettings';
+import { EngineConnectionGate } from './EngineConnectionGate';
+import { useSettings } from '../features/settings/hooks/useSettings';
 
 /**
  * Apply the user's theme preference to the <html> element so Tailwind's
@@ -47,15 +48,11 @@ function useThemeEffect() {
 export function App() {
   useThemeEffect();
 
-  // Hydrate settings from backend on first load so that persisted
-  // model selections and other server-side settings are restored.
-  useEffect(() => {
-    hydrateFromBackend();
-  }, []);
-
   return (
-    <Providers>
-      <AppRouter />
-    </Providers>
+    <EngineConnectionGate>
+      <Providers>
+        <AppRouter />
+      </Providers>
+    </EngineConnectionGate>
   );
 }

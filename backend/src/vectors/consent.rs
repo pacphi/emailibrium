@@ -2,14 +2,31 @@
 //!
 //! Tracks user consent for sending email data to external AI services
 //! and maintains an audit log of all cloud API calls.
+//!
+//! Single-code-path SeaORM (ADR-036): `ai_consent.consented_at`/`revoked_at` and
+//! `ai_audit_log.timestamp` are plain `TIMESTAMP` (no zone) in both dialects, so
+//! the entities declare them `NaiveDateTime` and every write here binds
+//! `.naive_utc()`. That closes the write-side half of `pl-timestamp-write-tz`:
+//! the pre-port code bound `DateTime<Utc>`, which PostgreSQL assignment-casts
+//! through the session `TimeZone` GUC, shifting the stored value by the session's
+//! offset on any non-UTC connection. A naive bind cannot shift. The read side was
+//! already correct but needed a per-backend decode arm (ADR-035 §2.6); the entity
+//! owns that now, so the four hand-written row-tuple aliases are gone.
 
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
+use sea_orm::sea_query::OnConflict;
+use sea_orm::ActiveValue::Set;
+use sea_orm::{
+    ColumnTrait, DatabaseConnection, DbErr, EntityTrait, Order, PaginatorTrait, QueryFilter,
+    QueryOrder, QuerySelect,
+};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info};
 
 use super::error::VectorError;
+use crate::db::entities::{ai_audit_log, ai_consent};
 use crate::db::Database;
 
 // ---------------------------------------------------------------------------
@@ -54,12 +71,12 @@ pub struct AuditPage {
 
 /// Manages user consent for cloud AI providers and maintains audit logs.
 pub struct ConsentManager {
-    db: Arc<Database>,
+    conn: DatabaseConnection,
 }
 
 impl ConsentManager {
     pub fn new(db: Arc<Database>) -> Self {
-        Self { db }
+        Self { conn: db.sea_orm() }
     }
 
     /// Grant consent for a specific cloud AI provider.
@@ -70,19 +87,34 @@ impl ConsentManager {
     ) -> Result<(), VectorError> {
         info!(provider = provider, "Granting AI consent");
 
-        sqlx::query(
-            "INSERT INTO ai_consent (provider, consented_at, acknowledgment) \
-             VALUES (?, ?, ?) \
-             ON CONFLICT(provider) DO UPDATE SET \
-                consented_at = excluded.consented_at, \
-                revoked_at = NULL, \
-                acknowledgment = excluded.acknowledgment",
+        // pl-timestamp-write-tz: `consented_at` is TIMESTAMP (no zone), so the
+        // bind is the naive UTC instant. Binding a `DateTime<Utc>` here — what
+        // this call site did before the port — lets PostgreSQL's
+        // timestamptz->timestamp assignment cast rewrite the value through the
+        // session's TimeZone.
+        let now = Utc::now().naive_utc();
+
+        // The re-grant path resets `revoked_at` to NULL: the insert binds NULL,
+        // and the conflict branch copies the excluded row's columns, so both
+        // paths land the same state through one statement (spike check #4).
+        ai_consent::Entity::insert(ai_consent::ActiveModel {
+            provider: Set(provider.to_owned()),
+            consented_at: Set(now),
+            revoked_at: Set(None),
+            acknowledgment: Set(acknowledgment.to_owned()),
+        })
+        .on_conflict(
+            OnConflict::column(ai_consent::Column::Provider)
+                .update_columns([
+                    ai_consent::Column::ConsentedAt,
+                    ai_consent::Column::RevokedAt,
+                    ai_consent::Column::Acknowledgment,
+                ])
+                .to_owned(),
         )
-        .bind(provider)
-        .bind(Utc::now())
-        .bind(acknowledgment)
-        .execute(&self.db.pool)
-        .await?;
+        .exec_without_returning(&self.conn)
+        .await
+        .map_err(|e| db_error("grant consent", e))?;
 
         Ok(())
     }
@@ -91,15 +123,22 @@ impl ConsentManager {
     pub async fn revoke_consent(&self, provider: &str) -> Result<(), VectorError> {
         info!(provider = provider, "Revoking AI consent");
 
-        let result = sqlx::query(
-            "UPDATE ai_consent SET revoked_at = ? WHERE provider = ? AND revoked_at IS NULL",
-        )
-        .bind(Utc::now())
-        .bind(provider)
-        .execute(&self.db.pool)
-        .await?;
+        // pl-timestamp-write-tz: naive UTC bind into the no-zone column.
+        let now = Utc::now().naive_utc();
 
-        if result.rows_affected() == 0 {
+        let affected = ai_consent::Entity::update_many()
+            .col_expr(
+                ai_consent::Column::RevokedAt,
+                sea_orm::sea_query::Expr::value(now),
+            )
+            .filter(ai_consent::Column::Provider.eq(provider))
+            .filter(ai_consent::Column::RevokedAt.is_null())
+            .exec(&self.conn)
+            .await
+            .map_err(|e| db_error("revoke consent", e))?
+            .rows_affected;
+
+        if affected == 0 {
             return Err(VectorError::ConfigError(format!(
                 "No active consent found for provider '{provider}'"
             )));
@@ -110,34 +149,33 @@ impl ConsentManager {
 
     /// Check whether active (non-revoked) consent exists for a provider.
     pub async fn has_consent(&self, provider: &str) -> Result<bool, VectorError> {
-        let row: (i64,) = sqlx::query_as(
-            "SELECT COUNT(*) FROM ai_consent WHERE provider = ? AND revoked_at IS NULL",
-        )
-        .bind(provider)
-        .fetch_one(&self.db.pool)
-        .await?;
+        let count = ai_consent::Entity::find()
+            .filter(ai_consent::Column::Provider.eq(provider))
+            .filter(ai_consent::Column::RevokedAt.is_null())
+            .count(&self.conn)
+            .await
+            .map_err(|e| db_error("check consent", e))?;
 
-        Ok(row.0 > 0)
+        Ok(count > 0)
     }
 
     /// Get all consent records.
     pub async fn get_all_consent(&self) -> Result<Vec<ConsentRecord>, VectorError> {
-        let rows = sqlx::query_as::<_, (String, DateTime<Utc>, Option<DateTime<Utc>>, String)>(
-            "SELECT provider, consented_at, revoked_at, acknowledgment FROM ai_consent ORDER BY consented_at DESC",
-        )
-        .fetch_all(&self.db.pool)
-        .await?;
+        let rows = ai_consent::Entity::find()
+            .order_by_desc(ai_consent::Column::ConsentedAt)
+            .all(&self.conn)
+            .await
+            .map_err(|e| db_error("read consent records", e))?;
 
         Ok(rows
             .into_iter()
-            .map(
-                |(provider, consented_at, revoked_at, acknowledgment)| ConsentRecord {
-                    provider,
-                    consented_at,
-                    revoked_at,
-                    acknowledgment,
-                },
-            )
+            .map(|m| ConsentRecord {
+                provider: m.provider,
+                // Stored naive, always UTC by construction (see the write path).
+                consented_at: m.consented_at.and_utc(),
+                revoked_at: m.revoked_at.map(|dt| dt.and_utc()),
+                acknowledgment: m.acknowledgment,
+            })
             .collect())
     }
 
@@ -150,74 +188,59 @@ impl ConsentManager {
             "Logging cloud AI call"
         );
 
-        sqlx::query(
-            "INSERT INTO ai_audit_log \
-             (timestamp, provider, model, endpoint, input_token_count, output_token_count, input_hash, latency_ms) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        )
-        .bind(entry.timestamp)
-        .bind(&entry.provider)
-        .bind(&entry.model)
-        .bind(&entry.endpoint)
-        .bind(entry.input_token_count)
-        .bind(entry.output_token_count)
-        .bind(&entry.input_hash)
-        .bind(entry.latency_ms)
-        .execute(&self.db.pool)
-        .await?;
+        ai_audit_log::Entity::insert(ai_audit_log::ActiveModel {
+            // pl-timestamp-write-tz: naive UTC bind into the no-zone column.
+            timestamp: Set(entry.timestamp.naive_utc()),
+            provider: Set(entry.provider.clone()),
+            model: Set(entry.model.clone()),
+            endpoint: Set(entry.endpoint.clone()),
+            // The counters are real 4-byte INTEGERs on PostgreSQL; saturate
+            // rather than wrap on the (not-in-practice) overflow.
+            input_token_count: Set(entry.input_token_count.map(narrow_to_i32)),
+            output_token_count: Set(entry.output_token_count.map(narrow_to_i32)),
+            input_hash: Set(entry.input_hash.clone()),
+            latency_ms: Set(entry.latency_ms.map(narrow_to_i32)),
+            ..Default::default()
+        })
+        .exec_without_returning(&self.conn)
+        .await
+        .map_err(|e| db_error("log cloud call", e))?;
 
         Ok(())
     }
 
     /// Get a paginated view of the audit log (newest first).
     pub async fn get_audit_log(&self, page: u32, per_page: u32) -> Result<AuditPage, VectorError> {
-        let offset = (page.saturating_sub(1)) as i64 * per_page as i64;
-        let limit = per_page as i64;
+        let offset = u64::from(page.saturating_sub(1)) * u64::from(per_page);
 
-        let (total,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM ai_audit_log")
-            .fetch_one(&self.db.pool)
-            .await?;
+        let total = ai_audit_log::Entity::find()
+            .count(&self.conn)
+            .await
+            .map_err(|e| db_error("count cloud audit log", e))? as i64;
 
-        let rows = sqlx::query_as::<
-            _,
-            (
-                i64,
-                DateTime<Utc>,
-                String,
-                String,
-                String,
-                Option<i64>,
-                Option<i64>,
-                Option<String>,
-                Option<i64>,
-            ),
-        >(
-            "SELECT id, timestamp, provider, model, endpoint, \
-                    input_token_count, output_token_count, input_hash, latency_ms \
-             FROM ai_audit_log ORDER BY timestamp DESC LIMIT ? OFFSET ?",
-        )
-        .bind(limit)
-        .bind(offset)
-        .fetch_all(&self.db.pool)
-        .await?;
+        let rows = ai_audit_log::Entity::find()
+            .order_by(ai_audit_log::Column::Timestamp, Order::Desc)
+            .limit(u64::from(per_page))
+            .offset(offset)
+            .all(&self.conn)
+            .await
+            .map_err(|e| db_error("read cloud audit log", e))?;
 
         let entries = rows
             .into_iter()
-            .map(
-                |(id, timestamp, provider, model, endpoint, input_tc, output_tc, hash, latency)| {
-                    AuditEntry {
-                        id: Some(id),
-                        timestamp,
-                        provider,
-                        model,
-                        endpoint,
-                        input_token_count: input_tc,
-                        output_token_count: output_tc,
-                        input_hash: hash,
-                        latency_ms: latency,
-                    }
-                },
-            )
+            .map(|m| AuditEntry {
+                // id and the counters are INTEGER/INT4 (i32) in both dialects;
+                // the public entry type keeps its i64 widths.
+                id: Some(i64::from(m.id)),
+                timestamp: m.timestamp.and_utc(),
+                provider: m.provider,
+                model: m.model,
+                endpoint: m.endpoint,
+                input_token_count: m.input_token_count.map(i64::from),
+                output_token_count: m.output_token_count.map(i64::from),
+                input_hash: m.input_hash,
+                latency_ms: m.latency_ms.map(i64::from),
+            })
             .collect();
 
         Ok(AuditPage {
@@ -229,6 +252,21 @@ impl ConsentManager {
     }
 }
 
+/// Saturating i64 -> i32 for the INTEGER counter columns.
+fn narrow_to_i32(value: i64) -> i32 {
+    value.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32
+}
+
+/// Map a SeaORM error onto this module's error type.
+///
+/// `VectorError::Db` exists, but this module keeps `StoreFailed` with an
+/// operation-name prefix: the prefix keeps the message diagnosable, and the
+/// variant is part of this module's observable error shape (callers map every
+/// variant to the same HTTP status, so switching would buy nothing).
+fn db_error(operation: &str, err: DbErr) -> VectorError {
+    VectorError::StoreFailed(format!("{operation}: {err}"))
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -237,40 +275,19 @@ impl ConsentManager {
 mod tests {
     use super::*;
 
+    /// In-memory SQLite carrying migration 002, which owns both tables this
+    /// module reads and writes. Replaying the real migration (rather than the
+    /// hand-written `CREATE TABLE`s these tests used to carry) is what makes the
+    /// timestamp columns genuinely `TIMESTAMP` here, matching production.
     async fn setup_db() -> Arc<Database> {
-        let db = Database::connect("sqlite::memory:")
-            .await
-            .expect("in-memory DB");
-
-        // Create tables directly for tests (migrations won't auto-run on :memory:).
-        sqlx::query(
-            "CREATE TABLE IF NOT EXISTS ai_consent (
-                provider TEXT PRIMARY KEY,
-                consented_at TEXT NOT NULL,
-                revoked_at TEXT,
-                acknowledgment TEXT NOT NULL
-            )",
+        let db = crate::db::test_sqlite_database().await;
+        let conn = db.sea_orm();
+        crate::db::apply_sqlite_migrations(
+            &conn,
+            &[include_str!("../../migrations/sqlite/002_ai_consent.sql")],
         )
-        .execute(&db.pool)
         .await
-        .unwrap();
-
-        sqlx::query(
-            "CREATE TABLE IF NOT EXISTS ai_audit_log (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                timestamp TEXT NOT NULL DEFAULT (datetime('now')),
-                provider TEXT NOT NULL,
-                model TEXT NOT NULL,
-                endpoint TEXT NOT NULL,
-                input_token_count INTEGER,
-                output_token_count INTEGER,
-                input_hash TEXT,
-                latency_ms INTEGER
-            )",
-        )
-        .execute(&db.pool)
-        .await
-        .unwrap();
+        .expect("migrate");
 
         Arc::new(db)
     }
@@ -329,6 +346,26 @@ mod tests {
         assert_eq!(all[0].acknowledgment, "Updated acknowledgment");
     }
 
+    /// Re-granting after a revoke clears `revoked_at` — the conflict branch
+    /// copies the excluded row's NULL rather than leaving the old revocation in
+    /// place, which would keep `has_consent` false forever.
+    #[tokio::test]
+    async fn test_regrant_clears_revocation() {
+        let db = setup_db().await;
+        let mgr = ConsentManager::new(db);
+
+        mgr.grant_consent("openai", "ack").await.unwrap();
+        mgr.revoke_consent("openai").await.unwrap();
+        assert!(mgr.get_all_consent().await.unwrap()[0].revoked_at.is_some());
+
+        mgr.grant_consent("openai", "ack again").await.unwrap();
+
+        let all = mgr.get_all_consent().await.unwrap();
+        assert_eq!(all.len(), 1);
+        assert!(all[0].revoked_at.is_none());
+        assert!(mgr.has_consent("openai").await.unwrap());
+    }
+
     #[tokio::test]
     async fn test_audit_logging() {
         let db = setup_db().await;
@@ -382,5 +419,65 @@ mod tests {
 
         let page3 = mgr.get_audit_log(3, 2).await.unwrap();
         assert_eq!(page3.entries.len(), 1);
+    }
+
+    /// pl-timestamp-write-tz, `ai_consent`: the value stored in the no-zone
+    /// column is exactly `.naive_utc()` of the written instant. A `DateTime<Utc>`
+    /// bind would land the session-local wall clock on PostgreSQL instead.
+    #[tokio::test]
+    async fn test_consent_timestamp_stored_as_naive_utc() {
+        let db = setup_db().await;
+        let mgr = ConsentManager::new(db.clone());
+
+        let before = Utc::now().naive_utc();
+        mgr.grant_consent("openai", "ack").await.unwrap();
+        let after = Utc::now().naive_utc();
+
+        let stored = ai_consent::Entity::find()
+            .one(&db.sea_orm())
+            .await
+            .unwrap()
+            .expect("row");
+        assert!(stored.consented_at >= before && stored.consented_at <= after);
+
+        // And the widened read is the same instant, tagged UTC.
+        let record = &mgr.get_all_consent().await.unwrap()[0];
+        assert_eq!(record.consented_at, stored.consented_at.and_utc());
+    }
+
+    /// pl-timestamp-write-tz, `ai_audit_log`: a fixed instant round-trips
+    /// unshifted (fixed rather than `Utc::now()` so the assertion is exact
+    /// equality, not a window).
+    #[tokio::test]
+    async fn test_audit_timestamp_round_trips_unshifted() {
+        let db = setup_db().await;
+        let mgr = ConsentManager::new(db.clone());
+
+        let written = DateTime::parse_from_rfc3339("2026-01-02T03:04:05Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        mgr.log_cloud_call(&AuditEntry {
+            id: None,
+            timestamp: written,
+            provider: "openai".to_string(),
+            model: "gpt-4o-mini".to_string(),
+            endpoint: "/v1/chat/completions".to_string(),
+            input_token_count: None,
+            output_token_count: None,
+            input_hash: None,
+            latency_ms: None,
+        })
+        .await
+        .unwrap();
+
+        let stored = ai_audit_log::Entity::find()
+            .one(&db.sea_orm())
+            .await
+            .unwrap()
+            .expect("row");
+        assert_eq!(stored.timestamp, written.naive_utc());
+
+        let page = mgr.get_audit_log(1, 10).await.unwrap();
+        assert_eq!(page.entries[0].timestamp, written);
     }
 }

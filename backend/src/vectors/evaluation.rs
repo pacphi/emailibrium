@@ -12,7 +12,12 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 use tracing::{debug, info};
 
+use sea_orm::sea_query::Expr;
+use sea_orm::ActiveValue::Set;
+use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
+
 use super::error::VectorError;
+use crate::db::entities::{ab_test_results, ab_tests};
 use crate::db::Database;
 
 // ---------------------------------------------------------------------------
@@ -126,11 +131,13 @@ pub struct ABTestSummary {
 // ---------------------------------------------------------------------------
 
 /// Manages A/B tests and evaluation metrics.
+///
+/// Persistence is single-code-path SeaORM (ADR-036).
 pub struct EvaluationEngine {
     /// Active and historical tests, keyed by test_id.
     tests: RwLock<HashMap<String, ABTest>>,
     /// Database for persistent storage of test results.
-    db: Arc<Database>,
+    conn: DatabaseConnection,
 }
 
 impl EvaluationEngine {
@@ -138,49 +145,8 @@ impl EvaluationEngine {
     pub fn new(db: Arc<Database>) -> Self {
         Self {
             tests: RwLock::new(HashMap::new()),
-            db,
+            conn: db.sea_orm(),
         }
-    }
-
-    /// Ensure the evaluation tables exist in the database.
-    pub async fn ensure_tables(&self) -> Result<(), VectorError> {
-        sqlx::query(
-            "CREATE TABLE IF NOT EXISTS ab_tests (
-                test_id TEXT PRIMARY KEY,
-                name TEXT NOT NULL,
-                variant_a_config TEXT NOT NULL,
-                variant_b_config TEXT NOT NULL,
-                traffic_split REAL NOT NULL DEFAULT 0.5,
-                status TEXT NOT NULL DEFAULT 'running',
-                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                concluded_at TIMESTAMP,
-                metrics_a TEXT NOT NULL DEFAULT '{}',
-                metrics_b TEXT NOT NULL DEFAULT '{}'
-            )",
-        )
-        .execute(&self.db.pool)
-        .await?;
-
-        sqlx::query(
-            "CREATE TABLE IF NOT EXISTS ab_test_results (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                test_id TEXT NOT NULL REFERENCES ab_tests(test_id),
-                variant TEXT NOT NULL CHECK(variant IN ('a', 'b')),
-                timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                mrr REAL,
-                precision_at_k REAL,
-                recall_at_k REAL,
-                ndcg REAL
-            )",
-        )
-        .execute(&self.db.pool)
-        .await?;
-
-        sqlx::query("CREATE INDEX IF NOT EXISTS idx_ab_results_test ON ab_test_results(test_id)")
-            .execute(&self.db.pool)
-            .await?;
-
-        Ok(())
     }
 
     /// Create a new A/B test.
@@ -211,18 +177,22 @@ impl EvaluationEngine {
         let va_json = serde_json::to_string(&variant_a)?;
         let vb_json = serde_json::to_string(&variant_b)?;
 
-        sqlx::query(
-            "INSERT INTO ab_tests (test_id, name, variant_a_config, variant_b_config, traffic_split, status, created_at)
-             VALUES (?, ?, ?, ?, ?, 'running', ?)",
-        )
-        .bind(&test_id)
-        .bind(&name)
-        .bind(&va_json)
-        .bind(&vb_json)
-        .bind(traffic_split)
-        .bind(test.created_at)
-        .execute(&self.db.pool)
-        .await?;
+        // `created_at` is a plain TIMESTAMP in both dialects — naive-UTC bind
+        // (the pre-port `DateTime<Utc>` bind was the write-side TZ bug class).
+        // `metrics_a`/`metrics_b` stay unset so the DDL '{}' defaults apply.
+        ab_tests::Entity::insert(ab_tests::ActiveModel {
+            test_id: Set(test_id.clone()),
+            name: Set(name.clone()),
+            variant_a_config: Set(va_json),
+            variant_b_config: Set(vb_json),
+            traffic_split: Set(traffic_split),
+            status: Set("running".to_owned()),
+            created_at: Set(test.created_at.naive_utc()),
+            ..Default::default()
+        })
+        .exec_without_returning(&self.conn)
+        .await
+        .map_err(VectorError::Db)?;
 
         // Store in memory.
         self.tests
@@ -282,20 +252,22 @@ impl EvaluationEngine {
             }
         }
 
-        // Persist observation.
-        sqlx::query(
-            "INSERT INTO ab_test_results (test_id, variant, timestamp, mrr, precision_at_k, recall_at_k, ndcg)
-             VALUES (?, ?, ?, ?, ?, ?, ?)",
-        )
-        .bind(test_id)
-        .bind(variant)
-        .bind(Utc::now())
-        .bind(mrr)
-        .bind(precision)
-        .bind(recall)
-        .bind(ndcg)
-        .execute(&self.db.pool)
-        .await?;
+        // Persist observation. The metric columns are REAL — 4-byte on
+        // PostgreSQL (ADR-035 width class) — so the samples narrow to `f32`;
+        // nothing reads them back (reporting uses the in-memory metrics).
+        ab_test_results::Entity::insert(ab_test_results::ActiveModel {
+            test_id: Set(test_id.to_owned()),
+            variant: Set(variant.to_owned()),
+            timestamp: Set(Utc::now().naive_utc()),
+            mrr: Set(Some(mrr as f32)),
+            precision_at_k: Set(Some(precision as f32)),
+            recall_at_k: Set(Some(recall as f32)),
+            ndcg: Set(Some(ndcg as f32)),
+            ..Default::default()
+        })
+        .exec_without_returning(&self.conn)
+        .await
+        .map_err(VectorError::Db)?;
 
         debug!(
             test_id = %test_id,
@@ -327,11 +299,16 @@ impl EvaluationEngine {
         test.concluded_at = Some(Utc::now());
 
         // Persist status change.
-        sqlx::query("UPDATE ab_tests SET status = 'concluded', concluded_at = ? WHERE test_id = ?")
-            .bind(test.concluded_at)
-            .bind(test_id)
-            .execute(&self.db.pool)
-            .await?;
+        ab_tests::Entity::update_many()
+            .col_expr(ab_tests::Column::Status, Expr::value("concluded"))
+            .col_expr(
+                ab_tests::Column::ConcludedAt,
+                Expr::value(test.concluded_at.map(|d| d.naive_utc())),
+            )
+            .filter(ab_tests::Column::TestId.eq(test_id))
+            .exec(&self.conn)
+            .await
+            .map_err(VectorError::Db)?;
 
         // Generate recommendation.
         let (recommendation, rationale) =
@@ -569,8 +546,13 @@ mod tests {
                 .await
                 .expect("in-memory db"),
         );
+        crate::db::apply_sqlite_migrations(
+            &db.sea_orm(),
+            &[include_str!("../../migrations/sqlite/009_ab_tests.sql")],
+        )
+        .await
+        .unwrap();
         let engine = EvaluationEngine::new(db);
-        engine.ensure_tables().await.unwrap();
 
         let test = engine
             .create_test(
@@ -602,8 +584,13 @@ mod tests {
                 .await
                 .expect("in-memory db"),
         );
+        crate::db::apply_sqlite_migrations(
+            &db.sea_orm(),
+            &[include_str!("../../migrations/sqlite/009_ab_tests.sql")],
+        )
+        .await
+        .unwrap();
         let engine = EvaluationEngine::new(db);
-        engine.ensure_tables().await.unwrap();
 
         let test = engine
             .create_test(
@@ -645,8 +632,13 @@ mod tests {
                 .await
                 .expect("in-memory db"),
         );
+        crate::db::apply_sqlite_migrations(
+            &db.sea_orm(),
+            &[include_str!("../../migrations/sqlite/009_ab_tests.sql")],
+        )
+        .await
+        .unwrap();
         let engine = EvaluationEngine::new(db);
-        engine.ensure_tables().await.unwrap();
 
         let test = engine
             .create_test(
@@ -687,8 +679,13 @@ mod tests {
                 .await
                 .expect("in-memory db"),
         );
+        crate::db::apply_sqlite_migrations(
+            &db.sea_orm(),
+            &[include_str!("../../migrations/sqlite/009_ab_tests.sql")],
+        )
+        .await
+        .unwrap();
         let engine = EvaluationEngine::new(db);
-        engine.ensure_tables().await.unwrap();
 
         let vc = || VariantConfig {
             name: "v".to_string(),

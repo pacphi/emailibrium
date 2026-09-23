@@ -33,6 +33,13 @@ export function ComposeEmail({ isOpen, onClose, accounts, prefill }: ComposeEmai
   const toInputRef = useRef<HTMLInputElement>(null);
 
   const sendMutation = useSendEmail();
+  const hasSelectedAccount = accounts.some((account) => account.id === fromAccountId);
+
+  // Initialize an asynchronous default once. Keep the chosen identity if an
+  // account disappears so a draft can never silently switch sending accounts.
+  useEffect(() => {
+    if (!fromAccountId && accounts[0]) setFromAccountId(accounts[0].id);
+  }, [accounts, fromAccountId]);
 
   // Autofocus the To field on open -- also keeps keyboard focus inside the modal, so the
   // shared useKeyboard shortcuts elsewhere (c/r/f) are correctly suppressed by its
@@ -57,7 +64,7 @@ export function ComposeEmail({ isOpen, onClose, accounts, prefill }: ComposeEmai
   }, []);
 
   function handleSend() {
-    if (!to.trim() || !fromAccountId) return;
+    if (!to.trim() || !hasSelectedAccount) return;
     sendMutation.mutate(
       {
         accountId: fromAccountId,
@@ -122,10 +129,17 @@ export function ComposeEmail({ isOpen, onClose, accounts, prefill }: ComposeEmai
               </label>
               <select
                 id="compose-from"
-                value={fromAccountId}
+                value={hasSelectedAccount ? fromAccountId : ''}
                 onChange={(e) => setFromAccountId(e.target.value)}
                 className="flex-1 rounded-md border border-gray-200 bg-transparent px-2 py-1.5 text-sm text-gray-900 outline-none focus:border-indigo-400 dark:border-gray-600 dark:text-white"
               >
+                {!hasSelectedAccount && (
+                  <option value="" disabled>
+                    {fromAccountId
+                      ? 'Selected account unavailable — choose a sender'
+                      : 'Choose a sender'}
+                  </option>
+                )}
                 {accounts.map((acc) => (
                   <option key={acc.id} value={acc.id}>
                     {acc.emailAddress} ({acc.provider})
@@ -257,6 +271,12 @@ export function ComposeEmail({ isOpen, onClose, accounts, prefill }: ComposeEmai
           </div>
         </div>
 
+        {sendMutation.isError && (
+          <p role="alert" className="px-4 pb-3 text-sm text-red-600 dark:text-red-400">
+            Failed to send email. Your message is still here; please try again.
+          </p>
+        )}
+
         {/* Footer */}
         <div className="flex items-center justify-between border-t border-gray-200 px-4 py-3 dark:border-gray-700">
           <button
@@ -278,7 +298,7 @@ export function ComposeEmail({ isOpen, onClose, accounts, prefill }: ComposeEmai
             <button
               type="button"
               onClick={handleSend}
-              disabled={sendMutation.isPending || !to.trim()}
+              disabled={sendMutation.isPending || !to.trim() || !hasSelectedAccount}
               className="flex items-center gap-1.5 rounded-md bg-indigo-600 px-4 py-1.5 text-sm font-medium text-white transition-colors hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
               aria-label="Send email"
             >

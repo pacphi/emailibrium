@@ -39,9 +39,9 @@ Emailibrium is a **vector-native email intelligence platform** organized as a fo
 |  SQLite (structured data, FTS5 search, email metadata, config)   |
 |  Vector Store (embeddings, HNSW index, clusters) --               |
 |    RuVector (primary, ADR-003) / Qdrant / SQLite fallback backends|
-|  PostgreSQL: docker-compose gates backend startup on it being     |
-|    healthy, but the backend never connects to it -- SQLite        |
-|    remains the only database actually in use today                |
+|  PostgreSQL: opt-in second backend (ADR-033). The connection      |
+|    URL's scheme selects it; the container is profile-gated, so    |
+|    a SQLite deployment never starts one. SQLite is the default.   |
 |  Redis: docker-compose gates backend startup on it too, but the   |
 |    application layer treats it as optional -- a missing Redis is  |
 |    a permanent cache miss, not an error. Used for pub/sub + cache.|

@@ -9,6 +9,10 @@ packages:
 # the `overrides` IOC pins below and Dependabot review.
 minimumReleaseAge: 0
 overrides:
+  # GHSA-c83g-rgw3-j3cx / GHSA-73wf-gq98-2v4g: build-tool cache exhaustion
+  # and unsafe custom statistics; GHSA-w5vr-8v7q-w6rv: invalid-input DoS.
+  "browserslist@<4.28.7": "4.28.7"
+  "baseline-browser-mapping@<2.11.0": "2.11.0"
   # brace-expansion < 1.1.16 (1.x line): exponential-time ReDoS via chained {} groups (GHSA-3jxr-9vmj-r5cp)
   # < 1.1.17: unbounded expansion length OOM crash (GHSA-mh99-v99m-4gvg)
   # < 1.1.18: DoS via unbounded intermediate arrays, bypassing the CVE-2026-14257

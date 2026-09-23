@@ -140,3 +140,5 @@ export type { AppConfig, AppCacheConfig, AppNetworkConfig, AppRulesConfig } from
 
 export { submitFeedback } from './learningApi.js';
 export type { FeedbackPayload, FeedbackAction } from './learningApi.js';
+
+export { getEngineSession, connectEngine, lockEngine } from './sessionApi.js';

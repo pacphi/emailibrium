@@ -15,8 +15,12 @@ const { mockCreate, mockGet, mockPost, capturedHooks } = vi.hoisted(() => {
   const mockPut = vi.fn().mockReturnValue(responseLike);
 
   type BeforeRequestState = { request: Request; options: unknown; retryCount: 0 };
-  const capturedHooks: { beforeRequest: Array<(state: BeforeRequestState) => void> } = {
+  const capturedHooks: {
+    beforeRequest: Array<(state: BeforeRequestState) => void>;
+    afterResponse: Array<(state: { response: Response }) => void>;
+  } = {
     beforeRequest: [],
+    afterResponse: [],
   };
 
   const mockInstance = {
@@ -31,8 +35,10 @@ const { mockCreate, mockGet, mockPost, capturedHooks } = vi.hoisted(() => {
     if (options?.hooks) {
       const hooks = options.hooks as {
         beforeRequest?: Array<(state: BeforeRequestState) => void>;
+        afterResponse?: Array<(state: { response: Response }) => void>;
       };
       capturedHooks.beforeRequest = hooks.beforeRequest ?? [];
+      capturedHooks.afterResponse = hooks.afterResponse ?? [];
     }
     return mockInstance;
   });
@@ -87,14 +93,14 @@ describe('client', () => {
       expect(mockCreate).toHaveBeenCalledWith(expect.objectContaining({ timeout: 30_000 }));
     });
 
-    it('registers a beforeRequest hook', async () => {
+    it('registers an authentication-response hook', async () => {
       vi.resetModules();
       await import('../client.js');
 
       const call = mockCreate.mock.calls[0]?.[0] as Record<string, unknown> | undefined;
-      const hooks = call?.hooks as { beforeRequest?: unknown[] } | undefined;
-      expect(hooks?.beforeRequest).toBeDefined();
-      expect(hooks!.beforeRequest!.length).toBeGreaterThan(0);
+      const hooks = call?.hooks as { afterResponse?: unknown[] } | undefined;
+      expect(hooks?.afterResponse).toBeDefined();
+      expect(hooks!.afterResponse!.length).toBeGreaterThan(0);
     });
 
     it('exports an api instance', async () => {
@@ -108,73 +114,36 @@ describe('client', () => {
   // Auth header injection
   // -----------------------------------------------------------------------
 
-  describe('auth header injection (beforeRequest hook)', () => {
-    it('sets Authorization header when token exists', async () => {
+  describe('session cookie authentication', () => {
+    it('includes same-origin session credentials', async () => {
       vi.resetModules();
       await import('../client.js');
-
-      mockLocalStorage.getItem.mockReturnValue('test-jwt-token');
-
-      const hook = capturedHooks.beforeRequest[0];
-      expect(hook).toBeDefined();
-
-      const fakeRequest = new Request('http://localhost/api/v1/test');
-      hook({ request: fakeRequest, options: {}, retryCount: 0 });
-
-      expect(fakeRequest.headers.get('Authorization')).toBe('Bearer test-jwt-token');
+      expect(mockCreate).toHaveBeenCalledWith(
+        expect.objectContaining({ credentials: 'same-origin' }),
+      );
     });
 
-    it('does not set Authorization header when no token', async () => {
+    it('never reads a persistent root access token for API requests', async () => {
       vi.resetModules();
       await import('../client.js');
-
-      mockLocalStorage.getItem.mockReturnValue(null);
-
-      const hook = capturedHooks.beforeRequest[0];
-      const fakeRequest = new Request('http://localhost/api/v1/test');
-      hook({ request: fakeRequest, options: {}, retryCount: 0 });
-
-      expect(fakeRequest.headers.get('Authorization')).toBeNull();
+      const request = new Request('http://localhost/api/v1/test');
+      for (const hook of capturedHooks.beforeRequest) hook({ request, options: {}, retryCount: 0 });
+      expect(mockLocalStorage.getItem).not.toHaveBeenCalled();
+      expect(request.headers.get('Authorization')).toBeNull();
     });
 
-    it('does not crash when localStorage is empty', async () => {
+    it('notifies the app when a private API request loses its session', async () => {
+      const dispatchEvent = vi.fn();
+      vi.stubGlobal('window', { dispatchEvent });
       vi.resetModules();
       await import('../client.js');
-
-      mockLocalStorage.getItem.mockReturnValue(null);
-
-      const hook = capturedHooks.beforeRequest[0];
-      const fakeRequest = new Request('http://localhost/api/v1/test');
-
-      expect(() => hook({ request: fakeRequest, options: {}, retryCount: 0 })).not.toThrow();
-    });
-
-    it('reads from the auth_token key in localStorage', async () => {
-      vi.resetModules();
-      await import('../client.js');
-
-      mockLocalStorage.getItem.mockReturnValue('abc');
-
-      const hook = capturedHooks.beforeRequest[0];
-      const fakeRequest = new Request('http://localhost/api/v1/test');
-      hook({ request: fakeRequest, options: {}, retryCount: 0 });
-
-      expect(mockLocalStorage.getItem).toHaveBeenCalledWith('auth_token');
-    });
-
-    it('formats token as Bearer scheme', async () => {
-      vi.resetModules();
-      await import('../client.js');
-
-      mockLocalStorage.getItem.mockReturnValue('xyz123');
-
-      const hook = capturedHooks.beforeRequest[0];
-      const fakeRequest = new Request('http://localhost/api/v1/test');
-      hook({ request: fakeRequest, options: {}, retryCount: 0 });
-
-      const header = fakeRequest.headers.get('Authorization');
-      expect(header).toMatch(/^Bearer /);
-      expect(header).toBe('Bearer xyz123');
+      capturedHooks.afterResponse[0]!({ response: new Response('{}', { status: 401 }) });
+      expect(dispatchEvent).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'emailibrium:unauthorized' }),
+      );
+      dispatchEvent.mockClear();
+      capturedHooks.afterResponse[0]!({ response: new Response('{}', { status: 200 }) });
+      expect(dispatchEvent).not.toHaveBeenCalled();
     });
   });
 

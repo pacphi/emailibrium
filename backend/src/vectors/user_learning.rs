@@ -9,6 +9,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
+use sea_orm::sea_query::OnConflict;
+use sea_orm::ActiveValue::Set;
+use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, QuerySelect};
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 use tracing::debug;
@@ -16,9 +19,18 @@ use tracing::debug;
 use super::error::VectorError;
 use super::learning::{FeedbackAction, LearningConfig};
 
-/// Row tuple for user learning model queries.
-type UserModelRow = (String, String, i64, DateTime<Utc>, DateTime<Utc>);
+/// Row tuple for user learning model queries (`feedback_count` is INTEGER —
+/// `i32`; the TIMESTAMP columns decode as `NaiveDateTime` — PostgreSQL
+/// rejects a `DateTime<Utc>` decode for the no-zone type).
+type UserModelRow = (
+    String,
+    String,
+    i32,
+    chrono::NaiveDateTime,
+    chrono::NaiveDateTime,
+);
 use super::types::EmailCategory;
+use crate::db::entities::user_learning_models;
 use crate::db::Database;
 
 // ---------------------------------------------------------------------------
@@ -121,11 +133,13 @@ impl UserLearningModel {
 // ---------------------------------------------------------------------------
 
 /// Manages per-user learning models with database persistence.
+///
+/// Persistence is single-code-path SeaORM (ADR-036).
 pub struct UserLearningStore {
     /// In-memory cache of user models.
     models: RwLock<HashMap<String, UserLearningModel>>,
     /// Database for persistence.
-    db: Arc<Database>,
+    conn: DatabaseConnection,
     /// Shared learning configuration.
     config: LearningConfig,
 }
@@ -135,34 +149,9 @@ impl UserLearningStore {
     pub fn new(db: Arc<Database>, config: LearningConfig) -> Self {
         Self {
             models: RwLock::new(HashMap::new()),
-            db,
+            conn: db.sea_orm(),
             config,
         }
-    }
-
-    /// Ensure the per-user learning table exists.
-    pub async fn ensure_table(&self) -> Result<(), VectorError> {
-        sqlx::query(
-            "CREATE TABLE IF NOT EXISTS user_learning_models (
-                user_id TEXT NOT NULL,
-                category TEXT NOT NULL,
-                offset_json TEXT NOT NULL,
-                feedback_count INTEGER NOT NULL DEFAULT 0,
-                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                PRIMARY KEY (user_id, category)
-            )",
-        )
-        .execute(&self.db.pool)
-        .await?;
-
-        sqlx::query(
-            "CREATE INDEX IF NOT EXISTS idx_user_learning_user ON user_learning_models(user_id)",
-        )
-        .execute(&self.db.pool)
-        .await?;
-
-        Ok(())
     }
 
     /// Get or create a user's learning model.
@@ -257,13 +246,21 @@ impl UserLearningStore {
 
     /// Load a user model from the database.
     async fn load_from_db(&self, user_id: &str) -> Result<UserLearningModel, VectorError> {
-        let rows: Vec<UserModelRow> = sqlx::query_as(
-            "SELECT category, offset_json, feedback_count, created_at, updated_at
-             FROM user_learning_models WHERE user_id = ?",
-        )
-        .bind(user_id)
-        .fetch_all(&self.db.pool)
-        .await?;
+        // `created_at`/`updated_at` decode as `DateTime<Utc>` leniently on
+        // the SQLite path (RFC3339 rows keep their instant, naive rows read
+        // as UTC).
+        let rows: Vec<UserModelRow> = user_learning_models::Entity::find()
+            .select_only()
+            .column(user_learning_models::Column::Category)
+            .column(user_learning_models::Column::OffsetJson)
+            .column(user_learning_models::Column::FeedbackCount)
+            .column(user_learning_models::Column::CreatedAt)
+            .column(user_learning_models::Column::UpdatedAt)
+            .filter(user_learning_models::Column::UserId.eq(user_id))
+            .into_tuple()
+            .all(&self.conn)
+            .await
+            .map_err(VectorError::Db)?;
 
         if rows.is_empty() {
             return Err(VectorError::NotFound(format!(
@@ -274,6 +271,8 @@ impl UserLearningStore {
         let mut model = UserLearningModel::new(user_id.to_string());
 
         for (cat_str, offset_json, feedback_count, created_at, updated_at) in rows {
+            let created_at = created_at.and_utc();
+            let updated_at = updated_at.and_utc();
             let category: EmailCategory = serde_json::from_str(&format!("\"{cat_str}\""))
                 .unwrap_or(EmailCategory::Uncategorized);
             let offset: Vec<f32> = serde_json::from_str(&offset_json).unwrap_or_default();
@@ -321,31 +320,46 @@ impl UserLearningStore {
         // Remove surrounding quotes from the category string.
         let cat_str = cat_str.trim_matches('"');
 
-        sqlx::query(
-            "INSERT INTO user_learning_models (user_id, category, offset_json, feedback_count, updated_at)
-             VALUES (?, ?, ?, ?, ?)
-             ON CONFLICT(user_id, category) DO UPDATE SET
-                offset_json = excluded.offset_json,
-                feedback_count = excluded.feedback_count,
-                updated_at = excluded.updated_at",
+        // `created_at` stays unset so the DDL default applies (as pre-port);
+        // `updated_at` is a plain TIMESTAMP — naive-UTC bind.
+        user_learning_models::Entity::insert(user_learning_models::ActiveModel {
+            user_id: Set(user_id.to_owned()),
+            category: Set(cat_str.to_owned()),
+            offset_json: Set(offset_json),
+            feedback_count: Set(offset.feedback_count as i32),
+            updated_at: Set(offset.updated_at.naive_utc()),
+            ..Default::default()
+        })
+        .on_conflict(
+            OnConflict::columns([
+                user_learning_models::Column::UserId,
+                user_learning_models::Column::Category,
+            ])
+            .update_columns([
+                user_learning_models::Column::OffsetJson,
+                user_learning_models::Column::FeedbackCount,
+                user_learning_models::Column::UpdatedAt,
+            ])
+            .to_owned(),
         )
-        .bind(user_id)
-        .bind(cat_str)
-        .bind(&offset_json)
-        .bind(offset.feedback_count as i64)
-        .bind(offset.updated_at)
-        .execute(&self.db.pool)
-        .await?;
+        .exec_without_returning(&self.conn)
+        .await
+        .map_err(VectorError::Db)?;
 
         Ok(())
     }
 
     /// List all user IDs with learning models.
     pub async fn list_users(&self) -> Result<Vec<String>, VectorError> {
-        let rows: Vec<(String,)> =
-            sqlx::query_as("SELECT DISTINCT user_id FROM user_learning_models ORDER BY user_id")
-                .fetch_all(&self.db.pool)
-                .await?;
+        let rows: Vec<(String,)> = user_learning_models::Entity::find()
+            .select_only()
+            .column(user_learning_models::Column::UserId)
+            .distinct()
+            .order_by_asc(user_learning_models::Column::UserId)
+            .into_tuple()
+            .all(&self.conn)
+            .await
+            .map_err(VectorError::Db)?;
 
         Ok(rows.into_iter().map(|(uid,)| uid).collect())
     }
@@ -428,8 +442,15 @@ mod tests {
                 .expect("in-memory DB"),
         );
         let config = LearningConfig::default();
+        crate::db::apply_sqlite_migrations(
+            &db.sea_orm(),
+            &[include_str!(
+                "../../migrations/sqlite/007_per_user_learning.sql"
+            )],
+        )
+        .await
+        .unwrap();
         let store = UserLearningStore::new(db, config);
-        store.ensure_table().await.unwrap();
 
         let model = store.get_or_create("user-1").await;
         assert_eq!(model.user_id, "user-1");
@@ -451,8 +472,15 @@ mod tests {
             min_feedback_events: 0,
             ..LearningConfig::default()
         };
+        crate::db::apply_sqlite_migrations(
+            &db.sea_orm(),
+            &[include_str!(
+                "../../migrations/sqlite/007_per_user_learning.sql"
+            )],
+        )
+        .await
+        .unwrap();
         let store = UserLearningStore::new(db, config);
-        store.ensure_table().await.unwrap();
 
         let _ = store.get_or_create("user-1").await;
 
@@ -479,6 +507,130 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_two_users_same_category_stay_isolated() {
+        // Composite `(user_id, category)` conflict target: two users saving
+        // offsets for the SAME category must land in two rows — a
+        // mis-specified conflict target would collapse them into one.
+        let db = Arc::new(
+            Database::connect("sqlite::memory:")
+                .await
+                .expect("in-memory DB"),
+        );
+        let config = LearningConfig {
+            min_feedback_events: 0,
+            ..LearningConfig::default()
+        };
+        crate::db::apply_sqlite_migrations(
+            &db.sea_orm(),
+            &[include_str!(
+                "../../migrations/sqlite/007_per_user_learning.sql"
+            )],
+        )
+        .await
+        .unwrap();
+        let store = UserLearningStore::new(db.clone(), config.clone());
+
+        for user in ["user-1", "user-2"] {
+            store
+                .on_feedback(
+                    user,
+                    EmailCategory::Work,
+                    &[0.5, 0.5, 0.0],
+                    &[1.0, 0.0, 0.0],
+                    &FeedbackAction::Star,
+                )
+                .await
+                .unwrap();
+        }
+
+        assert_eq!(
+            store.list_users().await.unwrap(),
+            vec!["user-1".to_string(), "user-2".to_string()],
+            "both users must have their own row"
+        );
+
+        // Reload each from the database through a fresh (cache-empty) store:
+        // each user's model carries exactly their own feedback.
+        let fresh = UserLearningStore::new(db, config);
+        let one = fresh.get_or_create("user-1").await;
+        let two = fresh.get_or_create("user-2").await;
+        assert_eq!(
+            one.total_feedback, 1,
+            "user-1 keeps exactly their own feedback"
+        );
+        assert_eq!(
+            two.total_feedback, 1,
+            "user-2 keeps exactly their own feedback"
+        );
+        assert!(one.offsets.contains_key(&EmailCategory::Work));
+        assert!(two.offsets.contains_key(&EmailCategory::Work));
+    }
+
+    /// Upsert `UpdatedAt` pin: a second feedback for the same (user,
+    /// category) must advance the persisted `updated_at` — dropping it from
+    /// the conflict's update-column set freezes the row at first insert.
+    #[tokio::test]
+    async fn test_upsert_advances_updated_at() {
+        let db = Arc::new(
+            Database::connect("sqlite::memory:")
+                .await
+                .expect("in-memory DB"),
+        );
+        let config = LearningConfig {
+            min_feedback_events: 0,
+            ..LearningConfig::default()
+        };
+        crate::db::apply_sqlite_migrations(
+            &db.sea_orm(),
+            &[include_str!(
+                "../../migrations/sqlite/007_per_user_learning.sql"
+            )],
+        )
+        .await
+        .unwrap();
+        let store = UserLearningStore::new(db.clone(), config.clone());
+
+        store
+            .on_feedback(
+                "user-1",
+                EmailCategory::Work,
+                &[0.5, 0.5, 0.0],
+                &[1.0, 0.0, 0.0],
+                &FeedbackAction::Star,
+            )
+            .await
+            .unwrap();
+        let first = UserLearningStore::new(db.clone(), config.clone())
+            .get_or_create("user-1")
+            .await
+            .offsets[&EmailCategory::Work]
+            .updated_at;
+
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        store
+            .on_feedback(
+                "user-1",
+                EmailCategory::Work,
+                &[0.5, 0.5, 0.0],
+                &[1.0, 0.0, 0.0],
+                &FeedbackAction::Star,
+            )
+            .await
+            .unwrap();
+        let second = UserLearningStore::new(db, config)
+            .get_or_create("user-1")
+            .await
+            .offsets[&EmailCategory::Work]
+            .updated_at;
+
+        assert!(
+            second > first,
+            "the persisted updated_at must advance across the upsert's conflict path \
+             (first {first}, second {second})"
+        );
+    }
+
+    #[tokio::test]
     async fn test_store_cold_user_fallback() {
         let db = Arc::new(
             Database::connect("sqlite::memory:")
@@ -489,8 +641,15 @@ mod tests {
             min_feedback_events: 100, // high threshold
             ..LearningConfig::default()
         };
+        crate::db::apply_sqlite_migrations(
+            &db.sea_orm(),
+            &[include_str!(
+                "../../migrations/sqlite/007_per_user_learning.sql"
+            )],
+        )
+        .await
+        .unwrap();
         let store = UserLearningStore::new(db, config);
-        store.ensure_table().await.unwrap();
 
         let shared = vec![1.0, 0.0, 0.0];
         let effective = store
@@ -511,8 +670,15 @@ mod tests {
             min_feedback_events: 2,
             ..LearningConfig::default()
         };
+        crate::db::apply_sqlite_migrations(
+            &db.sea_orm(),
+            &[include_str!(
+                "../../migrations/sqlite/007_per_user_learning.sql"
+            )],
+        )
+        .await
+        .unwrap();
         let store = UserLearningStore::new(db, config);
-        store.ensure_table().await.unwrap();
 
         assert!(!store.is_user_warm("user-1").await);
 

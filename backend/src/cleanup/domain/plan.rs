@@ -657,6 +657,7 @@ mod tests {
             account_id: "acct-b".into(),
             predicate_kind: PredicateKind::Rule,
             predicate_id: "r1".into(),
+            constraint_fingerprint: None,
             action: PlanAction::AddLabel {
                 kind: MoveKind::Label,
             },

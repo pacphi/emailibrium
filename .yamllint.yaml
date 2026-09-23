@@ -39,3 +39,13 @@ rules:
   indentation:
     spaces: 2
     indent-sequences: consistent
+    # Same tool-contradiction class as `braces` above, sequence-item flow
+    # mappings this time: when a `- { … }` parameter entry exceeds the print
+    # width, prettier breaks it with the mapping's content indented 4 past the
+    # dash (`--check` passes on exactly that), which this rule reads as
+    # over-indentation. No yamllint knob accepts prettier's multiline-flow
+    # style, so ignore the one prettier-formatted file that uses it — a
+    # PER-RULE ignore (see line-length's rationale above), not a file-wide one,
+    # so key-duplicates etc. still cover the API spec.
+    ignore: |
+      docs/api/openapi.yaml

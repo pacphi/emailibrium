@@ -12,8 +12,11 @@ use axum::{
     routing::get,
     Json, Router,
 };
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect};
 use serde::{Deserialize, Serialize};
-use sqlx::Row;
+
+use crate::db::entities::attachments;
+use crate::db::entities::emails;
 use tokio_util::io::ReaderStream;
 use tracing::{debug, warn};
 
@@ -89,12 +92,14 @@ async fn get_email_message_id(
     state: &AppState,
     email_id: &str,
 ) -> Result<String, (StatusCode, String)> {
-    let row: Option<(Option<String>,)> =
-        sqlx::query_as("SELECT message_id FROM emails WHERE id = ?1")
-            .bind(email_id)
-            .fetch_optional(&state.db.pool)
-            .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let row: Option<(Option<String>,)> = emails::Entity::find()
+        .select_only()
+        .column(emails::Column::MessageId)
+        .filter(emails::Column::Id.eq(email_id))
+        .into_tuple()
+        .one(&state.orm)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     match row {
         Some((Some(mid),)) if !mid.is_empty() => Ok(mid),
         Some(_) => Ok(email_id.to_string()),
@@ -143,10 +148,17 @@ async fn lazy_fetch_attachment(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("write: {e}")))?;
 
     // Update DB.
-    sqlx::query("UPDATE attachments SET fetch_status = 'fetched', storage_path = ?1 WHERE id = ?2")
-        .bind(&path)
-        .bind(att_id)
-        .execute(&state.db.pool)
+    attachments::Entity::update_many()
+        .col_expr(
+            attachments::Column::FetchStatus,
+            sea_orm::sea_query::Expr::value("fetched"),
+        )
+        .col_expr(
+            attachments::Column::StoragePath,
+            sea_orm::sea_query::Expr::value(path.as_str()),
+        )
+        .filter(attachments::Column::Id.eq(att_id))
+        .exec(&state.orm)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -230,30 +242,29 @@ async fn list_attachments(
 ) -> Result<Json<Vec<AttachmentResponse>>, (StatusCode, String)> {
     let include_inline = params.include_inline.unwrap_or(false);
 
-    let sql = if include_inline {
-        "SELECT id, email_id, filename, content_type, size_bytes, is_inline, fetch_status \
-         FROM attachments WHERE email_id = ?1 ORDER BY filename"
-    } else {
-        "SELECT id, email_id, filename, content_type, size_bytes, is_inline, fetch_status \
-         FROM attachments WHERE email_id = ?1 AND is_inline = FALSE ORDER BY filename"
-    };
-
-    let rows = sqlx::query(sql)
-        .bind(&email_id)
-        .fetch_all(&state.db.pool)
+    let mut query =
+        attachments::Entity::find().filter(attachments::Column::EmailId.eq(email_id.as_str()));
+    if !include_inline {
+        query = query.filter(attachments::Column::IsInline.eq(false));
+    }
+    let rows = query
+        .order_by_asc(attachments::Column::Filename)
+        .all(&state.orm)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     let attachments = rows
-        .iter()
+        .into_iter()
         .map(|r| AttachmentResponse {
-            id: r.get("id"),
-            email_id: r.get("email_id"),
-            filename: r.get("filename"),
-            content_type: r.get("content_type"),
-            size_bytes: r.get("size_bytes"),
-            is_inline: r.get::<bool, _>("is_inline"),
-            fetch_status: r.get("fetch_status"),
+            id: r.id,
+            email_id: r.email_id,
+            filename: r.filename,
+            content_type: r.content_type,
+            // Entity column is i32 (a real 4-byte INTEGER on PostgreSQL —
+            // the old direct i64 decode was the ADR-035 width class).
+            size_bytes: i64::from(r.size_bytes),
+            is_inline: r.is_inline,
+            fetch_status: r.fetch_status,
         })
         .collect();
 
@@ -267,24 +278,20 @@ async fn download_attachment(
 ) -> Result<Response, (StatusCode, String)> {
     debug!(email_id = %email_id, att_id = %att_id, "Downloading attachment");
 
-    let row = sqlx::query(
-        "SELECT id, email_id, account_id, filename, content_type, \
-         storage_path, fetch_status, provider_attachment_id, is_inline \
-         FROM attachments WHERE id = ?1 AND email_id = ?2",
-    )
-    .bind(&att_id)
-    .bind(&email_id)
-    .fetch_optional(&state.db.pool)
-    .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-    .ok_or_else(|| (StatusCode::NOT_FOUND, "Attachment not found".to_string()))?;
+    let row = attachments::Entity::find()
+        .filter(attachments::Column::Id.eq(att_id.as_str()))
+        .filter(attachments::Column::EmailId.eq(email_id.as_str()))
+        .one(&state.orm)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "Attachment not found".to_string()))?;
 
-    let filename: String = row.get("filename");
-    let content_type: String = row.get("content_type");
-    let fetch_status: String = row.get("fetch_status");
-    let storage_path: Option<String> = row.get("storage_path");
-    let account_id: String = row.get("account_id");
-    let provider_att_id: Option<String> = row.get("provider_attachment_id");
+    let filename: String = row.filename;
+    let content_type: String = row.content_type;
+    let fetch_status: String = row.fetch_status;
+    let storage_path: Option<String> = row.storage_path;
+    let account_id: String = row.account_id;
+    let provider_att_id: Option<String> = row.provider_attachment_id;
 
     // Determine on-disk path, lazy-fetching if necessary.
     let path = match (fetch_status.as_str(), storage_path) {
@@ -336,15 +343,13 @@ async fn download_all_zip(
     debug!(email_id = %email_id, "Downloading all attachments as ZIP");
 
     // Load all non-inline attachments.
-    let rows = sqlx::query(
-        "SELECT id, email_id, account_id, filename, content_type, \
-         storage_path, fetch_status, provider_attachment_id \
-         FROM attachments WHERE email_id = ?1 AND is_inline = FALSE ORDER BY filename",
-    )
-    .bind(&email_id)
-    .fetch_all(&state.db.pool)
-    .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let rows = attachments::Entity::find()
+        .filter(attachments::Column::EmailId.eq(email_id.as_str()))
+        .filter(attachments::Column::IsInline.eq(false))
+        .order_by_asc(attachments::Column::Filename)
+        .all(&state.orm)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     if rows.is_empty() {
         return Err((StatusCode::NOT_FOUND, "No attachments found".to_string()));
@@ -353,12 +358,12 @@ async fn download_all_zip(
     // Ensure all attachments are fetched; collect (path, filename) pairs.
     let mut entries: Vec<(String, String)> = Vec::with_capacity(rows.len());
     for row in &rows {
-        let att_id: String = row.get("id");
-        let filename: String = row.get("filename");
-        let account_id: String = row.get("account_id");
-        let fetch_status: String = row.get("fetch_status");
-        let storage_path: Option<String> = row.get("storage_path");
-        let provider_att_id: Option<String> = row.get("provider_attachment_id");
+        let att_id: String = row.id.clone();
+        let filename: String = row.filename.clone();
+        let account_id: String = row.account_id.clone();
+        let fetch_status: String = row.fetch_status.clone();
+        let storage_path: Option<String> = row.storage_path.clone();
+        let provider_att_id: Option<String> = row.provider_attachment_id.clone();
 
         let path = match (fetch_status.as_str(), storage_path) {
             ("fetched", Some(ref p)) if tokio::fs::try_exists(p).await.unwrap_or(false) => {

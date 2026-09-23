@@ -125,13 +125,17 @@ pub struct RagContext {
 /// block for prompt injection.
 pub struct RagPipeline {
     search: Arc<HybridSearch>,
-    db: Arc<Database>,
+    conn: sea_orm::DatabaseConnection,
     config: RagConfig,
 }
 
 impl RagPipeline {
     pub fn new(search: Arc<HybridSearch>, db: Arc<Database>, config: RagConfig) -> Self {
-        Self { search, db, config }
+        Self {
+            search,
+            conn: db.sea_orm(),
+            config,
+        }
     }
 
     /// Retrieve email context relevant to the user's query.
@@ -326,43 +330,60 @@ impl RagPipeline {
         })
     }
 
-    /// Fetch email metadata and content from SQLite.
+    /// Fetch email metadata and content from the database.
     async fn fetch_emails(&self, ids: &[String]) -> Result<Vec<EmailSnippet>, VectorError> {
+        use crate::db::entities::emails;
+        use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect};
+
         if ids.is_empty() {
             return Ok(Vec::new());
         }
 
-        // Build a parameterized IN clause
-        let placeholders: Vec<String> = (1..=ids.len()).map(|i| format!("?{i}")).collect();
-        let sql = format!(
-            "SELECT id, subject, from_name, from_addr, received_at, body_text, category \
-             FROM emails WHERE id IN ({}) ORDER BY received_at DESC",
-            placeholders.join(", ")
+        // `received_at` renders into human-readable context text: RFC3339
+        // output is byte-identical for legacy RFC3339 rows and normalizes
+        // naive DDL-default rows (same policy as `tools::readonly::emails`).
+        // `category` decodes as non-optional `String` like the pre-port row —
+        // a NULL category errors, preserving the old decode behavior.
+        type Row = (
+            String,
+            String,
+            Option<String>,
+            String,
+            chrono::NaiveDateTime,
+            Option<String>,
+            String,
         );
-
-        // Dynamic SQL: only the `?N` placeholder list is built at runtime; all
-        // values are bound below. See `crate::db::audited_sql`.
-        let mut query = sqlx::query_as::<_, EmailRow>(crate::db::audited_sql(&sql));
-        for id in ids {
-            query = query.bind(id);
-        }
-
-        let rows: Vec<EmailRow> = query
-            .fetch_all(&self.db.pool)
+        let rows: Vec<Row> = emails::Entity::find()
+            .select_only()
+            .column(emails::Column::Id)
+            .column(emails::Column::Subject)
+            .column(emails::Column::FromName)
+            .column(emails::Column::FromAddr)
+            .column(emails::Column::ReceivedAt)
+            .column(emails::Column::BodyText)
+            .column(emails::Column::Category)
+            .filter(emails::Column::Id.is_in(ids.iter().map(String::as_str)))
+            .order_by_desc(emails::Column::ReceivedAt)
+            .into_tuple()
+            .all(&self.conn)
             .await
             .map_err(|e| VectorError::EmbeddingFailed(format!("RAG email fetch failed: {e}")))?;
 
         Ok(rows
             .into_iter()
-            .map(|r| EmailSnippet {
-                id: r.id,
-                subject: r.subject,
-                from_name: r.from_name,
-                from_addr: r.from_addr,
-                received_at: r.received_at,
-                body_text: r.body_text,
-                category: r.category,
-            })
+            .map(
+                |(id, subject, from_name, from_addr, received_at, body_text, category)| {
+                    EmailSnippet {
+                        id,
+                        subject,
+                        from_name,
+                        from_addr,
+                        received_at: received_at.and_utc().to_rfc3339(),
+                        body_text,
+                        category,
+                    }
+                },
+            )
             .collect())
     }
 
@@ -482,18 +503,6 @@ struct EmailSnippet {
     category: String,
 }
 
-/// Row type for sqlx query.
-#[derive(Debug, sqlx::FromRow)]
-struct EmailRow {
-    id: String,
-    subject: String,
-    from_name: Option<String>,
-    from_addr: String,
-    received_at: String,
-    body_text: Option<String>,
-    category: String,
-}
-
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -526,12 +535,16 @@ mod tests {
     }
 
     fn make_pipeline_stub(config: RagConfig) -> RagPipeline {
-        // We construct a RagPipeline with dummy Arc pointers that we never call.
-        // Only format_email / format_email_truncated are exercised — they don't
-        // touch search or db.
+        // We construct a RagPipeline with a dummy Arc pointer that we never
+        // call. Only format_email / format_email_truncated are exercised —
+        // they don't touch search or the connection (a Disconnected
+        // `DatabaseConnection` stands in cleanly).
         let search = unsafe { Arc::from_raw(std::ptr::null::<HybridSearch>()) };
-        let db = unsafe { Arc::from_raw(std::ptr::null::<Database>()) };
-        RagPipeline { search, db, config }
+        RagPipeline {
+            search,
+            conn: sea_orm::DatabaseConnection::default(),
+            config,
+        }
     }
 
     // -- RagConfig defaults -------------------------------------------------
@@ -576,7 +589,6 @@ mod tests {
 
         // Cleanup: prevent drop of null pointers
         std::mem::forget(pipeline.search);
-        std::mem::forget(pipeline.db);
     }
 
     #[test]
@@ -589,7 +601,6 @@ mod tests {
         assert!(!formatted.contains("Body:"));
 
         std::mem::forget(pipeline.search);
-        std::mem::forget(pipeline.db);
     }
 
     #[test]
@@ -612,7 +623,6 @@ mod tests {
         assert!(!formatted.contains("<bob@example.com>"));
 
         std::mem::forget(pipeline.search);
-        std::mem::forget(pipeline.db);
     }
 
     #[test]
@@ -636,7 +646,6 @@ mod tests {
         assert!(body_line.len() < 40, "Body line too long: {}", body_line);
 
         std::mem::forget(pipeline.search);
-        std::mem::forget(pipeline.db);
     }
 
     // -- format_email_truncated ---------------------------------------------
@@ -652,7 +661,6 @@ mod tests {
         assert!(truncated.contains("Subject: Budget Test"));
 
         std::mem::forget(pipeline.search);
-        std::mem::forget(pipeline.db);
     }
 
     #[test]
@@ -666,7 +674,6 @@ mod tests {
         assert!(truncated.len() <= 30);
 
         std::mem::forget(pipeline.search);
-        std::mem::forget(pipeline.db);
     }
 
     #[test]
@@ -680,7 +687,6 @@ mod tests {
         assert!(truncated.contains("Subject: No Body"));
 
         std::mem::forget(pipeline.search);
-        std::mem::forget(pipeline.db);
     }
 
     // -- Token budget logic (unit-level) ------------------------------------

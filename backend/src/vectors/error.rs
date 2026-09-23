@@ -31,8 +31,10 @@ pub enum VectorError {
     #[error("Configuration error: {0}")]
     ConfigError(String),
 
+    /// SeaORM-path database error (ADR-036) — the port is complete, so this
+    /// is THE database variant (the pre-port `sqlx::Error` wrapper is gone).
     #[error("Database error: {0}")]
-    DatabaseError(#[from] sqlx::Error),
+    Db(#[from] sea_orm::DbErr),
 
     #[error("Serialization error: {0}")]
     SerializationError(#[from] serde_json::Error),
