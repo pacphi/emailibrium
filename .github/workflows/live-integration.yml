@@ -1,0 +1,71 @@
+name: Live Provider Integration
+
+on:
+  workflow_dispatch:
+    inputs:
+      provider:
+        description: Dedicated test-account provider
+        type: choice
+        required: true
+        default: providers
+        options:
+          - providers
+          - gmail
+          - outlook
+
+permissions:
+  contents: read
+
+concurrency:
+  group: live-provider-integration
+  cancel-in-progress: false
+
+jobs:
+  provider-contracts:
+    name: Read-only provider contracts
+    # No PR code or arbitrary branch receives test-account credentials.
+    if: github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main'
+    environment: live-integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: true
+          persist-credentials: false
+      - uses: ./.github/actions/setup-rust
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: backend
+      - name: Validate selected test configuration
+        env:
+          TEST_PROVIDER: ${{ inputs.provider }}
+          EMAILIBRIUM_TEST_GOOGLE_CLIENT_ID: ${{ (inputs.provider == 'gmail' || inputs.provider == 'providers') && secrets.EMAILIBRIUM_TEST_GOOGLE_CLIENT_ID || '' }}
+          EMAILIBRIUM_TEST_GOOGLE_CLIENT_SECRET: ${{ (inputs.provider == 'gmail' || inputs.provider == 'providers') && secrets.EMAILIBRIUM_TEST_GOOGLE_CLIENT_SECRET || '' }}
+          EMAILIBRIUM_TEST_GOOGLE_REFRESH_TOKEN: ${{ (inputs.provider == 'gmail' || inputs.provider == 'providers') && secrets.EMAILIBRIUM_TEST_GOOGLE_REFRESH_TOKEN || '' }}
+          EMAILIBRIUM_TEST_GOOGLE_EXPECTED_EMAIL: ${{ (inputs.provider == 'gmail' || inputs.provider == 'providers') && secrets.EMAILIBRIUM_TEST_GOOGLE_EXPECTED_EMAIL || '' }}
+          EMAILIBRIUM_TEST_MICROSOFT_CLIENT_ID: ${{ (inputs.provider == 'outlook' || inputs.provider == 'providers') && secrets.EMAILIBRIUM_TEST_MICROSOFT_CLIENT_ID || '' }}
+          EMAILIBRIUM_TEST_MICROSOFT_CLIENT_SECRET: ${{ (inputs.provider == 'outlook' || inputs.provider == 'providers') && secrets.EMAILIBRIUM_TEST_MICROSOFT_CLIENT_SECRET || '' }}
+          EMAILIBRIUM_TEST_MICROSOFT_REFRESH_TOKEN: ${{ (inputs.provider == 'outlook' || inputs.provider == 'providers') && secrets.EMAILIBRIUM_TEST_MICROSOFT_REFRESH_TOKEN || '' }}
+          EMAILIBRIUM_TEST_MICROSOFT_EXPECTED_EMAIL: ${{ (inputs.provider == 'outlook' || inputs.provider == 'providers') && secrets.EMAILIBRIUM_TEST_MICROSOFT_EXPECTED_EMAIL || '' }}
+          EMAILIBRIUM_TEST_MICROSOFT_TENANT_ID: ${{ vars.EMAILIBRIUM_TEST_MICROSOFT_TENANT_ID || 'common' }}
+        run: node scripts/test-integration.mjs "$TEST_PROVIDER" --check-config
+      - name: Compile provider tests without account credentials
+        working-directory: backend
+        run: cargo test --locked --test live_provider_credentials --no-run
+      - name: Verify dedicated account credentials and label reads
+        env:
+          TEST_PROVIDER: ${{ inputs.provider }}
+          EMAILIBRIUM_TEST_GOOGLE_CLIENT_ID: ${{ (inputs.provider == 'gmail' || inputs.provider == 'providers') && secrets.EMAILIBRIUM_TEST_GOOGLE_CLIENT_ID || '' }}
+          EMAILIBRIUM_TEST_GOOGLE_CLIENT_SECRET: ${{ (inputs.provider == 'gmail' || inputs.provider == 'providers') && secrets.EMAILIBRIUM_TEST_GOOGLE_CLIENT_SECRET || '' }}
+          EMAILIBRIUM_TEST_GOOGLE_REFRESH_TOKEN: ${{ (inputs.provider == 'gmail' || inputs.provider == 'providers') && secrets.EMAILIBRIUM_TEST_GOOGLE_REFRESH_TOKEN || '' }}
+          EMAILIBRIUM_TEST_GOOGLE_EXPECTED_EMAIL: ${{ (inputs.provider == 'gmail' || inputs.provider == 'providers') && secrets.EMAILIBRIUM_TEST_GOOGLE_EXPECTED_EMAIL || '' }}
+          EMAILIBRIUM_TEST_MICROSOFT_CLIENT_ID: ${{ (inputs.provider == 'outlook' || inputs.provider == 'providers') && secrets.EMAILIBRIUM_TEST_MICROSOFT_CLIENT_ID || '' }}
+          EMAILIBRIUM_TEST_MICROSOFT_CLIENT_SECRET: ${{ (inputs.provider == 'outlook' || inputs.provider == 'providers') && secrets.EMAILIBRIUM_TEST_MICROSOFT_CLIENT_SECRET || '' }}
+          EMAILIBRIUM_TEST_MICROSOFT_REFRESH_TOKEN: ${{ (inputs.provider == 'outlook' || inputs.provider == 'providers') && secrets.EMAILIBRIUM_TEST_MICROSOFT_REFRESH_TOKEN || '' }}
+          EMAILIBRIUM_TEST_MICROSOFT_EXPECTED_EMAIL: ${{ (inputs.provider == 'outlook' || inputs.provider == 'providers') && secrets.EMAILIBRIUM_TEST_MICROSOFT_EXPECTED_EMAIL || '' }}
+          EMAILIBRIUM_TEST_MICROSOFT_TENANT_ID: ${{ vars.EMAILIBRIUM_TEST_MICROSOFT_TENANT_ID || 'common' }}
+        run: node scripts/test-integration.mjs "$TEST_PROVIDER"

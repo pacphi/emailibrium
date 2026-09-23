@@ -49,6 +49,18 @@ format/lint and advisory checks. Run actual Agentic-QE CLI check-ins. AQE MCP he
 Rust branch scanning were unreliable in the prior audit; do not turn those into a pass.
 Do not use a generated score or configuration marker as a substitute for execution.
 
+### Local and hosted integration configuration
+
+The September 22 follow-up requested explicit local dotenv loading and GitHub
+secrets for real integration tests. Add a Node-built-in dotenv entry point, a
+committed empty example, and a manual workflow backed by a dedicated
+`live-integration` environment. Generated HTTP/database credentials stay ephemeral.
+Dedicated provider tests refresh tokens, verify expected account identity, and
+read label/category metadata through the actual adapters. They never mutate mail.
+Missing credentials and zero selected tests must fail. Local runner contracts run
+without secrets on ordinary CI; actual provider execution requires the dedicated
+test-account credentials and an explicit invocation.
+
 ## Wave 2: verified, resumable execution
 
 1. Introduce per-message operation identities and atomic leases with durable expiry and

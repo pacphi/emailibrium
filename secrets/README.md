@@ -1,5 +1,10 @@
 # Secrets Management
 
+For local dotenv configuration and GitHub test-account secrets, see
+[Integration environments](../docs/testing/integration-environments.md).
+Those test commands generate disposable engine credentials and use separately
+configured provider accounts only when explicitly selected.
+
 ## Quick Start
 
 Generate development secrets:

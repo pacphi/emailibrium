@@ -454,8 +454,7 @@ mod synthetic {
             vec![("Label_1".into(), "SYNTHETIC-private-label".into())],
         ] {
             let error = validate_gmail_metadata(&labels)
-                .err()
-                .expect("Gmail must include system INBOX metadata");
+                .expect_err("Gmail must include system INBOX metadata");
             assert!(!format!("{error:?} {error}").contains("SYNTHETIC"));
         }
         assert!(validate_gmail_metadata(&[("INBOX".into(), "Inbox".into())]).is_ok());

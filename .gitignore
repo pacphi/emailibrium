@@ -11,6 +11,7 @@ dist/
 # Environment & Secrets
 .env
 .env.*
+!.env.integration.example
 secrets/dev/
 secrets/staging/
 secrets/production/
