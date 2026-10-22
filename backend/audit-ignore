@@ -46,3 +46,14 @@ RUSTSEC-2025-0134
 # newest version ttf-parser has ever published (confirmed via `cargo info`),
 # and lopdf 0.42.0 has no newer release that drops or replaces it.
 RUSTSEC-2026-0192
+
+# RUSTSEC-2024-0449: unsafe-libyaml unmaintained (informational, no CVE)
+# https://rustsec.org/advisories/RUSTSEC-2024-0449.html
+# Path: unsafe-libyaml 0.2.11 <- serde_yaml 0.9.34+deprecated <- emailibrium
+# (direct: src/tools/config.rs, src/vectors/yaml_config.rs) and figment 0.10.19
+# (`yaml` feature, our config loader). No patched version exists (patched = []),
+# and 0.10.19 is figment's newest release, which still hard-requires serde_yaml
+# 0.9. Reachable: it parses repo/operator-owned YAML config files only, never
+# untrusted input. Exit: remove once serde_yaml is replaced (e.g. serde-saphyr)
+# and figment's YAML provider is swapped or figment drops serde_yaml.
+RUSTSEC-2024-0449
