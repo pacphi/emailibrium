@@ -1,0 +1,216 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": "Managed from pacphi/mise-dotfiles. Replaces Dependabot version updates (2026-10-21).",
+  "extends": [
+    "config:recommended"
+  ],
+  "minimumReleaseAge": "3 days",
+  "internalChecksFilter": "strict",
+  "osvVulnerabilityAlerts": true,
+  "vulnerabilityAlerts": {
+    "enabled": true,
+    "labels": [
+      "security"
+    ]
+  },
+  "packageRules": [
+    {
+      "description": "github-actions: settings",
+      "matchCategories": [
+        "ci"
+      ],
+      "schedule": [
+        "* 0-5 * * 1"
+      ],
+      "commitMessagePrefix": "ci:"
+    },
+    {
+      "description": "cargo backend/**: settings",
+      "matchCategories": [
+        "rust"
+      ],
+      "matchFileNames": [
+        "backend/**"
+      ],
+      "schedule": [
+        "* 0-5 * * 1"
+      ],
+      "commitMessagePrefix": "deps(backend):"
+    },
+    {
+      "description": "cargo backend/**: group tokio-ecosystem",
+      "matchCategories": [
+        "rust"
+      ],
+      "matchFileNames": [
+        "backend/**"
+      ],
+      "groupName": "tokio-ecosystem",
+      "matchPackageNames": [
+        "tokio*"
+      ]
+    },
+    {
+      "description": "cargo backend/**: group serde-ecosystem",
+      "matchCategories": [
+        "rust"
+      ],
+      "matchFileNames": [
+        "backend/**"
+      ],
+      "groupName": "serde-ecosystem",
+      "matchPackageNames": [
+        "serde*"
+      ]
+    },
+    {
+      "description": "cargo backend/**: group axum-ecosystem",
+      "matchCategories": [
+        "rust"
+      ],
+      "matchFileNames": [
+        "backend/**"
+      ],
+      "groupName": "axum-ecosystem",
+      "matchPackageNames": [
+        "axum*",
+        "tower*"
+      ]
+    },
+    {
+      "description": "cargo backend/**: group crypto-ecosystem",
+      "matchCategories": [
+        "rust"
+      ],
+      "matchFileNames": [
+        "backend/**"
+      ],
+      "groupName": "crypto-ecosystem",
+      "matchPackageNames": [
+        "aes*",
+        "argon2",
+        "zeroize"
+      ]
+    },
+    {
+      "description": "npm frontend/**: settings",
+      "matchCategories": [
+        "js"
+      ],
+      "matchFileNames": [
+        "frontend/**"
+      ],
+      "schedule": [
+        "* 0-5 * * 1"
+      ],
+      "commitMessagePrefix": "deps(frontend):"
+    },
+    {
+      "description": "npm frontend/**: group tanstack",
+      "matchCategories": [
+        "js"
+      ],
+      "matchFileNames": [
+        "frontend/**"
+      ],
+      "groupName": "tanstack",
+      "matchPackageNames": [
+        "@tanstack/*"
+      ]
+    },
+    {
+      "description": "npm frontend/**: group radix-ui",
+      "matchCategories": [
+        "js"
+      ],
+      "matchFileNames": [
+        "frontend/**"
+      ],
+      "groupName": "radix-ui",
+      "matchPackageNames": [
+        "@radix-ui/*"
+      ]
+    },
+    {
+      "description": "npm frontend/**: group testing",
+      "matchCategories": [
+        "js"
+      ],
+      "matchFileNames": [
+        "frontend/**"
+      ],
+      "groupName": "testing",
+      "matchPackageNames": [
+        "vitest",
+        "@testing-library/*",
+        "playwright",
+        "msw"
+      ],
+      "matchDepTypes": [
+        "devDependencies"
+      ]
+    },
+    {
+      "description": "npm frontend/**: group storybook",
+      "matchCategories": [
+        "js"
+      ],
+      "matchFileNames": [
+        "frontend/**"
+      ],
+      "groupName": "storybook",
+      "matchPackageNames": [
+        "@storybook/*",
+        "storybook"
+      ],
+      "matchDepTypes": [
+        "devDependencies"
+      ]
+    },
+    {
+      "description": "npm frontend/**: group eslint",
+      "matchCategories": [
+        "js"
+      ],
+      "matchFileNames": [
+        "frontend/**"
+      ],
+      "groupName": "eslint",
+      "matchPackageNames": [
+        "eslint*",
+        "@eslint/*",
+        "typescript-eslint"
+      ],
+      "matchDepTypes": [
+        "devDependencies"
+      ]
+    },
+    {
+      "description": "docker backend/**: settings",
+      "matchCategories": [
+        "docker"
+      ],
+      "matchFileNames": [
+        "backend/**"
+      ],
+      "schedule": [
+        "* 0-5 * * 1"
+      ],
+      "commitMessagePrefix": "deps(docker):"
+    },
+    {
+      "description": "docker frontend/**: settings",
+      "matchCategories": [
+        "docker"
+      ],
+      "matchFileNames": [
+        "frontend/**"
+      ],
+      "schedule": [
+        "* 0-5 * * 1"
+      ],
+      "commitMessagePrefix": "deps(docker):"
+    }
+  ],
+  "prConcurrentLimit": 31
+}
