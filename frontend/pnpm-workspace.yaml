@@ -9,16 +9,24 @@ packages:
 # the `overrides` IOC pins below and Dependabot review.
 minimumReleaseAge: 0
 overrides:
+  # GHSA-c83g-rgw3-j3cx / GHSA-73wf-gq98-2v4g: build-tool cache exhaustion
+  # and unsafe custom statistics; GHSA-w5vr-8v7q-w6rv: invalid-input DoS.
+  "browserslist@<4.28.7": "4.28.7"
+  "baseline-browser-mapping@<2.11.0": "2.11.0"
   # brace-expansion < 1.1.16 (1.x line): exponential-time ReDoS via chained {} groups (GHSA-3jxr-9vmj-r5cp)
   # < 1.1.17: unbounded expansion length OOM crash (GHSA-mh99-v99m-4gvg)
   # < 1.1.18: DoS via unbounded intermediate arrays, bypassing the CVE-2026-14257
   # mitigation (GHSA-rgw5-rvv9-x895), supersedes the 1.1.17 pin above
-  "brace-expansion@<1.1.18": "1.1.18"
+  # < 1.1.19 / 1.1.20 / 1.1.21: further DoS fixes (GHSA-6j4f-fj2g-mc7p,
+  # GHSA-qhr7-859c-m2p7, GHSA-q2hr-2g5m-vwhr), supersedes the 1.1.18 pin above
+  "brace-expansion@<1.1.21": "1.1.21"
   # brace-expansion 4.x/5.x line < 5.0.8: ReDoS (GHSA-3jxr-9vmj-r5cp) +
   # unbounded expansion length OOM crash (GHSA-mh99-v99m-4gvg)
   # < 5.0.9: DoS via unbounded intermediate arrays, bypassing the CVE-2026-14257
   # mitigation (GHSA-rgw5-rvv9-x895), supersedes the 5.0.8 pin above
-  "brace-expansion@>=4.0.0 <5.0.9": "5.0.9"
+  # < 5.0.10 / 5.0.11 / 5.0.12: further DoS fixes (GHSA-6j4f-fj2g-mc7p,
+  # GHSA-qhr7-859c-m2p7, GHSA-q2hr-2g5m-vwhr), supersedes the 5.0.9 pin above
+  "brace-expansion@>=4.0.0 <5.0.12": "5.0.12"
   # ws < 8.21.0: memory-exhaustion DoS from tiny fragments (GHSA-96hv-2xvq-fx4p)
   "ws@>=8.0.0 <8.21.0": "8.21.0"
   "lodash@>=4.0.0 <=4.17.23": "4.18.1"
