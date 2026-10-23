@@ -42,6 +42,12 @@ One incidental exception: the backend also reads the OS-standard `HOME` variable
 when `generative.builtin.cache_dir` isn't set. It isn't an Emailibrium-specific config knob and
 has no `EMAILIBRIUM_` equivalent.
 
+The backend also reads `OAUTH_ENCRYPTION_KEY` directly (`backend/src/main.rs`). This is the key
+that encrypts stored OAuth credentials. It is the last fallback: the variable named by
+`security.encryption_key_env` wins, then `encryption.master_password`, then `OAUTH_ENCRYPTION_KEY`.
+Docker Compose delivers it from the mounted `oauth_encryption_key` secret through
+`backend/entrypoint.sh`. See [Local Engine Access](security/local-engine-access.md).
+
 ## Complete Key Reference
 
 ### Top-Level
