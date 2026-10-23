@@ -13,7 +13,7 @@ import { ComposeEmail } from './ComposeEmail';
 import { MoveDialog } from './MoveDialog';
 import { useEmailShortcuts, type ReplyOpenSignal } from './hooks/useEmailShortcuts';
 import { useQuery } from '@tanstack/react-query';
-import { getAllLabels, getEnrichedCategories, getEmailCounts } from '@emailibrium/api';
+import { getAllLabels, getEnrichedCategories, getEmailCounts, getAccounts } from '@emailibrium/api';
 import {
   useEmailsQuery,
   useEmailQuery,
@@ -762,10 +762,12 @@ export function EmailClient() {
     [listWidth],
   );
 
-  const accounts = useMemo(
-    () => [] as { id: string; emailAddress: string; provider: string }[],
-    [],
-  );
+  const accountsQuery = useQuery({
+    queryKey: ['accounts'],
+    queryFn: getAccounts,
+    staleTime: 60_000,
+  });
+  const accounts = (accountsQuery.data ?? []).filter((account) => account.isActive);
 
   return (
     <div className="flex h-full overflow-hidden">

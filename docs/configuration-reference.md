@@ -46,11 +46,11 @@ has no `EMAILIBRIUM_` equivalent.
 
 ### Top-Level
 
-| Key            | Type   | Default                          | Env Override               | Description                                                                                                                                     |
-| -------------- | ------ | -------------------------------- | -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `host`         | String | `127.0.0.1`                      | `EMAILIBRIUM_HOST`         | Server bind address                                                                                                                             |
-| `port`         | u16    | `8080`                           | `EMAILIBRIUM_PORT`         | Server listen port                                                                                                                              |
-| `database_url` | String | `sqlite:emailibrium.db?mode=rwc` | `EMAILIBRIUM_DATABASE_URL` | SQLite connection URL -- `postgres://` is not yet supported, see [Deployment Guide](deployment-guide.md#database-strategy-sqlite-vs-postgresql) |
+| Key            | Type   | Default                          | Env Override               | Description                                                                                                                                                                                                                                                         |
+| -------------- | ------ | -------------------------------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `host`         | String | `127.0.0.1`                      | `EMAILIBRIUM_HOST`         | Server bind address                                                                                                                                                                                                                                                 |
+| `port`         | u16    | `8080`                           | `EMAILIBRIUM_PORT`         | Server listen port                                                                                                                                                                                                                                                  |
+| `database_url` | String | `sqlite:emailibrium.db?mode=rwc` | `EMAILIBRIUM_DATABASE_URL` | Connection URL. The scheme selects the backend: `sqlite:emailibrium.db?mode=rwc` or `postgres://emailibrium:PASSWORD@postgres:5432/emailibrium` (`postgresql://` also accepted). See [Deployment Guide](deployment-guide.md#database-strategy-sqlite-vs-postgresql) |
 
 ### Store (`store.*`)
 

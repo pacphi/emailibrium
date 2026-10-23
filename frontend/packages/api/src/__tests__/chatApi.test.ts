@@ -118,7 +118,7 @@ describe('chatApi', () => {
   });
 
   describe('streamChatMessage', () => {
-    it('sends POST to /api/v1/ai/chat/stream with auth header', async () => {
+    it('sends POST to /api/v1/ai/chat/stream with a session cookie', async () => {
       mockLocalStorage.getItem.mockReturnValue('my-token');
 
       const mockReader = {
@@ -139,7 +139,9 @@ describe('chatApi', () => {
       const fetchCall = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0];
       expect(fetchCall[0]).toBe('/api/v1/ai/chat/stream');
       expect(fetchCall[1].method).toBe('POST');
-      expect(fetchCall[1].headers.Authorization).toBe('Bearer my-token');
+      expect(fetchCall[1].headers.Authorization).toBeUndefined();
+      expect(fetchCall[1].credentials).toBe('same-origin');
+      expect(mockLocalStorage.getItem).not.toHaveBeenCalled();
       expect(fetchCall[1].headers['Content-Type']).toBe('application/json');
 
       vi.unstubAllGlobals();

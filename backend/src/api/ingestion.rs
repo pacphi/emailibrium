@@ -16,11 +16,16 @@ use axum::{
     Json, Router,
 };
 use futures::stream::Stream;
+use sea_orm::sea_query::{Expr, ExprTrait, Func, OnConflict};
+use sea_orm::{
+    ActiveValue::Set, ColumnTrait, DatabaseConnection, DbErr, EntityTrait, QueryFilter, QuerySelect,
+};
 use serde::{Deserialize, Serialize};
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::StreamExt;
 use tracing::{debug, info, warn};
 
+use crate::db::entities::{emails, sync_state};
 use crate::email::provider::EmailProvider;
 use crate::email::types::{ListParams, ProviderKind};
 use crate::AppState;
@@ -124,6 +129,49 @@ async fn ingestion_status_sse(
             .interval(Duration::from_secs(15))
             .text("ping"),
     )
+}
+
+// ---------------------------------------------------------------------------
+// sync_state persistence
+// ---------------------------------------------------------------------------
+
+/// `UPDATE sync_state SET emails_synced = emails_synced + n, [history_id = h,]
+/// last_sync_at = <now>, status = 'idle' WHERE account_id = ?` — the shape every
+/// end-of-sync write in this file shared.
+///
+/// `history_id` is left alone when `None`, matching the full-sync branch that ran when the
+/// provider had no marker to record. The delta path's "no changes detected" write never
+/// named `emails_synced`; it passes `synced = 0` here, and `emails_synced = emails_synced + 0`
+/// is the same write as omitting the column.
+async fn mark_sync_idle(
+    conn: &DatabaseConnection,
+    account_id: &str,
+    synced: u64,
+    history_id: Option<&str>,
+) -> Result<u64, DbErr> {
+    // `emails_synced` is INTEGER (INT4 on PostgreSQL) while the counter is u64, so the
+    // delta narrows at the bind.
+    let delta = i32::try_from(synced).unwrap_or(i32::MAX);
+
+    let mut update = sync_state::Entity::update_many()
+        .col_expr(
+            sync_state::Column::EmailsSynced,
+            Expr::col(sync_state::Column::EmailsSynced).add(delta),
+        )
+        .col_expr(
+            sync_state::Column::LastSyncAt,
+            Expr::value(crate::db::now_text()),
+        )
+        .col_expr(sync_state::Column::Status, Expr::value("idle"));
+    if let Some(hid) = history_id {
+        update = update.col_expr(sync_state::Column::HistoryId, Expr::value(hid));
+    }
+
+    Ok(update
+        .filter(sync_state::Column::AccountId.eq(account_id))
+        .exec(conn)
+        .await?
+        .rows_affected)
 }
 
 /// Sync emails from the provider API into the local `emails` table.
@@ -235,14 +283,17 @@ pub async fn sync_emails_from_provider(
     };
 
     // Check sync_state for an existing history_id (incremental sync marker).
-    let sync_row: Option<(Option<String>,)> =
-        sqlx::query_as("SELECT history_id FROM sync_state WHERE account_id = ?")
-            .bind(account_id)
-            .fetch_optional(&state.db.pool)
-            .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    // Outer `None` = the account has no sync_state row; inner `None` = it has no marker.
+    let sync_row: Option<Option<String>> = sync_state::Entity::find()
+        .select_only()
+        .column(sync_state::Column::HistoryId)
+        .filter(sync_state::Column::AccountId.eq(account_id))
+        .into_tuple()
+        .one(&state.orm)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    let history_id = sync_row.and_then(|(h,)| h);
+    let history_id = sync_row.flatten();
 
     // ── Incremental sync path ────────────────────────────────────────────
     // If we have a history_id from a previous sync, use the provider's delta
@@ -274,9 +325,13 @@ pub async fn sync_emails_from_provider(
                     account_id = %account_id,
                     "Incremental sync failed ({e}), falling back to full sync"
                 );
-                let _ = sqlx::query("UPDATE sync_state SET history_id = NULL WHERE account_id = ?")
-                    .bind(account_id)
-                    .execute(&state.db.pool)
+                let _ = sync_state::Entity::update_many()
+                    .col_expr(
+                        sync_state::Column::HistoryId,
+                        Expr::value(Option::<String>::None),
+                    )
+                    .filter(sync_state::Column::AccountId.eq(account_id))
+                    .exec(&state.orm)
                     .await;
             }
         }
@@ -292,7 +347,7 @@ pub async fn sync_emails_from_provider(
     // Load enabled rules once for the whole sync run so we can apply them
     // to each email as it arrives, avoiding stragglers.
     let enabled_rules: Vec<crate::rules::types::Rule> =
-        crate::rules::rule_engine::RuleEngine::load_rules(&state.db.pool)
+        crate::rules::rule_engine::RuleEngine::load_rules(&state.db)
             .await
             .unwrap_or_default()
             .into_iter()
@@ -351,10 +406,9 @@ pub async fn sync_emails_from_provider(
         );
 
         for msg in &page.messages {
-            let n = upsert_email(state, account_id, provider_str, msg).await;
+            let n = upsert_email(&state.orm, account_id, provider_str, msg).await;
             if n > 0 && !enabled_rules.is_empty() {
-                crate::rules::executor::apply_rules_to_email(&state.db.pool, msg, &enabled_rules)
-                    .await;
+                crate::rules::executor::apply_rules_to_email(&state.db, msg, &enabled_rules).await;
             }
             inserted += n;
         }
@@ -391,27 +445,9 @@ pub async fn sync_emails_from_provider(
     // next sync can use the incremental (delta) path.
     let new_history_id = fetch_provider_history_id(provider_str, &*provider, &access_token).await;
 
-    // Update sync state with count + history marker.
-    if let Some(ref hid) = new_history_id {
-        let _ = sqlx::query(
-            "UPDATE sync_state SET emails_synced = emails_synced + ?1, history_id = ?2, \
-             last_sync_at = datetime('now'), status = 'idle' WHERE account_id = ?3",
-        )
-        .bind(inserted as i64)
-        .bind(hid)
-        .bind(account_id)
-        .execute(&state.db.pool)
-        .await;
-    } else {
-        let _ = sqlx::query(
-            "UPDATE sync_state SET emails_synced = emails_synced + ?1, \
-             last_sync_at = datetime('now'), status = 'idle' WHERE account_id = ?2",
-        )
-        .bind(inserted as i64)
-        .bind(account_id)
-        .execute(&state.db.pool)
-        .await;
-    }
+    // Update sync state with count + history marker. The two former branches differed only
+    // in whether `history_id` was in the SET list, which `mark_sync_idle` keys off `None`.
+    let _ = mark_sync_idle(&state.orm, account_id, inserted, new_history_id.as_deref()).await;
 
     info!(
         account_id = %account_id,
@@ -541,21 +577,14 @@ async fn incremental_sync_delta(
     if total_changes == 0 {
         // No changes — just advance the history marker.
         if let Some(ref new_hid) = delta.new_history_id {
-            let _ = sqlx::query(
-                "UPDATE sync_state SET history_id = ?, last_sync_at = datetime('now'), \
-                 status = 'idle' WHERE account_id = ?",
-            )
-            .bind(new_hid)
-            .bind(account_id)
-            .execute(&state.db.pool)
-            .await;
+            let _ = mark_sync_idle(&state.orm, account_id, 0, Some(new_hid)).await;
         }
         return Ok(0);
     }
 
     // Load enabled rules once so actions can be applied to each arriving email.
     let enabled_rules: Vec<crate::rules::types::Rule> =
-        crate::rules::rule_engine::RuleEngine::load_rules(&state.db.pool)
+        crate::rules::rule_engine::RuleEngine::load_rules(&state.db)
             .await
             .unwrap_or_default()
             .into_iter()
@@ -567,14 +596,10 @@ async fn incremental_sync_delta(
     for msg_id in new_ids.iter().chain(updated_ids.iter()) {
         match provider.get_message(access_token, msg_id).await {
             Ok(msg) => {
-                let n = upsert_email(state, account_id, provider_str, &msg).await;
+                let n = upsert_email(&state.orm, account_id, provider_str, &msg).await;
                 if n > 0 && !enabled_rules.is_empty() {
-                    crate::rules::executor::apply_rules_to_email(
-                        &state.db.pool,
-                        &msg,
-                        &enabled_rules,
-                    )
-                    .await;
+                    crate::rules::executor::apply_rules_to_email(&state.db, &msg, &enabled_rules)
+                        .await;
                 }
                 inserted += n;
             }
@@ -588,15 +613,9 @@ async fn incremental_sync_delta(
     // deleted_at timestamp instead of permanently removing rows.
     let now_iso = chrono::Utc::now().to_rfc3339();
     for msg_id in deleted_ids {
-        if let Err(e) = crate::db::update_email_state(
-            &state.db.pool,
-            msg_id,
-            true,
-            false,
-            "TRASH",
-            Some(&now_iso),
-        )
-        .await
+        if let Err(e) =
+            crate::db::update_email_state(&state.orm, msg_id, true, false, "TRASH", Some(&now_iso))
+                .await
         {
             warn!(email_id = %msg_id, "Failed to soft-delete email during delta sync: {e}");
         }
@@ -614,7 +633,7 @@ async fn incremental_sync_delta(
 
         if has_added("TRASH") {
             let _ = crate::db::update_email_state(
-                &state.db.pool,
+                &state.orm,
                 &lc.message_id,
                 true,
                 false,
@@ -624,7 +643,7 @@ async fn incremental_sync_delta(
             .await;
         } else if has_removed("TRASH") {
             let _ = crate::db::update_email_state(
-                &state.db.pool,
+                &state.orm,
                 &lc.message_id,
                 false,
                 false,
@@ -636,7 +655,7 @@ async fn incremental_sync_delta(
 
         if has_added("SPAM") {
             let _ = crate::db::update_email_state(
-                &state.db.pool,
+                &state.orm,
                 &lc.message_id,
                 false,
                 true,
@@ -646,7 +665,7 @@ async fn incremental_sync_delta(
             .await;
         } else if has_removed("SPAM") {
             let _ = crate::db::update_email_state(
-                &state.db.pool,
+                &state.orm,
                 &lc.message_id,
                 false,
                 false,
@@ -659,15 +678,7 @@ async fn incremental_sync_delta(
 
     // Update sync state with new history marker.
     if let Some(ref new_hid) = delta.new_history_id {
-        let _ = sqlx::query(
-            "UPDATE sync_state SET emails_synced = emails_synced + ?1, history_id = ?2, \
-             last_sync_at = datetime('now'), status = 'idle' WHERE account_id = ?3",
-        )
-        .bind(inserted as i64)
-        .bind(new_hid)
-        .bind(account_id)
-        .execute(&state.db.pool)
-        .await;
+        let _ = mark_sync_idle(&state.orm, account_id, inserted, Some(new_hid)).await;
     }
 
     info!(
@@ -681,64 +692,113 @@ async fn incremental_sync_delta(
     Ok(inserted)
 }
 
-/// Upsert a single email message into the local DB. Returns 1 if inserted, 0 otherwise.
-async fn upsert_email(
-    state: &AppState,
+// The three `ON CONFLICT DO UPDATE` assignments sea-query has no typed form for. Both
+// dialects name the proposed row `excluded` and the existing row by table name inside
+// `DO UPDATE`, and both have `length()` and `COALESCE()`, so one portable SQL text covers
+// what ADR-035 §2.3 catalogs as the genuinely-different-SQL-text (upsert) class. These are
+// `&'static str` literals, never built from input, keeping ADR-036 §5's raw-fragment audit
+// surface enumerable.
+
+/// Keep the stored body when the incoming one is empty; `length(NULL)` is NULL on both
+/// backends, so a NULL incoming body also keeps the stored one.
+const CONFLICT_BODY_HTML: &str =
+    "CASE WHEN length(excluded.body_html) > 0 THEN excluded.body_html ELSE emails.body_html END";
+/// See [`CONFLICT_BODY_HTML`].
+const CONFLICT_BODY_TEXT: &str =
+    "CASE WHEN length(excluded.body_text) > 0 THEN excluded.body_text ELSE emails.body_text END";
+/// Keep the stored unsubscribe header when the provider didn't send one this time.
+const CONFLICT_LIST_UNSUBSCRIBE: &str =
+    "COALESCE(excluded.list_unsubscribe, emails.list_unsubscribe)";
+/// See [`CONFLICT_LIST_UNSUBSCRIBE`].
+const CONFLICT_LIST_UNSUBSCRIBE_POST: &str =
+    "COALESCE(excluded.list_unsubscribe_post, emails.list_unsubscribe_post)";
+
+/// What a re-delivery of an already-stored message does to the row.
+///
+/// Split out from [`upsert_email`] so the rendered-SQL test can pin the real clause rather
+/// than a copy of it.
+fn upsert_conflict_action() -> OnConflict {
+    OnConflict::column(emails::Column::Id)
+        .value(emails::Column::BodyHtml, Expr::cust(CONFLICT_BODY_HTML))
+        .value(emails::Column::BodyText, Expr::cust(CONFLICT_BODY_TEXT))
+        .update_columns([
+            emails::Column::Labels,
+            emails::Column::IsRead,
+            emails::Column::IsStarred,
+            emails::Column::IsTrash,
+            emails::Column::IsSpam,
+            emails::Column::Folder,
+        ])
+        .value(
+            emails::Column::ListUnsubscribe,
+            Expr::cust(CONFLICT_LIST_UNSUBSCRIBE),
+        )
+        .value(
+            emails::Column::ListUnsubscribePost,
+            Expr::cust(CONFLICT_LIST_UNSUBSCRIBE_POST),
+        )
+        .to_owned()
+}
+
+/// The row a provider message inserts, before any conflict handling.
+fn incoming_email_row(
     account_id: &str,
     provider_str: &str,
     msg: &crate::email::types::EmailMessage,
-) -> u64 {
+) -> emails::ActiveModel {
     let is_starred = msg.labels.iter().any(|l| l == "STARRED");
     let has_attachments = false;
 
     // Derive is_trash, is_spam, folder from provider labels.
     let (is_trash, is_spam, folder) = crate::db::derive_state_from_labels(&msg.labels);
 
-    let result = sqlx::query(
-        r#"INSERT INTO emails
-           (id, account_id, provider, message_id, thread_id, subject,
-            from_addr, to_addrs, received_at, body_text, body_html, labels,
-            is_read, is_starred, has_attachments, embedding_status,
-            is_trash, is_spam, folder, list_unsubscribe, list_unsubscribe_post)
-           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, 'pending',
-                   ?16, ?17, ?18, ?19, ?20)
-           ON CONFLICT(id) DO UPDATE SET
-            body_html = CASE WHEN length(excluded.body_html) > 0 THEN excluded.body_html ELSE emails.body_html END,
-            body_text = CASE WHEN length(excluded.body_text) > 0 THEN excluded.body_text ELSE emails.body_text END,
-            labels = excluded.labels,
-            is_read = excluded.is_read,
-            is_starred = excluded.is_starred,
-            is_trash = excluded.is_trash,
-            is_spam = excluded.is_spam,
-            folder = excluded.folder,
-            list_unsubscribe = COALESCE(excluded.list_unsubscribe, emails.list_unsubscribe),
-            list_unsubscribe_post = COALESCE(excluded.list_unsubscribe_post, emails.list_unsubscribe_post)"#,
-    )
-    .bind(&msg.id)
-    .bind(account_id)
-    .bind(provider_str)
-    .bind(&msg.id)
-    .bind(&msg.thread_id)
-    .bind(&msg.subject)
-    .bind(&msg.from)
-    .bind(msg.to.join(", "))
-    .bind(msg.date.to_rfc3339())
-    .bind(msg.body.as_deref().unwrap_or(&msg.snippet))
-    .bind(msg.body_html.as_deref().unwrap_or(""))
-    .bind(msg.labels.join(","))
-    .bind(msg.is_read)
-    .bind(is_starred)
-    .bind(has_attachments)
-    .bind(is_trash)
-    .bind(is_spam)
-    .bind(folder)
-    .bind(&msg.list_unsubscribe)
-    .bind(&msg.list_unsubscribe_post)
-    .execute(&state.db.pool)
-    .await;
+    // Columns the old INSERT didn't name stay `NotSet` so the DDL default still fills them.
+    emails::ActiveModel {
+        id: Set(msg.id.clone()),
+        account_id: Set(account_id.to_owned()),
+        provider: Set(provider_str.to_owned()),
+        message_id: Set(Some(msg.id.clone())),
+        thread_id: Set(msg.thread_id.clone()),
+        subject: Set(msg.subject.clone()),
+        from_addr: Set(msg.from.clone()),
+        to_addrs: Set(msg.to.join(", ")),
+        // `received_at` is a plain TIMESTAMP in both dialects, so a temporal value is bound
+        // rather than the RFC3339 String the pre-port code bound — that String is what broke
+        // this write on PostgreSQL (ADR-035 §2.6; see the entity's module doc).
+        received_at: Set(msg.date.naive_utc()),
+        body_text: Set(Some(msg.body.as_deref().unwrap_or(&msg.snippet).to_owned())),
+        body_html: Set(Some(msg.body_html.as_deref().unwrap_or("").to_owned())),
+        labels: Set(Some(msg.labels.join(","))),
+        is_read: Set(Some(msg.is_read)),
+        is_starred: Set(Some(is_starred)),
+        has_attachments: Set(Some(has_attachments)),
+        embedding_status: Set(Some("pending".to_owned())),
+        is_trash: Set(is_trash as i32),
+        is_spam: Set(is_spam as i32),
+        folder: Set(folder.to_owned()),
+        list_unsubscribe: Set(msg.list_unsubscribe.clone()),
+        list_unsubscribe_post: Set(msg.list_unsubscribe_post.clone()),
+        ..Default::default()
+    }
+}
+
+/// Upsert a single email message into the local DB. Returns 1 if inserted, 0 otherwise.
+///
+/// "1 if inserted" overstates it and always did: `ON CONFLICT DO UPDATE` reports one
+/// affected row on the update path too, so a re-delivered message counts as new. Preserved.
+async fn upsert_email(
+    conn: &DatabaseConnection,
+    account_id: &str,
+    provider_str: &str,
+    msg: &crate::email::types::EmailMessage,
+) -> u64 {
+    let result = emails::Entity::insert(incoming_email_row(account_id, provider_str, msg))
+        .on_conflict(upsert_conflict_action())
+        .exec_without_returning(conn)
+        .await;
 
     match result {
-        Ok(r) if r.rows_affected() > 0 => 1,
+        Ok(rows) if rows > 0 => 1,
         Ok(_) => 0,
         Err(e) => {
             warn!(email_id = %msg.id, "Failed to upsert email: {e}");
@@ -1130,14 +1190,23 @@ pub struct EmbeddingStatusSample {
 async fn embedding_status(
     State(state): State<AppState>,
 ) -> Result<Json<EmbeddingStatusResponse>, (StatusCode, String)> {
-    // Query real counts from the emails table grouped by embedding_status.
-    let rows: Vec<(String, i64)> = sqlx::query_as(
-        "SELECT COALESCE(embedding_status, 'pending') as status, COUNT(*) as cnt \
-         FROM emails GROUP BY embedding_status",
-    )
-    .fetch_all(&state.db.pool)
-    .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    // Query real counts from the emails table grouped by embedding_status. The GROUP BY
+    // stays on the raw column, as before: NULL and 'pending' rows form two separate groups
+    // that both come back labelled 'pending', and the loop below overwrites rather than sums
+    // for a known label — so one of the two is dropped. Preserved.
+    let status_label: [Expr; 2] = [
+        Expr::col(emails::Column::EmbeddingStatus),
+        Expr::value("pending"),
+    ];
+    let rows: Vec<(String, i64)> = emails::Entity::find()
+        .select_only()
+        .expr_as(Func::coalesce(status_label), "status")
+        .column_as(Expr::cust("COUNT(*)"), "cnt")
+        .group_by(emails::Column::EmbeddingStatus)
+        .into_tuple()
+        .all(&state.orm)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     let mut embedded_count: u64 = 0;
     let mut pending_count: u64 = 0;
@@ -1469,5 +1538,328 @@ mod tests {
     fn test_ingestion_phase_equality() {
         assert_eq!(IngestionPhase::Syncing, IngestionPhase::Syncing);
         assert_ne!(IngestionPhase::Syncing, IngestionPhase::Complete);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Persistence tests
+// ---------------------------------------------------------------------------
+
+/// The upsert and `sync_state` writes this file owns, against a real schema.
+///
+/// Both were untested before the SeaORM port, so these pin the conflict-path semantics the
+/// hand-written `ON CONFLICT DO UPDATE` encoded, the temporal `received_at` bind, and the
+/// TEXT timestamp shape `sync_state.last_sync_at` must keep (ADR-035 §2.5).
+#[cfg(test)]
+mod persistence_tests {
+    use chrono::{TimeZone, Utc};
+    use sea_orm::ConnectionTrait;
+
+    use super::*;
+
+    use crate::email::types::EmailMessage;
+
+    /// In-memory connection carrying the `emails` schema (001 plus the ALTERs from
+    /// 016/018/021/027 the entity's columns require) and `sync_state` (004).
+    async fn test_conn() -> DatabaseConnection {
+        let conn = crate::db::test_sqlite_database().await.sea_orm();
+        crate::db::apply_sqlite_migrations(
+            &conn,
+            &[
+                include_str!("../../migrations/sqlite/001_initial_schema.sql"),
+                include_str!("../../migrations/sqlite/004_accounts.sql"),
+                include_str!("../../migrations/sqlite/016_soft_delete_trash_spam.sql"),
+                include_str!("../../migrations/sqlite/018_unsubscribe_headers.sql"),
+                include_str!("../../migrations/sqlite/021_thread_key.sql"),
+                include_str!("../../migrations/sqlite/027_is_archived.sql"),
+            ],
+        )
+        .await
+        .expect("migrate");
+        conn
+    }
+
+    /// A delivery with every column the upsert writes populated.
+    fn delivery(id: &str) -> EmailMessage {
+        EmailMessage {
+            id: id.to_string(),
+            thread_id: Some(format!("thread-{id}")),
+            from: "sender@example.com".to_string(),
+            to: vec!["a@example.com".to_string(), "b@example.com".to_string()],
+            subject: format!("subject-{id}"),
+            snippet: "snippet".to_string(),
+            body: Some("body-text".to_string()),
+            body_html: Some("<p>body-html</p>".to_string()),
+            labels: vec!["INBOX".to_string()],
+            date: Utc.with_ymd_and_hms(2026, 8, 1, 10, 30, 0).unwrap(),
+            is_read: false,
+            list_unsubscribe: Some("<https://unsub.test/one>".to_string()),
+            list_unsubscribe_post: Some("List-Unsubscribe=One-Click".to_string()),
+        }
+    }
+
+    /// An account mid-sync: `status = 'syncing'`, so a later flip to `'idle'` is visible.
+    ///
+    /// `sync_state.account_id` has a FK to `connected_accounts` and sqlx turns SQLite's
+    /// `foreign_keys` pragma on, so the parent row has to exist first.
+    async fn seed_syncing_account(
+        conn: &DatabaseConnection,
+        account_id: &str,
+        emails_synced: i32,
+        history_id: Option<&str>,
+    ) {
+        conn.execute_unprepared(&format!(
+            "INSERT INTO connected_accounts (id, provider, email_address) \
+             VALUES ('{account_id}', 'gmail', '{account_id}@example.com')"
+        ))
+        .await
+        .expect("seed account");
+
+        sync_state::Entity::insert(sync_state::ActiveModel {
+            account_id: Set(account_id.to_owned()),
+            emails_synced: Set(emails_synced),
+            history_id: Set(history_id.map(str::to_owned)),
+            status: Set("syncing".to_owned()),
+            ..Default::default()
+        })
+        .exec_without_returning(conn)
+        .await
+        .expect("seed sync_state");
+    }
+
+    async fn sync_row(conn: &DatabaseConnection, account_id: &str) -> sync_state::Model {
+        sync_state::Entity::find_by_id(account_id.to_string())
+            .one(conn)
+            .await
+            .expect("query")
+            .expect("row")
+    }
+
+    async fn stored(conn: &DatabaseConnection, id: &str) -> emails::Model {
+        emails::Entity::find_by_id(id.to_string())
+            .one(conn)
+            .await
+            .expect("query")
+            .expect("row")
+    }
+
+    /// The upsert is one portable SQL text, not the per-backend pair ADR-035 §2.3 says this
+    /// class of statement otherwise needs: the whole `ON CONFLICT DO UPDATE` clause renders
+    /// byte-identically on both backends, and only the placeholder style differs. With no
+    /// live PostgreSQL in this loop, this is what catches a regression in the raw
+    /// `Expr::cust` fragments.
+    #[test]
+    fn the_upsert_renders_one_portable_sql_text_on_both_backends() {
+        use sea_orm::{DatabaseBackend, QueryTrait};
+
+        let render = |backend| {
+            emails::Entity::insert(incoming_email_row("acct-1", "gmail", &delivery("m1")))
+                .on_conflict(upsert_conflict_action())
+                .build(backend)
+                .sql
+        };
+        let sqlite = render(DatabaseBackend::Sqlite);
+        let postgres = render(DatabaseBackend::Postgres);
+
+        let conflict_clause =
+            |sql: &str| sql[sql.find(" ON CONFLICT ").expect("conflict clause")..].to_string();
+        assert_eq!(conflict_clause(&sqlite), conflict_clause(&postgres));
+
+        // The two forms sea-query has no typed equivalent for survive into both dialects.
+        let clause = conflict_clause(&postgres);
+        assert!(
+            clause.contains(&format!(r#""body_html" = {CONFLICT_BODY_HTML}"#)),
+            "body_html CASE missing from: {clause}"
+        );
+        assert!(
+            clause.contains(&format!(
+                r#""list_unsubscribe" = {CONFLICT_LIST_UNSUBSCRIBE}"#
+            )),
+            "list_unsubscribe COALESCE missing from: {clause}"
+        );
+        // The plain columns still take the proposed row.
+        assert!(clause.contains(r#""folder" = "excluded"."folder""#));
+
+        // All 21 columns bind as parameters — the raw fragments leak no literal into the
+        // INSERT, and PostgreSQL's numbering runs the full width.
+        assert!(postgres.contains("VALUES ($1, "), "{postgres}");
+        assert!(postgres.contains("$21)"), "{postgres}");
+        assert!(sqlite.contains("VALUES (?, "), "{sqlite}");
+    }
+
+    #[tokio::test]
+    async fn fresh_delivery_inserts_every_column_the_upsert_names() {
+        let conn = test_conn().await;
+        let msg = delivery("m1");
+
+        assert_eq!(upsert_email(&conn, "acct-1", "gmail", &msg).await, 1);
+
+        let row = stored(&conn, "m1").await;
+        assert_eq!(row.account_id, "acct-1");
+        assert_eq!(row.provider, "gmail");
+        assert_eq!(row.message_id.as_deref(), Some("m1"));
+        assert_eq!(row.thread_id.as_deref(), Some("thread-m1"));
+        assert_eq!(row.subject, "subject-m1");
+        assert_eq!(row.from_addr, "sender@example.com");
+        assert_eq!(row.to_addrs, "a@example.com, b@example.com");
+        assert_eq!(row.body_text.as_deref(), Some("body-text"));
+        assert_eq!(row.body_html.as_deref(), Some("<p>body-html</p>"));
+        assert_eq!(row.labels.as_deref(), Some("INBOX"));
+        assert_eq!(row.is_read, Some(false));
+        assert_eq!(row.is_starred, Some(false));
+        assert_eq!(row.has_attachments, Some(false));
+        assert_eq!(row.embedding_status.as_deref(), Some("pending"));
+        assert_eq!(row.is_trash, 0);
+        assert_eq!(row.is_spam, 0);
+        assert_eq!(row.folder, "INBOX");
+        assert_eq!(
+            row.list_unsubscribe.as_deref(),
+            Some("<https://unsub.test/one>")
+        );
+        // `is_archived` was never in the INSERT list, so it still takes the DDL default.
+        assert!(!row.is_archived);
+    }
+
+    /// The conflict path: `CASE WHEN length(excluded.…) > 0` keeps a stored body against an
+    /// empty re-delivery, `COALESCE` keeps a stored unsubscribe header against a NULL one,
+    /// and the plain `excluded.*` columns take the new values.
+    #[tokio::test]
+    async fn conflicting_redelivery_keeps_empty_bodies_and_null_headers() {
+        let conn = test_conn().await;
+        assert_eq!(
+            upsert_email(&conn, "acct-1", "gmail", &delivery("m1")).await,
+            1
+        );
+
+        let mut thin = delivery("m1");
+        thin.body = Some(String::new());
+        thin.snippet = String::new();
+        thin.body_html = Some(String::new());
+        thin.list_unsubscribe = None;
+        thin.list_unsubscribe_post = None;
+        thin.labels = vec!["SPAM".to_string(), "STARRED".to_string()];
+        thin.is_read = true;
+
+        // An update still reports one affected row, so the caller counts it as new.
+        assert_eq!(upsert_email(&conn, "acct-1", "gmail", &thin).await, 1);
+
+        let row = stored(&conn, "m1").await;
+        assert_eq!(row.body_text.as_deref(), Some("body-text"));
+        assert_eq!(row.body_html.as_deref(), Some("<p>body-html</p>"));
+        assert_eq!(
+            row.list_unsubscribe.as_deref(),
+            Some("<https://unsub.test/one>")
+        );
+        assert_eq!(
+            row.list_unsubscribe_post.as_deref(),
+            Some("List-Unsubscribe=One-Click")
+        );
+        assert_eq!(row.labels.as_deref(), Some("SPAM,STARRED"));
+        assert_eq!(row.is_read, Some(true));
+        assert_eq!(row.is_starred, Some(true));
+        assert_eq!(row.is_spam, 1);
+        assert_eq!(row.is_trash, 0);
+        assert_eq!(row.folder, "SPAM");
+    }
+
+    #[tokio::test]
+    async fn conflicting_redelivery_replaces_bodies_when_the_incoming_ones_are_not_empty() {
+        let conn = test_conn().await;
+        upsert_email(&conn, "acct-1", "gmail", &delivery("m1")).await;
+
+        let mut fuller = delivery("m1");
+        fuller.body = Some("body-text-v2".to_string());
+        fuller.body_html = Some("<p>body-html-v2</p>".to_string());
+        upsert_email(&conn, "acct-1", "gmail", &fuller).await;
+
+        let row = stored(&conn, "m1").await;
+        assert_eq!(row.body_text.as_deref(), Some("body-text-v2"));
+        assert_eq!(row.body_html.as_deref(), Some("<p>body-html-v2</p>"));
+    }
+
+    /// `received_at` is bound as a temporal value, not the RFC3339 String the pre-port code
+    /// wrote — it decodes back identically and compares as a timestamp.
+    #[tokio::test]
+    async fn received_at_round_trips_as_a_temporal_value() {
+        let conn = test_conn().await;
+        let msg = delivery("m1");
+        upsert_email(&conn, "acct-1", "gmail", &msg).await;
+
+        let row = stored(&conn, "m1").await;
+        assert_eq!(row.received_at, msg.date.naive_utc());
+
+        let cutoff = Utc
+            .with_ymd_and_hms(2026, 7, 1, 0, 0, 0)
+            .unwrap()
+            .naive_utc();
+        let matched = emails::Entity::find()
+            .filter(emails::Column::ReceivedAt.gt(cutoff))
+            .all(&conn)
+            .await
+            .expect("filter");
+        assert_eq!(matched.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn mark_sync_idle_writes_the_text_timestamp_shape_and_advances_the_counter() {
+        let conn = test_conn().await;
+        seed_syncing_account(&conn, "acct-1", 7, None).await;
+
+        assert_eq!(
+            mark_sync_idle(&conn, "acct-1", 3, Some("hist-9"))
+                .await
+                .expect("update"),
+            1
+        );
+
+        let row = sync_row(&conn, "acct-1").await;
+        assert_eq!(row.emails_synced, 10);
+        assert_eq!(row.history_id.as_deref(), Some("hist-9"));
+        assert_eq!(row.status, "idle");
+
+        // The exact shape `datetime('now')` produced, which this column's readers parse.
+        let stamp = row.last_sync_at.expect("last_sync_at");
+        assert_eq!(
+            stamp.len(),
+            19,
+            "expected 'YYYY-MM-DD HH:MM:SS', got {stamp}"
+        );
+        chrono::NaiveDateTime::parse_from_str(&stamp, "%Y-%m-%d %H:%M:%S")
+            .unwrap_or_else(|e| panic!("last_sync_at {stamp} is not the TEXT shape: {e}"));
+    }
+
+    /// A `None` marker leaves `history_id` alone — the full-sync branch that ran when the
+    /// provider had none to record.
+    #[tokio::test]
+    async fn mark_sync_idle_leaves_the_history_marker_alone_when_there_is_none_to_record() {
+        let conn = test_conn().await;
+        seed_syncing_account(&conn, "acct-1", 4, Some("hist-1")).await;
+
+        mark_sync_idle(&conn, "acct-1", 2, None)
+            .await
+            .expect("update");
+
+        let row = sync_row(&conn, "acct-1").await;
+        assert_eq!(row.history_id.as_deref(), Some("hist-1"));
+        assert_eq!(row.emails_synced, 6);
+        assert_eq!(row.status, "idle");
+    }
+
+    /// Scoping pin: the write is keyed by account id and must not touch a bystander row.
+    #[tokio::test]
+    async fn mark_sync_idle_scopes_to_the_target_account() {
+        let conn = test_conn().await;
+        seed_syncing_account(&conn, "acct-a", 1, None).await;
+        seed_syncing_account(&conn, "acct-b", 1, None).await;
+
+        mark_sync_idle(&conn, "acct-a", 5, Some("hist-a"))
+            .await
+            .expect("update");
+
+        let b = sync_row(&conn, "acct-b").await;
+        assert_eq!(b.emails_synced, 1);
+        assert_eq!(b.history_id, None);
+        assert_eq!(b.last_sync_at, None);
+        assert_eq!(b.status, "syncing");
     }
 }

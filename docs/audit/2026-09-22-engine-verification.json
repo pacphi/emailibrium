@@ -1,0 +1,154 @@
+{
+  "date_local": "2026-09-22",
+  "timezone": "America/Los_Angeles",
+  "recorded_at_utc": "2026-09-23T00:13:23.125731+00:00",
+  "base_revision": "03e39c50157aafd9a4f7cff90081072830666b04",
+  "validated_code_revision": "dce32163ff5cc8ef83973adf369b1fa5b6740bac",
+  "validation_note": "Combined local command followed by targeted provider revalidation and all-target Clippy after a test-only lint correction; no application code changed afterward.",
+  "lockfile_sha256": {
+    "backend/Cargo.lock": "99b6bba2f9c99c90415a44d5553c0cfba166644829b51a93e961aed6cc3c19fd",
+    "frontend/pnpm-lock.yaml": "2faba35ae0541f1e0821ed3ea7c1d3cd852596bc9ad9e3901f325620de1d6c5f"
+  },
+  "checks": {
+    "runner-local": {
+      "exit_code": 0,
+      "passed": 1398,
+      "ignored": 12,
+      "includes_doctests": true
+    },
+    "runner-postgres": {
+      "exit_code": 0,
+      "real_database": "disposable PostgreSQL 16.15 on loopback",
+      "library_passed": 3,
+      "binary_audit_passed": 1,
+      "exact_cutoff_passed": 1,
+      "unfiltered_cutoff_ignored": 1
+    },
+    "runner-final-node": {
+      "exit_code": 0,
+      "passed": 18,
+      "skipped": 0
+    },
+    "provider-final-gate": {
+      "exit_code": 0,
+      "synthetic_passed": 9,
+      "live_ignored": 2,
+      "checks": [
+        "targeted tests after lint correction",
+        "all-target Clippy -D warnings"
+      ]
+    },
+    "proptest-final": {
+      "exit_code": 0,
+      "passed": 21
+    },
+    "builtin-final-check": {
+      "exit_code": 0
+    },
+    "frontend-final-test": {
+      "exit_code": 0,
+      "passed": 402
+    },
+    "frontend-types": {
+      "exit_code": 0
+    },
+    "frontend-final-build": {
+      "exit_code": 0
+    },
+    "frontend-final-lint": {
+      "exit_code": 0
+    },
+    "browser-final": {
+      "exit_code": 0,
+      "passed": 32,
+      "retries": 0,
+      "scope": "Chromium, synthetic API/SSE responses; routed areas, not every behavior"
+    },
+    "aqe-final-web": {
+      "exit_code": 0,
+      "runId": "3ad3eb84-74ad-42b6-85e1-92cf2c59a981",
+      "status": "passed",
+      "total": 333,
+      "passed": 333,
+      "failed": 0,
+      "skipped": 0,
+      "duration": 1271,
+      "failedTests": []
+    },
+    "frontend-final-audit": {
+      "exit_code": 0,
+      "vulnerabilities": {
+        "info": 0,
+        "low": 0,
+        "moderate": 0,
+        "high": 0,
+        "critical": 0
+      }
+    },
+    "backend-audit": {
+      "exit_code": 0,
+      "vulnerability_count": 0,
+      "warnings": [
+        {
+          "kind": "unmaintained",
+          "package": "ttf-parser",
+          "version": "0.25.1",
+          "advisory": "RUSTSEC-2026-0192"
+        }
+      ]
+    },
+    "workflows-final-actionlint": {
+      "exit_code": 0
+    },
+    "workflows-final-yamllint": {
+      "exit_code": 0
+    },
+    "native_http": {
+      "status": "passed",
+      "checks": {
+        "minimal_public_health": true,
+        "unauthenticated_rest_and_mcp_denied": true,
+        "wrong_credential_denied": true,
+        "authenticated_actual_rest": true,
+        "mcp_origin_boundary": true,
+        "authenticated_actual_mcp_handshake_and_discovery": true,
+        "browser_cookie_session": true,
+        "logout_revokes_access": true,
+        "unissued_callback_rejected": true,
+        "no_credentials_or_callback_canaries_in_logs": true
+      },
+      "binary": "local debug executable; sha256 below",
+      "binary_sha256": "7ba3cf6a1e9f7effc75000b35926970301d6f4844c2a0a9cd0aa65a7a8d656f6",
+      "limits": "Actual native backend, empty disposable SQLite database, mock embeddings, no model inference or live provider connection."
+    },
+    "recipe_argument_regression": {
+      "baseline_unsafe_interpolation_reproduced": true,
+      "fixed_recipe_rejects_literal_mode_without_execution": true
+    },
+    "missing_configuration": {
+      "exit_code": 1,
+      "missing_provider_configuration_rejected": true
+    }
+  },
+  "not_executed": [
+    "Live Gmail/Outlook credential calls",
+    "Live IMAP",
+    "Live mailbox writes or end-to-end filing verification",
+    "Actual local-model classification or throughput benchmark",
+    "Complete UI/a11y/cross-browser coverage",
+    "Docker Compose workflow runtime",
+    "GitHub hosted workflow run"
+  ],
+  "filing": "All four email-triage schedules verified paused; filing task idle.",
+  "remaining_engine_work": [
+    "Durable per-message verified worker and crash recovery",
+    "Approved policy and classifier integration",
+    "Obligation ledger and remaining UI behaviors",
+    "Measured 1000/10000/150000-message acceptance"
+  ],
+  "coordination": {
+    "ruflo_swarm": "swarm-1790115206869-zr53jj",
+    "workers": "native Codex in isolated Git branches",
+    "aqe": "Actual CLI frontend execution; unavailable MCP health and incorrect Rust scan rejected as evidence"
+  }
+}

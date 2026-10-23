@@ -20,6 +20,7 @@ pub mod middleware;
 pub mod rules;
 pub mod sync_lock;
 pub mod tools;
+pub mod triage;
 pub mod vectors;
 
 /// Cleanup planning — the portable half of the subdomain.

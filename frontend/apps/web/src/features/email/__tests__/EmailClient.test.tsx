@@ -67,6 +67,7 @@ vi.mock('../hooks/useEmails', () => ({
 
 vi.mock('@emailibrium/api', () => ({
   submitFeedback: vi.fn(),
+  getAccounts: vi.fn().mockResolvedValue([]),
   getAllLabels: vi.fn().mockResolvedValue([]),
   getEnrichedCategories: vi.fn().mockResolvedValue([]),
   getEmailCounts: vi.fn().mockResolvedValue({ total: 3, unread: 0, archivedCount: 0 }),

@@ -173,9 +173,9 @@ impl MockEmailProviderFactory {
         Self { inner: Arc::new(f) }
     }
 
-    /// Factory that fails every call — wired as the default so existing
-    /// tests that DO expect "no provider" semantics behave like the old
-    /// HashMap-empty path: dispatch returns Ok(()) (handled in the worker).
+    /// Factory that fails every call. The default orchestrator fails closed
+    /// until a real provider factory is installed. Tests of successful apply
+    /// must inject a provider that explicitly reports success.
     pub fn no_op() -> Self {
         Self::new(|account_id| Err(FactoryError::NotFound(account_id.to_string())))
     }

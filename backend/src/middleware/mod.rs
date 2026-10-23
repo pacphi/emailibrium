@@ -7,3 +7,7 @@ pub mod log_scrub;
 pub mod log_scrubbing;
 pub mod rate_limit;
 pub mod security_headers;
+
+pub mod local_auth;
+
+pub mod credentials;

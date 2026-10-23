@@ -47,12 +47,11 @@ export async function confirmToolCall(
   confirmationId: string,
   approved: boolean,
 ): Promise<void> {
-  const token = localStorage.getItem('auth_token');
   const response = await fetch('/api/v1/ai/chat/confirm', {
     method: 'POST',
+    credentials: 'same-origin',
     headers: {
       'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
     },
     body: JSON.stringify({ sessionId, confirmationId, approved }),
   });
@@ -102,14 +101,13 @@ export async function streamChatMessage(
       ? { onChunk: onChunkOrCallbacks, onDone: onDone!, onError: onError! }
       : onChunkOrCallbacks;
   const controller = new AbortController();
-  const token = localStorage.getItem('auth_token');
 
   try {
     const response = await fetch('/api/v1/ai/chat/stream', {
       method: 'POST',
+      credentials: 'same-origin',
       headers: {
         'Content-Type': 'application/json',
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
       body: JSON.stringify(request),
       signal: controller.signal,

@@ -150,7 +150,7 @@ async fn grant_consent(
 ) -> Result<Json<GrantConsentResponse>, (StatusCode, String)> {
     state
         .vector_service
-        .consent_manager
+        .inference_policy
         .grant_consent(&req.provider, &req.acknowledgment)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -180,7 +180,7 @@ async fn revoke_consent(
 ) -> Result<Json<RevokeConsentResponse>, (StatusCode, String)> {
     state
         .vector_service
-        .consent_manager
+        .inference_policy
         .revoke_consent(&provider)
         .await
         .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
@@ -236,12 +236,20 @@ async fn record_gdpr_consent(
         ));
     }
 
-    let decision = state
-        .vector_service
-        .privacy_service
-        .record_consent(&req.consent_type, req.granted, None, None)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let decision = if req.consent_type == "cloud_ai" {
+        state
+            .vector_service
+            .inference_policy
+            .record_cloud_consent(req.granted)
+            .await
+    } else {
+        state
+            .vector_service
+            .privacy_service
+            .record_consent(&req.consent_type, req.granted, None, None)
+            .await
+    }
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     // When cloud_ai consent changes, toggle cloud providers in the generative router.
     if req.consent_type == "cloud_ai" {
@@ -249,6 +257,7 @@ async fn record_gdpr_consent(
             ProviderType::OpenAi,
             ProviderType::Anthropic,
             ProviderType::Gemini,
+            ProviderType::OpenRouter,
         ];
         for pt in &cloud_providers {
             if req.granted {

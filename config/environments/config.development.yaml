@@ -4,7 +4,7 @@
 # Overrides backend/config.yaml defaults for containerized development.
 # Secrets are injected via Docker secrets, not config files.
 
-host: "0.0.0.0"
+host: "127.0.0.1"
 port: 8080
 database_url: "sqlite:/app/data/emailibrium-dev.db?mode=rwc"
 

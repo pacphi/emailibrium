@@ -7,7 +7,7 @@
 use async_trait::async_trait;
 use thiserror::Error;
 
-use crate::rules::types::{EvaluationScope, RuleEvaluation, RuleExecutionMode};
+use crate::rules::types::{EvaluationScope, RuleAction, RuleEvaluation, RuleExecutionMode};
 
 use super::operation::{AccountStateEtag, EmailRef, UnsubscribeMethodKind};
 
@@ -15,8 +15,10 @@ use super::operation::{AccountStateEtag, EmailRef, UnsubscribeMethodKind};
 pub enum RepoError {
     #[error("not found")]
     NotFound,
-    #[error("sqlx: {0}")]
-    Sqlx(#[from] sqlx::Error),
+    #[error("conflict: {0}")]
+    Conflict(&'static str),
+    #[error("db: {0}")]
+    Db(#[from] sea_orm::DbErr),
     #[error("internal: {0}")]
     Internal(String),
 }
@@ -44,6 +46,20 @@ pub trait EmailRepository: Send + Sync {
     async fn list_by_account(&self, account_id: &str) -> Result<Vec<EmailRef>, RepoError>;
     async fn list_by_cluster(&self, cluster_id: &str) -> Result<Vec<EmailRef>, RepoError>;
     async fn count_by_account(&self, account_id: &str) -> Result<u64, RepoError>;
+
+    /// Eligible active messages, strictly older than the fixed apply-time cutoff.
+    /// Implementations must filter before paginating and order by date then id.
+    async fn archive_candidates(
+        &self,
+        _account_id: &str,
+        _before: chrono::DateTime<chrono::Utc>,
+        _page: u32,
+        _page_size: u32,
+    ) -> Result<Vec<EmailRef>, RepoError> {
+        Err(RepoError::Internal(
+            "archive eligibility is unavailable".into(),
+        ))
+    }
 }
 
 #[async_trait]
@@ -72,4 +88,39 @@ pub trait RuleEvaluator: Send + Sync {
         mode: RuleExecutionMode,
         scope: EvaluationScope,
     ) -> Result<Vec<RuleEvaluation>, RuleEvalError>;
+
+    /// Preview and constraint binding produced from the same rule snapshot.
+    async fn evaluate_bound_scope(
+        &self,
+        _mode: RuleExecutionMode,
+        _scope: EvaluationScope,
+    ) -> Result<Vec<BoundRuleEvaluation>, RuleEvalError> {
+        Err(RuleEvalError::Engine(
+            "bound rule evaluation is unavailable".into(),
+        ))
+    }
+
+    /// Complete matched results for one selected rule, not its bounded preview.
+    async fn matching_page(
+        &self,
+        _account_id: &str,
+        _rule_id: &str,
+        _page: u32,
+        _page_size: u32,
+    ) -> Result<RuleMatchPage, RuleEvalError> {
+        Err(RuleEvalError::Engine(
+            "complete rule eligibility is unavailable".into(),
+        ))
+    }
+}
+
+pub struct RuleMatchPage {
+    pub emails: Vec<EmailRef>,
+    pub actions: Vec<RuleAction>,
+    pub constraint_fingerprint: String,
+}
+
+pub struct BoundRuleEvaluation {
+    pub evaluation: RuleEvaluation,
+    pub constraint_fingerprint: String,
 }

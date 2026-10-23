@@ -1,31 +1,25 @@
 import { defineConfig, devices } from '@playwright/test';
 
+// This suite owns its server. Never reuse a developer server connected to live mail.
 export default defineConfig({
   testDir: './e2e',
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
-  retries: process.env.CI ? 2 : 0,
-  workers: process.env.CI ? 1 : undefined,
-  reporter: process.env.CI ? 'github' : 'html',
-
+  retries: 0,
+  workers: process.env.CI ? 2 : 4,
+  reporter: [['list'], ['html', { open: 'never' }]],
   use: {
-    baseURL: 'http://localhost:3000',
+    baseURL: 'http://127.0.0.1:4173',
     headless: true,
+    serviceWorkers: 'block',
     screenshot: 'only-on-failure',
-    trace: 'on-first-retry',
+    trace: 'retain-on-failure',
   },
-
-  projects: [
-    {
-      name: 'chromium',
-      use: { ...devices['Desktop Chrome'] },
-    },
-  ],
-
+  projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
   webServer: {
-    command: 'pnpm dev',
-    port: 3000,
-    reuseExistingServer: true,
-    timeout: 30_000,
+    command: 'node node_modules/vite/bin/vite.js --config vite.e2e.config.ts',
+    url: 'http://127.0.0.1:4173',
+    reuseExistingServer: false,
+    timeout: 60_000,
   },
 });

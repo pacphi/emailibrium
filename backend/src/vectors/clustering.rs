@@ -930,8 +930,7 @@ fn compute_centroid(embeddings: &[&Vec<f32>]) -> Vec<f32> {
 /// then clusters via Mini-batch K-Means with automatic K selection.
 pub struct ClusterEngine {
     store: Arc<dyn VectorStoreBackend>,
-    #[allow(dead_code)]
-    db: Arc<Database>,
+    conn: sea_orm::DatabaseConnection,
     config: ClusterConfig,
     clusters: RwLock<Vec<TopicCluster>>,
     /// Email -> current cluster assignment for hysteresis checks.
@@ -952,7 +951,7 @@ impl ClusterEngine {
     ) -> Self {
         Self {
             store,
-            db,
+            conn: db.sea_orm(),
             config,
             clusters: RwLock::new(Vec::new()),
             assignments: RwLock::new(HashMap::new()),
@@ -970,7 +969,7 @@ impl ClusterEngine {
     ) -> Self {
         Self {
             store,
-            db,
+            conn: db.sea_orm(),
             config,
             clusters: RwLock::new(Vec::new()),
             assignments: RwLock::new(HashMap::new()),
@@ -994,7 +993,7 @@ impl ClusterEngine {
         }
         Self {
             store,
-            db,
+            conn: db.sea_orm(),
             config,
             clusters: RwLock::new(clusters),
             assignments: RwLock::new(assignments_map),
@@ -1484,10 +1483,12 @@ impl ClusterEngine {
         self.clusters.write().await.clear();
         self.assignments.write().await.clear();
 
-        // Also clear from SQLite so stale clusters don't reload on restart.
-        sqlx::query("DELETE FROM topic_clusters")
-            .execute(&self.db.pool)
-            .await?;
+        // Also clear from the database so stale clusters don't reload on restart.
+        use sea_orm::EntityTrait;
+        crate::db::entities::topic_clusters::Entity::delete_many()
+            .exec(&self.conn)
+            .await
+            .map_err(VectorError::Db)?;
 
         tracing::info!("Cleared all clusters (memory + SQLite)");
         Ok(())
@@ -1507,17 +1508,21 @@ impl ClusterEngine {
     // Persistence — SQLite-backed cluster storage
     // -----------------------------------------------------------------------
 
-    /// Persist all current clusters to SQLite. Replaces the full set each time
-    /// (DELETE + INSERT) inside a transaction for atomicity.
+    /// Persist all current clusters to the database. Replaces the full set
+    /// each time (DELETE + INSERT) inside a transaction for atomicity.
     pub async fn persist_clusters(&self) -> Result<(), VectorError> {
+        use crate::db::entities::topic_clusters;
+        use sea_orm::ActiveValue::Set;
+        use sea_orm::{EntityTrait, TransactionTrait};
+
         let clusters = self.clusters.read().await;
-        let pool = &self.db.pool;
 
-        let mut tx = pool.begin().await?;
+        let txn = self.conn.begin().await.map_err(VectorError::Db)?;
 
-        sqlx::query("DELETE FROM topic_clusters")
-            .execute(&mut *tx)
-            .await?;
+        topic_clusters::Entity::delete_many()
+            .exec(&txn)
+            .await
+            .map_err(VectorError::Db)?;
 
         for c in clusters.iter() {
             let centroid_blob: Vec<u8> = c.centroid.iter().flat_map(|f| f.to_le_bytes()).collect();
@@ -1528,112 +1533,113 @@ impl ClusterEngine {
             let rep_ids_json = serde_json::to_string(&c.representative_email_ids)
                 .unwrap_or_else(|_| "[]".to_string());
 
-            sqlx::query(
-                "INSERT INTO topic_clusters \
-                 (id, name, description, centroid, email_ids, email_count, \
-                  top_terms, representative_email_ids, stability_score, \
-                  stability_runs, is_pinned, created_at, updated_at) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
-            )
-            .bind(&c.id)
-            .bind(&c.name)
-            .bind(&c.description)
-            .bind(&centroid_blob)
-            .bind(&email_ids_json)
-            .bind(c.email_count as i64)
-            .bind(&top_terms_json)
-            .bind(&rep_ids_json)
-            .bind(c.stability_score as f64)
-            .bind(c.stability_runs as i64)
-            .bind(c.is_pinned)
-            .bind(c.created_at.to_rfc3339())
-            .bind(c.updated_at.to_rfc3339())
-            .execute(&mut *tx)
-            .await?;
+            // `created_at`/`updated_at` are TEXT written by the application —
+            // the RFC3339 strings are byte-identical to the pre-port binds.
+            // `is_pinned` is an INTEGER 0/1 flag (not BOOLEAN).
+            topic_clusters::Entity::insert(topic_clusters::ActiveModel {
+                id: Set(c.id.clone()),
+                name: Set(c.name.clone()),
+                description: Set(c.description.clone()),
+                centroid: Set(centroid_blob),
+                email_ids: Set(email_ids_json),
+                email_count: Set(c.email_count as i32),
+                top_terms: Set(top_terms_json),
+                representative_email_ids: Set(rep_ids_json),
+                stability_score: Set(c.stability_score),
+                stability_runs: Set(c.stability_runs as i32),
+                is_pinned: Set(c.is_pinned as i32),
+                created_at: Set(c.created_at.to_rfc3339()),
+                updated_at: Set(c.updated_at.to_rfc3339()),
+            })
+            .exec_without_returning(&txn)
+            .await
+            .map_err(VectorError::Db)?;
         }
 
-        tx.commit().await?;
+        txn.commit().await.map_err(VectorError::Db)?;
 
         tracing::info!(count = clusters.len(), "Persisted clusters to SQLite");
         Ok(())
     }
 
-    /// Load clusters from SQLite into the in-memory RwLock. Called on startup.
-    #[allow(clippy::type_complexity)]
+    /// Load clusters from the database into the in-memory RwLock. Called on
+    /// startup.
     pub async fn load_persisted_clusters(&self) -> Result<usize, VectorError> {
-        let pool = &self.db.pool;
+        use crate::db::entities::topic_clusters;
+        use sea_orm::{ConnectionTrait, DatabaseBackend, EntityTrait, Statement};
 
         // Check if the table exists (migration may not have run yet).
-        let table_exists: (i64,) = sqlx::query_as(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='topic_clusters'",
-        )
-        .fetch_one(pool)
-        .await?;
+        // Catalog introspection is inherently per-backend (ADR-036 §5 hatch).
+        let existence_sql = match self.conn.get_database_backend() {
+            DatabaseBackend::Postgres => {
+                "SELECT COUNT(*) AS cnt FROM information_schema.tables \
+                 WHERE table_name = 'topic_clusters'"
+            }
+            _ => {
+                "SELECT COUNT(*) AS cnt FROM sqlite_master \
+                 WHERE type='table' AND name='topic_clusters'"
+            }
+        };
+        let table_exists: i64 = self
+            .conn
+            .query_one_raw(Statement::from_string(
+                self.conn.get_database_backend(),
+                existence_sql.to_owned(),
+            ))
+            .await
+            .map_err(VectorError::Db)?
+            .map(|row| row.try_get_by_index(0))
+            .transpose()
+            .map_err(VectorError::Db)?
+            .unwrap_or(0);
 
-        if table_exists.0 == 0 {
+        if table_exists == 0 {
             tracing::debug!("topic_clusters table not found, skipping load");
             return Ok(0);
         }
 
-        let rows: Vec<(
-            String,  // id
-            String,  // name
-            String,  // description
-            Vec<u8>, // centroid (blob)
-            String,  // email_ids (json)
-            i64,     // email_count
-            String,  // top_terms (json)
-            String,  // representative_email_ids (json)
-            f64,     // stability_score
-            i64,     // stability_runs
-            bool,    // is_pinned
-            String,  // created_at
-            String,  // updated_at
-        )> = sqlx::query_as(
-            "SELECT id, name, description, centroid, email_ids, email_count, \
-             top_terms, representative_email_ids, stability_score, \
-             stability_runs, is_pinned, created_at, updated_at \
-             FROM topic_clusters",
-        )
-        .fetch_all(pool)
-        .await?;
+        let rows: Vec<topic_clusters::Model> = topic_clusters::Entity::find()
+            .all(&self.conn)
+            .await
+            .map_err(VectorError::Db)?;
 
         let mut loaded: Vec<TopicCluster> = Vec::with_capacity(rows.len());
         let mut assignments_map = HashMap::new();
 
         for row in &rows {
             let centroid: Vec<f32> = row
-                .3
+                .centroid
                 .chunks_exact(4)
                 .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
                 .collect();
-            let email_ids: Vec<String> = serde_json::from_str(&row.4).unwrap_or_default();
-            let top_terms: Vec<ClusterTerm> = serde_json::from_str(&row.6).unwrap_or_default();
+            let email_ids: Vec<String> = serde_json::from_str(&row.email_ids).unwrap_or_default();
+            let top_terms: Vec<ClusterTerm> =
+                serde_json::from_str(&row.top_terms).unwrap_or_default();
             let representative_email_ids: Vec<String> =
-                serde_json::from_str(&row.7).unwrap_or_default();
-            let created_at = chrono::DateTime::parse_from_rfc3339(&row.11)
+                serde_json::from_str(&row.representative_email_ids).unwrap_or_default();
+            let created_at = chrono::DateTime::parse_from_rfc3339(&row.created_at)
                 .map(|dt| dt.with_timezone(&Utc))
                 .unwrap_or_else(|_| Utc::now());
-            let updated_at = chrono::DateTime::parse_from_rfc3339(&row.12)
+            let updated_at = chrono::DateTime::parse_from_rfc3339(&row.updated_at)
                 .map(|dt| dt.with_timezone(&Utc))
                 .unwrap_or_else(|_| Utc::now());
 
             for eid in &email_ids {
-                assignments_map.insert(eid.clone(), row.0.clone());
+                assignments_map.insert(eid.clone(), row.id.clone());
             }
 
             loaded.push(TopicCluster {
-                id: row.0.clone(),
-                name: row.1.clone(),
-                description: row.2.clone(),
+                id: row.id.clone(),
+                name: row.name.clone(),
+                description: row.description.clone(),
                 centroid,
                 email_ids,
-                email_count: row.5 as usize,
+                email_count: row.email_count as usize,
                 top_terms,
                 representative_email_ids,
-                stability_score: row.8 as f32,
-                stability_runs: row.9 as u32,
-                is_pinned: row.10,
+                stability_score: row.stability_score,
+                stability_runs: row.stability_runs as u32,
+                is_pinned: row.is_pinned != 0,
                 created_at,
                 updated_at,
             });

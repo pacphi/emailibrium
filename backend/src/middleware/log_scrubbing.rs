@@ -15,6 +15,12 @@ use regex::Regex;
 use std::sync::OnceLock;
 use tracing::{error, warn};
 
+/// Trace spans contain only the route path. OAuth codes/state and bearer
+/// credentials must never reach the default full-URI tracing span.
+pub fn safe_request_span(request: &Request<Body>) -> tracing::Span {
+    tracing::info_span!("http.request", method = %request.method(), path = request.uri().path())
+}
+
 /// Regex patterns for detecting tokens and sensitive data
 static TOKEN_PATTERNS: OnceLock<Vec<Regex>> = OnceLock::new();
 
@@ -57,58 +63,23 @@ pub fn scrub_sensitive_data(input: &str) -> String {
     output
 }
 
-/// Middleware to scrub tokens from error responses
+/// Log only request method, path, and status.
 ///
-/// This middleware should be applied early in the middleware stack
-/// to catch errors from downstream handlers.
-///
-/// It sanitises the request URI (via [`scrub_query_params`]) and headers
-/// (via [`scrub_headers`]) before forwarding the request, and uses
-/// [`scrub_error_message`] when logging error responses.
+/// Query keys can be encoded or repeated, so name-based query redaction cannot
+/// make a request URI safe to log. Headers may also contain sensitive URLs.
+/// The original request is forwarded unchanged; only log metadata is narrowed.
 pub async fn log_scrubbing_middleware(request: Request<Body>, next: Next) -> Response<Body> {
     let method = request.method().clone();
+    let path = request.uri().path().to_owned();
+    tracing::trace!(method = %method, path = %path, "Incoming request");
 
-    // Scrub sensitive query parameters from the URI for logging purposes.
-    let scrubbed_uri = scrub_query_params(&request.uri().to_string());
-
-    // Scrub sensitive headers for any diagnostic logging.
-    let scrubbed_hdrs = scrub_headers(request.headers());
-    tracing::trace!(
-        method = %method,
-        uri = %scrubbed_uri,
-        headers = %scrubbed_hdrs,
-        "Incoming request (scrubbed)"
-    );
-
-    // Process request
     let response = next.run(request).await;
-
-    // Check if response is an error status
     let status = response.status();
-    if status.is_client_error() || status.is_server_error() {
-        // Build a synthetic error to exercise scrub_error_message
-        let synthetic_err = std::io::Error::other(format!("{status} on {scrubbed_uri}"));
-        let scrubbed_msg = scrub_error_message(&synthetic_err);
-
-        if status.is_server_error() {
-            error!(
-                method = %method,
-                uri = %scrubbed_uri,
-                status = %status,
-                error_detail = %scrubbed_msg,
-                "Request error (details scrubbed)"
-            );
-        } else {
-            warn!(
-                method = %method,
-                uri = %scrubbed_uri,
-                status = %status,
-                error_detail = %scrubbed_msg,
-                "Client error (details scrubbed)"
-            );
-        }
+    if status.is_server_error() {
+        error!(method = %method, path = %path, status = %status, "Request error");
+    } else if status.is_client_error() {
+        warn!(method = %method, path = %path, status = %status, "Client error");
     }
-
     response
 }
 
@@ -119,6 +90,7 @@ pub fn scrub_query_params(url: &str) -> String {
     // Remove common sensitive query parameters
     let sensitive_params = [
         "access_token",
+        "state",
         "refresh_token",
         "token",
         "code",
@@ -276,7 +248,7 @@ mod tests {
         let result = scrub_query_params(url);
         assert!(result.contains("access_token=[REDACTED]"));
         assert!(!result.contains("secret123"));
-        assert!(result.contains("state=abc"));
+        assert!(result.contains("state=[REDACTED]"));
     }
 
     #[test]
@@ -337,5 +309,126 @@ mod tests {
         let err = std::io::Error::other("Connection refused on port 8080");
         let result = scrub_error_message(&err);
         assert_eq!(result, "Connection refused on port 8080");
+    }
+    #[test]
+    fn oauth_callback_state_and_code_are_redacted_without_rewriting_request_uri() {
+        let request = Request::builder()
+            .uri("/api/v1/auth/callback?code=synthetic-code&state=gmail:synthetic-state")
+            .body(Body::empty())
+            .unwrap();
+        let safe = scrub_query_params(&request.uri().to_string());
+        assert!(!safe.contains("synthetic-code"));
+        assert!(!safe.contains("synthetic-state"));
+        assert!(request
+            .uri()
+            .query()
+            .unwrap()
+            .contains("state=gmail:synthetic-state"));
+    }
+
+    #[test]
+    fn safe_request_trace_span_omits_callback_secrets() {
+        use std::sync::{Arc, Mutex};
+        #[derive(Clone)]
+        struct Buffer(Arc<Mutex<Vec<u8>>>);
+        impl std::io::Write for Buffer {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let bytes = Arc::new(Mutex::new(Vec::new()));
+        let writer = bytes.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .without_time()
+            .with_ansi(false)
+            .with_span_events(tracing_subscriber::fmt::format::FmtSpan::NEW)
+            .with_writer(move || Buffer(writer.clone()))
+            .finish();
+        let request = Request::builder()
+            .uri("/api/v1/auth/callback?code=synthetic-code&state=synthetic-state")
+            .body(Body::empty())
+            .unwrap();
+        tracing::subscriber::with_default(subscriber, || {
+            drop(safe_request_span(&request));
+        });
+        let log = String::from_utf8(bytes.lock().unwrap().clone()).unwrap();
+        assert!(log.contains("/api/v1/auth/callback"));
+        assert!(!log.contains("synthetic-code"));
+        assert!(!log.contains("synthetic-state"));
+    }
+    #[tokio::test]
+    async fn encoded_oauth_parameters_never_reach_middleware_error_logs() {
+        use axum::{extract::OriginalUri, http::StatusCode, routing::get, Router};
+        use std::sync::{Arc, Mutex};
+        use tower::ServiceExt;
+        use tracing::instrument::WithSubscriber;
+
+        #[derive(Clone)]
+        struct Buffer(Arc<Mutex<Vec<u8>>>);
+        impl std::io::Write for Buffer {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let uri = "/api/v1/auth/callback?%63ode=credential-canary-1234&%73tate=state-canary";
+        for status in [StatusCode::BAD_REQUEST, StatusCode::INTERNAL_SERVER_ERROR] {
+            let bytes = Arc::new(Mutex::new(Vec::new()));
+            let writer = bytes.clone();
+            let subscriber = tracing_subscriber::fmt()
+                .without_time()
+                .with_ansi(false)
+                .with_max_level(tracing::Level::TRACE)
+                .with_writer(move || Buffer(writer.clone()))
+                .finish();
+            let router = Router::new()
+                .route(
+                    "/api/v1/auth/callback",
+                    get(move |OriginalUri(original): OriginalUri| async move {
+                        (status, original.to_string())
+                    }),
+                )
+                .layer(axum::middleware::from_fn(log_scrubbing_middleware));
+            let response = router
+                .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+                .with_subscriber(subscriber)
+                .await
+                .unwrap();
+            assert_eq!(response.status(), status);
+            let body = axum::body::to_bytes(response.into_body(), 1024)
+                .await
+                .unwrap();
+            assert_eq!(
+                body.as_ref(),
+                uri.as_bytes(),
+                "the handler must receive the original encoded URI"
+            );
+            let log = String::from_utf8(bytes.lock().unwrap().clone()).unwrap();
+            assert!(log.contains("/api/v1/auth/callback"));
+            assert!(
+                log.contains(if status.is_client_error() {
+                    "Client error"
+                } else {
+                    "Request error"
+                }),
+                "must exercise the middleware error branch: {log}"
+            );
+            assert!(
+                !log.contains("credential-canary-1234"),
+                "credential leaked in middleware logs: {log}"
+            );
+            assert!(
+                !log.contains("state-canary"),
+                "OAuth state leaked in middleware logs: {log}"
+            );
+        }
     }
 }

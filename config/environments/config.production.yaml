@@ -5,7 +5,7 @@
 # Secrets (database_url, encryption password, OAuth credentials) are
 # injected via Docker secrets or environment variables -- never here.
 
-host: "0.0.0.0"
+host: "127.0.0.1"
 port: 8080
 # database_url: provided via /run/secrets/database_url or EMAILIBRIUM_DATABASE_URL
 

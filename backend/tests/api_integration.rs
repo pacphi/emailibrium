@@ -18,9 +18,18 @@ use axum::{
     routing::{delete, get, post},
     Json, Router,
 };
+use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseConnection, Statement};
 use serde::{Deserialize, Serialize};
-use sqlx::{sqlite::SqlitePoolOptions, Row, SqlitePool};
 use tower::ServiceExt;
+
+/// Build a raw SQLite statement (these tests replicate production SQL text
+/// against in-memory SQLite, so SQLite rendering is deliberate).
+fn stmt<I>(sql: &str, values: I) -> Statement
+where
+    I: IntoIterator<Item = sea_orm::Value>,
+{
+    Statement::from_sql_and_values(DatabaseBackend::Sqlite, sql, values)
+}
 
 // ---------------------------------------------------------------------------
 // Test-local types (mirror production response/request shapes)
@@ -28,7 +37,8 @@ use tower::ServiceExt;
 
 #[derive(Clone)]
 struct TestState {
-    pool: SqlitePool,
+    /// SeaORM handle over the in-memory SQLite database (ADR-036).
+    pool: DatabaseConnection,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -127,19 +137,20 @@ struct ErasureRequest {
 const EMAIL_COLUMNS: &str = "id, account_id, provider, subject, from_addr, \
     is_read, is_starred, has_attachments, embedding_status, category";
 
-fn row_to_response(row: &sqlx::sqlite::SqliteRow) -> EmailResponse {
+fn row_to_response(row: &sea_orm::QueryResult) -> EmailResponse {
     EmailResponse {
-        id: row.get("id"),
-        account_id: row.get("account_id"),
-        provider: row.get("provider"),
-        subject: row.get("subject"),
-        from_addr: row.get("from_addr"),
-        is_read: row.get::<bool, _>("is_read"),
-        is_starred: row.get::<bool, _>("is_starred"),
-        has_attachments: row.get::<bool, _>("has_attachments"),
-        embedding_status: row.get("embedding_status"),
+        id: row.try_get("", "id").unwrap(),
+        account_id: row.try_get("", "account_id").unwrap(),
+        provider: row.try_get("", "provider").unwrap(),
+        subject: row.try_get("", "subject").unwrap(),
+        from_addr: row.try_get("", "from_addr").unwrap(),
+        is_read: row.try_get("", "is_read").unwrap(),
+        is_starred: row.try_get("", "is_starred").unwrap(),
+        has_attachments: row.try_get("", "has_attachments").unwrap(),
+        embedding_status: row.try_get("", "embedding_status").unwrap(),
         category: row
-            .get::<Option<String>, _>("category")
+            .try_get::<Option<String>>("", "category")
+            .unwrap()
             .unwrap_or_else(|| "Uncategorized".to_string()),
     }
 }
@@ -164,33 +175,33 @@ async fn list_emails(
         format!("WHERE {}", where_parts.join(" AND "))
     };
 
-    let count_sql = format!("SELECT COUNT(*) FROM emails {where_clause}");
-    let mut count_q = sqlx::query_scalar::<_, i64>(emailibrium::db::audited_sql(&count_sql));
+    let mut binds: Vec<sea_orm::Value> = Vec::new();
     if let Some(ref v) = params.account_id {
-        count_q = count_q.bind(v);
+        binds.push(v.as_str().into());
     }
     if let Some(ref v) = params.category {
-        count_q = count_q.bind(v);
+        binds.push(v.as_str().into());
     }
-    let total = count_q
-        .fetch_one(&state.pool)
+
+    let count_sql = format!("SELECT COUNT(*) AS cnt FROM emails {where_clause}");
+    let total: i64 = state
+        .pool
+        .query_one_raw(stmt(&count_sql, binds.clone()))
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .and_then(|row| row.try_get_by_index(0).ok())
+        .unwrap_or(0);
 
     let select_sql = format!(
         "SELECT {EMAIL_COLUMNS} FROM emails {where_clause} ORDER BY received_at DESC LIMIT ? OFFSET ?"
     );
-    let mut query = sqlx::query(emailibrium::db::audited_sql(&select_sql));
-    if let Some(ref v) = params.account_id {
-        query = query.bind(v);
-    }
-    if let Some(ref v) = params.category {
-        query = query.bind(v);
-    }
-    query = query.bind(limit).bind(offset);
+    let mut select_binds = binds;
+    select_binds.push(limit.into());
+    select_binds.push(offset.into());
 
-    let rows = query
-        .fetch_all(&state.pool)
+    let rows = state
+        .pool
+        .query_all_raw(stmt(&select_sql, select_binds))
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -203,9 +214,9 @@ async fn get_email(
     Path(id): Path<String>,
 ) -> Result<Json<EmailResponse>, (StatusCode, String)> {
     let sql = format!("SELECT {EMAIL_COLUMNS} FROM emails WHERE id = ?1");
-    let row = sqlx::query(emailibrium::db::audited_sql(&sql))
-        .bind(&id)
-        .fetch_optional(&state.pool)
+    let row = state
+        .pool
+        .query_one_raw(stmt(&sql, [id.as_str().into()]))
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -219,9 +230,12 @@ async fn delete_email(
     State(state): State<TestState>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    let rows = sqlx::query("DELETE FROM emails WHERE id = ?1")
-        .bind(&id)
-        .execute(&state.pool)
+    let rows = state
+        .pool
+        .execute_raw(stmt(
+            "DELETE FROM emails WHERE id = ?1",
+            [id.as_str().into()],
+        ))
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -235,9 +249,12 @@ async fn archive_email(
     State(state): State<TestState>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    let rows = sqlx::query("UPDATE emails SET labels = 'ARCHIVED' WHERE id = ?1")
-        .bind(&id)
-        .execute(&state.pool)
+    let rows = state
+        .pool
+        .execute_raw(stmt(
+            "UPDATE emails SET labels = 'ARCHIVED' WHERE id = ?1",
+            [id.as_str().into()],
+        ))
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -251,19 +268,26 @@ async fn star_email(
     State(state): State<TestState>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    let current: Option<(bool,)> = sqlx::query_as("SELECT is_starred FROM emails WHERE id = ?1")
-        .bind(&id)
-        .fetch_optional(&state.pool)
+    let current: Option<bool> = state
+        .pool
+        .query_one_raw(stmt(
+            "SELECT is_starred FROM emails WHERE id = ?1",
+            [id.as_str().into()],
+        ))
         .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map(|row| row.try_get_by_index(0))
+        .transpose()
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let new_starred = !current
-        .ok_or_else(|| (StatusCode::NOT_FOUND, "Email not found".to_string()))?
-        .0;
+    let new_starred =
+        !current.ok_or_else(|| (StatusCode::NOT_FOUND, "Email not found".to_string()))?;
 
-    sqlx::query("UPDATE emails SET is_starred = ?1 WHERE id = ?2")
-        .bind(new_starred)
-        .bind(&id)
-        .execute(&state.pool)
+    state
+        .pool
+        .execute_raw(stmt(
+            "UPDATE emails SET is_starred = ?1 WHERE id = ?2",
+            [new_starred.into(), id.as_str().into()],
+        ))
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -273,14 +297,28 @@ async fn star_email(
 async fn email_counts(
     State(state): State<TestState>,
 ) -> Result<Json<EmailCounts>, (StatusCode, String)> {
-    let (total, unread): (i64, i64) = sqlx::query_as(
-        "SELECT COALESCE(COUNT(*), 0), \
-         COALESCE(SUM(CASE WHEN is_read = 0 THEN 1 ELSE 0 END), 0) \
+    let row = state
+        .pool
+        .query_one_raw(stmt(
+            "SELECT COALESCE(COUNT(*), 0) AS total, \
+         COALESCE(SUM(CASE WHEN is_read = 0 THEN 1 ELSE 0 END), 0) AS unread \
          FROM emails",
-    )
-    .fetch_one(&state.pool)
-    .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            [],
+        ))
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .ok_or_else(|| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "no counts row".to_string(),
+            )
+        })?;
+    let total: i64 = row
+        .try_get("", "total")
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let unread: i64 = row
+        .try_get("", "unread")
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     Ok(Json(EmailCounts {
         total: total as u64,
@@ -291,12 +329,25 @@ async fn email_counts(
 async fn list_accounts(
     State(state): State<TestState>,
 ) -> Result<Json<Vec<AccountResponse>>, (StatusCode, String)> {
-    let rows: Vec<(String, String, String, String)> = sqlx::query_as(
-        "SELECT id, provider, email_address, status FROM connected_accounts ORDER BY created_at",
-    )
-    .fetch_all(&state.pool)
-    .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let rows: Vec<(String, String, String, String)> = state
+        .pool
+        .query_all_raw(stmt(
+            "SELECT id, provider, email_address, status FROM connected_accounts ORDER BY created_at",
+            [],
+        ))
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .iter()
+        .map(|row| {
+            Ok((
+                row.try_get_by_index(0)?,
+                row.try_get_by_index(1)?,
+                row.try_get_by_index(2)?,
+                row.try_get_by_index(3)?,
+            ))
+        })
+        .collect::<Result<Vec<_>, sea_orm::DbErr>>()
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     let accounts = rows
         .into_iter()
@@ -323,24 +374,31 @@ async fn disconnect_account(
         )
     })?;
 
-    let _ = sqlx::query("DELETE FROM emails WHERE account_id = ?1")
-        .bind(&id)
-        .execute(&state.pool)
+    let _ = state
+        .pool
+        .execute_raw(stmt(
+            "DELETE FROM emails WHERE account_id = ?1",
+            [id.as_str().into()],
+        ))
         .await;
-    let _ = sqlx::query("DELETE FROM sync_state WHERE account_id = ?1")
-        .bind(&id)
-        .execute(&state.pool)
+    let _ = state
+        .pool
+        .execute_raw(stmt(
+            "DELETE FROM sync_state WHERE account_id = ?1",
+            [id.as_str().into()],
+        ))
         .await;
 
-    let rows = sqlx::query(
-        "UPDATE connected_accounts SET status = 'disconnected', \
+    let rows = state
+        .pool
+        .execute_raw(stmt(
+            "UPDATE connected_accounts SET status = 'disconnected', \
          encrypted_access_token = NULL, encrypted_refresh_token = NULL \
          WHERE id = ?1",
-    )
-    .bind(&id)
-    .execute(&state.pool)
-    .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            [id.as_str().into()],
+        ))
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     if rows.rows_affected() == 0 {
         return Err((StatusCode::NOT_FOUND, "Account not found".to_string()));
@@ -367,18 +425,21 @@ async fn record_gdpr_consent(
     let id = uuid::Uuid::new_v4().to_string();
     let now = chrono::Utc::now().to_rfc3339();
 
-    sqlx::query(
-        "INSERT INTO consent_decisions (id, consent_type, granted, granted_at, created_at) \
+    state
+        .pool
+        .execute_raw(stmt(
+            "INSERT INTO consent_decisions (id, consent_type, granted, granted_at, created_at) \
          VALUES (?1, ?2, ?3, ?4, ?5)",
-    )
-    .bind(&id)
-    .bind(&req.consent_type)
-    .bind(req.granted)
-    .bind(&now)
-    .bind(&now)
-    .execute(&state.pool)
-    .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            [
+                id.as_str().into(),
+                req.consent_type.as_str().into(),
+                req.granted.into(),
+                now.as_str().into(),
+                now.as_str().into(),
+            ],
+        ))
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     Ok(Json(GdprConsentResponse {
         decision: GdprConsentDecision {
@@ -392,12 +453,24 @@ async fn record_gdpr_consent(
 async fn list_gdpr_consents(
     State(state): State<TestState>,
 ) -> Result<Json<GdprConsentListResponse>, (StatusCode, String)> {
-    let rows: Vec<(String, String, bool)> = sqlx::query_as(
-        "SELECT id, consent_type, granted FROM consent_decisions ORDER BY created_at",
-    )
-    .fetch_all(&state.pool)
-    .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let rows: Vec<(String, String, bool)> = state
+        .pool
+        .query_all_raw(stmt(
+            "SELECT id, consent_type, granted FROM consent_decisions ORDER BY created_at",
+            [],
+        ))
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .iter()
+        .map(|row| {
+            Ok((
+                row.try_get_by_index(0)?,
+                row.try_get_by_index(1)?,
+                row.try_get_by_index(2)?,
+            ))
+        })
+        .collect::<Result<Vec<_>, sea_orm::DbErr>>()
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     let decisions = rows
         .into_iter()
@@ -418,12 +491,14 @@ async fn start_ingestion(
     let account_id = req.account_id.unwrap_or_else(|| "default".to_string());
 
     if account_id != "default" {
-        let exists: Option<(String,)> =
-            sqlx::query_as("SELECT id FROM connected_accounts WHERE id = ?1")
-                .bind(&account_id)
-                .fetch_optional(&state.pool)
-                .await
-                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        let exists = state
+            .pool
+            .query_one_raw(stmt(
+                "SELECT id FROM connected_accounts WHERE id = ?1",
+                [account_id.as_str().into()],
+            ))
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
         if exists.is_none() {
             return Err((
@@ -446,7 +521,7 @@ async fn health_check() -> StatusCode {
 }
 
 async fn readiness_check(State(state): State<TestState>) -> StatusCode {
-    match sqlx::query("SELECT 1").execute(&state.pool).await {
+    match state.pool.execute_unprepared("SELECT 1").await {
         Ok(_) => StatusCode::OK,
         Err(_) => StatusCode::SERVICE_UNAVAILABLE,
     }
@@ -463,9 +538,10 @@ async fn erase_user_data(
         ));
     }
 
-    let _ = sqlx::query("DELETE FROM emails").execute(&state.pool).await;
-    let _ = sqlx::query("DELETE FROM consent_decisions")
-        .execute(&state.pool)
+    let _ = state.pool.execute_unprepared("DELETE FROM emails").await;
+    let _ = state
+        .pool
+        .execute_unprepared("DELETE FROM consent_decisions")
         .await;
 
     Ok(StatusCode::OK)
@@ -475,55 +551,48 @@ async fn erase_user_data(
 // Test infrastructure
 // ---------------------------------------------------------------------------
 
-async fn setup_test_db() -> SqlitePool {
-    let pool = SqlitePoolOptions::new()
-        .max_connections(1)
-        .connect("sqlite::memory:")
-        .await
-        .expect("Failed to create in-memory SQLite pool");
+async fn setup_test_db() -> DatabaseConnection {
+    let conn = emailibrium::db::test_sqlite_database().await.sea_orm();
 
-    sqlx::query("PRAGMA foreign_keys = OFF")
-        .execute(&pool)
+    conn.execute_unprepared("PRAGMA foreign_keys = OFF")
         .await
         .unwrap();
 
-    // Use raw_sql to execute multi-statement migration scripts in one call.
+    // Execute multi-statement migration scripts in one call each.
     let migrations: &[&str] = &[
-        include_str!("../migrations/001_initial_schema.sql"),
-        include_str!("../migrations/002_ai_consent.sql"),
-        include_str!("../migrations/003_ai_metadata.sql"),
-        include_str!("../migrations/004_accounts.sql"),
-        include_str!("../migrations/006_ingestion_checkpoints.sql"),
-        include_str!("../migrations/007_per_user_learning.sql"),
-        include_str!("../migrations/008_cloud_api_audit.sql"),
-        include_str!("../migrations/009_ab_tests.sql"),
-        include_str!("../migrations/010_gdpr_consent.sql"),
-        include_str!("../migrations/011_sync_queue.sql"),
-        include_str!("../migrations/012_rules.sql"),
-        include_str!("../migrations/014_attachments.sql"),
+        include_str!("../migrations/sqlite/001_initial_schema.sql"),
+        include_str!("../migrations/sqlite/002_ai_consent.sql"),
+        include_str!("../migrations/sqlite/003_ai_metadata.sql"),
+        include_str!("../migrations/sqlite/004_accounts.sql"),
+        include_str!("../migrations/sqlite/006_ingestion_checkpoints.sql"),
+        include_str!("../migrations/sqlite/007_per_user_learning.sql"),
+        include_str!("../migrations/sqlite/008_cloud_api_audit.sql"),
+        include_str!("../migrations/sqlite/009_ab_tests.sql"),
+        include_str!("../migrations/sqlite/010_gdpr_consent.sql"),
+        include_str!("../migrations/sqlite/011_sync_queue.sql"),
+        include_str!("../migrations/sqlite/012_rules.sql"),
+        include_str!("../migrations/sqlite/014_attachments.sql"),
     ];
 
     for sql in migrations {
-        sqlx::raw_sql(emailibrium::db::audited_sql(sql))
-            .execute(&pool)
+        conn.execute_unprepared(sql)
             .await
             .unwrap_or_else(|e| panic!("Migration failed: {e}\nSQL:\n{sql}"));
     }
 
     // Migration 013: add columns (ignore if already exist).
-    let _ = sqlx::raw_sql(
-        "ALTER TABLE connected_accounts ADD COLUMN sync_depth TEXT NOT NULL DEFAULT '30d';\
+    let _ = conn
+        .execute_unprepared(
+            "ALTER TABLE connected_accounts ADD COLUMN sync_depth TEXT NOT NULL DEFAULT '30d';\
          ALTER TABLE connected_accounts ADD COLUMN sync_frequency INTEGER NOT NULL DEFAULT 5;",
-    )
-    .execute(&pool)
-    .await;
+        )
+        .await;
 
-    sqlx::query("PRAGMA foreign_keys = ON")
-        .execute(&pool)
+    conn.execute_unprepared("PRAGMA foreign_keys = ON")
         .await
         .unwrap();
 
-    pool
+    conn
 }
 
 fn build_test_router(state: TestState) -> Router {
@@ -561,29 +630,24 @@ fn build_test_router(state: TestState) -> Router {
         .with_state(state)
 }
 
-async fn insert_test_email(pool: &SqlitePool, id: &str, account_id: &str, subject: &str) {
-    sqlx::query(
+async fn insert_test_email(conn: &DatabaseConnection, id: &str, account_id: &str, subject: &str) {
+    conn.execute_raw(stmt(
         "INSERT INTO emails (id, account_id, provider, subject, from_addr, to_addrs, \
          received_at, is_read, is_starred, has_attachments, embedding_status, category) \
          VALUES (?1, ?2, 'gmail', ?3, 'sender@example.com', 'recipient@example.com', \
          datetime('now'), 0, 0, 0, 'pending', 'Inbox')",
-    )
-    .bind(id)
-    .bind(account_id)
-    .bind(subject)
-    .execute(pool)
+        [id.into(), account_id.into(), subject.into()],
+    ))
     .await
     .expect("Failed to insert test email");
 }
 
-async fn insert_test_account(pool: &SqlitePool, id: &str, email: &str) {
-    sqlx::query(
+async fn insert_test_account(conn: &DatabaseConnection, id: &str, email: &str) {
+    conn.execute_raw(stmt(
         "INSERT INTO connected_accounts (id, provider, email_address, status) \
          VALUES (?1, 'gmail', ?2, 'connected')",
-    )
-    .bind(id)
-    .bind(email)
-    .execute(pool)
+        [id.into(), email.into()],
+    ))
     .await
     .expect("Failed to insert test account");
 }
@@ -707,8 +771,7 @@ async fn test_list_emails_filter_by_category() {
     let pool = setup_test_db().await;
     insert_test_email(&pool, "email-f1", "acc-001", "Important").await;
     insert_test_email(&pool, "email-f2", "acc-001", "Newsletter").await;
-    sqlx::query("UPDATE emails SET category = 'Newsletter' WHERE id = 'email-f2'")
-        .execute(&pool)
+    pool.execute_unprepared("UPDATE emails SET category = 'Newsletter' WHERE id = 'email-f2'")
         .await
         .unwrap();
 
@@ -769,11 +832,17 @@ async fn test_delete_email() {
     let (status, _) = delete_request(app, "/api/v1/emails/email-del").await;
     assert_eq!(status, StatusCode::NO_CONTENT);
 
-    let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM emails WHERE id = 'email-del'")
-        .fetch_one(&pool)
+    let count: i64 = pool
+        .query_one_raw(stmt(
+            "SELECT COUNT(*) AS cnt FROM emails WHERE id = 'email-del'",
+            [],
+        ))
         .await
+        .unwrap()
+        .unwrap()
+        .try_get_by_index(0)
         .unwrap();
-    assert_eq!(count.0, 0);
+    assert_eq!(count, 0);
 }
 
 #[tokio::test]
@@ -799,9 +868,12 @@ async fn test_archive_email() {
     .await;
     assert_eq!(status, StatusCode::NO_CONTENT);
 
-    let (labels,): (String,) = sqlx::query_as("SELECT labels FROM emails WHERE id = 'email-arc'")
-        .fetch_one(&pool)
+    let labels: String = pool
+        .query_one_raw(stmt("SELECT labels FROM emails WHERE id = 'email-arc'", []))
         .await
+        .unwrap()
+        .unwrap()
+        .try_get_by_index(0)
         .unwrap();
     assert_eq!(labels, "ARCHIVED");
 }
@@ -834,11 +906,16 @@ async fn test_star_email_toggles() {
     .await;
     assert_eq!(status, StatusCode::NO_CONTENT);
 
-    let (starred,): (bool,) =
-        sqlx::query_as("SELECT is_starred FROM emails WHERE id = 'email-star'")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+    let starred: bool = pool
+        .query_one_raw(stmt(
+            "SELECT is_starred FROM emails WHERE id = 'email-star'",
+            [],
+        ))
+        .await
+        .unwrap()
+        .unwrap()
+        .try_get_by_index(0)
+        .unwrap();
     assert!(starred);
 }
 
@@ -874,8 +951,7 @@ async fn test_email_counts_with_data() {
     let pool = setup_test_db().await;
     insert_test_email(&pool, "email-c1", "acc-001", "Email 1").await;
     insert_test_email(&pool, "email-c2", "acc-001", "Email 2").await;
-    sqlx::query("UPDATE emails SET is_read = 1 WHERE id = 'email-c1'")
-        .execute(&pool)
+    pool.execute_unprepared("UPDATE emails SET is_read = 1 WHERE id = 'email-c1'")
         .await
         .unwrap();
 
@@ -949,12 +1025,16 @@ async fn test_disconnect_account_success() {
     let (status, _) = delete_request(app, &format!("/api/v1/auth/accounts/{account_id}")).await;
     assert_eq!(status, StatusCode::NO_CONTENT);
 
-    let (db_status,): (String,) =
-        sqlx::query_as("SELECT status FROM connected_accounts WHERE id = ?1")
-            .bind(&account_id)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+    let db_status: String = pool
+        .query_one_raw(stmt(
+            "SELECT status FROM connected_accounts WHERE id = ?1",
+            [account_id.as_str().into()],
+        ))
+        .await
+        .unwrap()
+        .unwrap()
+        .try_get_by_index(0)
+        .unwrap();
     assert_eq!(db_status, "disconnected");
 }
 
@@ -1012,12 +1092,11 @@ async fn test_list_gdpr_consents_after_recording() {
 
     // Record a consent directly in DB.
     let id = uuid::Uuid::new_v4().to_string();
-    sqlx::query(
+    pool.execute_raw(stmt(
         "INSERT INTO consent_decisions (id, consent_type, granted, created_at) \
          VALUES (?1, 'analytics', 1, datetime('now'))",
-    )
-    .bind(&id)
-    .execute(&pool)
+        [id.as_str().into()],
+    ))
     .await
     .unwrap();
 
@@ -1093,9 +1172,12 @@ async fn test_erase_with_valid_token() {
     .await;
     assert_eq!(status, StatusCode::OK);
 
-    let (count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM emails")
-        .fetch_one(&pool)
+    let count: i64 = pool
+        .query_one_raw(stmt("SELECT COUNT(*) AS cnt FROM emails", []))
         .await
+        .unwrap()
+        .unwrap()
+        .try_get_by_index(0)
         .unwrap();
     assert_eq!(count, 0);
 }

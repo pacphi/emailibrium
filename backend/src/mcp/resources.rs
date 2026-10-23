@@ -305,7 +305,7 @@ async fn audit_thread_read(ctx: &ToolContext, uri: &str, status: &'static str, s
         // resource traffic rather than as tool calls that never happened.
         source: CallSource::Resource.as_str(),
     };
-    audit::log_tool_call(ctx.pool(), &entry).await;
+    audit::log_tool_call(&ctx.conn(), &entry).await;
 }
 
 /// Serialize a fetched record, reporting a serialization failure as a server

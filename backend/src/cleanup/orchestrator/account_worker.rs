@@ -22,6 +22,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::Utc;
+use sea_orm::sea_query::Expr;
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use thiserror::Error;
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
@@ -33,6 +35,7 @@ use crate::cleanup::domain::operation::{
 };
 use crate::cleanup::domain::plan::{JobCounts, JobId, PlanId};
 use crate::cleanup::repository::CleanupPlanRepository;
+use crate::db::entities::emails;
 use crate::email::provider::{MoveKind as ProvMoveKind, ProviderError};
 use crate::email::unsubscribe::{SubscriptionTarget, UnsubscribeService};
 
@@ -70,10 +73,10 @@ pub struct AccountWorkerCtx {
     pub user_id: String,
     /// Job id for this apply run; carried into every audit row.
     pub job_id: JobId,
-    /// Optional local DB pool — when set, a successful provider archive
-    /// also updates `is_archived = 1` in the local emails table so the
+    /// Optional local DB handle — when set, a successful provider archive
+    /// also updates `is_archived = true` in the local emails table so the
     /// Archive view shows the email immediately without waiting for a sync.
-    pub db: Option<sqlx::SqlitePool>,
+    pub db: Option<crate::db::Database>,
 }
 
 impl AccountWorkerCtx {}
@@ -100,25 +103,45 @@ impl AccountWorker {
         let semaphore = Arc::new(Semaphore::new(per_provider_concurrency(self.provider)));
         let throttle_ms = per_provider_throttle_ms(self.provider);
 
-        // Read all rows for this account once, then iterate seq order. For
-        // huge plans the production wiring should cursor-paginate; Phase C
-        // accepts the upper bound (10k expansion test) since rows live in
-        // SQLite already.
+        // Load the complete initial snapshot in bounded repository pages.
+        // Predicate children appended during this run keep the existing
+        // follow-up-apply semantics rather than changing this snapshot.
         let mut counts = JobCounts::default();
-
-        let (rows, _) = self
-            .ctx
-            .repo
-            .list_operations(
-                plan_id,
-                crate::cleanup::repository::OpsFilter {
-                    account_id: Some(self.account_id.clone()),
-                    ..Default::default()
-                },
-                None,
-                u32::MAX,
-            )
-            .await?;
+        let mut rows = Vec::new();
+        let mut cursor = None;
+        loop {
+            if cancel.is_cancelled() {
+                return Err(WorkerError::Cancelled);
+            }
+            let (page, next_cursor) = self
+                .ctx
+                .repo
+                .list_operations(
+                    plan_id,
+                    crate::cleanup::repository::OpsFilter {
+                        account_id: Some(self.account_id.clone()),
+                        ..Default::default()
+                    },
+                    cursor,
+                    1000,
+                )
+                .await?;
+            // An empty page may repeat the cursor at normal repository EOF.
+            // Cursors cannot regress, and nonempty pages must make progress.
+            if next_cursor.is_some_and(|next| {
+                next < cursor.unwrap_or(0) || (!page.is_empty() && next == cursor.unwrap_or(0))
+            }) {
+                return Err(crate::cleanup::domain::ports::RepoError::Internal(
+                    "cleanup operations cursor did not advance".into(),
+                )
+                .into());
+            }
+            rows.extend(page);
+            if next_cursor.is_none() || next_cursor == cursor {
+                break;
+            }
+            cursor = next_cursor;
+        }
 
         let mut idx = 0usize;
         while idx < rows.len() {
@@ -127,6 +150,28 @@ impl AccountWorker {
             }
             let op = rows[idx].clone();
             idx += 1;
+
+            // A replay must preserve terminal outcomes before evaluating any
+            // current request's risk or acknowledgement gates.
+            match &op {
+                PlannedOperation::Materialized(row)
+                    if !matches!(row.status, OperationStatus::Pending) =>
+                {
+                    continue;
+                }
+                PlannedOperation::Predicate(predicate)
+                    if matches!(
+                        predicate.status,
+                        PredicateStatus::Expanded
+                            | PredicateStatus::Applied
+                            | PredicateStatus::Failed
+                            | PredicateStatus::Skipped
+                    ) =>
+                {
+                    continue;
+                }
+                _ => {}
+            }
 
             // Skip rows above the risk-max threshold: they remain pending
             // for a follow-up apply with a higher risk_max.
@@ -191,17 +236,6 @@ impl AccountWorker {
             let row = match op {
                 PlannedOperation::Materialized(r) => r,
                 PlannedOperation::Predicate(p) => {
-                    if matches!(
-                        p.status,
-                        PredicateStatus::Expanded
-                            | PredicateStatus::Applied
-                            | PredicateStatus::Failed
-                            | PredicateStatus::Skipped
-                    ) {
-                        // Already terminal; nothing to do for the predicate
-                        // row itself — children (if any) are independent rows.
-                        continue;
-                    }
                     if let Err(err) = self.expand_predicate_into_plan(plan_id, &p).await {
                         let action_type = plan_action_type_str(&p.action).to_string();
                         let _ = self
@@ -223,11 +257,6 @@ impl AccountWorker {
                     continue;
                 }
             };
-
-            // Skip rows that are already terminal (idempotent re-apply).
-            if !matches!(row.status, OperationStatus::Pending) {
-                continue;
-            }
 
             // Acquire concurrency permit.
             let _permit = match semaphore.clone().acquire_owned().await {
@@ -404,12 +433,13 @@ impl AccountWorker {
             .await;
 
         let page_size: u32 = 1000;
+        let expansion_as_of = Utc::now();
         let mut page: u32 = 0;
         loop {
             let children = self
                 .ctx
                 .expander
-                .expand_page(predicate, page, page_size)
+                .expand_page(expansion_as_of, predicate, page, page_size)
                 .await?;
             if children.is_empty() {
                 break;
@@ -452,10 +482,8 @@ impl AccountWorker {
     }
 
     /// Dispatch an action via the provider port. The factory yields a
-    /// per-account `(EmailProvider, access_token)` pair (Item #1). When
-    /// the factory has no provider for this account (Mock no-op default
-    /// used in unit tests) we treat the call as a success so the
-    /// orchestrator + SSE plumbing remains exercisable.
+    /// per-account `(EmailProvider, access_token)` pair (Item #1). Missing
+    /// accounts fail closed: no provider operation means no applied outcome.
     async fn dispatch(&self, row: &PlannedOperationRow) -> Result<(), DispatchError> {
         // Unsubscribe is sender-level and routes through UnsubscribeService,
         // independent of the per-account provider.
@@ -471,12 +499,10 @@ impl AccountWorker {
         {
             Ok(r) => r,
             Err(FactoryError::NotFound(_)) => {
-                tracing::debug!(
-                    account_id = %self.account_id,
-                    seq = row.seq,
-                    "dispatch: factory has no provider for account — treating as success",
-                );
-                return Ok(());
+                return Err(DispatchError::Failed(ErrorCode {
+                    code: "account_not_found".into(),
+                    message: "provider account is no longer available".into(),
+                }));
             }
             Err(FactoryError::OAuth(msg)) => {
                 tracing::warn!(
@@ -525,13 +551,8 @@ impl AccountWorker {
             PlanAction::Archive => {
                 let r = provider.archive_message(access_token, email_id).await;
                 if r.is_ok() {
-                    if let Some(ref pool) = self.ctx.db {
-                        let _ = sqlx::query(
-                            "UPDATE emails SET labels = 'ARCHIVED', is_archived = 1 WHERE id = ?1",
-                        )
-                        .bind(email_id)
-                        .execute(pool)
-                        .await;
+                    if let Some(ref db) = self.ctx.db {
+                        mark_archived_locally(db, email_id).await;
                     }
                 }
                 r
@@ -561,11 +582,8 @@ impl AccountWorker {
                     // Permanent: delete from provider, then remove from local DB.
                     let r = provider.delete_message(access_token, email_id).await;
                     if r.is_ok() {
-                        if let Some(ref pool) = self.ctx.db {
-                            let _ = sqlx::query("DELETE FROM emails WHERE id = ?1")
-                                .bind(email_id)
-                                .execute(pool)
-                                .await;
+                        if let Some(ref db) = self.ctx.db {
+                            delete_locally(db, email_id).await;
                         }
                     }
                     r
@@ -573,13 +591,8 @@ impl AccountWorker {
                     // Soft delete: archive on provider + mark locally.
                     let r = provider.archive_message(access_token, email_id).await;
                     if r.is_ok() {
-                        if let Some(ref pool) = self.ctx.db {
-                            let _ = sqlx::query(
-                                "UPDATE emails SET labels = 'ARCHIVED', is_archived = 1 WHERE id = ?1",
-                            )
-                            .bind(email_id)
-                            .execute(pool)
-                            .await;
+                        if let Some(ref db) = self.ctx.db {
+                            mark_archived_locally(db, email_id).await;
                         }
                     }
                     r
@@ -658,6 +671,35 @@ impl AccountWorker {
     }
 }
 
+/// Mark an email `is_archived` locally after a successful provider archive. Best-effort:
+/// errors are swallowed (matching this call site's pre-existing `let _ =` behavior — the
+/// provider-side archive already succeeded, so a failure here is a local cache staleness,
+/// not an apply failure).
+///
+/// `labels` is REPLACED by the single value `'ARCHIVED'`, not appended to — the pre-port
+/// behavior, preserved deliberately.
+///
+/// `is_archived` is a real BOOLEAN column in both dialects, and the `emails` entity declares
+/// it `bool`, so SeaORM encodes the right per-backend value: Postgres rejects an integer
+/// literal against a BOOLEAN column (ADR-035, now entity-owned per ADR-036).
+async fn mark_archived_locally(db: &crate::db::Database, email_id: &str) {
+    let _ = emails::Entity::update_many()
+        .col_expr(emails::Column::Labels, Expr::value("ARCHIVED"))
+        .col_expr(emails::Column::IsArchived, Expr::value(true))
+        .filter(emails::Column::Id.eq(email_id))
+        .exec(&db.sea_orm())
+        .await;
+}
+
+/// Remove an email from the local cache after a successful permanent provider delete.
+/// Best-effort, matching `mark_archived_locally`'s error-swallowing rationale.
+async fn delete_locally(db: &crate::db::Database, email_id: &str) {
+    let _ = emails::Entity::delete_many()
+        .filter(emails::Column::Id.eq(email_id))
+        .exec(&db.sea_orm())
+        .await;
+}
+
 #[allow(dead_code)] // Skipped variant reserved for precondition checks (ADR-030 §8 rule 4).
 enum DispatchError {
     Skipped(SkipReason),
@@ -704,5 +746,117 @@ fn group_key(op: &PlannedOperation) -> String {
             S::ArchiveStrategy { strategy } => format!("strategy:{strategy:?}"),
             S::Manual => String::new(),
         },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests — behavior pins for the two local-cache helpers.
+//
+// These reach the database directly rather than through `AccountWorker::run`
+// so each local cache mutation is verified independently of provider resolution.
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::Database;
+    use sea_orm::{ActiveModelTrait, ActiveValue::Set, DatabaseConnection};
+
+    /// In-memory SQLite carrying every migration the `emails` entity spans (see
+    /// `rules::executor`'s identical helper for why each one is needed).
+    async fn fresh_db() -> Database {
+        let db = crate::db::test_sqlite_database().await;
+        let conn = db.sea_orm();
+        crate::db::apply_sqlite_migrations(
+            &conn,
+            &[
+                include_str!("../../../migrations/sqlite/001_initial_schema.sql"),
+                include_str!("../../../migrations/sqlite/016_soft_delete_trash_spam.sql"),
+                include_str!("../../../migrations/sqlite/018_unsubscribe_headers.sql"),
+                include_str!("../../../migrations/sqlite/021_thread_key.sql"),
+                include_str!("../../../migrations/sqlite/027_is_archived.sql"),
+            ],
+        )
+        .await
+        .expect("migrate");
+        db
+    }
+
+    async fn seed_email(conn: &DatabaseConnection, id: &str, labels: &str) {
+        emails::ActiveModel {
+            id: Set(id.to_owned()),
+            account_id: Set("acct-1".to_owned()),
+            provider: Set("gmail".to_owned()),
+            subject: Set(format!("subject {id}")),
+            from_addr: Set("sender@example.com".to_owned()),
+            to_addrs: Set("me@example.com".to_owned()),
+            received_at: Set(Utc::now().naive_utc()),
+            labels: Set(Some(labels.to_owned())),
+            is_read: Set(Some(false)),
+            is_starred: Set(Some(false)),
+            is_spam: Set(0),
+            is_trash: Set(0),
+            folder: Set("INBOX".to_owned()),
+            is_archived: Set(false),
+            ..Default::default()
+        }
+        .insert(conn)
+        .await
+        .expect("seed email");
+    }
+
+    async fn load(conn: &DatabaseConnection, id: &str) -> Option<emails::Model> {
+        emails::Entity::find_by_id(id)
+            .one(conn)
+            .await
+            .expect("load")
+    }
+
+    #[tokio::test]
+    async fn mark_archived_locally_sets_the_flag_and_replaces_labels() {
+        let db = fresh_db().await;
+        let conn = db.sea_orm();
+        seed_email(&conn, "e1", "INBOX,IMPORTANT").await;
+        seed_email(&conn, "e2", "INBOX").await;
+
+        mark_archived_locally(&db, "e1").await;
+
+        let target = load(&conn, "e1").await.expect("row present");
+        assert!(target.is_archived);
+        // Wholesale replacement, NOT an append — pre-port behavior, preserved.
+        assert_eq!(target.labels.as_deref(), Some("ARCHIVED"));
+
+        let bystander = load(&conn, "e2").await.expect("row present");
+        assert!(!bystander.is_archived);
+        assert_eq!(bystander.labels.as_deref(), Some("INBOX"));
+    }
+
+    #[tokio::test]
+    async fn delete_locally_removes_only_the_target_row() {
+        let db = fresh_db().await;
+        let conn = db.sea_orm();
+        seed_email(&conn, "e1", "INBOX").await;
+        seed_email(&conn, "e2", "INBOX").await;
+
+        delete_locally(&db, "e1").await;
+
+        assert!(load(&conn, "e1").await.is_none());
+        assert!(load(&conn, "e2").await.is_some());
+    }
+
+    #[tokio::test]
+    async fn local_helpers_are_silent_no_ops_for_an_unknown_email() {
+        // Both are best-effort: a miss must not panic (they swallow errors and
+        // return `()`, so "no panic" is the whole observable contract).
+        let db = fresh_db().await;
+        let conn = db.sea_orm();
+        seed_email(&conn, "e1", "INBOX").await;
+
+        mark_archived_locally(&db, "does-not-exist").await;
+        delete_locally(&db, "does-not-exist").await;
+
+        let untouched = load(&conn, "e1").await.expect("row present");
+        assert!(!untouched.is_archived);
+        assert_eq!(untouched.labels.as_deref(), Some("INBOX"));
     }
 }

@@ -24,9 +24,10 @@ const MAX_ID_LEN: usize = 200;
 
 /// Log a backing-service failure and return a caller-safe [`ToolError`].
 ///
-/// Raw `sqlx::Error` text can carry table names, column names, and the database
-/// file path. Operators get the full detail in the log; the caller — which may
-/// be a model relaying text to a user — gets only the operation that failed.
+/// Raw database error text (`sea_orm::DbErr` wrapping the driver's message)
+/// can carry table names, column names, and the database file path. Operators
+/// get the full detail in the log; the caller — which may be a model relaying
+/// text to a user — gets only the operation that failed.
 pub fn db_error(operation: &str, e: impl std::fmt::Display) -> crate::tools::ToolError {
     tracing::error!(operation, error = %e, "tool backing operation failed");
     crate::tools::ToolError::Database(format!("{operation} failed"))
@@ -119,8 +120,13 @@ mod tests {
 
     #[test]
     fn db_error_withholds_backing_error_text() {
+        // Constructed as `sea_orm::DbErr` — the type every real caller passes
+        // post-port — so the pin covers the error text that actually flows.
         let raw = "no such column: secret_col in /var/data/emailibrium.db";
-        let err = db_error("Listing attachments", sqlx::Error::Protocol(raw.into()));
+        let err = db_error(
+            "Listing attachments",
+            sea_orm::DbErr::Custom(raw.to_string()),
+        );
 
         let surfaced = err.to_string();
         assert!(!surfaced.contains("secret_col"));

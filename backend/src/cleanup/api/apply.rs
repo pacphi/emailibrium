@@ -115,7 +115,7 @@ async fn begin_apply(
     let job_id = orch.begin_apply(&plan, opts).await.map_err(|e| {
         use crate::cleanup::orchestrator::apply::BeginApplyError as E;
         match e {
-            E::BadStatus(_) | E::Expired => {
+            E::BadStatus(_) | E::Expired | E::ClaimConflict => {
                 err(StatusCode::CONFLICT, "plan_not_applyable", &e.to_string())
             }
             E::HardDrift(_) => err(StatusCode::CONFLICT, "hard_drift", &e.to_string()),
