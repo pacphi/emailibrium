@@ -70,7 +70,7 @@ lettre = { version = "0.11", default-features = false, features = ["tokio1-rustl
 uuid = { version = "1", features = ["v4", "v7", "serde"] }
 blake3 = "1"
 chrono = { version = "0.4", features = ["serde"] }
-chrono-english = "0.1"
+chrono-english = "0.2"
 
 # URL encoding for OAuth
 urlencoding = "2"
