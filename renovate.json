@@ -4,6 +4,9 @@
   "extends": [
     "config:recommended"
   ],
+  "baseBranchPatterns": [
+    "develop"
+  ],
   "minimumReleaseAge": "3 days",
   "internalChecksFilter": "strict",
   "osvVulnerabilityAlerts": true,
