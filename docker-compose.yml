@@ -258,7 +258,7 @@ services:
 
   # ─── Qdrant Vector DB (optional, enable with STORE_BACKEND=qdrant) ─
   qdrant:
-    image: qdrant/qdrant:v1.13.6
+    image: qdrant/qdrant:v1.20.0
     container_name: emailibrium-qdrant
     profiles:
       - qdrant # Only starts when: docker compose --profile qdrant up
