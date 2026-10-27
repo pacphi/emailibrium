@@ -5,6 +5,7 @@
 //! header parsing, with batch execution, undo buffer, and false-positive guards.
 
 use std::collections::HashMap;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -195,21 +196,135 @@ pub fn should_warn(_subscription: &Subscription, open_rate: f32) -> bool {
 // Execution
 // ---------------------------------------------------------------------------
 
+/// Reject a resolved address that would let an email's `List-Unsubscribe`
+/// header turn this local engine into an SSRF primitive: the URL in that
+/// header is attacker-controlled, so every address it resolves to is
+/// checked, not just the hostname's apparent shape. Loopback, RFC 1918
+/// private, link-local, IPv6 unique-local (`fc00::/7`), CGNAT
+/// (`100.64.0.0/10`), multicast, broadcast and unspecified addresses are all
+/// rejected. An IPv4-mapped IPv6 address is unwrapped and checked as its
+/// IPv4 form so it can't be used to smuggle past the IPv4-specific checks.
+fn is_disallowed_unsubscribe_target(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => {
+            v4.is_loopback()
+                || v4.is_private()
+                || v4.is_link_local()
+                || v4.is_multicast()
+                || v4.is_unspecified()
+                || v4.is_broadcast()
+                || is_cgnat_v4(v4)
+        }
+        IpAddr::V6(v6) => {
+            if let Some(mapped) = v6.to_ipv4_mapped() {
+                return is_disallowed_unsubscribe_target(IpAddr::V4(mapped));
+            }
+            v6.is_loopback() || v6.is_multicast() || v6.is_unspecified() || is_unique_local_v6(v6) || is_link_local_v6(v6)
+        }
+    }
+}
+
+/// `100.64.0.0/10`, the shared address space reserved for carrier-grade NAT —
+/// not covered by `Ipv4Addr::is_private()`, which only knows RFC 1918.
+fn is_cgnat_v4(v4: std::net::Ipv4Addr) -> bool {
+    let o = v4.octets();
+    o[0] == 100 && (o[1] & 0b1100_0000) == 64
+}
+
+/// `fc00::/7`, IPv6 unique-local addresses — the IPv6 analog of RFC 1918,
+/// with no stable `is_unique_local()` in std at this edition.
+fn is_unique_local_v6(v6: std::net::Ipv6Addr) -> bool {
+    (v6.segments()[0] & 0xfe00) == 0xfc00
+}
+
+/// `fe80::/10`, IPv6 link-local addresses — no stable named method in std
+/// at this edition.
+fn is_link_local_v6(v6: std::net::Ipv6Addr) -> bool {
+    (v6.segments()[0] & 0xffc0) == 0xfe80
+}
+
+/// Parse and validate a `List-Unsubscribe` URL before this engine fetches
+/// it. Requires `https`; resolves the host itself (rather than letting the
+/// HTTP client resolve blind) and rejects it if any resolved address is
+/// disallowed per [`is_disallowed_unsubscribe_target`]. Returns the parsed
+/// URL and the one address the actual connection will be pinned to, so a
+/// second DNS lookup inside the HTTP client can't land on a different,
+/// unvalidated address between this check and the request
+/// (DNS-rebinding).
+async fn validate_unsubscribe_url(url_str: &str) -> Result<(reqwest::Url, SocketAddr), String> {
+    let url = reqwest::Url::parse(url_str).map_err(|e| format!("invalid unsubscribe url: {e}"))?;
+
+    if url.scheme() != "https" {
+        return Err(format!(
+            "unsubscribe url must use https, got {:?}",
+            url.scheme()
+        ));
+    }
+
+    let host = url
+        .host_str()
+        .ok_or_else(|| "unsubscribe url has no host".to_string())?
+        .to_string();
+    let port = url.port_or_known_default().unwrap_or(443);
+
+    let resolved: Vec<SocketAddr> = tokio::net::lookup_host((host.as_str(), port))
+        .await
+        .map_err(|e| format!("dns resolution failed for {host}: {e}"))?
+        .collect();
+
+    if resolved.is_empty() {
+        return Err(format!("dns resolution for {host} returned no addresses"));
+    }
+
+    for addr in &resolved {
+        if is_disallowed_unsubscribe_target(addr.ip()) {
+            return Err(format!(
+                "unsubscribe url {host} resolves to a disallowed address ({}); refusing to fetch an internal/private/loopback target",
+                addr.ip()
+            ));
+        }
+    }
+
+    // Every resolved address was just validated above, so pinning to the
+    // first one is as safe as pinning to any other.
+    Ok((url, resolved[0]))
+}
+
+/// Build a client scoped to exactly one validated, pinned address: no
+/// automatic redirect-following (a validated host could otherwise hand back
+/// a redirect to an internal target and have it followed silently — a
+/// redirect target must be validated from scratch, which means re-entering
+/// this module's checks, not quietly trusting the client's redirect logic),
+/// and `.resolve()` so the connection cannot be re-resolved to a different
+/// address than the one just validated.
+fn pinned_https_client(host: &str, pinned: SocketAddr) -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .user_agent("Emailibrium/1.0 (unsubscribe)")
+        .redirect(reqwest::redirect::Policy::none())
+        .resolve(host, pinned)
+        .build()
+        .map_err(|e| format!("failed to build unsubscribe http client: {e}"))
+}
+
 /// Execute an unsubscribe request using the given method.
 ///
 /// - `HttpPost`: sends a POST with `List-Unsubscribe=One-Click` body (RFC 8058).
 /// - `HttpGet`: sends a GET request to the unsubscribe URL.
 /// - `Mailto`: returns success (actual sending requires SMTP, which is logged
 ///   but not executed in the local-first architecture).
-pub async fn execute_unsubscribe(
-    method: &UnsubscribeMethod,
-    http: &reqwest::Client,
-) -> Result<UnsubscribeResult, String> {
+///
+/// `HttpPost` and `HttpGet` both validate the URL first (see
+/// [`validate_unsubscribe_url`]) — it comes straight from an email header,
+/// so it is treated as untrusted input, never fetched blind.
+pub async fn execute_unsubscribe(method: &UnsubscribeMethod) -> Result<UnsubscribeResult, String> {
     match method {
         UnsubscribeMethod::HttpPost { url } => {
-            debug!(url = %url, "Executing HTTP POST unsubscribe (RFC 8058)");
-            let resp = http
-                .post(url)
+            let (parsed, pinned) = validate_unsubscribe_url(url).await?;
+            let host = parsed.host_str().unwrap_or_default().to_string();
+            let client = pinned_https_client(&host, pinned)?;
+            debug!(url = %url, pinned = %pinned, "Executing HTTP POST unsubscribe (RFC 8058)");
+            let resp = client
+                .post(parsed)
                 .header("Content-Type", "application/x-www-form-urlencoded")
                 .body("List-Unsubscribe=One-Click")
                 .timeout(Duration::from_secs(15))
@@ -235,9 +350,12 @@ pub async fn execute_unsubscribe(
             }
         }
         UnsubscribeMethod::HttpGet { url } => {
-            debug!(url = %url, "Executing HTTP GET unsubscribe");
-            let resp = http
-                .get(url)
+            let (parsed, pinned) = validate_unsubscribe_url(url).await?;
+            let host = parsed.host_str().unwrap_or_default().to_string();
+            let client = pinned_https_client(&host, pinned)?;
+            debug!(url = %url, pinned = %pinned, "Executing HTTP GET unsubscribe");
+            let resp = client
+                .get(parsed)
                 .timeout(Duration::from_secs(15))
                 .send()
                 .await
@@ -283,8 +401,13 @@ pub async fn execute_unsubscribe(
 // ---------------------------------------------------------------------------
 
 /// Service for batch unsubscribe with an undo buffer.
+///
+/// Holds no shared `reqwest::Client`: each `HttpPost`/`HttpGet` execution
+/// builds its own client, scoped to the one validated, pinned address that
+/// request's URL resolved to (see `validate_unsubscribe_url` and
+/// `pinned_https_client` above) — a client shared across different
+/// unsubscribe targets couldn't carry a single pinned address correctly.
 pub struct UnsubscribeService {
-    http: reqwest::Client,
     undo_buffer: Arc<Mutex<HashMap<String, UndoEntry>>>,
     undo_window: Duration,
 }
@@ -293,11 +416,6 @@ impl UnsubscribeService {
     /// Create a new unsubscribe service.
     pub fn new() -> Self {
         Self {
-            http: reqwest::Client::builder()
-                .user_agent("Emailibrium/1.0 (unsubscribe)")
-                .redirect(reqwest::redirect::Policy::limited(3))
-                .build()
-                .unwrap_or_default(),
             undo_buffer: Arc::new(Mutex::new(HashMap::new())),
             undo_window: Duration::from_secs(300), // 5 minutes
         }
@@ -464,7 +582,7 @@ impl UnsubscribeService {
             }
         };
 
-        match execute_unsubscribe(method, &self.http).await {
+        match execute_unsubscribe(method).await {
             Ok(mut result) => {
                 result.sender = target.sender.clone();
                 result
@@ -708,7 +826,6 @@ mod tests {
     #[tokio::test]
     async fn test_undo_expired_batch() {
         let service = UnsubscribeService {
-            http: reqwest::Client::new(),
             undo_buffer: Arc::new(Mutex::new(HashMap::new())),
             undo_window: Duration::from_millis(1), // Very short window.
         };
@@ -752,5 +869,145 @@ mod tests {
         assert!(matches!(&methods[1], UnsubscribeMethod::HttpPost { .. }));
         // HTTP (not HTTPS) stays HttpGet even with post header.
         assert!(matches!(&methods[2], UnsubscribeMethod::HttpGet { .. }));
+    }
+
+    // -----------------------------------------------------------------
+    // SSRF fix: `is_disallowed_unsubscribe_target` / `validate_unsubscribe_url`
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn disallowed_targets_cover_loopback_private_link_local_cgnat_and_v6_equivalents() {
+        let disallowed: &[&str] = &[
+            "127.0.0.1",     // loopback v4
+            "10.0.0.1",      // RFC 1918 private
+            "172.16.0.1",    // RFC 1918 private
+            "192.168.1.1",   // RFC 1918 private
+            "169.254.1.1",   // link-local v4
+            "100.64.0.1",    // CGNAT, not covered by Ipv4Addr::is_private()
+            "0.0.0.0",       // unspecified
+            "255.255.255.255", // broadcast
+            "224.0.0.1",     // multicast v4
+            "::1",           // loopback v6
+            "fc00::1",       // unique-local v6
+            "fe80::1",       // link-local v6
+            "ff02::1",       // multicast v6
+            "::ffff:127.0.0.1", // IPv4-mapped IPv6 loopback — must unwrap, not bypass
+            "::ffff:10.0.0.1",  // IPv4-mapped IPv6 private — must unwrap, not bypass
+        ];
+        for ip_str in disallowed {
+            let ip: IpAddr = ip_str.parse().unwrap();
+            assert!(
+                is_disallowed_unsubscribe_target(ip),
+                "{ip_str} should be disallowed"
+            );
+        }
+    }
+
+    #[test]
+    fn public_looking_addresses_are_not_disallowed() {
+        // Proof that the validation isn't simply rejecting everything: known
+        // public addresses (not reachable/dialed in this test, just checked
+        // against the same predicate production code uses) must pass.
+        let public: &[&str] = &["8.8.8.8", "1.1.1.1", "2606:4700:4700::1111"];
+        for ip_str in public {
+            let ip: IpAddr = ip_str.parse().unwrap();
+            assert!(
+                !is_disallowed_unsubscribe_target(ip),
+                "{ip_str} should NOT be disallowed"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn validate_rejects_plain_http_before_any_dns_or_network_activity() {
+        // No network access in this sandbox for a real host, and none
+        // should be needed: the scheme check must short-circuit before DNS.
+        let err = validate_unsubscribe_url("http://example.invalid/unsub")
+            .await
+            .unwrap_err();
+        assert!(err.contains("https"), "error should mention https: {err}");
+    }
+
+    #[tokio::test]
+    async fn validate_rejects_a_url_that_resolves_to_loopback() {
+        let err = validate_unsubscribe_url("https://localhost/unsub")
+            .await
+            .unwrap_err();
+        assert!(
+            err.contains("disallowed address"),
+            "error should name the disallowed-address reason: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn validate_rejects_a_literal_private_ip_target() {
+        let err = validate_unsubscribe_url("https://192.168.1.1/unsub")
+            .await
+            .unwrap_err();
+        assert!(
+            err.contains("disallowed address"),
+            "error should name the disallowed-address reason: {err}"
+        );
+    }
+
+    /// Proves the exact redirect policy `pinned_https_client` builds with
+    /// (`redirect::Policy::none()`) does not chase a 3xx response: the
+    /// server's hit counter stays at 1, and the 302 status is returned to
+    /// the caller as-is rather than silently followed to its `Location`.
+    ///
+    /// This runs over plain HTTP against a local 127.0.0.1 test server,
+    /// not through `validate_unsubscribe_url`/`pinned_https_client`'s full
+    /// pipeline: that pipeline requires `https` and rejects loopback by
+    /// design (proven above), so it cannot be driven end-to-end against a
+    /// same-process test server without building self-signed-TLS test
+    /// infrastructure this repo doesn't otherwise have. What's proven here
+    /// is the one mechanism production code actually relies on to stop a
+    /// validated host from redirecting the engine to an internal target:
+    /// the client simply never follows a redirect, anywhere, ever.
+    #[tokio::test]
+    async fn redirect_none_policy_does_not_chase_a_3xx_response() {
+        use axum::{response::Redirect, routing::get, Router};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let hits = Arc::new(AtomicUsize::new(0));
+        let hits_for_handler = hits.clone();
+        let router = Router::new().route(
+            "/start",
+            get(move || {
+                let hits = hits_for_handler.clone();
+                async move {
+                    hits.fetch_add(1, Ordering::SeqCst);
+                    Redirect::to("http://169.254.169.254/latest/meta-data/")
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move {
+            axum::serve(listener, router).await.unwrap();
+        });
+
+        let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .unwrap();
+        let resp = client
+            .get(format!("http://{addr}/start"))
+            .send()
+            .await
+            .unwrap();
+
+        // axum's `Redirect::to` issues 303 See Other; what's under test is
+        // that the client doesn't chase a redirect at all, regardless of
+        // which 3xx code it carries.
+        assert_eq!(resp.status().as_u16(), 303);
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            1,
+            "the redirect target must never be fetched, so the origin server \
+             must have been hit exactly once"
+        );
+
+        task.abort();
     }
 }
