@@ -573,6 +573,7 @@ mod tests {
         }
         async fn list_operations(
             &self,
+            _user_id: &str,
             _id: PlanId,
             filter: OpsFilter,
             _cursor: Option<u64>,
@@ -610,6 +611,7 @@ mod tests {
         }
         async fn sample_operations(
             &self,
+            _user_id: &str,
             _id: PlanId,
             _s: &str,
             _n: u32,
@@ -682,7 +684,7 @@ mod tests {
             }
             Ok(())
         }
-        async fn cancel(&self, _id: PlanId) -> Result<(), RepoError> {
+        async fn cancel(&self, _user_id: &str, _id: PlanId) -> Result<(), RepoError> {
             Ok(())
         }
         async fn expire_due(&self, _now: chrono::DateTime<chrono::Utc>) -> Result<u32, RepoError> {
@@ -1190,7 +1192,7 @@ mod tests {
             "all unacknowledged rows must be visited"
         );
         let (tail, _) = repo
-            .list_operations(plan.id, OpsFilter::default(), Some(1000), 10)
+            .list_operations(&plan.user_id, plan.id, OpsFilter::default(), Some(1000), 10)
             .await
             .expect("tail");
         assert_eq!(tail.len(), 5);
@@ -1236,7 +1238,7 @@ mod tests {
         assert_eq!(counts.applied, 0, "no provider operation was performed");
         assert_eq!(counts.failed, 1);
         let (rows, _) = repo
-            .list_operations(plan.id, OpsFilter::default(), None, 10)
+            .list_operations(&plan.user_id, plan.id, OpsFilter::default(), None, 10)
             .await
             .expect("rows");
         assert!(matches!(&rows[0], PlannedOperation::Materialized(r)
@@ -1388,7 +1390,7 @@ mod tests {
             .await
             .expect("run worker");
         let (rows, _) = repo
-            .list_operations(plan.id, OpsFilter::default(), None, 10)
+            .list_operations(&plan.user_id, plan.id, OpsFilter::default(), None, 10)
             .await
             .expect("rows");
         assert_eq!(

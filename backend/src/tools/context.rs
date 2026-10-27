@@ -14,6 +14,7 @@ use std::sync::Arc;
 use crate::db::Database;
 use crate::email::oauth::OAuthManager;
 use crate::email::poll_scheduler::PollSchedulerHandle;
+use crate::principal::Principal;
 use crate::sync_lock::AccountLockMap;
 use crate::vectors::ingestion::IngestionBroadcast;
 use crate::vectors::VectorService;
@@ -29,6 +30,12 @@ use super::registry::ToolError;
 pub struct ToolContext {
     /// Always present: every tool reads the database.
     pub db: Arc<Database>,
+    /// The authenticated caller. Derived from the engine's own identity
+    /// (`Principal::local_operator`), never from a request field — see
+    /// `crate::principal`. Tests may construct a `ToolContext` with a
+    /// different principal via [`ToolContext::with_principal`] to prove a
+    /// handler actually filters by it; no production path does this.
+    pub principal: Principal,
     /// Search, store, clustering, ingestion and learning engines.
     pub vectors: Option<Arc<VectorService>>,
     /// Connected-account metadata and per-account sync state.
@@ -68,6 +75,7 @@ impl ToolContext {
     ) -> Self {
         Self {
             db,
+            principal: Principal::local_operator(),
             vectors: Some(vectors),
             oauth: Some(oauth),
             poll_scheduler,
@@ -81,12 +89,22 @@ impl ToolContext {
     pub fn new(db: Arc<Database>) -> Self {
         Self {
             db,
+            principal: Principal::local_operator(),
             vectors: None,
             oauth: None,
             poll_scheduler: None,
             sync_progress: None,
             pipeline_locks: None,
         }
+    }
+
+    /// Override the principal. Exists for tests proving a handler filters by
+    /// `ctx.principal` rather than trusting a request field — production
+    /// wiring never calls this, so the context always carries
+    /// `Principal::local_operator` outside tests.
+    pub fn with_principal(mut self, principal: Principal) -> Self {
+        self.principal = principal;
+        self
     }
 
     pub fn with_vectors(mut self, vectors: Arc<VectorService>) -> Self {

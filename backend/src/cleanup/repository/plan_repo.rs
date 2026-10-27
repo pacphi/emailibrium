@@ -85,15 +85,21 @@ pub trait CleanupPlanRepository: Send + Sync {
         status: Option<PlanStatus>,
         limit: u32,
     ) -> Result<Vec<CleanupPlanSummary>, RepoError>;
+    /// `user_id` must match the plan's owner (same filter `load` already
+    /// applies) — closes pl-plan-id-only-authz: knowing a plan UUID alone
+    /// used to be sufficient to read its operations.
     async fn list_operations(
         &self,
+        user_id: &str,
         id: PlanId,
         filter: OpsFilter,
         cursor: Option<u64>,
         limit: u32,
     ) -> Result<(Vec<PlannedOperation>, Option<u64>), RepoError>;
+    /// `user_id` must match the plan's owner — see `list_operations`.
     async fn sample_operations(
         &self,
+        user_id: &str,
         id: PlanId,
         source_kind: &str,
         n: u32,
@@ -134,7 +140,8 @@ pub trait CleanupPlanRepository: Send + Sync {
         seq: u64,
         status: crate::cleanup::domain::operation::PredicateStatus,
     ) -> Result<(), RepoError>;
-    async fn cancel(&self, id: PlanId) -> Result<(), RepoError>;
+    /// `user_id` must match the plan's owner — see `list_operations`.
+    async fn cancel(&self, user_id: &str, id: PlanId) -> Result<(), RepoError>;
     async fn expire_due(&self, now: DateTime<Utc>) -> Result<u32, RepoError>;
     async fn purge_older_than(&self, cutoff: DateTime<Utc>) -> Result<u32, RepoError>;
 }
@@ -146,6 +153,22 @@ pub struct SeaOrmCleanupPlanRepo {
 impl SeaOrmCleanupPlanRepo {
     pub fn new(conn: DatabaseConnection) -> Self {
         Self { conn }
+    }
+
+    /// `NotFound` unless `id` exists AND belongs to `user_id` — deliberately
+    /// indistinguishable from "doesn't exist" so a caller can't use this to
+    /// probe which plan ids are claimed by someone else.
+    async fn assert_owned(&self, user_id: &str, id: PlanId) -> Result<(), RepoError> {
+        let owned = plans::Entity::find_by_id(id.as_bytes().to_vec())
+            .filter(plans::Column::UserId.eq(user_id.as_bytes().to_vec()))
+            .one(&self.conn)
+            .await?
+            .is_some();
+        if owned {
+            Ok(())
+        } else {
+            Err(RepoError::NotFound)
+        }
     }
 }
 
@@ -319,7 +342,7 @@ impl CleanupPlanRepository for SeaOrmCleanupPlanRepo {
         let mut cursor = None;
         loop {
             let (page, next_cursor) = self
-                .list_operations(id, OpsFilter::default(), cursor, 1000)
+                .list_operations(user_id, id, OpsFilter::default(), cursor, 1000)
                 .await?;
             operations.extend(page);
             if next_cursor.is_none() || next_cursor == cursor {
@@ -396,11 +419,13 @@ impl CleanupPlanRepository for SeaOrmCleanupPlanRepo {
 
     async fn list_operations(
         &self,
+        user_id: &str,
         id: PlanId,
         filter: OpsFilter,
         cursor: Option<u64>,
         limit: u32,
     ) -> Result<(Vec<PlannedOperation>, Option<u64>), RepoError> {
+        self.assert_owned(user_id, id).await?;
         let limit = u64::from(limit.clamp(1, 1000));
         // The seq column is INTEGER/INT4; a cursor beyond i32 can match nothing,
         // which saturating to i32::MAX preserves.
@@ -448,10 +473,12 @@ impl CleanupPlanRepository for SeaOrmCleanupPlanRepo {
 
     async fn sample_operations(
         &self,
+        user_id: &str,
         id: PlanId,
         source_kind: &str,
         n: u32,
     ) -> Result<Vec<String>, RepoError> {
+        self.assert_owned(user_id, id).await?;
         let row = ops::Entity::find()
             .filter(ops::Column::PlanId.eq(id.as_bytes().to_vec()))
             .filter(ops::Column::OpKind.eq("predicate"))
@@ -659,7 +686,8 @@ impl CleanupPlanRepository for SeaOrmCleanupPlanRepo {
             .unwrap_or(0))
     }
 
-    async fn cancel(&self, id: PlanId) -> Result<(), RepoError> {
+    async fn cancel(&self, user_id: &str, id: PlanId) -> Result<(), RepoError> {
+        self.assert_owned(user_id, id).await?;
         let result = plans::Entity::update_many()
             .col_expr(plans::Column::Status, Expr::value("cancelled"))
             .filter(plans::Column::Id.eq(id.as_bytes().to_vec()))
@@ -962,7 +990,7 @@ mod tests {
         assert_eq!(b.operations.len(), 1);
         assert_eq!(b.account_state_etags.len(), 1);
         let (a_ops, _) = repo
-            .list_operations(a_id, OpsFilter::default(), None, 100)
+            .list_operations(user_a, a_id, OpsFilter::default(), None, 100)
             .await
             .expect("ops");
         assert_eq!(a_ops.len(), 1);
@@ -1024,7 +1052,7 @@ mod tests {
         repo.save(&plan).await.expect("save");
         repo.save(&bystander).await.expect("save bystander");
 
-        repo.cancel(plan_id).await.expect("cancel");
+        repo.cancel(user, plan_id).await.expect("cancel");
 
         let loaded = repo.load(user, plan_id).await.expect("load").unwrap();
         assert_eq!(loaded.status, PlanStatus::Cancelled);
@@ -1034,6 +1062,52 @@ mod tests {
             .expect("load")
             .unwrap();
         assert_eq!(untouched.status, PlanStatus::Ready);
+    }
+
+    #[tokio::test]
+    async fn cancel_rejects_a_plan_belonging_to_another_principal() {
+        let repo = SeaOrmCleanupPlanRepo::new(fresh_conn().await);
+        let owner = "user-cancel-owner";
+        let attacker = "user-cancel-attacker";
+        let plan = sample_plan(owner);
+        let plan_id = plan.id;
+        repo.save(&plan).await.expect("save");
+
+        assert!(matches!(
+            repo.cancel(attacker, plan_id).await,
+            Err(RepoError::NotFound)
+        ));
+        let untouched = repo.load(owner, plan_id).await.expect("load").unwrap();
+        assert_eq!(
+            untouched.status,
+            PlanStatus::Ready,
+            "a rejected cancel from another principal must not change status"
+        );
+    }
+
+    #[tokio::test]
+    async fn list_operations_and_sample_operations_reject_another_principal() {
+        let repo = SeaOrmCleanupPlanRepo::new(fresh_conn().await);
+        let owner = "user-ops-owner";
+        let attacker = "user-ops-attacker";
+        let plan = sample_plan(owner);
+        let plan_id = plan.id;
+        repo.save(&plan).await.expect("save");
+
+        assert!(matches!(
+            repo.list_operations(attacker, plan_id, OpsFilter::default(), None, 10)
+                .await,
+            Err(RepoError::NotFound)
+        ));
+        assert!(matches!(
+            repo.sample_operations(attacker, plan_id, "manual", 5).await,
+            Err(RepoError::NotFound)
+        ));
+        // The owner's own calls still succeed — this isn't a blanket failure.
+        assert!(repo
+            .list_operations(owner, plan_id, OpsFilter::default(), None, 10)
+            .await
+            .is_ok());
     }
 
     #[tokio::test]
@@ -1061,7 +1135,7 @@ mod tests {
         repo.save(&plan).await.expect("save");
 
         let (page1, cursor1) = repo
-            .list_operations(plan_id, OpsFilter::default(), None, 1)
+            .list_operations(user, plan_id, OpsFilter::default(), None, 1)
             .await
             .expect("list");
         assert_eq!(page1.len(), 1);
@@ -1069,7 +1143,7 @@ mod tests {
         assert_eq!(cursor1, Some(1));
 
         let (page2, _cursor2) = repo
-            .list_operations(plan_id, OpsFilter::default(), cursor1, 10)
+            .list_operations(user, plan_id, OpsFilter::default(), cursor1, 10)
             .await
             .expect("list");
         assert_eq!(page2.len(), 1);
@@ -1116,7 +1190,7 @@ mod tests {
             .expect("update");
 
         let (listed, _) = repo
-            .list_operations(plan_id, OpsFilter::default(), None, 10)
+            .list_operations(user, plan_id, OpsFilter::default(), None, 10)
             .await
             .expect("list");
         assert_eq!(listed.len(), 1);
@@ -1164,7 +1238,7 @@ mod tests {
             .expect("update");
 
         let (ops, _) = repo
-            .list_operations(plan_id, OpsFilter::default(), None, 10)
+            .list_operations(user, plan_id, OpsFilter::default(), None, 10)
             .await
             .expect("list");
         assert_eq!(ops.len(), 2);
@@ -1212,7 +1286,7 @@ mod tests {
         repo.save(&plan).await.expect("save");
 
         let ids = repo
-            .sample_operations(plan_id, "manual", 2)
+            .sample_operations(user, plan_id, "manual", 2)
             .await
             .expect("sample");
         assert!(ids.is_empty());
@@ -1326,7 +1400,7 @@ mod tests {
             .expect("replace");
 
         let (ops, _) = repo
-            .list_operations(plan_id, OpsFilter::default(), None, 10)
+            .list_operations(user, plan_id, OpsFilter::default(), None, 10)
             .await
             .expect("list");
         let seqs: Vec<u64> = ops.iter().map(|o| o.seq()).collect();
@@ -1335,7 +1409,13 @@ mod tests {
         assert_eq!(ops[1].account_id(), "acct-a");
 
         let (other_ops, _) = repo
-            .list_operations(other_id, OpsFilter::default(), None, 10)
+            .list_operations(
+                "user-replace-other",
+                other_id,
+                OpsFilter::default(),
+                None,
+                10,
+            )
             .await
             .expect("list other");
         assert_eq!(other_ops.len(), 1, "other plan's acct-a row must survive");
@@ -1372,7 +1452,7 @@ mod tests {
             .expect("append");
 
         let (ops, _) = repo
-            .list_operations(plan_id, OpsFilter::default(), None, 10)
+            .list_operations(user, plan_id, OpsFilter::default(), None, 10)
             .await
             .expect("list");
         let seqs: Vec<u64> = ops.iter().map(|o| o.seq()).collect();
@@ -1404,6 +1484,7 @@ mod tests {
 
         let by_account = repo
             .list_operations(
+                user,
                 plan_id,
                 OpsFilter {
                     account_id: Some("acct-b".into()),
@@ -1421,6 +1502,7 @@ mod tests {
 
         let by_risk = repo
             .list_operations(
+                user,
                 plan_id,
                 OpsFilter {
                     risk: Some("high".into()),
@@ -1435,6 +1517,7 @@ mod tests {
 
         let no_match = repo
             .list_operations(
+                user,
                 plan_id,
                 OpsFilter {
                     account_id: Some("acct-zzz".into()),
@@ -1527,7 +1610,7 @@ mod tests {
             Err(RepoError::Conflict(_))
         ));
         assert!(matches!(
-            peer.cancel(plan_id).await,
+            peer.cancel(&user, plan_id).await,
             Err(RepoError::Conflict(_))
         ));
         assert!(matches!(
@@ -1572,17 +1655,18 @@ mod tests {
 
         // Cursor pagination + filters.
         let (page, cursor) = repo
-            .list_operations(plan_id, OpsFilter::default(), None, 1)
+            .list_operations(&user, plan_id, OpsFilter::default(), None, 1)
             .await
             .expect("page 1");
         assert_eq!(page.len(), 1);
         let (rest, _) = repo
-            .list_operations(plan_id, OpsFilter::default(), cursor, 10)
+            .list_operations(&user, plan_id, OpsFilter::default(), cursor, 10)
             .await
             .expect("page 2");
         assert_eq!(rest.len(), 1);
         let (by_account, _) = repo
             .list_operations(
+                &user,
                 plan_id,
                 OpsFilter {
                     account_id: Some("acct-a".into()),
@@ -1598,7 +1682,7 @@ mod tests {
         // sample_operations: empty per pinned behavior (save never writes
         // sample_ids_json).
         assert!(repo
-            .sample_operations(plan_id, "manual", 5)
+            .sample_operations(&user, plan_id, "manual", 5)
             .await
             .expect("sample")
             .is_empty());
@@ -1633,7 +1717,7 @@ mod tests {
             .await
             .expect("update predicate status");
         let (ops, _) = repo
-            .list_operations(plan_id, OpsFilter::default(), None, 10)
+            .list_operations(&user, plan_id, OpsFilter::default(), None, 10)
             .await
             .expect("list");
         match &ops[0] {
@@ -1669,7 +1753,7 @@ mod tests {
         assert_eq!(repo.max_seq(plan_id).await.expect("max_seq"), 9);
 
         // cancel.
-        repo.cancel(plan_id).await.expect("cancel");
+        repo.cancel(&user, plan_id).await.expect("cancel");
         assert_eq!(
             repo.load(&user, plan_id)
                 .await
@@ -1736,7 +1820,7 @@ mod tests {
         // A load/save round trip must not delete rows that were beyond page one.
         repo.save(&loaded).await.expect("save loaded");
         let (tail, _) = repo
-            .list_operations(plan.id, OpsFilter::default(), Some(1000), 10)
+            .list_operations(&plan.user_id, plan.id, OpsFilter::default(), Some(1000), 10)
             .await
             .expect("tail");
         assert_eq!(tail.len(), 5);
@@ -1832,7 +1916,7 @@ mod tests {
     #[tokio::test]
     async fn claim_boundary_cancel_cannot_override_an_active_claim_or_win_a_claim_race() {
         let (owner, peer, plan) = boundary_claimed_plan().await;
-        assert!(peer.cancel(plan.id).await.is_err());
+        assert!(peer.cancel(&plan.user_id, plan.id).await.is_err());
         assert_eq!(
             owner
                 .load(&plan.user_id, plan.id)
@@ -1846,8 +1930,10 @@ mod tests {
             .release_apply(plan.id, PlanStatus::Ready)
             .await
             .unwrap();
-        let (claim, cancel) =
-            tokio::join!(owner.claim_apply(&plan, Utc::now()), peer.cancel(plan.id));
+        let (claim, cancel) = tokio::join!(
+            owner.claim_apply(&plan, Utc::now()),
+            peer.cancel(&plan.user_id, plan.id)
+        );
         assert!(
             matches!((claim, cancel), (Ok(true), Err(_)) | (Ok(false), Ok(()))),
             "claim and cancel cannot both win"

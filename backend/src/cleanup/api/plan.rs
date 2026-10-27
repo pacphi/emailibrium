@@ -244,11 +244,11 @@ async fn get_plan(
 async fn cancel_plan(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
-    Query(_q): Query<UserQuery>,
+    Query(q): Query<UserQuery>,
 ) -> Result<StatusCode, (StatusCode, Json<ErrorBody>)> {
     state
         .cleanup_plan_repo
-        .cancel(id)
+        .cancel(&q.user_id, id)
         .await
         .map_err(|e| match &e {
             crate::cleanup::domain::ports::RepoError::Conflict(_) => {
@@ -273,6 +273,7 @@ async fn cancel_plan(
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ListOpsQuery {
+    pub user_id: String,
     pub cursor: Option<u64>,
     pub limit: Option<u32>,
     pub risk: Option<String>,
@@ -300,7 +301,7 @@ async fn list_operations(
     };
     let (items, next_cursor) = state
         .cleanup_plan_repo
-        .list_operations(id, filter, q.cursor, limit)
+        .list_operations(&q.user_id, id, filter, q.cursor, limit)
         .await
         .map_err(|e| {
             err(
@@ -319,6 +320,7 @@ async fn list_operations(
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SampleQuery {
+    pub user_id: String,
     pub source: String,
     pub n: Option<u32>,
 }
@@ -337,7 +339,7 @@ async fn sample_operations(
     let n = q.n.unwrap_or(5).min(20);
     let email_ids = state
         .cleanup_plan_repo
-        .sample_operations(id, &q.source, n)
+        .sample_operations(&q.user_id, id, &q.source, n)
         .await
         .map_err(|e| {
             err(

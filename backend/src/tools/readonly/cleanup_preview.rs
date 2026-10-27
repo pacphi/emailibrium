@@ -15,7 +15,7 @@ use std::sync::Arc;
 use serde_json::{json, Value};
 
 use super::params::PreviewCleanupPlanRequest;
-use super::{validate_limit, validate_user_id, validate_uuid};
+use super::{validate_limit, validate_uuid};
 use crate::cleanup::domain::builder::PlanBuilder;
 use crate::cleanup::domain::classifier::RiskClassifier;
 use crate::cleanup::domain::operation::{
@@ -40,8 +40,12 @@ pub async fn preview_cleanup_plan(
     ctx: Arc<ToolContext>,
     req: PreviewCleanupPlanRequest,
 ) -> Result<Value, ToolError> {
-    let user_id = req.user_id.clone();
-    validate_user_id(&user_id).map_err(ToolError::Invalid)?;
+    // Owner comes from the authenticated caller, never from a request field
+    // (milestone 0.6 — see `crate::principal`). `user_id` used to be a plain
+    // string the caller supplied directly; it's gone from the schema now, and
+    // `#[serde(deny_unknown_fields)]` on the request rejects a caller that
+    // still sends it rather than silently ignoring the field.
+    let user_id = ctx.principal.as_str().to_string();
     let sample_limit = validate_limit(req.sample_limit.unwrap_or(10), 50) as usize;
 
     let selections = build_selections(req).map_err(ToolError::Invalid)?;

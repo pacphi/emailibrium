@@ -117,6 +117,7 @@ impl AccountWorker {
                 .ctx
                 .repo
                 .list_operations(
+                    &self.ctx.user_id,
                     plan_id,
                     crate::cleanup::repository::OpsFilter {
                         account_id: Some(self.account_id.clone()),
