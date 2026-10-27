@@ -424,6 +424,194 @@ impl ImapProvider {
         })
     }
 
+    /// Parse a header-only `async_imap::types::Fetch` result (from a
+    /// `BODY.PEEK[HEADER]` fetch) into an `EmailMessage` with no body.
+    ///
+    /// Mirrors `parse_fetched` but reads `fetch.header()` instead of
+    /// `fetch.body()`, deliberately duplicated rather than shared so that
+    /// `parse_fetched` (and the full-body fetch path it serves) is untouched.
+    fn parse_fetched_headers(fetch: &async_imap::types::Fetch) -> Option<EmailMessage> {
+        let uid = fetch.uid?;
+
+        let header_bytes = fetch.header()?;
+        let parsed = mail_parser::MessageParser::default().parse(header_bytes)?;
+
+        let from = parsed
+            .from()
+            .and_then(|addr| {
+                addr.iter().next().and_then(|a| {
+                    a.address
+                        .as_deref()
+                        .map(|s| s.to_string())
+                        .or_else(|| a.name.as_deref().map(|s| s.to_string()))
+                })
+            })
+            .unwrap_or_default();
+
+        let to: Vec<String> = parsed
+            .to()
+            .map(|addr| {
+                addr.iter()
+                    .filter_map(|a| a.address.as_deref().map(|s| s.to_string()))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let subject = parsed.subject().unwrap_or("").to_string();
+
+        let date = parsed
+            .date()
+            .and_then(|dt| Utc.timestamp_opt(dt.to_timestamp(), 0).single())
+            .unwrap_or_else(Utc::now);
+
+        let is_read = fetch
+            .flags()
+            .any(|f| matches!(f, async_imap::types::Flag::Seen));
+        let is_flagged = fetch
+            .flags()
+            .any(|f| matches!(f, async_imap::types::Flag::Flagged));
+
+        let mut labels: Vec<String> = fetch
+            .flags()
+            .map(|f| match f {
+                async_imap::types::Flag::Seen => "\\Seen".to_string(),
+                async_imap::types::Flag::Answered => "\\Answered".to_string(),
+                async_imap::types::Flag::Flagged => "\\Flagged".to_string(),
+                async_imap::types::Flag::Deleted => "\\Deleted".to_string(),
+                async_imap::types::Flag::Draft => "\\Draft".to_string(),
+                async_imap::types::Flag::Recent => "\\Recent".to_string(),
+                async_imap::types::Flag::MayCreate => "\\*".to_string(),
+                async_imap::types::Flag::Custom(ref cow) => cow.to_string(),
+            })
+            .collect();
+
+        if is_flagged && !labels.contains(&"STARRED".to_string()) {
+            labels.push("STARRED".to_string());
+        }
+
+        let list_unsubscribe = extract_header_text(&parsed, "List-Unsubscribe");
+        let list_unsubscribe_post = extract_header_text(&parsed, "List-Unsubscribe-Post");
+
+        Some(EmailMessage {
+            id: uid.to_string(),
+            thread_id: parsed.message_id().map(|s| s.to_string()),
+            from,
+            to,
+            subject,
+            snippet: String::new(),
+            body: None,
+            body_html: None,
+            labels,
+            date,
+            is_read,
+            list_unsubscribe,
+            list_unsubscribe_post,
+        })
+    }
+
+    /// List message headers only (From/To/Subject/Date/flags/List-Unsubscribe),
+    /// never the body, via `BODY.PEEK[HEADER]`.
+    ///
+    /// Unlike `list_messages`, this (a) never transfers body bytes over the
+    /// wire, matching the mail-agent plan's "headers only, never bodies"
+    /// principle, and (b) never marks a message `\Seen` as a side effect,
+    /// because `PEEK` suppresses that (plain `BODY[HEADER]`/`RFC822.HEADER`
+    /// would not). Milestone 1's header-rule Kind classifier uses this
+    /// instead of `list_messages`.
+    pub async fn list_message_headers(
+        &self,
+        params: &ListParams,
+    ) -> Result<EmailPage, ProviderError> {
+        self.validate_config()?;
+
+        let (mut session, exists) = self.connect_and_select().await?;
+
+        let mut criteria = Vec::new();
+        if let Some(ref label) = params.label {
+            criteria.push(format!("KEYWORD {label}"));
+        }
+        if let Some(ref query) = params.query {
+            criteria.push(format!("TEXT \"{query}\""));
+        }
+        let search_str = if criteria.is_empty() {
+            "ALL".to_string()
+        } else {
+            criteria.join(" ")
+        };
+
+        let uids = session
+            .uid_search(&search_str)
+            .await
+            .map_err(|e| ProviderError::RequestFailed(format!("UID SEARCH failed: {e}")))?;
+
+        let mut uid_list: Vec<u32> = uids.into_iter().collect();
+        uid_list.sort_unstable_by(|a, b| b.cmp(a));
+
+        let start_after: u32 = params
+            .page_token
+            .as_ref()
+            .and_then(|t| t.parse().ok())
+            .unwrap_or(u32::MAX);
+
+        let paginated: Vec<u32> = uid_list
+            .into_iter()
+            .filter(|&uid| uid < start_after)
+            .take(params.max_results as usize + 1)
+            .collect();
+
+        let has_more = paginated.len() > params.max_results as usize;
+        let fetch_uids: Vec<u32> = paginated
+            .into_iter()
+            .take(params.max_results as usize)
+            .collect();
+
+        if fetch_uids.is_empty() {
+            let _ = session.logout().await;
+            return Ok(EmailPage {
+                messages: vec![],
+                next_page_token: None,
+                result_size_estimate: Some(exists),
+            });
+        }
+
+        let next_page_token = if has_more {
+            fetch_uids.last().map(|uid| uid.to_string())
+        } else {
+            None
+        };
+
+        let uid_set = fetch_uids
+            .iter()
+            .map(|u| u.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+
+        debug!(uid_set = %uid_set, count = fetch_uids.len(), "Fetching IMAP message headers (no body)");
+
+        let fetches = session
+            .uid_fetch(&uid_set, "(FLAGS BODY.PEEK[HEADER])")
+            .await
+            .map_err(|e| ProviderError::RequestFailed(format!("UID FETCH failed: {e}")))?;
+
+        let raw_messages: Vec<_> = fetches
+            .try_collect()
+            .await
+            .map_err(|e| ProviderError::RequestFailed(format!("FETCH stream failed: {e}")))?;
+
+        let messages: Vec<EmailMessage> = raw_messages
+            .iter()
+            .filter_map(Self::parse_fetched_headers)
+            .collect();
+
+        let _ = session.logout().await;
+
+        Ok(EmailPage {
+            messages,
+            next_page_token,
+            result_size_estimate: Some(exists),
+        })
+    }
+
     /// Modify flags on a message by UID.
     async fn store_flags(
         &self,
