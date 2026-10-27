@@ -784,9 +784,9 @@ async fn preview_cleanup_plan_is_strictly_read_only() {
 
     let before: i64 = count_cleanup_plans(&env.db.sea_orm()).await.expect("count");
 
-    let resp = env
-        .call_tool(&s, "preview_cleanup_plan", json!({"user_id": "test-user"}))
-        .await;
+    // No user_id: the owner comes from the authenticated caller (milestone
+    // 0.6), never from a request field.
+    let resp = env.call_tool(&s, "preview_cleanup_plan", json!({})).await;
     ok(&resp);
 
     let after: i64 = count_cleanup_plans(&env.db.sea_orm()).await.expect("count");
@@ -794,6 +794,24 @@ async fn preview_cleanup_plan_is_strictly_read_only() {
         before, after,
         "preview persisted a plan — the dry-run guarantee is broken"
     );
+}
+
+#[tokio::test]
+async fn preview_cleanup_plan_rejects_a_caller_supplied_user_id() {
+    let env = Env::default_env().await;
+    let s = env.open_session().await;
+
+    // A caller that still sends user_id must be rejected outright (invalid
+    // params), not silently ignored — ignoring it would leave the caller
+    // believing it still chooses whose plan is built.
+    let resp = env
+        .call_tool(
+            &s,
+            "preview_cleanup_plan",
+            json!({"user_id": "someone-else"}),
+        )
+        .await;
+    assert_eq!(err_code(&resp), -32602, "{resp}");
 }
 
 #[tokio::test]

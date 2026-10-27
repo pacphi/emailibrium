@@ -76,6 +76,7 @@ pub struct ListAttachmentsRequest {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Default, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct PreviewCleanupPlanRequest {
     #[schemars(
         description = "Account UUIDs to scope the preview to. Empty means every connected account."
@@ -99,11 +100,6 @@ pub struct PreviewCleanupPlanRequest {
         description = "Global archive cutoff: one of olderThan30d, olderThan90d, olderThan1y, custom"
     )]
     pub archive_strategy: Option<String>,
-
-    #[schemars(
-        description = "Owner the in-memory plan is built for. Letters, digits, '-' and '_' only."
-    )]
-    pub user_id: String,
 
     #[schemars(
         description = "How many sample operations to include in the response (default: 10, max: 50)"

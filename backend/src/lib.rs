@@ -17,6 +17,7 @@ pub mod email;
 pub mod events;
 pub mod mcp;
 pub mod middleware;
+pub mod principal;
 pub mod rules;
 pub mod sync_lock;
 pub mod tools;
