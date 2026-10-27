@@ -690,8 +690,13 @@ impl EmailProvider for ImapProvider {
 
         debug!(uid_set = %uid_set, count = fetch_uids.len(), "Fetching IMAP messages");
 
+        // BODY.PEEK[] (not RFC822) -- same full-message bytes (both populate
+        // Fetch::body() identically; see async-imap's BodySection{section:
+        // None} match), but PEEK suppresses the implicit \Seen the server
+        // would otherwise set on every message this ever looks at (RFC 3501
+        // §6.4.5) -- plain RFC822 does not have a PEEK form.
         let fetches = session
-            .uid_fetch(&uid_set, "(FLAGS RFC822)")
+            .uid_fetch(&uid_set, "(FLAGS BODY.PEEK[])")
             .await
             .map_err(|e| ProviderError::RequestFailed(format!("UID FETCH failed: {e}")))?;
 
@@ -724,8 +729,10 @@ impl EmailProvider for ImapProvider {
 
         let (mut session, _) = self.connect_and_select().await?;
 
+        // See list_messages above: BODY.PEEK[] instead of RFC822, same
+        // bytes, no implicit \Seen.
         let fetches = session
-            .uid_fetch(id, "(FLAGS RFC822)")
+            .uid_fetch(id, "(FLAGS BODY.PEEK[])")
             .await
             .map_err(|e| ProviderError::RequestFailed(format!("UID FETCH failed: {e}")))?;
 
