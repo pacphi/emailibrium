@@ -41,9 +41,11 @@ The first three are the ones worth not losing.
 
 Decision made: keep the three backlog items that overlap this plan's MCP work, plus a fourth found on the same read-through, that is directly on-topic. Everything else in `.autopilot/` (four finished projects' history, `correctness-debt`, `db-schema-modernization`, `postgres-fulltext-search`) was deleted as agreed — nothing in those was unique or unfinished-and-wanted.
 
-### 4a. `security-baseline` — queued, never started, parked 2026-08-06
+### 4a. `security-baseline` — queued, never started as of 2026-08-06, **but independently fixed since (correction, 27 Oct, later verification pass)**
 
-**This is a live, shipped vulnerability, not a backlog idea.** Its own file says it should run before anything else. Findings it recorded, verified against the tree on 2026-08-06:
+**Update: this is resolved, not a live vulnerability.** The findings below describe the tree as it stood 2026-08-06. `develop` has since shipped the actual fix independently of this parked pipeline — `backend/src/middleware/local_auth.rs` (commits `e03220c`/`506ddd0`), wired into `main.rs` ahead of both the REST and MCP route trees. Verified 27 Oct by running `cargo test --lib local_auth`, not by re-reading claims: 9/9 pass, including a test that builds the exact same router shape `main.rs` does (`.nest("/api/v1", ...).nest_service("/api/v1/mcp", ...)`) and proves both reject unauthenticated requests, and a test proving a correct bearer token from a disallowed `Origin` is still rejected (the DNS-rebinding defense). The config-binding and startup-log deliverables below are also already done: both environment YAMLs and `docker-compose.yml` bind/publish `127.0.0.1` only, and `main.rs` logs the bind address with `authentication = "required"` on every start. Kept here, corrected rather than deleted, as a reminder that this doc's other sections (4b, 4c) were written against the same 2026-08-06 snapshot and have not been re-verified — don't assume they're still accurate either.
+
+Findings as originally recorded, now historical:
 
 - **The backend has no authentication anywhere.** No auth module exists under `backend/src/middleware/`. The only JWT references are log-scrubbing patterns and a comment that says "In production, decode JWT and extract user_id" — aspirational, not implemented.
 - **Both shipped configs bind every network interface by default.** `config/environments/config.development.yaml` and `config.production.yaml` both set `host: "0.0.0.0"`, overriding the backend's own safe `127.0.0.1` default. Docker Compose publishes port 8080.
