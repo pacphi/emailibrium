@@ -26,6 +26,13 @@ pub struct Model {
     /// was the ADR-035 width class).
     pub match_count: i32,
     pub last_run_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// 'suggest' | 'trusted' (migration 032). Level 0 Observe and level 3
+    /// Act are not rule states; see `rules::authority`.
+    pub authority_level: Option<String>,
+    pub clean_streak: Option<i32>,
+    /// TEXT, not a native timestamp type, matching `connected_accounts`'
+    /// `role_declared_at` (migration 030, ADR-035 2.5).
+    pub graduated_at: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

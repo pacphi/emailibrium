@@ -18,4 +18,6 @@ pub mod label_namespace;
 pub mod operation;
 pub mod plan;
 pub mod ports;
+pub mod reconcile;
 pub mod sender_key;
+pub mod topic_gate;
