@@ -93,6 +93,37 @@ tools:
     requires_confirmation: false
     rate_limit_per_minute: 5
 
+  # --- Milestone 2: read-only chief-of-staff tools (tools/staff) --------
+  # Each scans every row in the emails table (via scan_mail), not just a
+  # page of them — no body_text/body_html in that query, so cheaper than
+  # list_subscriptions/preview_cleanup_plan above, but still a full-table
+  # pass. A middle rate limit, not the 5/min reserved for the body-scanning
+  # pair, not the 20/min default either.
+  doctor:
+    enabled: true
+    requires_confirmation: false
+    rate_limit_per_minute: 20
+
+  get_snapshot:
+    enabled: true
+    requires_confirmation: false
+    rate_limit_per_minute: 10
+
+  brief:
+    enabled: true
+    requires_confirmation: false
+    rate_limit_per_minute: 10
+
+  review:
+    enabled: true
+    requires_confirmation: false
+    rate_limit_per_minute: 10
+
+  identity_map:
+    enabled: true
+    requires_confirmation: false
+    rate_limit_per_minute: 10
+
   # --- A4 action tools — not implemented yet ---------------------------
   # `deferred: true` records the intended policy without the registry
   # reporting these as unknown names. They are inert until the handlers land;

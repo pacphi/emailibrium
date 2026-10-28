@@ -27,15 +27,25 @@ use tower::ServiceExt as _;
 
 type McpService = StreamableHttpService<EmailibriumMcpServer, LocalSessionManager>;
 
-/// The frozen public tool surface, sorted (README.md tool table).
-const FIFTEEN_TOOLS: [&str; 15] = [
+/// The frozen public tool surface, sorted.
+///
+/// README.md's tool table (section "MCP Server") still says "15 read-only
+/// tools" and lists only the original fifteen — milestone 2 added the five
+/// `tools/staff` ones below without updating it (out of scope for that
+/// change; flagged, not fixed, here). This constant reflects the actual
+/// registered surface, which README.md currently does not.
+const TWENTY_TOOLS: [&str; 20] = [
+    "brief",
     "count_emails",
+    "doctor",
     "find_similar_emails",
     "get_email",
     "get_email_thread",
     "get_insights",
     "get_learning_metrics",
+    "get_snapshot",
     "get_sync_status",
+    "identity_map",
     "list_accounts",
     "list_attachments",
     "list_clusters",
@@ -43,6 +53,7 @@ const FIFTEEN_TOOLS: [&str; 15] = [
     "list_rules",
     "list_subscriptions",
     "preview_cleanup_plan",
+    "review",
     "search_emails",
 ];
 
@@ -422,13 +433,13 @@ fn config_from_yaml(yaml: &str) -> (tempfile::TempDir, ToolsConfig) {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn tools_list_returns_exactly_the_fifteen_documented_tools() {
+async fn tools_list_returns_exactly_the_twenty_registered_tools() {
     let env = Env::default_env().await;
     let s = env.open_session().await;
     let names = env.wire_tool_names(&s).await;
     assert_eq!(
-        names, FIFTEEN_TOOLS,
-        "wire tools/list must equal the README table, sorted"
+        names, TWENTY_TOOLS,
+        "wire tools/list must equal the full registered surface, sorted"
     );
 }
 
@@ -542,7 +553,7 @@ async fn a_disabled_tool_vanishes_from_the_router_entirely() {
         !names.contains(&"get_email".to_string()),
         "disabled tool still listed: {names:?}"
     );
-    assert_eq!(names.len(), 14);
+    assert_eq!(names.len(), 19);
 
     let resp = env
         .call_tool(&s, "get_email", json!({"email_id": "email-1"}))
@@ -920,5 +931,5 @@ async fn stdio_serves_the_identical_tool_list_as_http() {
     let http_names = env.wire_tool_names(&s).await;
 
     assert_eq!(stdio_names, http_names, "stdio and HTTP surfaces drifted");
-    assert_eq!(stdio_names, FIFTEEN_TOOLS);
+    assert_eq!(stdio_names, TWENTY_TOOLS);
 }

@@ -100,6 +100,12 @@ column because the underlying data genuinely isn't user-scoped in a
 single-principal engine (it's scoped by connected account, which is a
 different axis this ADR doesn't touch), not because scoping them was skipped.
 
+**Addendum (milestone 2):** `doctor`, `get_snapshot`, `brief`, `review`,
+`identity_map` (`tools/staff`) were added after this ADR landed. All five
+read `emails`/`connected_accounts`, the same account-scoped, no-`user_id`-
+column tables as the row above — **not user-scoped, by design**, same
+reasoning, no new row needed here.
+
 ## 4. Non-goals
 
 - **No login, registration, or multi-user UI.** There is one principal. This
