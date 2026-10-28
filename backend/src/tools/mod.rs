@@ -15,6 +15,7 @@ pub mod context;
 pub mod rate_limit;
 pub mod readonly;
 pub mod registry;
+pub mod staff;
 
 pub use context::ToolContext;
 pub use registry::{declare, CallSource, ToolDecl, ToolError, ToolRegistry};
@@ -48,6 +49,7 @@ fn empty_schema() -> serde_json::Value {
 /// exist, not the set that is enabled.
 pub fn declarations() -> Vec<ToolDecl> {
     use readonly::params as p;
+    use staff::params as sp;
 
     vec![
         // --- the original seven, moved off `#[tool]` in mcp/server.rs -----
@@ -149,6 +151,55 @@ pub fn declarations() -> Vec<ToolDecl> {
              Never returns file contents.",
             schema_for::<p::ListAttachmentsRequest>(),
             readonly::emails::list_attachments,
+        ),
+        // --- Milestone 2: read-only chief-of-staff tools (tools/staff) ----
+        // Body-free by construction: every handler reads mail through
+        // staff::scan::scan_mail, whose query never selects a body or
+        // subject column at all (see staff/mod.rs's doc comment).
+        declare(
+            "doctor",
+            "Report connection health, write capabilities, label strategy, and a \
+             scan-time estimate for one or every connected account. Headers and \
+             counts only — never a message body.",
+            schema_for::<sp::DoctorRequest>(),
+            staff::doctor::doctor,
+        ),
+        declare(
+            "get_snapshot",
+            "Snapshot one account's mailbox shape: Kind distribution (People/ \
+             Subscriptions/Receipts/Notifications/Other), human/receipts/GitHub \
+             share, inflow rate, history length, the detected archetype, and a \
+             flag if the declared account role looks like a mismatch. Headers and \
+             counts only — never a message body.",
+            schema_for::<sp::GetSnapshotRequest>(),
+            staff::snapshot::get_snapshot,
+        ),
+        declare(
+            "brief",
+            "The attention queue: unread People-kind mail waiting in the inbox, \
+             plus filed counts by Kind. SLA clocks, the overdue boomerang, and \
+             protected-sender alerts aren't available yet (see the response's \
+             not_yet_available field). Headers and counts only — never a message \
+             body.",
+            schema_for::<sp::BriefRequest>(),
+            staff::brief::brief,
+        ),
+        declare(
+            "review",
+            "Read-only weekly review: senders first seen in the last 7 days, and \
+             unsubscribe candidates from the existing subscription detector. \
+             Reporting only — no rule graduation or approval action. Headers and \
+             counts only — never a message body.",
+            schema_for::<sp::ReviewRequest>(),
+            staff::review::review,
+        ),
+        declare(
+            "identity_map",
+            "Cross-account identity map: senders (by sender key) that appear in \
+             more than one connected account, with a per-account message count. \
+             Headers and counts only — never a message body.",
+            schema_for::<sp::IdentityMapRequest>(),
+            staff::identity_map::identity_map,
         ),
     ]
 }
