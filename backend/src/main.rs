@@ -90,6 +90,60 @@ impl From<&AppState> for tools::ToolContext {
             state.pipeline_locks.clone(),
             state.poll_scheduler.clone(),
         )
+        .with_mail_writer(Arc::new(OrchestratorMailWriter {
+            orchestrator: state.apply_orchestrator.clone(),
+        }) as Arc<dyn tools::mail_writer::MailWriter>)
+    }
+}
+
+/// The real `tools::mail_writer::MailWriter` implementation — see that
+/// trait's module doc for why it exists at all (the lib crate's `ToolContext`
+/// cannot hold this binary's own locally-compiled `cleanup::orchestrator`
+/// types directly). Resolves a live provider through
+/// `ApplyOrchestrator::provider_factory`, the same hardened, already-wired
+/// path `AccountWorker` uses for every other apply — no connection or
+/// provider logic is reimplemented here.
+struct OrchestratorMailWriter {
+    orchestrator: Arc<cleanup::orchestrator::ApplyOrchestrator>,
+}
+
+#[async_trait::async_trait]
+impl tools::mail_writer::MailWriter for OrchestratorMailWriter {
+    async fn archive(
+        &self,
+        account_id: &str,
+        provider_message_id: &str,
+    ) -> Result<(), tools::mail_writer::MailWriteError> {
+        let resolved = self
+            .orchestrator
+            .provider_factory
+            .provider_for(account_id)
+            .await
+            .map_err(|e| tools::mail_writer::MailWriteError::AccountNotFound(e.to_string()))?;
+        resolved
+            .provider
+            .archive_message(&resolved.access_token, provider_message_id)
+            .await
+            .map_err(|e| tools::mail_writer::MailWriteError::Provider(e.to_string()))
+    }
+
+    async fn unarchive(
+        &self,
+        account_id: &str,
+        provider_message_id: &str,
+    ) -> Result<(), tools::mail_writer::MailWriteError> {
+        let resolved = self
+            .orchestrator
+            .provider_factory
+            .provider_for(account_id)
+            .await
+            .map_err(|e| tools::mail_writer::MailWriteError::AccountNotFound(e.to_string()))?;
+        tools::mail_writer::check_undo_supported(resolved.kind, account_id)?;
+        resolved
+            .provider
+            .unarchive_message(&resolved.access_token, provider_message_id)
+            .await
+            .map_err(|e| tools::mail_writer::MailWriteError::Provider(e.to_string()))
     }
 }
 

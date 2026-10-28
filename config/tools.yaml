@@ -124,6 +124,47 @@ tools:
     requires_confirmation: false
     rate_limit_per_minute: 10
 
+  # --- Milestone 3: write-capable staff tools ---------------------------
+  # Preview tools are read-only (list proposed dispositions, no mutation);
+  # apply/undo mutate a real mailbox and require confirmation, matching
+  # the send_email/delete_email/create_rule convention below. Note (see
+  # this session's finding): requires_confirmation is read by the chat
+  # orchestrator's own pending_confirmations flow (api/ai.rs), NOT checked
+  # anywhere in the MCP dispatch path (src/mcp/) -- it provides no gate
+  # against a direct MCP call for ANY tool, not just these. The real
+  # protection specific to these four is write_tools.rs's own batch_key
+  # mechanism: apply/undo reject any call that doesn't present the exact
+  # hash a prior preview returned.
+  era_archive_preview:
+    enabled: true
+    requires_confirmation: false
+    rate_limit_per_minute: 10
+
+  era_archive_apply:
+    enabled: true
+    requires_confirmation: true
+    rate_limit_per_minute: 5
+
+  era_archive_undo:
+    enabled: true
+    requires_confirmation: true
+    rate_limit_per_minute: 5
+
+  closeout_preview:
+    enabled: true
+    requires_confirmation: false
+    rate_limit_per_minute: 10
+
+  closeout_apply:
+    enabled: true
+    requires_confirmation: true
+    rate_limit_per_minute: 5
+
+  closeout_undo:
+    enabled: true
+    requires_confirmation: true
+    rate_limit_per_minute: 5
+
   # --- A4 action tools — not implemented yet ---------------------------
   # `deferred: true` records the intended policy without the registry
   # reporting these as unknown names. They are inert until the handlers land;

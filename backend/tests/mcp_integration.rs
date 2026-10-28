@@ -34,10 +34,16 @@ type McpService = StreamableHttpService<EmailibriumMcpServer, LocalSessionManage
 /// `tools/staff` ones below without updating it (out of scope for that
 /// change; flagged, not fixed, here). This constant reflects the actual
 /// registered surface, which README.md currently does not.
-const TWENTY_TOOLS: [&str; 20] = [
+const TWENTY_SIX_TOOLS: [&str; 26] = [
     "brief",
+    "closeout_apply",
+    "closeout_preview",
+    "closeout_undo",
     "count_emails",
     "doctor",
+    "era_archive_apply",
+    "era_archive_preview",
+    "era_archive_undo",
     "find_similar_emails",
     "get_email",
     "get_email_thread",
@@ -433,12 +439,12 @@ fn config_from_yaml(yaml: &str) -> (tempfile::TempDir, ToolsConfig) {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn tools_list_returns_exactly_the_twenty_registered_tools() {
+async fn tools_list_returns_exactly_the_twenty_six_registered_tools() {
     let env = Env::default_env().await;
     let s = env.open_session().await;
     let names = env.wire_tool_names(&s).await;
     assert_eq!(
-        names, TWENTY_TOOLS,
+        names, TWENTY_SIX_TOOLS,
         "wire tools/list must equal the full registered surface, sorted"
     );
 }
@@ -553,7 +559,7 @@ async fn a_disabled_tool_vanishes_from_the_router_entirely() {
         !names.contains(&"get_email".to_string()),
         "disabled tool still listed: {names:?}"
     );
-    assert_eq!(names.len(), 19);
+    assert_eq!(names.len(), 25);
 
     let resp = env
         .call_tool(&s, "get_email", json!({"email_id": "email-1"}))
@@ -931,5 +937,5 @@ async fn stdio_serves_the_identical_tool_list_as_http() {
     let http_names = env.wire_tool_names(&s).await;
 
     assert_eq!(stdio_names, http_names, "stdio and HTTP surfaces drifted");
-    assert_eq!(stdio_names, TWENTY_TOOLS);
+    assert_eq!(stdio_names, TWENTY_SIX_TOOLS);
 }
