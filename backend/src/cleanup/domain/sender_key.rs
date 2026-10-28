@@ -81,7 +81,9 @@ mod tests {
     #[test]
     fn plain_address() {
         assert_eq!(
-            SenderKey::from_address("alice@example.com").unwrap().as_str(),
+            SenderKey::from_address("alice@example.com")
+                .unwrap()
+                .as_str(),
             "alice@example.com"
         );
     }
@@ -109,7 +111,9 @@ mod tests {
     #[test]
     fn case_insensitive() {
         assert_eq!(
-            SenderKey::from_address("Alice@Example.COM").unwrap().as_str(),
+            SenderKey::from_address("Alice@Example.COM")
+                .unwrap()
+                .as_str(),
             "alice@example.com"
         );
     }

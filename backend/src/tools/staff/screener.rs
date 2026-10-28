@@ -57,7 +57,11 @@ pub async fn screener(ctx: Arc<ToolContext>, req: ScreenerRequest) -> Result<Val
             message_count,
         })
         .collect();
-    candidates.sort_by(|a, b| b.message_count.cmp(&a.message_count).then(a.from_addr.cmp(&b.from_addr)));
+    candidates.sort_by(|a, b| {
+        b.message_count
+            .cmp(&a.message_count)
+            .then(a.from_addr.cmp(&b.from_addr))
+    });
 
     let report = ScreenerReport {
         candidates,
@@ -65,5 +69,6 @@ pub async fn screener(ctx: Arc<ToolContext>, req: ScreenerRequest) -> Result<Val
                  (first/last-seen) exists — this list is every distinct human sender seen, not \
                  yet narrowed to first-time contacts.",
     };
-    serde_json::to_value(report).map_err(|e| ToolError::Database(format!("serializing screener report: {e}")))
+    serde_json::to_value(report)
+        .map_err(|e| ToolError::Database(format!("serializing screener report: {e}")))
 }

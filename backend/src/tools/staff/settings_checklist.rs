@@ -63,11 +63,16 @@ pub async fn settings_checklist(
         })
         .collect();
     // Highest volume first — "ranked by volume eliminated".
-    items.sort_by(|a, b| b.message_count.cmp(&a.message_count).then(a.sender_key.cmp(&b.sender_key)));
+    items.sort_by(|a, b| {
+        b.message_count
+            .cmp(&a.message_count)
+            .then(a.sender_key.cmp(&b.sender_key))
+    });
 
     let out = SettingsChecklist {
         items,
         total_notification_messages: total,
     };
-    serde_json::to_value(out).map_err(|e| ToolError::Database(format!("serializing settings checklist: {e}")))
+    serde_json::to_value(out)
+        .map_err(|e| ToolError::Database(format!("serializing settings checklist: {e}")))
 }

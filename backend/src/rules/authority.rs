@@ -56,7 +56,10 @@ pub struct RuleAuthority {
 
 impl RuleAuthority {
     pub fn new(level: AuthorityLevel, clean_streak: u32) -> Self {
-        Self { level, clean_streak }
+        Self {
+            level,
+            clean_streak,
+        }
     }
 
     pub fn default_for_new_rule() -> Self {
@@ -171,15 +174,25 @@ mod tests {
         let r = RuleAuthority::new(AuthorityLevel::Suggest, 2);
         let after_correction = record_approval(r, Approval::Correction).new_state;
         let out = record_approval(after_correction, Approval::ApplyOnceClean);
-        assert_eq!(out.new_state.level, AuthorityLevel::Suggest, "streak reset, this is only 1");
+        assert_eq!(
+            out.new_state.level,
+            AuthorityLevel::Suggest,
+            "streak reset, this is only 1"
+        );
         assert_eq!(out.new_state.clean_streak, 1);
     }
 
     #[test]
     fn an_already_trusted_rule_does_not_change_level_on_further_events() {
         let r = RuleAuthority::new(AuthorityLevel::Trusted, 0);
-        assert_eq!(record_approval(r, Approval::Correction).new_state.level, AuthorityLevel::Trusted);
-        assert_eq!(record_approval(r, Approval::ApplyOnceClean).new_state.level, AuthorityLevel::Trusted);
+        assert_eq!(
+            record_approval(r, Approval::Correction).new_state.level,
+            AuthorityLevel::Trusted
+        );
+        assert_eq!(
+            record_approval(r, Approval::ApplyOnceClean).new_state.level,
+            AuthorityLevel::Trusted
+        );
     }
 
     #[test]

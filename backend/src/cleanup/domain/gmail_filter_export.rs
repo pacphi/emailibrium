@@ -101,7 +101,10 @@ mod tests {
         let xml = to_gmail_filter_xml(&rules);
         assert!(xml.contains("a&amp;b@example.com"));
         assert!(xml.contains("&quot;Quoted&quot;"));
-        assert!(!xml.contains("a&b@example.com"), "raw ampersand must not survive unescaped");
+        assert!(
+            !xml.contains("a&b@example.com"),
+            "raw ampersand must not survive unescaped"
+        );
     }
 
     #[test]

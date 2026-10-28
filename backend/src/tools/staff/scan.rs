@@ -97,7 +97,9 @@ pub async fn scan_mail_with_ids(
         .into_model::<CandidateRow>()
         .all(&ctx.conn())
         .await
-        .map_err(|e| crate::tools::readonly::db_error("Scanning mail for a write candidate set", e))?;
+        .map_err(|e| {
+            crate::tools::readonly::db_error("Scanning mail for a write candidate set", e)
+        })?;
 
     Ok(rows
         .into_iter()

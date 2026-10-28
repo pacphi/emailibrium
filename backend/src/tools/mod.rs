@@ -10,8 +10,8 @@
 //! registration line.
 
 pub mod audit;
-pub mod confirmation;
 pub mod config;
+pub mod confirmation;
 pub mod context;
 pub mod mail_writer;
 pub mod rate_limit;

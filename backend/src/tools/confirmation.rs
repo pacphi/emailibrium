@@ -94,7 +94,10 @@ impl ConfirmationStore {
     /// (through the separate approval endpoint) would need to approve.
     pub fn check_and_consume(&self, tool_name: &str, args: &Value) -> Result<(), String> {
         let fingerprint = Self::fingerprint(tool_name, args);
-        let mut entries = self.entries.lock().expect("confirmation store lock poisoned");
+        let mut entries = self
+            .entries
+            .lock()
+            .expect("confirmation store lock poisoned");
         Self::sweep_expired(&mut entries);
 
         if let Some((id, entry)) = entries
@@ -143,7 +146,10 @@ impl ConfirmationStore {
     /// approval endpoint — never from anything in the MCP dispatch path, so
     /// a denied caller cannot reach this through the call that was denied.
     pub fn approve(&self, id: &str) -> Result<(), ApproveError> {
-        let mut entries = self.entries.lock().expect("confirmation store lock poisoned");
+        let mut entries = self
+            .entries
+            .lock()
+            .expect("confirmation store lock poisoned");
         Self::sweep_expired(&mut entries);
         match entries.get_mut(id) {
             Some(entry) if !entry.consumed => {
@@ -193,10 +199,14 @@ mod tests {
         let args = json!({"batch_key": "abc"});
         // The denied caller only ever has the error string (the id) — there
         // is no field in it that, fed back in, satisfies the gate.
-        let id = store.check_and_consume("era_archive_apply", &args).unwrap_err();
+        let id = store
+            .check_and_consume("era_archive_apply", &args)
+            .unwrap_err();
         // Retrying the exact same call, exact same args, with nothing else
         // done, must still be denied: the id alone is not an approval.
-        let second = store.check_and_consume("era_archive_apply", &args).unwrap_err();
+        let second = store
+            .check_and_consume("era_archive_apply", &args)
+            .unwrap_err();
         assert_eq!(id, second, "same pending confirmation, not a new one");
         // Even explicitly passing the id back as if it were a credential
         // (the shape of the original, broken design) must not help — this
@@ -208,7 +218,9 @@ mod tests {
     fn only_a_separate_approve_call_lets_the_matching_retry_through() {
         let store = ConfirmationStore::new();
         let args = json!({"batch_key": "abc"});
-        let id = store.check_and_consume("era_archive_apply", &args).unwrap_err();
+        let id = store
+            .check_and_consume("era_archive_apply", &args)
+            .unwrap_err();
 
         store.approve(&id).expect("approval endpoint call succeeds");
 
@@ -222,13 +234,17 @@ mod tests {
     fn approval_is_single_use() {
         let store = ConfirmationStore::new();
         let args = json!({"batch_key": "abc"});
-        let id = store.check_and_consume("era_archive_apply", &args).unwrap_err();
+        let id = store
+            .check_and_consume("era_archive_apply", &args)
+            .unwrap_err();
         store.approve(&id).unwrap();
         store.check_and_consume("era_archive_apply", &args).unwrap();
 
         // A second identical call after the approval was spent is denied
         // again, with a fresh id — the old approval cannot be replayed.
-        let err = store.check_and_consume("era_archive_apply", &args).unwrap_err();
+        let err = store
+            .check_and_consume("era_archive_apply", &args)
+            .unwrap_err();
         assert_ne!(err, id, "a spent confirmation is not reusable");
     }
 
@@ -249,6 +265,9 @@ mod tests {
     #[test]
     fn approving_an_unknown_id_fails_closed() {
         let store = ConfirmationStore::new();
-        assert_eq!(store.approve("confirm_doesnotexist"), Err(ApproveError::Expired));
+        assert_eq!(
+            store.approve("confirm_doesnotexist"),
+            Err(ApproveError::Expired)
+        );
     }
 }

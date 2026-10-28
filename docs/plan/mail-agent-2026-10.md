@@ -430,7 +430,7 @@ The morning brief orders items by what they cost if missed: open loops past thei
 
 **Sample daily digest**
 
-```
+```text
 Yesterday · christopher.a.phillipson@gmail.com
 Inbox now: 3 (1 review request on sindri · 1 recruiter reply · 1 household thread)
 Filed: 28 GitHub (3 need you ↗) · 5 LinkedIn alerts · 2 receipts · 4 newsletters
@@ -441,7 +441,7 @@ Open loops: Household 1 (2 days) · Career 0
 
 **Sample Monday review**
 
-```
+```text
 Week of Oct 27 · 3 accounts
 1. New senders (9): approve suggested Kind/Topic, or unsubscribe   [per sender]
 2. Unsubscribe candidates (4): ≥10 messages, 0 opened in 90 days
@@ -502,7 +502,7 @@ Seven milestones inside pacphi/emailibrium (Rust backend, MIT), each ending in s
 
 **Repo layout**
 
-```
+```text
 emailibrium/
   backend/src/tools/staff/      # NEW: snapshot, brief, closeout, plan_apply/undo, review, health, identity_map, rule_set_authority
   backend/src/tools/readonly/   # existing 15 tools (unchanged)

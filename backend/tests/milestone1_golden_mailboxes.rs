@@ -245,11 +245,7 @@ fn personal_account_fixture() -> Vec<FixtureMessage> {
 
 #[tokio::test]
 async fn business_profile_is_machine_dominated_with_low_human_share() {
-    let kinds = classify_fixture(
-        business_account_fixture(),
-        "chris@cpventuresgroup.com",
-    )
-    .await;
+    let kinds = classify_fixture(business_account_fixture(), "chris@cpventuresgroup.com").await;
 
     let people_share = share(&kinds, Kind::People);
     let notifications_share = share(&kinds, Kind::Notifications);
@@ -389,4 +385,3 @@ async fn professional_profile_github_reasons_route_as_the_plan_describes() {
         "ci_activity/push should be source-settings candidates"
     );
 }
-

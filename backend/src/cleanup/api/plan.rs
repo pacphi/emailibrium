@@ -283,7 +283,13 @@ async fn list_operations(
     };
     let (items, next_cursor) = state
         .cleanup_plan_repo
-        .list_operations(Principal::local_operator().as_str(), id, filter, q.cursor, limit)
+        .list_operations(
+            Principal::local_operator().as_str(),
+            id,
+            filter,
+            q.cursor,
+            limit,
+        )
         .await
         .map_err(|e| {
             err(

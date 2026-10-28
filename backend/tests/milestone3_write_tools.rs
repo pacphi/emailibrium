@@ -92,7 +92,11 @@ impl EmailProvider for RecordingProvider {
     ) -> Result<(), ProviderError> {
         unreachable!("not exercised by the write-tools integration under test")
     }
-    async fn create_label(&self, _access_token: &str, _name: &str) -> Result<String, ProviderError> {
+    async fn create_label(
+        &self,
+        _access_token: &str,
+        _name: &str,
+    ) -> Result<String, ProviderError> {
         unreachable!("not exercised by the write-tools integration under test")
     }
 }
@@ -106,7 +110,9 @@ impl EmailProvider for RecordingProvider {
 /// `ApplyOrchestrator.provider_factory` to this same `EmailProvider` call
 /// is simple, directly-reviewable glue, not logic this test needs to
 /// re-exercise.
-fn ctx_with_recording_provider(db: emailibrium::db::Database) -> (Arc<ToolContext>, Arc<RecordingProvider>) {
+fn ctx_with_recording_provider(
+    db: emailibrium::db::Database,
+) -> (Arc<ToolContext>, Arc<RecordingProvider>) {
     let recorder = Arc::new(RecordingProvider::default());
     let mail_writer: Arc<dyn emailibrium::tools::mail_writer::MailWriter> =
         Arc::new(DirectMailWriter(recorder.clone()));
@@ -207,18 +213,33 @@ async fn era_archive_apply_undo_and_reapply_is_a_no_op() {
 
     // Two messages older than 5 years (the only era this milestone
     // implements), one recent — the recent one must never be touched.
-    email_row("old-1", "a@old.example", now - chrono::Duration::days(2000), true)
-        .insert(&conn)
-        .await
-        .expect("seed old-1");
-    email_row("old-2", "b@old.example", now - chrono::Duration::days(1900), false)
-        .insert(&conn)
-        .await
-        .expect("seed old-2");
-    email_row("recent-1", "c@recent.example", now - chrono::Duration::days(10), false)
-        .insert(&conn)
-        .await
-        .expect("seed recent-1");
+    email_row(
+        "old-1",
+        "a@old.example",
+        now - chrono::Duration::days(2000),
+        true,
+    )
+    .insert(&conn)
+    .await
+    .expect("seed old-1");
+    email_row(
+        "old-2",
+        "b@old.example",
+        now - chrono::Duration::days(1900),
+        false,
+    )
+    .insert(&conn)
+    .await
+    .expect("seed old-2");
+    email_row(
+        "recent-1",
+        "c@recent.example",
+        now - chrono::Duration::days(10),
+        false,
+    )
+    .insert(&conn)
+    .await
+    .expect("seed recent-1");
 
     let (ctx, recorder) = ctx_with_recording_provider(db);
 
@@ -338,7 +359,11 @@ async fn era_archive_apply_undo_and_reapply_is_a_no_op() {
 
     // The real provider's inverse call happened too.
     let unarchived = recorder.unarchived.lock().unwrap();
-    assert_eq!(unarchived.len(), 2, "exactly two real unarchive_message calls");
+    assert_eq!(
+        unarchived.len(),
+        2,
+        "exactly two real unarchive_message calls"
+    );
     assert!(unarchived.contains(&"provider-old-1".to_string()));
     assert!(unarchived.contains(&"provider-old-2".to_string()));
 }
@@ -350,20 +375,35 @@ async fn closeout_empties_the_inbox_except_keep_items_and_undoes() {
     let now = chrono::Utc::now().naive_utc();
 
     // People-kind (human-looking sender, no bulk markers) -> needs you, stays.
-    email_row("human-1", "jamie@example-partner.com", now - chrono::Duration::days(1), false)
-        .insert(&conn)
-        .await
-        .expect("seed human-1");
+    email_row(
+        "human-1",
+        "jamie@example-partner.com",
+        now - chrono::Duration::days(1),
+        false,
+    )
+    .insert(&conn)
+    .await
+    .expect("seed human-1");
     // Already-read bulk mail -> done, archived.
-    email_row("bulk-read-1", "noreply@service.example", now - chrono::Duration::hours(2), true)
-        .insert(&conn)
-        .await
-        .expect("seed bulk-read-1");
+    email_row(
+        "bulk-read-1",
+        "noreply@service.example",
+        now - chrono::Duration::hours(2),
+        true,
+    )
+    .insert(&conn)
+    .await
+    .expect("seed bulk-read-1");
     // Unread, ambiguous -> keep, stays (default-safe).
-    email_row("unread-1", "someone@unknown.example", now - chrono::Duration::hours(1), false)
-        .insert(&conn)
-        .await
-        .expect("seed unread-1");
+    email_row(
+        "unread-1",
+        "someone@unknown.example",
+        now - chrono::Duration::hours(1),
+        false,
+    )
+    .insert(&conn)
+    .await
+    .expect("seed unread-1");
 
     let (ctx, recorder) = ctx_with_recording_provider(db);
 
@@ -375,7 +415,10 @@ async fn closeout_empties_the_inbox_except_keep_items_and_undoes() {
     )
     .await
     .expect("preview");
-    assert_eq!(preview["to_archive_count"], 1, "only the read bulk item is 'done'");
+    assert_eq!(
+        preview["to_archive_count"], 1,
+        "only the read bulk item is 'done'"
+    );
     let batch_key = preview["batch_key"].as_str().unwrap().to_string();
 
     let applied = closeout_apply_tool(
@@ -400,7 +443,10 @@ async fn closeout_empties_the_inbox_except_keep_items_and_undoes() {
         .await
         .unwrap()
         .unwrap();
-    assert!(!human.is_archived, "needs-you (People) must stay in the inbox");
+    assert!(
+        !human.is_archived,
+        "needs-you (People) must stay in the inbox"
+    );
     let unread = emails::Entity::find_by_id("unread-1".to_string())
         .one(&conn)
         .await
@@ -444,10 +490,17 @@ async fn closeout_empties_the_inbox_except_keep_items_and_undoes() {
         .await
         .unwrap()
         .unwrap();
-    assert!(!bulk_after.is_archived, "undo must restore the archived item");
+    assert!(
+        !bulk_after.is_archived,
+        "undo must restore the archived item"
+    );
 
     let unarchived = recorder.unarchived.lock().unwrap();
-    assert_eq!(unarchived.len(), 1, "exactly one real unarchive_message call");
+    assert_eq!(
+        unarchived.len(),
+        1,
+        "exactly one real unarchive_message call"
+    );
     assert_eq!(unarchived[0], "provider-bulk-read-1");
 }
 

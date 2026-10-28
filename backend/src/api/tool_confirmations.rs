@@ -44,7 +44,9 @@ async fn approve(
         )),
         Err(ApproveError::Expired) => Err((
             axum::http::StatusCode::GONE,
-            format!("Confirmation {id} expired or does not exist — the caller must request a fresh one"),
+            format!(
+                "Confirmation {id} expired or does not exist — the caller must request a fresh one"
+            ),
         )),
     }
 }

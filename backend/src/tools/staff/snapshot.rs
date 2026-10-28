@@ -104,7 +104,10 @@ fn detect_archetype(shape: &Shape) -> Archetype {
 /// Snapshot one account's mailbox shape: counts by Kind, human/receipts/
 /// GitHub share, inflow rate, history length, the detected archetype, and a
 /// role-mismatch flag against the declared `AccountRole` (milestone 1).
-pub async fn get_snapshot(ctx: Arc<ToolContext>, req: GetSnapshotRequest) -> Result<Value, ToolError> {
+pub async fn get_snapshot(
+    ctx: Arc<ToolContext>,
+    req: GetSnapshotRequest,
+) -> Result<Value, ToolError> {
     validate_uuid("account_id", &req.account_id).map_err(ToolError::Invalid)?;
 
     let account = {
@@ -117,10 +120,7 @@ pub async fn get_snapshot(ctx: Arc<ToolContext>, req: GetSnapshotRequest) -> Res
             .ok_or_else(|| ToolError::NotFound(format!("No account with id {}", req.account_id)))?
     };
 
-    let declared_role = account
-        .role
-        .as_deref()
-        .and_then(role_from_str);
+    let declared_role = account.role.as_deref().and_then(role_from_str);
 
     let messages = scan_mail(&ctx, Some(req.account_id.as_str()), false).await?;
     let total = messages.len();

@@ -112,10 +112,7 @@ mod tests {
 
     #[test]
     fn empty_labels_map_to_empty_regardless_of_name() {
-        assert_eq!(
-            classify_mapping(&label("Developer", 0, 1)),
-            Mapping::Empty
-        );
+        assert_eq!(classify_mapping(&label("Developer", 0, 1)), Mapping::Empty);
     }
 
     #[test]
@@ -144,7 +141,10 @@ mod tests {
 
     #[test]
     fn org_shaped_labels_fold_into_sender() {
-        assert_eq!(classify_mapping(&label("Org", 80, 3)), Mapping::FoldIntoSender);
+        assert_eq!(
+            classify_mapping(&label("Org", 80, 3)),
+            Mapping::FoldIntoSender
+        );
         assert_eq!(
             classify_mapping(&label("Org/Acme", 12, 3)),
             Mapping::FoldIntoSender
@@ -169,7 +169,10 @@ mod tests {
         ];
         let plan = plan_reconcile(&labels);
         assert_eq!(plan.len(), 4);
-        assert_eq!(plan["Developer"], Mapping::FlatTopic("OpenSource".to_string()));
+        assert_eq!(
+            plan["Developer"],
+            Mapping::FlatTopic("OpenSource".to_string())
+        );
         assert_eq!(plan["Stray"], Mapping::Empty);
     }
 

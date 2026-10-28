@@ -52,7 +52,12 @@ pub fn run_gate_pass(
 ) -> Vec<(&str, GateDecision)> {
     candidates
         .iter()
-        .map(|s| (s.topic.as_str(), gate(s, has_distinct_disposition(&s.topic))))
+        .map(|s| {
+            (
+                s.topic.as_str(),
+                gate(s, has_distinct_disposition(&s.topic)),
+            )
+        })
         .collect()
 }
 
