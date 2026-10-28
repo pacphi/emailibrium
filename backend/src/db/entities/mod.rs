@@ -36,6 +36,7 @@ pub mod mcp_tool_audit;
 pub mod privacy_audit_log;
 pub mod processing_checkpoints;
 pub mod rules;
+pub mod saved_reports;
 pub mod search_interactions;
 pub mod sync_conflicts;
 pub mod sync_queue;

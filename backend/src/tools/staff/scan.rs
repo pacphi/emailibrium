@@ -17,6 +17,11 @@
 //! (nothing protected, no declared own-addresses): the sender ledger and
 //! account own-address list are later milestones' work, exactly as
 //! milestone 1 documented for the live classifier.
+//!
+//! `email_id`/`thread_key` (milestone 5) are row identifiers, not body
+//! content, so selecting them doesn't weaken the body-free guarantee above
+//! — they let `staff::brief` group open loops into conversations and
+//! `staff::write_tools` join back to a row it can act on.
 
 use std::sync::Arc;
 
@@ -30,21 +35,28 @@ use crate::tools::{ToolContext, ToolError};
 /// One classified message, with just enough context to bucket and count it.
 #[derive(Debug, Clone)]
 pub struct ScannedMessage {
+    pub email_id: String,
     pub account_id: String,
     pub from_addr: String,
     pub received_at: chrono::NaiveDateTime,
     pub is_read: bool,
+    /// Groups messages into the same conversation (migration 021). Falls
+    /// back to the message's own id for rows ingested before threading
+    /// existed — never empty, so callers can always group by it.
+    pub thread_key: String,
     pub classification: Classification,
 }
 
 #[derive(FromQueryResult)]
 struct Row {
+    id: String,
     account_id: String,
     from_addr: String,
     to_addrs: String,
     list_unsubscribe: Option<String>,
     received_at: chrono::NaiveDateTime,
     is_read: Option<bool>,
+    thread_key: Option<String>,
 }
 
 /// A scanned message that also carries the two ids a write operation needs
@@ -123,12 +135,14 @@ pub async fn scan_mail(
 ) -> Result<Vec<ScannedMessage>, ToolError> {
     let mut query = emails::Entity::find()
         .select_only()
+        .column(emails::Column::Id)
         .column(emails::Column::AccountId)
         .column(emails::Column::FromAddr)
         .column(emails::Column::ToAddrs)
         .column(emails::Column::ListUnsubscribe)
         .column(emails::Column::ReceivedAt)
         .column(emails::Column::IsRead)
+        .column(emails::Column::ThreadKey)
         .filter(emails::Column::DeletedAt.is_null())
         .filter(emails::Column::IsSpam.eq(0))
         .filter(emails::Column::IsTrash.eq(0));
@@ -176,6 +190,8 @@ pub async fn scan_mail(
             };
 
             ScannedMessage {
+                thread_key: row.thread_key.unwrap_or_else(|| row.id.clone()),
+                email_id: row.id,
                 account_id: row.account_id,
                 from_addr: row.from_addr,
                 received_at: row.received_at,

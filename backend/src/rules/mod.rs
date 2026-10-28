@@ -11,6 +11,7 @@
 pub mod authority;
 pub mod executor;
 pub mod json_parser;
+pub mod retention;
 pub mod rule_engine;
 pub mod rule_processor;
 pub mod rule_validator;

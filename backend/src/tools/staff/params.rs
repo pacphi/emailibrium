@@ -100,3 +100,33 @@ pub struct CloseoutUndoRequest {
     #[schemars(description = "The batch_key a closeout_apply call returned.")]
     pub batch_key: String,
 }
+
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct HealthRequest {
+    #[schemars(
+        description = "Restrict the health report to this account UUID. Omit to merge every connected account."
+    )]
+    pub account_id: Option<String>,
+}
+
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct ListSavedReportsRequest {
+    #[schemars(
+        description = "Restrict to this report kind: \"brief\", \"review\", or \"health\". Omit for every kind."
+    )]
+    pub kind: Option<String>,
+    #[schemars(
+        description = "Restrict to reports generated for this account UUID. Omit for every account, including merged (all-account) reports."
+    )]
+    pub account_id: Option<String>,
+    #[schemars(
+        description = "Maximum number of reports to return, most recent first. Defaults to 20."
+    )]
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct GetSavedReportRequest {
+    #[schemars(description = "The id a list_saved_reports call returned.")]
+    pub report_id: String,
+}

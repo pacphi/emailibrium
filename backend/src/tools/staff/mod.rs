@@ -18,9 +18,12 @@
 
 pub mod brief;
 pub mod doctor;
+pub mod health;
 pub mod identity_map;
+pub mod noise_trend;
 pub mod params;
 pub mod review;
+pub mod saved_reports;
 pub mod scan;
 pub mod screener;
 pub mod settings_checklist;
@@ -49,13 +52,18 @@ mod tests {
             &[
                 include_str!("../../../migrations/sqlite/001_initial_schema.sql"),
                 include_str!("../../../migrations/sqlite/004_accounts.sql"),
+                include_str!("../../../migrations/sqlite/012_rules.sql"),
                 include_str!("../../../migrations/sqlite/013_account_settings.sql"),
                 include_str!("../../../migrations/sqlite/016_soft_delete_trash_spam.sql"),
+                include_str!("../../../migrations/sqlite/017_topic_clusters.sql"),
                 include_str!("../../../migrations/sqlite/018_unsubscribe_headers.sql"),
                 include_str!("../../../migrations/sqlite/021_thread_key.sql"),
+                include_str!("../../../migrations/sqlite/026_rules_match_count.sql"),
                 include_str!("../../../migrations/sqlite/027_is_archived.sql"),
                 include_str!("../../../migrations/sqlite/028_imap_accounts.sql"),
                 include_str!("../../../migrations/sqlite/030_account_role.sql"),
+                include_str!("../../../migrations/sqlite/032_rule_authority.sql"),
+                include_str!("../../../migrations/sqlite/033_saved_reports.sql"),
             ],
         )
         .await
@@ -124,6 +132,33 @@ mod tests {
         .await
         .expect("identity_map");
         assert!(!identity_map.to_string().contains(BODY_MARKER));
+
+        let health = super::health::health(ctx.clone(), super::params::HealthRequest::default())
+            .await
+            .expect("health");
+        assert!(!health.to_string().contains(BODY_MARKER));
+
+        super::saved_reports::save_report(&ctx, "brief", None, &brief)
+            .await
+            .expect("save_report");
+        let listed = super::saved_reports::list_saved_reports(
+            ctx.clone(),
+            super::params::ListSavedReportsRequest::default(),
+        )
+        .await
+        .expect("list_saved_reports");
+        assert!(!listed.to_string().contains(BODY_MARKER));
+        let report_id = listed["reports"][0]["id"]
+            .as_str()
+            .expect("a saved report id")
+            .to_string();
+        let fetched = super::saved_reports::get_saved_report(
+            ctx.clone(),
+            super::params::GetSavedReportRequest { report_id },
+        )
+        .await
+        .expect("get_saved_report");
+        assert!(!fetched.to_string().contains(BODY_MARKER));
 
         // review's subscription-detection half needs vector services, which
         // this minimal context doesn't carry — doctor needs oauth. Both are
