@@ -201,27 +201,64 @@ pub fn should_warn(_subscription: &Subscription, open_rate: f32) -> bool {
 /// header is attacker-controlled, so every address it resolves to is
 /// checked, not just the hostname's apparent shape. Loopback, RFC 1918
 /// private, link-local, IPv6 unique-local (`fc00::/7`), CGNAT
-/// (`100.64.0.0/10`), multicast, broadcast and unspecified addresses are all
-/// rejected. An IPv4-mapped IPv6 address is unwrapped and checked as its
-/// IPv4 form so it can't be used to smuggle past the IPv4-specific checks.
+/// (`100.64.0.0/10`), multicast, broadcast, unspecified, "this network"
+/// (`0.0.0.0/8`), IETF protocol assignments (`192.0.0.0/24`, which includes
+/// the NAT64 discovery address `192.0.0.8/32`), benchmarking
+/// (`198.18.0.0/15`) and reserved (`240.0.0.0/4`) addresses are all
+/// rejected. An IPv4 address embedded in an IPv6 encoding — IPv4-mapped
+/// (`::ffff:a.b.c.d`), NAT64 (`64:ff9b::/96`), 6to4 (`2002::/16`), or the
+/// deprecated IPv4-compatible form (`::a.b.c.d`) — is extracted and checked
+/// as its IPv4 form, so none of those encodings can smuggle a private
+/// address past the IPv4-specific checks. `64:ff9b:1::/48` (RFC 8215's
+/// local-use NAT64 prefix) is rejected outright rather than decoded: unlike
+/// the other encodings, extracting its embedded address for prefix lengths
+/// other than /96 requires RFC 6052 §2.2's non-contiguous bit layout
+/// (a reserved "u" field splits the IPv4 payload), and the prefix exists
+/// specifically to carry private IPv4 addresses, so treating the whole
+/// prefix as disallowed is both simpler and strictly safer than attempting
+/// a bit-exact decode.
+///
+/// A std `IpAddr::is_global()` allowlist check exists but is nightly-only
+/// (feature `ip`, confirmed unstable against this repo's pinned 1.97
+/// toolchain by direct compilation, not assumed) and out of reach on a
+/// stable toolchain; no third-party crate was added for this because the
+/// available candidate already in this dependency tree (`ipnet`) is CIDR
+/// arithmetic, not a maintained IANA special-purpose registry, and this
+/// sandbox has no network access to vet an unfamiliar crate for a security
+/// boundary. The existing hand-rolled, individually-documented denylist
+/// pattern is extended instead.
 fn is_disallowed_unsubscribe_target(ip: IpAddr) -> bool {
     match ip {
-        IpAddr::V4(v4) => {
-            v4.is_loopback()
-                || v4.is_private()
-                || v4.is_link_local()
-                || v4.is_multicast()
-                || v4.is_unspecified()
-                || v4.is_broadcast()
-                || is_cgnat_v4(v4)
-        }
+        IpAddr::V4(v4) => is_disallowed_ipv4(v4),
         IpAddr::V6(v6) => {
-            if let Some(mapped) = v6.to_ipv4_mapped() {
-                return is_disallowed_unsubscribe_target(IpAddr::V4(mapped));
+            if is_fully_disallowed_v6_prefix(v6) {
+                return true;
             }
-            v6.is_loopback() || v6.is_multicast() || v6.is_unspecified() || is_unique_local_v6(v6) || is_link_local_v6(v6)
+            if let Some(embedded) = embedded_ipv4(v6) {
+                return is_disallowed_ipv4(embedded);
+            }
+            v6.is_loopback()
+                || v6.is_multicast()
+                || v6.is_unspecified()
+                || is_unique_local_v6(v6)
+                || is_link_local_v6(v6)
+                || is_deprecated_site_local_v6(v6)
         }
     }
+}
+
+fn is_disallowed_ipv4(v4: std::net::Ipv4Addr) -> bool {
+    v4.is_loopback()
+        || v4.is_private()
+        || v4.is_link_local()
+        || v4.is_multicast()
+        || v4.is_unspecified()
+        || v4.is_broadcast()
+        || is_cgnat_v4(v4)
+        || is_this_network_v4(v4)
+        || is_ietf_protocol_assignment_v4(v4)
+        || is_benchmarking_v4(v4)
+        || is_reserved_v4(v4)
 }
 
 /// `100.64.0.0/10`, the shared address space reserved for carrier-grade NAT —
@@ -229,6 +266,31 @@ fn is_disallowed_unsubscribe_target(ip: IpAddr) -> bool {
 fn is_cgnat_v4(v4: std::net::Ipv4Addr) -> bool {
     let o = v4.octets();
     o[0] == 100 && (o[1] & 0b1100_0000) == 64
+}
+
+/// `0.0.0.0/8`, "this network" — not covered by `is_unspecified()`, which
+/// only matches the single address `0.0.0.0`.
+fn is_this_network_v4(v4: std::net::Ipv4Addr) -> bool {
+    v4.octets()[0] == 0
+}
+
+/// `192.0.0.0/24`, IETF protocol assignments — includes `192.0.0.8/32`, the
+/// NAT64 discovery address.
+fn is_ietf_protocol_assignment_v4(v4: std::net::Ipv4Addr) -> bool {
+    let o = v4.octets();
+    o[0] == 192 && o[1] == 0 && o[2] == 0
+}
+
+/// `198.18.0.0/15`, reserved for network benchmarking.
+fn is_benchmarking_v4(v4: std::net::Ipv4Addr) -> bool {
+    let o = v4.octets();
+    o[0] == 198 && (o[1] & 0b1111_1110) == 18
+}
+
+/// `240.0.0.0/4`, reserved for future use (includes the broadcast address,
+/// already covered separately by `is_broadcast()`).
+fn is_reserved_v4(v4: std::net::Ipv4Addr) -> bool {
+    v4.octets()[0] >= 240
 }
 
 /// `fc00::/7`, IPv6 unique-local addresses — the IPv6 analog of RFC 1918,
@@ -241,6 +303,69 @@ fn is_unique_local_v6(v6: std::net::Ipv6Addr) -> bool {
 /// at this edition.
 fn is_link_local_v6(v6: std::net::Ipv6Addr) -> bool {
     (v6.segments()[0] & 0xffc0) == 0xfe80
+}
+
+/// `fec0::/10`, the deprecated IPv6 site-local range (formally deprecated by
+/// RFC 3879, but still routable on hosts/stacks that haven't dropped it) —
+/// no stable named method in std at this edition.
+fn is_deprecated_site_local_v6(v6: std::net::Ipv6Addr) -> bool {
+    (v6.segments()[0] & 0xffc0) == 0xfec0
+}
+
+/// `64:ff9b:1::/48` (RFC 8215) and Teredo (`2001:0000::/32`, RFC 4380),
+/// rejected outright — see this module's top-level doc comment for why
+/// they aren't decoded. Teredo's embedded client address is XOR-obfuscated
+/// per RFC 4380, not a simple bit-extraction like NAT64/6to4, and nothing
+/// legitimate would ever serve a List-Unsubscribe target over a Teredo
+/// tunnel.
+fn is_fully_disallowed_v6_prefix(v6: std::net::Ipv6Addr) -> bool {
+    let s = v6.segments();
+    (s[0] == 0x0064 && s[1] == 0xff9b && s[2] == 0x0001) || (s[0] == 0x2001 && s[1] == 0x0000)
+}
+
+/// Extract an IPv4 address embedded in an IPv6 encoding, where the payload
+/// is recoverable without RFC 6052's non-contiguous bit layout: IPv4-mapped
+/// (`::ffff:a.b.c.d`), the NAT64 well-known `/96` prefix (`64:ff9b::/96`,
+/// last 32 bits), 6to4 (`2002::/16`, next 32 bits), and the deprecated
+/// IPv4-compatible form (`::a.b.c.d`, last 32 bits with the top 96 bits
+/// zero). Returns `None` for `::` and `::1` (unspecified/loopback), which
+/// are handled by the existing IPv6-specific checks instead.
+fn embedded_ipv4(v6: std::net::Ipv6Addr) -> Option<std::net::Ipv4Addr> {
+    use std::net::Ipv4Addr;
+
+    if let Some(v4) = v6.to_ipv4_mapped() {
+        return Some(v4);
+    }
+
+    let s = v6.segments();
+    let last_two_as_v4 = |s: &[u16; 8]| {
+        Ipv4Addr::new((s[6] >> 8) as u8, s[6] as u8, (s[7] >> 8) as u8, s[7] as u8)
+    };
+
+    // NAT64 well-known prefix: 64:ff9b::/96 — last 32 bits are the IPv4.
+    if s[0] == 0x0064 && s[1] == 0xff9b && s[2] == 0 && s[3] == 0 && s[4] == 0 && s[5] == 0 {
+        return Some(last_two_as_v4(&s));
+    }
+
+    // 6to4: 2002::/16 — the next 32 bits (segments 1-2) are the IPv4.
+    if s[0] == 0x2002 {
+        return Some(Ipv4Addr::new(
+            (s[1] >> 8) as u8,
+            s[1] as u8,
+            (s[2] >> 8) as u8,
+            s[2] as u8,
+        ));
+    }
+
+    // Deprecated IPv4-compatible form: top 96 bits zero, excluding `::`
+    // and `::1` (unspecified/loopback), which the caller checks itself.
+    let top_96_zero = s[0] == 0 && s[1] == 0 && s[2] == 0 && s[3] == 0 && s[4] == 0 && s[5] == 0;
+    let is_unspecified_or_loopback = s[6] == 0 && (s[7] == 0 || s[7] == 1);
+    if top_96_zero && !is_unspecified_or_loopback {
+        return Some(last_two_as_v4(&s));
+    }
+
+    None
 }
 
 /// Parse and validate a `List-Unsubscribe` URL before this engine fetches
@@ -295,13 +420,20 @@ async fn validate_unsubscribe_url(url_str: &str) -> Result<(reqwest::Url, Socket
 /// a redirect to an internal target and have it followed silently — a
 /// redirect target must be validated from scratch, which means re-entering
 /// this module's checks, not quietly trusting the client's redirect logic),
-/// and `.resolve()` so the connection cannot be re-resolved to a different
-/// address than the one just validated.
+/// `.resolve()` so the connection cannot be re-resolved to a different
+/// address than the one just validated, and `.no_proxy()` so an
+/// `HTTP_PROXY`/`HTTPS_PROXY` environment variable can't silently bypass
+/// the pinned address entirely: reqwest honors those variables by default,
+/// and a proxy does its own DNS resolution using the original hostname, so
+/// `.resolve()` alone would never even apply once a proxy is in the path.
+/// This is scoped to this one client; any other HTTP client elsewhere in
+/// the app that legitimately needs proxy support is unaffected.
 fn pinned_https_client(host: &str, pinned: SocketAddr) -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
         .user_agent("Emailibrium/1.0 (unsubscribe)")
         .redirect(reqwest::redirect::Policy::none())
         .resolve(host, pinned)
+        .no_proxy()
         .build()
         .map_err(|e| format!("failed to build unsubscribe http client: {e}"))
 }
@@ -904,6 +1036,76 @@ mod tests {
     }
 
     #[test]
+    fn disallowed_targets_cover_the_round_2_ipv6_encodings_and_ipv4_ranges() {
+        let disallowed: &[&str] = &[
+            "64:ff9b::7f00:1",   // NAT64 /96, encodes 127.0.0.1
+            "64:ff9b::a00:1",    // NAT64 /96, encodes 10.0.0.1
+            "2002:c0a8:101::",   // 6to4, encodes 192.168.1.1
+            "2002:a00:1::",      // 6to4, encodes 10.0.0.1
+            "::127.0.0.1",       // deprecated IPv4-compatible, loopback
+            "::10.0.0.1",        // deprecated IPv4-compatible, private
+            "64:ff9b:1::7f00:1", // RFC 8215 local-use NAT64 — rejected outright, not decoded
+            "0.0.0.0",           // already covered via is_unspecified, kept for 0.0.0.0/8 overlap
+            "0.1.2.3",           // 0.0.0.0/8, "this network"
+            "192.0.0.1",         // 192.0.0.0/24, IETF protocol assignment
+            "192.0.0.8",         // NAT64 discovery address, inside 192.0.0.0/24
+            "198.18.0.1",        // 198.18.0.0/15, benchmarking
+            "198.19.255.254",    // still inside 198.18.0.0/15
+            "240.0.0.1",         // 240.0.0.0/4, reserved
+            "255.0.0.1",         // still inside 240.0.0.0/4
+            "fec0::1",           // deprecated IPv6 site-local, fec0::/10
+            "feff:ffff::1",      // still inside fec0::/10
+            "2001:0:4136:e378::1", // Teredo, 2001:0000::/32 — rejected outright
+        ];
+        for ip_str in disallowed {
+            let ip: IpAddr = ip_str.parse().unwrap();
+            assert!(
+                is_disallowed_unsubscribe_target(ip),
+                "{ip_str} should be disallowed"
+            );
+        }
+    }
+
+    #[test]
+    fn deprecated_site_local_and_teredo_do_not_overreach_their_boundaries() {
+        // fec0::/10 is fec0:: through feff:ffff:...:ffff. fe80::1 (link-local,
+        // already covered) and a plain global address must not be caught by
+        // the site-local check specifically.
+        assert!(!is_deprecated_site_local_v6("2001:4860:4860::8888".parse().unwrap()));
+        // 2001:1::1 is outside Teredo's 2001:0000::/32 (note the second
+        // segment must be zero) — a global 2001:: address must not be
+        // rejected just for sharing Teredo's top 16 bits.
+        let ip: IpAddr = "2001:1::1".parse().unwrap();
+        assert!(!is_disallowed_unsubscribe_target(ip));
+    }
+
+    #[test]
+    fn benchmarking_range_does_not_overreach_its_boundaries() {
+        // 198.18.0.0/15 is 198.18.0.0-198.19.255.255. Addresses just
+        // outside that boundary on both sides must NOT be disallowed by
+        // this check, proving the bitmask is exact rather than overbroad.
+        let just_outside: &[&str] = &["198.17.255.255", "198.20.0.0"];
+        for ip_str in just_outside {
+            let ip: IpAddr = ip_str.parse().unwrap();
+            assert!(
+                !is_disallowed_unsubscribe_target(ip),
+                "{ip_str} is just outside 198.18.0.0/15 and should NOT be disallowed"
+            );
+        }
+    }
+
+    #[test]
+    fn six_to_four_encoding_of_a_genuinely_public_address_is_not_disallowed() {
+        // 2002:0808:0808:: encodes 8.8.8.8 via 6to4 — a public address, so
+        // the 6to4 decode path must not reject it just for being 6to4.
+        let ip: IpAddr = "2002:808:808::".parse().unwrap();
+        assert!(
+            !is_disallowed_unsubscribe_target(ip),
+            "6to4 encoding of a public IPv4 address should not be disallowed"
+        );
+    }
+
+    #[test]
     fn public_looking_addresses_are_not_disallowed() {
         // Proof that the validation isn't simply rejecting everything: known
         // public addresses (not reachable/dialed in this test, just checked
@@ -989,6 +1191,12 @@ mod tests {
 
         let client = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
+            // Hermetic against an ambient HTTP_PROXY/HTTPS_PROXY in the
+            // environment (the user's shell, CI, or this file's own
+            // proxy-bypass test running concurrently in the same binary)
+            // — this test is about redirect policy, not proxy behavior,
+            // so it must not be sensitive to either.
+            .no_proxy()
             .build()
             .unwrap();
         let resp = client
@@ -1009,5 +1217,126 @@ mod tests {
         );
 
         task.abort();
+    }
+
+    /// Proves `.no_proxy()` actually suppresses a configured proxy — not
+    /// just that the builder call compiles. A "fake proxy" TCP listener
+    /// counts connection attempts but never speaks a real proxy protocol
+    /// (it just drops whatever connects); a real target server answers
+    /// directly. A control client with an explicit `reqwest::Proxy`
+    /// configured (no `.no_proxy()`) must route through the fake proxy —
+    /// proving the proxy is live and reqwest's default behavior honors
+    /// it, the exact thing `pinned_https_client`'s `.no_proxy()` call
+    /// exists to prevent (production relies on the env-var-detection form
+    /// of the same mechanism, since that's what `HTTP_PROXY`/
+    /// `HTTPS_PROXY` drive, but `.no_proxy()`'s documented job is to
+    /// disable proxy use outright, so overriding an explicitly-configured
+    /// proxy is at least as strong a guarantee as overriding env-var
+    /// auto-detection — this avoids mutating real process-wide
+    /// `HTTP_PROXY`/`HTTPS_PROXY` env vars, which would otherwise risk
+    /// racing any other test in this binary that builds a bare
+    /// `reqwest::Client` concurrently; an earlier version of this test did
+    /// exactly that and broke `redirect_none_policy_does_not_chase_a_3xx_response`
+    /// by sheer timing, which is why this version doesn't touch the
+    /// environment at all). The same `.resolve(..).no_proxy()`
+    /// combination `pinned_https_client` builds with must then reach the
+    /// target directly, with the fake proxy's hit count unchanged.
+    ///
+    /// Runs over plain HTTP, not through `pinned_https_client` itself,
+    /// for the same reason the redirect test above does: that function
+    /// requires `https` and `validate_unsubscribe_url` rejects loopback
+    /// targets by design, so the full pipeline can't be driven end to end
+    /// against a same-process test server without self-signed-TLS test
+    /// infrastructure this repo doesn't have.
+    #[tokio::test]
+    async fn no_proxy_setting_overrides_an_explicitly_configured_proxy() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let target_hits = Arc::new(AtomicUsize::new(0));
+        let target_hits_for_handler = target_hits.clone();
+        let target_router = axum::Router::new().route(
+            "/",
+            axum::routing::get(move || {
+                let hits = target_hits_for_handler.clone();
+                async move {
+                    hits.fetch_add(1, Ordering::SeqCst);
+                    "direct-ok"
+                }
+            }),
+        );
+        let target_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let target_addr = target_listener.local_addr().unwrap();
+        let target_task = tokio::spawn(async move {
+            axum::serve(target_listener, target_router).await.unwrap();
+        });
+
+        let proxy_hits = Arc::new(AtomicUsize::new(0));
+        let proxy_hits_for_task = proxy_hits.clone();
+        let proxy_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let proxy_addr = proxy_listener.local_addr().unwrap();
+        let proxy_task = tokio::spawn(async move {
+            loop {
+                let Ok((_stream, _)) = proxy_listener.accept().await else {
+                    break;
+                };
+                // Not a real proxy: just record the attempt and drop the
+                // connection. A control client routed through this must
+                // fail (or hang until it errors) rather than succeed —
+                // the assertion below only needs the hit count, not a
+                // successful response.
+                proxy_hits_for_task.fetch_add(1, Ordering::SeqCst);
+            }
+        });
+
+        let explicit_proxy = reqwest::Proxy::http(format!("http://{proxy_addr}")).unwrap();
+
+        // Control: an explicitly configured proxy, no `.no_proxy()`, must
+        // be used.
+        let control_client = reqwest::Client::builder()
+            .proxy(explicit_proxy.clone())
+            .build()
+            .unwrap();
+        let _ = control_client
+            .get(format!("http://{target_addr}/"))
+            .timeout(Duration::from_secs(2))
+            .send()
+            .await;
+        assert!(
+            proxy_hits.load(Ordering::SeqCst) >= 1,
+            "control client (configured proxy, no .no_proxy()) must have attempted \
+             the fake proxy, otherwise this test's proxy setup isn't actually \
+             exercising reqwest's proxy path at all"
+        );
+        let hits_after_control = proxy_hits.load(Ordering::SeqCst);
+
+        // Subject: the same proxy configured, PLUS the exact
+        // `.resolve(..).no_proxy()` combination `pinned_https_client`
+        // builds with — `.no_proxy()` must win.
+        let pinned = SocketAddr::new(target_addr.ip(), target_addr.port());
+        let no_proxy_client = reqwest::Client::builder()
+            .proxy(explicit_proxy)
+            .resolve("example.invalid", pinned)
+            .no_proxy()
+            .build()
+            .unwrap();
+        let resp = no_proxy_client
+            .get("http://example.invalid/")
+            .timeout(Duration::from_secs(5))
+            .send()
+            .await
+            .expect("no_proxy client must reach the target directly, overriding the configured proxy");
+
+        assert_eq!(resp.status(), reqwest::StatusCode::OK);
+        assert_eq!(resp.text().await.unwrap(), "direct-ok");
+        assert_eq!(target_hits.load(Ordering::SeqCst), 1, "target must receive exactly the no_proxy client's request");
+        assert_eq!(
+            proxy_hits.load(Ordering::SeqCst),
+            hits_after_control,
+            ".no_proxy() must mean the fake proxy receives no further connections \
+             after the control request"
+        );
+
+        target_task.abort();
+        proxy_task.abort();
     }
 }
