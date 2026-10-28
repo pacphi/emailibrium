@@ -39,7 +39,7 @@ overrides:
   "esbuild@<0.28.1": "0.28.1"
   # undici < 7.28.0: ProxyAgent silently drops requestTls over SOCKS5, defeating
   # CA pinning (GHSA-vxpw-j846-p89q, GHSA-hm92-r4w5-c3mj, GHSA-vmh5-mc38-953g, + 4 more)
-  "undici@<7.28.0": "7.28.0"
+  "undici@<7.28.0": "7.30.1"
   # postcss <= 8.5.17: path traversal via sourceMappingURL leads to arbitrary
   # .map file disclosure (GHSA-r28c-9q8g-f849)
   # <= 8.5.22: incomplete fix — attacker-controlled sourceMappingURL still reads
