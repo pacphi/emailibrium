@@ -39,6 +39,7 @@ use crate::cleanup::repository::adapters::{
 };
 use crate::cleanup::repository::{CleanupPlanRepository, OpsFilter};
 use crate::db::entities::connected_accounts;
+use crate::principal::Principal;
 use crate::AppState;
 
 pub fn routes() -> Router<AppState> {
@@ -60,12 +61,6 @@ pub fn routes() -> Router<AppState> {
 pub struct ErrorBody {
     pub error: String,
     pub message: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct UserQuery {
-    pub user_id: String,
 }
 
 fn err(code: StatusCode, error: &str, message: &str) -> (StatusCode, Json<ErrorBody>) {
@@ -134,12 +129,6 @@ async fn build_plan_builder(state: &AppState) -> Result<PlanBuilder, sea_orm::Db
 // POST /plan
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CreatePlanQuery {
-    pub user_id: String,
-}
-
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreatePlanResponse {
@@ -153,16 +142,9 @@ pub struct CreatePlanResponse {
 
 async fn create_plan(
     State(state): State<AppState>,
-    Query(q): Query<CreatePlanQuery>,
     Json(selections): Json<WizardSelections>,
 ) -> Result<(StatusCode, Json<CreatePlanResponse>), (StatusCode, Json<ErrorBody>)> {
-    if q.user_id.trim().is_empty() {
-        return Err(err(
-            StatusCode::BAD_REQUEST,
-            "invalid_user",
-            "userId required",
-        ));
-    }
+    let user_id = Principal::local_operator();
     let builder = build_plan_builder(&state).await.map_err(|e| {
         err(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -171,13 +153,16 @@ async fn create_plan(
         )
     })?;
     let build_started = std::time::Instant::now();
-    let plan: CleanupPlan = builder.build(&q.user_id, selections).await.map_err(|e| {
-        err(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "build_failed",
-            &e.to_string(),
-        )
-    })?;
+    let plan: CleanupPlan = builder
+        .build(user_id.as_str(), selections)
+        .await
+        .map_err(|e| {
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "build_failed",
+                &e.to_string(),
+            )
+        })?;
     let build_duration_ms = build_started.elapsed().as_millis() as u64;
     state.cleanup_plan_repo.save(&plan).await.map_err(|e| {
         err(
@@ -190,7 +175,7 @@ async fn create_plan(
     state.cleanup_telemetry.emit(
         crate::cleanup::telemetry::CleanupTelemetryEvent::CleanupPlanBuilt {
             plan_id: plan.id,
-            user_id_hash: crate::cleanup::telemetry::hash_user_id(&q.user_id),
+            user_id_hash: crate::cleanup::telemetry::hash_user_id(user_id.as_str()),
             total_operations: plan.totals.total_operations,
             risk_low: plan.risk.low,
             risk_medium: plan.risk.medium,
@@ -220,11 +205,10 @@ async fn create_plan(
 async fn get_plan(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
-    Query(q): Query<UserQuery>,
 ) -> Result<Json<CleanupPlan>, (StatusCode, Json<ErrorBody>)> {
     let plan = state
         .cleanup_plan_repo
-        .load(&q.user_id, id)
+        .load(Principal::local_operator().as_str(), id)
         .await
         .map_err(|e| {
             err(
@@ -244,11 +228,10 @@ async fn get_plan(
 async fn cancel_plan(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
-    Query(q): Query<UserQuery>,
 ) -> Result<StatusCode, (StatusCode, Json<ErrorBody>)> {
     state
         .cleanup_plan_repo
-        .cancel(&q.user_id, id)
+        .cancel(Principal::local_operator().as_str(), id)
         .await
         .map_err(|e| match &e {
             crate::cleanup::domain::ports::RepoError::Conflict(_) => {
@@ -273,7 +256,6 @@ async fn cancel_plan(
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ListOpsQuery {
-    pub user_id: String,
     pub cursor: Option<u64>,
     pub limit: Option<u32>,
     pub risk: Option<String>,
@@ -301,7 +283,7 @@ async fn list_operations(
     };
     let (items, next_cursor) = state
         .cleanup_plan_repo
-        .list_operations(&q.user_id, id, filter, q.cursor, limit)
+        .list_operations(Principal::local_operator().as_str(), id, filter, q.cursor, limit)
         .await
         .map_err(|e| {
             err(
@@ -320,7 +302,6 @@ async fn list_operations(
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SampleQuery {
-    pub user_id: String,
     pub source: String,
     pub n: Option<u32>,
 }
@@ -339,7 +320,7 @@ async fn sample_operations(
     let n = q.n.unwrap_or(5).min(20);
     let email_ids = state
         .cleanup_plan_repo
-        .sample_operations(&q.user_id, id, &q.source, n)
+        .sample_operations(Principal::local_operator().as_str(), id, &q.source, n)
         .await
         .map_err(|e| {
             err(
@@ -358,7 +339,6 @@ async fn sample_operations(
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RefreshQuery {
-    pub user_id: String,
     pub account_id: String,
 }
 
@@ -398,7 +378,9 @@ async fn refresh_account(
     state.cleanup_telemetry.emit(
         crate::cleanup::telemetry::CleanupTelemetryEvent::CleanupPlanRefreshed {
             plan_id: id,
-            user_id_hash: crate::cleanup::telemetry::hash_user_id(&q.user_id),
+            user_id_hash: crate::cleanup::telemetry::hash_user_id(
+                Principal::local_operator().as_str(),
+            ),
             account_id_hash: crate::cleanup::telemetry::hash_account_id(&q.account_id),
             reason: "manual".to_string(),
         },
@@ -413,7 +395,6 @@ async fn refresh_account(
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ListPlansQuery {
-    pub user_id: String,
     pub status: Option<String>,
     pub limit: Option<u32>,
 }
@@ -432,7 +413,7 @@ async fn list_plans(
     let limit = q.limit.unwrap_or(20).min(100);
     let items = state
         .cleanup_plan_repo
-        .list_by_user(&q.user_id, status, limit)
+        .list_by_user(Principal::local_operator().as_str(), status, limit)
         .await
         .map_err(|e| {
             err(
