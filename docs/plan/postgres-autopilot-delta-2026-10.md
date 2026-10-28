@@ -20,6 +20,15 @@ ADR-034 accepted the *design* for BM25 full-text search via `ruvector-postgres`,
 
 This doesn't block the chief-of-staff plan — nothing in it depends on Postgres full-text search — but it's a known, honest gap if anyone runs emailibrium on Postgres instead of SQLite.
 
+**Queued as a follow-up task (28 Oct, Chris):** implement ADR-034's design for real. Scope, as currently understood:
+
+- Add `ruvector-postgres`'s BM25 scoring function/extension to the Postgres migration path (the SQLite side has 3 FTS5-specific migrations — `005`, `019`, `020` — that have no Postgres counterpart at all; this needs an equivalent migration or extension-install step, not a literal port of FTS5 DDL).
+- Give `backend/src/vectors/search.rs`'s `fts5_search` a real Postgres branch calling `ruvector_bm25_score()`, instead of its current behavior: hard-erroring on any non-SQLite backend so the caller falls back to plain `LIKE` search (verified by reading the function directly, 28 Oct).
+- Verify ranking quality against the same BM25 weighting SQLite uses (subject×10, from_name×5, from_addr×3, body_text×1, labels×2 — ADR-029) so results are comparable across backends, not just "present."
+- Not yet scheduled against a milestone or branch; this note is the record that it's wanted, not a plan for when.
+
+**Second, related, pre-existing gap found 28 Oct (not caused by this queue item, found while checking it):** `backend/src/vectors/remote_wipe.rs`'s `RemoteWipeService::wipe_user_data`/`wipe_all_data` only ever deleted `emails`, `vector_backups`, `search_interactions`, and `category_centroids` — `cleanup_plans`, `cleanup_audit_log`, `rules`, `connected_accounts`, `operation_journal`, and now milestone 5's `saved_reports` are all absent from both wipe paths, confirmed by reading every `Entity::delete_many()` call in the file. This predates the mail-agent work entirely (the cleanup-planning tables have been unwiped since they were added) — milestone 5 didn't introduce the gap, it just added one more table to the existing pile. A real GDPR/data-retention issue, not fixed here; needs its own scoped pass across every table added since this service was last touched, not a one-table patch.
+
 ## 3. What's left in `.autopilot/`'s backlog
 
 Four projects in `.autopilot/` are finished (postgres-support above, plus `ci-build-optimization`, `docs-accuracy-audit`, `keyboard-shortcuts` — each closed with only minor open backlog notes, nothing blocking).
