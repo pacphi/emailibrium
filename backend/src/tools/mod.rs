@@ -253,6 +253,26 @@ pub fn declarations() -> Vec<ToolDecl> {
             schema_for::<sp::CloseoutUndoRequest>(),
             staff::write_tools::closeout_undo_tool,
         ),
+        // --- Milestone 4: rules + flow (read-only reports) ----------------
+        declare(
+            "screener",
+            "First-time human senders sitting in the proposed State/New \
+             default, grouped by sender (not message). Caveat carried in the \
+             payload itself: every non-broadcast People sender proposes \
+             State/New until the sender ledger exists, so this is every \
+             distinct human sender seen, not yet narrowed to first contacts. \
+             Headers and counts only — never a message body.",
+            schema_for::<sp::ScreenerRequest>(),
+            staff::screener::screener,
+        ),
+        declare(
+            "settings_checklist",
+            "Notification-kind mail grouped by sender key and ranked by \
+             volume — the source-settings changes that would eliminate the \
+             most inflow. Headers and counts only — never a message body.",
+            schema_for::<sp::SettingsChecklistRequest>(),
+            staff::settings_checklist::settings_checklist,
+        ),
     ]
 }
 

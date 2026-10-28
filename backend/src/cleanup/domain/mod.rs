@@ -13,6 +13,7 @@
 
 pub mod builder;
 pub mod classifier;
+pub mod gmail_filter_export;
 pub mod kind;
 pub mod label_namespace;
 pub mod operation;

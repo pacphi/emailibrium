@@ -46,10 +46,10 @@ pub fn gate(stats: &TopicStats, has_distinct_disposition: bool) -> GateDecision 
 }
 
 /// One promote/demote pass over every candidate topic for an account.
-pub fn run_gate_pass<'a>(
-    candidates: &'a [TopicStats],
+pub fn run_gate_pass(
+    candidates: &[TopicStats],
     has_distinct_disposition: impl Fn(&str) -> bool,
-) -> Vec<(&'a str, GateDecision)> {
+) -> Vec<(&str, GateDecision)> {
     candidates
         .iter()
         .map(|s| (s.topic.as_str(), gate(s, has_distinct_disposition(&s.topic))))
