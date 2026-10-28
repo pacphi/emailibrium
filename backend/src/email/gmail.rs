@@ -137,6 +137,12 @@ impl GmailProvider {
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
             .collect();
+        let cc_raw = get_header("Cc");
+        let cc: Vec<String> = cc_raw
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
         let subject = get_header("Subject");
         let date_str = get_header("Date");
 
@@ -166,6 +172,7 @@ impl GmailProvider {
             thread_id,
             from,
             to,
+            cc,
             subject,
             snippet,
             body,

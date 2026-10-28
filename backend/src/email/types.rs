@@ -79,6 +79,57 @@ impl std::str::FromStr for AccountStatus {
     }
 }
 
+/// What an account is *for* (docs/plan/mail-agent-2026-10.md section 6's
+/// onboarding question). Declared by the user, never detected from the
+/// address — the plan's own evidence (section 2) is that an address-based
+/// guess was wrong for two of the three measured accounts. Drives playbook
+/// defaults, the protected list, privacy posture and retention; milestone 1
+/// only adds the storage column (migration 030) — the onboarding question
+/// itself, and the "Mixed" archetype override on top of a declared role,
+/// are later milestones.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AccountRole {
+    Personal,
+    Professional,
+    Business,
+    Shared,
+    Retired,
+}
+
+impl AccountRole {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Personal => "personal",
+            Self::Professional => "professional",
+            Self::Business => "business",
+            Self::Shared => "shared",
+            Self::Retired => "retired",
+        }
+    }
+}
+
+impl std::fmt::Display for AccountRole {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for AccountRole {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "personal" => Ok(Self::Personal),
+            "professional" => Ok(Self::Professional),
+            "business" => Ok(Self::Business),
+            "shared" => Ok(Self::Shared),
+            "retired" => Ok(Self::Retired),
+            other => Err(format!("Unknown account role: {other}")),
+        }
+    }
+}
+
 /// A connected email account (DDD-005 aggregate root).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -148,6 +199,11 @@ pub struct EmailMessage {
     pub from: String,
     /// Recipient addresses.
     pub to: Vec<String>,
+    /// Cc'd addresses. Milestone 1's Kind classifier uses this to sub-route
+    /// GitHub notifications by the reason encoded in the cc address
+    /// (mention@, review_requested@, ci_activity@, ...).
+    #[serde(default)]
+    pub cc: Vec<String>,
     /// Subject line.
     pub subject: String,
     /// Plain-text body snippet.
@@ -278,6 +334,41 @@ mod tests {
             AccountStatus::Connected
         );
         assert_eq!(AccountStatus::Suspended.as_str(), "suspended");
+    }
+
+    #[test]
+    fn account_role_roundtrip() {
+        for role in [
+            AccountRole::Personal,
+            AccountRole::Professional,
+            AccountRole::Business,
+            AccountRole::Shared,
+            AccountRole::Retired,
+        ] {
+            assert_eq!(role.as_str().parse::<AccountRole>().unwrap(), role);
+        }
+        assert!("unknown".parse::<AccountRole>().is_err());
+    }
+
+    #[test]
+    fn email_message_cc_defaults_to_empty_on_old_json() {
+        // Serialized before `cc` existed (or from a provider path that
+        // doesn't populate it) must still deserialize, not error.
+        let json = r#"{
+            "id": "1",
+            "threadId": null,
+            "from": "a@example.com",
+            "to": ["b@example.com"],
+            "subject": "s",
+            "snippet": "",
+            "body": null,
+            "bodyHtml": null,
+            "labels": [],
+            "date": "2026-01-01T00:00:00Z",
+            "isRead": false
+        }"#;
+        let msg: EmailMessage = serde_json::from_str(json).unwrap();
+        assert_eq!(msg.cc, Vec::<String>::new());
     }
 
     #[test]

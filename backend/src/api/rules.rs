@@ -683,6 +683,7 @@ async fn test_rule(
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty())
                 .collect(),
+            cc: Vec::new(),
             subject: subject.clone(),
             snippet: String::new(),
             body: body_text,
@@ -792,6 +793,7 @@ async fn run_rule(
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty())
                 .collect(),
+            cc: Vec::new(),
             subject: subject.clone(),
             snippet: String::new(),
             body: body_text,

@@ -1586,6 +1586,7 @@ mod persistence_tests {
             thread_id: Some(format!("thread-{id}")),
             from: "sender@example.com".to_string(),
             to: vec!["a@example.com".to_string(), "b@example.com".to_string()],
+            cc: vec![],
             subject: format!("subject-{id}"),
             snippet: "snippet".to_string(),
             body: Some("body-text".to_string()),

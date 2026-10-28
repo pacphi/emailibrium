@@ -485,6 +485,7 @@ mod tests {
                     thread_id: None,
                     from: format!("sender{i}@test.com"),
                     to: vec!["user@test.com".into()],
+                    cc: vec![],
                     subject: format!("Subject {i}"),
                     snippet: format!("Snippet {i}"),
                     body: None,

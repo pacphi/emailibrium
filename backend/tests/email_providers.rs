@@ -35,6 +35,7 @@ impl MockEmailProvider {
                 thread_id: Some(format!("thread-{i}")),
                 from: format!("sender{i}@test.com"),
                 to: vec!["user@test.com".into()],
+                cc: vec![],
                 subject: format!("Subject {i}"),
                 snippet: format!("Snippet {i}"),
                 body: Some(format!("Body {i}")),

@@ -46,11 +46,30 @@ impl FixtureMessage {
         );
         Self { uid, raw }
     }
+
+    /// Insert an extra raw header line (e.g. `Cc` or `List-Unsubscribe`)
+    /// before the blank line that separates headers from the body. Added
+    /// as a builder method rather than a `new()` parameter so the six
+    /// existing milestone-0 call sites don't need updating — milestone 1's
+    /// golden-mailbox fixtures are the first to need Cc/List-Unsubscribe.
+    // `fake_imap/mod.rs` is included separately, per test binary, via
+    // `#[path]` (not a shared library module) — a method or field unused
+    // by one binary's particular tests is still live code for another's,
+    // so `dead_code` is allowed per-item here rather than silencing the
+    // lint for the whole file.
+    #[allow(dead_code)]
+    pub fn with_header(mut self, name: &str, value: &str) -> Self {
+        let insert_at = self.raw.find("\r\n\r\n").unwrap_or(self.raw.len());
+        self.raw
+            .insert_str(insert_at, &format!("\r\n{name}: {value}"));
+        self
+    }
 }
 
 /// A running fake IMAP server bound to an ephemeral loopback port.
 pub struct FakeImapServer {
     pub addr: SocketAddr,
+    #[allow(dead_code)] // see with_header's comment: per-binary usage varies
     seen: Arc<Mutex<HashSet<u32>>>,
 }
 
@@ -90,6 +109,7 @@ impl FakeImapServer {
     /// Whether the fake server's persisted state currently has `\Seen` set
     /// for this UID — the real-side-effect assertion for the `\Seen`
     /// side-effect fix: a `PEEK` fetch must leave this `false`.
+    #[allow(dead_code)] // see with_header's comment: per-binary usage varies
     pub fn is_seen(&self, uid: u32) -> bool {
         self.seen.lock().expect("seen mutex poisoned").contains(&uid)
     }

@@ -1,4 +1,4 @@
-//! `connected_accounts` — linked mailbox accounts (migrations 004, 013, 028).
+//! `connected_accounts` — linked mailbox accounts (migrations 004, 013, 028, 030).
 //!
 //! All temporal columns here are TEXT by design (ADR-035 §2.5): the DDL default is
 //! `to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')` and downstream code
@@ -33,6 +33,11 @@ pub struct Model {
     pub imap_encryption: Option<String>,
     pub smtp_host: Option<String>,
     pub smtp_port: Option<i32>,
+    /// `AccountRole::as_str()` value (migration 030). `None` until declared
+    /// at onboarding or set explicitly — no default is assumed.
+    pub role: Option<String>,
+    /// TEXT timestamp (§2.5 class) — see the module doc.
+    pub role_declared_at: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

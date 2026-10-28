@@ -90,6 +90,10 @@ pub struct UpdateAccountRequest {
     pub label_prefix: Option<String>,
     pub sync_depth: Option<String>,
     pub sync_frequency: Option<i32>,
+    /// "personal" | "professional" | "business" | "shared" | "retired"
+    /// (docs/plan/mail-agent-2026-10.md section 6). Direct storage path for
+    /// now — the onboarding question itself is a later milestone.
+    pub role: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -651,6 +655,7 @@ async fn patch_account(
             body.label_prefix.as_deref(),
             body.sync_depth.as_deref(),
             body.sync_frequency,
+            body.role.as_deref(),
         )
         .await
         .map_err(|e| match e {

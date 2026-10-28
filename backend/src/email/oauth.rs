@@ -741,6 +741,7 @@ impl OAuthManager {
     }
 
     /// Update account settings (archive strategy, label prefix, sync depth, sync frequency).
+    #[allow(clippy::too_many_arguments)]
     pub async fn update_account_settings(
         &self,
         account_id: &str,
@@ -748,6 +749,7 @@ impl OAuthManager {
         label_prefix: Option<&str>,
         sync_depth: Option<&str>,
         sync_frequency: Option<i32>,
+        role: Option<&str>,
     ) -> Result<(), OAuthError> {
         // Validate inputs.
         if let Some(s) = archive_strategy {
@@ -756,6 +758,14 @@ impl OAuthManager {
                     "Invalid archive_strategy: {s}"
                 )));
             }
+        }
+        // docs/plan/mail-agent-2026-10.md section 6's five declared-role
+        // options (never detected from the address). Role is set here as a
+        // direct storage path (milestone 1); the onboarding UI question is
+        // a later milestone.
+        if let Some(r) = role {
+            r.parse::<crate::email::types::AccountRole>()
+                .map_err(OAuthError::ValidationError)?;
         }
         if let Some(d) = sync_depth {
             if !["7d", "30d", "90d", "365d", "all"].contains(&d) {
@@ -797,6 +807,13 @@ impl OAuthManager {
         }
         if let Some(v) = sync_frequency {
             update = update.col_expr(accounts::Column::SyncFrequency, Expr::value(v));
+        }
+        if let Some(v) = role {
+            update = update.col_expr(accounts::Column::Role, Expr::value(v));
+            update = update.col_expr(
+                accounts::Column::RoleDeclaredAt,
+                Expr::value(crate::db::now_text()),
+            );
         }
         let affected = update
             .filter(accounts::Column::Id.eq(account_id))
@@ -1060,6 +1077,11 @@ mod tests {
         ))
         .await
         .unwrap();
+        conn.execute_unprepared(include_str!(
+            "../../migrations/sqlite/030_account_role.sql"
+        ))
+        .await
+        .unwrap();
 
         let key = crate::vectors::encryption::derive_key("test-password", TOKEN_KEY_SALT).unwrap();
         let mgr = OAuthManager {
@@ -1129,6 +1151,11 @@ mod tests {
         ))
         .await
         .unwrap();
+        conn.execute_unprepared(include_str!(
+            "../../migrations/sqlite/030_account_role.sql"
+        ))
+        .await
+        .unwrap();
 
         let key = crate::vectors::encryption::derive_key("test-password", TOKEN_KEY_SALT).unwrap();
         let mgr = OAuthManager {
@@ -1159,6 +1186,7 @@ mod tests {
             Some("X/"),
             Some("90d"),
             Some(120),
+            Some("professional"),
         )
         .await
         .unwrap();
@@ -1193,6 +1221,84 @@ mod tests {
             .expect("b state");
         assert_eq!(sb.account_id, "acct-b");
         assert!(mgr.get_sync_state("acct-zzz").await.unwrap().is_none());
+
+        // Role (migration 030) round-trips through the same partial-update
+        // path, and the bystander account's role stays unset — proven via
+        // a full-model query (not list_accounts' column-scoped projection,
+        // which doesn't carry role), which is exactly why this test's
+        // schema setup above now includes migration 030: a full-model
+        // SeaORM query against a DB missing those columns is a SQL error,
+        // not a silently-empty field.
+        use sea_orm::EntityTrait;
+        let a_row = accounts::Entity::find_by_id("acct-a")
+            .one(&mgr.conn)
+            .await
+            .unwrap()
+            .expect("acct-a row");
+        assert_eq!(a_row.role, Some("professional".to_string()));
+        assert!(a_row.role_declared_at.is_some());
+        let b_row = accounts::Entity::find_by_id("acct-b")
+            .one(&mgr.conn)
+            .await
+            .unwrap()
+            .expect("acct-b row");
+        assert_eq!(b_row.role, None);
+        assert!(b_row.role_declared_at.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_update_account_settings_rejects_an_invalid_role() {
+        let conn = crate::db::test_sqlite_database().await.sea_orm();
+        conn.execute_unprepared(include_str!("../../migrations/sqlite/004_accounts.sql"))
+            .await
+            .unwrap();
+        conn.execute_unprepared(
+            "ALTER TABLE connected_accounts ADD COLUMN sync_depth TEXT NOT NULL DEFAULT '30d';",
+        )
+        .await
+        .unwrap();
+        conn.execute_unprepared(
+            "ALTER TABLE connected_accounts ADD COLUMN sync_frequency INTEGER NOT NULL DEFAULT 5;",
+        )
+        .await
+        .unwrap();
+        conn.execute_unprepared(include_str!(
+            "../../migrations/sqlite/028_imap_accounts.sql"
+        ))
+        .await
+        .unwrap();
+        conn.execute_unprepared(include_str!(
+            "../../migrations/sqlite/030_account_role.sql"
+        ))
+        .await
+        .unwrap();
+
+        let key = crate::vectors::encryption::derive_key("test-password", TOKEN_KEY_SALT).unwrap();
+        let mgr = OAuthManager {
+            conn,
+            encryption_key: Some(key),
+            http: reqwest::Client::new(),
+            pending_states: Mutex::new(HashMap::new()),
+        };
+
+        mgr.save_imap_account(
+            "acct-a",
+            "a@example.com",
+            "pw",
+            "imap.example.com",
+            993,
+            crate::email::imap::ImapEncryption::Ssl,
+            "smtp.example.com",
+            465,
+        )
+        .await
+        .unwrap();
+
+        let err = mgr
+            .update_account_settings("acct-a", None, None, None, None, Some("not-a-real-role"))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, OAuthError::ValidationError(_)));
     }
 
     #[tokio::test]
