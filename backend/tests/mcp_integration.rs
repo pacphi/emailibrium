@@ -34,7 +34,7 @@ type McpService = StreamableHttpService<EmailibriumMcpServer, LocalSessionManage
 /// `tools/staff` ones below without updating it (out of scope for that
 /// change; flagged, not fixed, here). This constant reflects the actual
 /// registered surface, which README.md currently does not.
-const TWENTY_EIGHT_TOOLS: [&str; 28] = [
+const THIRTY_ONE_TOOLS: [&str; 31] = [
     "brief",
     "closeout_apply",
     "closeout_preview",
@@ -49,14 +49,17 @@ const TWENTY_EIGHT_TOOLS: [&str; 28] = [
     "get_email_thread",
     "get_insights",
     "get_learning_metrics",
+    "get_saved_report",
     "get_snapshot",
     "get_sync_status",
+    "health",
     "identity_map",
     "list_accounts",
     "list_attachments",
     "list_clusters",
     "list_recent_emails",
     "list_rules",
+    "list_saved_reports",
     "list_subscriptions",
     "preview_cleanup_plan",
     "review",
@@ -441,12 +444,12 @@ fn config_from_yaml(yaml: &str) -> (tempfile::TempDir, ToolsConfig) {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn tools_list_returns_exactly_the_twenty_eight_registered_tools() {
+async fn tools_list_returns_exactly_the_thirty_one_registered_tools() {
     let env = Env::default_env().await;
     let s = env.open_session().await;
     let names = env.wire_tool_names(&s).await;
     assert_eq!(
-        names, TWENTY_EIGHT_TOOLS,
+        names, THIRTY_ONE_TOOLS,
         "wire tools/list must equal the full registered surface, sorted"
     );
 }
@@ -561,7 +564,7 @@ async fn a_disabled_tool_vanishes_from_the_router_entirely() {
         !names.contains(&"get_email".to_string()),
         "disabled tool still listed: {names:?}"
     );
-    assert_eq!(names.len(), 27);
+    assert_eq!(names.len(), 30);
 
     let resp = env
         .call_tool(&s, "get_email", json!({"email_id": "email-1"}))
@@ -1009,5 +1012,5 @@ async fn stdio_serves_the_identical_tool_list_as_http() {
     let http_names = env.wire_tool_names(&s).await;
 
     assert_eq!(stdio_names, http_names, "stdio and HTTP surfaces drifted");
-    assert_eq!(stdio_names, TWENTY_EIGHT_TOOLS);
+    assert_eq!(stdio_names, THIRTY_ONE_TOOLS);
 }

@@ -165,6 +165,22 @@ tools:
     requires_confirmation: true
     rate_limit_per_minute: 5
 
+  # --- Milestone 5: cadence (health report, saved reports) -------------
+  health:
+    enabled: true
+    requires_confirmation: false
+    rate_limit_per_minute: 10
+
+  list_saved_reports:
+    enabled: true
+    requires_confirmation: false
+    rate_limit_per_minute: 10
+
+  get_saved_report:
+    enabled: true
+    requires_confirmation: false
+    rate_limit_per_minute: 10
+
   # --- A4 action tools — not implemented yet ---------------------------
   # `deferred: true` records the intended policy without the registry
   # reporting these as unknown names. They are inert until the handlers land;

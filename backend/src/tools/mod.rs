@@ -179,20 +179,22 @@ pub fn declarations() -> Vec<ToolDecl> {
         ),
         declare(
             "brief",
-            "The attention queue: unread People-kind mail waiting in the inbox, \
-             plus filed counts by Kind. SLA clocks, the overdue boomerang, and \
-             protected-sender alerts aren't available yet (see the response's \
-             not_yet_available field). Headers and counts only — never a message \
-             body.",
+            "The attention queue: open People-kind loops with their SLA clock \
+             and boomerang flag (past-SLA loops re-enter at the top), plus \
+             filed counts by Kind. Protected-sender alerts aren't available yet \
+             (see the response's not_yet_available field). Headers and counts \
+             only — never a message body.",
             schema_for::<sp::BriefRequest>(),
             staff::brief::brief,
         ),
         declare(
             "review",
-            "Read-only weekly review: senders first seen in the last 7 days, and \
-             unsubscribe candidates from the existing subscription detector. \
-             Reporting only — no rule graduation or approval action. Headers and \
-             counts only — never a message body.",
+            "Read-only weekly review, all accounts merged and tagged: new \
+             senders, unsubscribe candidates, open loops past 7 days, strays \
+             (3+ unclassified visits), the noise trend's three biggest levers, \
+             and rules one approval away from graduating to trusted. Reporting \
+             only — no rule graduation or approval action. Headers and counts \
+             only — never a message body.",
             schema_for::<sp::ReviewRequest>(),
             staff::review::review,
         ),
@@ -272,6 +274,33 @@ pub fn declarations() -> Vec<ToolDecl> {
              most inflow. Headers and counts only — never a message body.",
             schema_for::<sp::SettingsChecklistRequest>(),
             staff::settings_checklist::settings_checklist,
+        ),
+        // --- Milestone 5: cadence (health report, saved reports) ----------
+        declare(
+            "health",
+            "The monthly report: topic promote/demote decisions against the \
+             volume gate, retention proposals on trusted Notifications rules \
+             with ephemeral senders (never on the personal account, Receipts, \
+             People or security), a trusted-rule audit, security signals \
+             (app-password age; zero-sends and revoke-link aren't available \
+             yet), and sender drift. Read-only — nothing here is applied. \
+             Headers and counts only — never a message body.",
+            schema_for::<sp::HealthRequest>(),
+            staff::health::health,
+        ),
+        declare(
+            "list_saved_reports",
+            "List saved copies of prior brief/review/health reports, most \
+             recent first, optionally filtered by kind or account.",
+            schema_for::<sp::ListSavedReportsRequest>(),
+            staff::saved_reports::list_saved_reports,
+        ),
+        declare(
+            "get_saved_report",
+            "Fetch one saved report's full content by id, exactly as it was \
+             generated.",
+            schema_for::<sp::GetSavedReportRequest>(),
+            staff::saved_reports::get_saved_report,
         ),
     ]
 }
