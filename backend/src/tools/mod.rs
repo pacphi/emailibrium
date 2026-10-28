@@ -12,6 +12,7 @@
 pub mod audit;
 pub mod config;
 pub mod context;
+pub mod mail_writer;
 pub mod rate_limit;
 pub mod readonly;
 pub mod registry;
@@ -200,6 +201,55 @@ pub fn declarations() -> Vec<ToolDecl> {
              Headers and counts only — never a message body.",
             schema_for::<sp::IdentityMapRequest>(),
             staff::identity_map::identity_map,
+        ),
+        // --- Milestone 3: the first write-capable chief-of-staff tools ----
+        // Authority level 0/1 only: every apply requires the exact batch_key
+        // its matching preview returned. See staff::write_tools's module doc
+        // for why apply/undo mutate local state rather than a live provider.
+        declare(
+            "era_archive_preview",
+            "Preview the oldest era (mail older than 5 years): candidate count, \
+             a 3-item sample, and the batch_key required to apply. Read-only.",
+            schema_for::<sp::EraArchivePreviewRequest>(),
+            staff::write_tools::era_archive_preview_tool,
+        ),
+        declare(
+            "era_archive_apply",
+            "Archive every message era_archive_preview identified, locally \
+             (see module doc — not yet a live provider write). Requires the \
+             exact batch_key the matching preview returned; rejected otherwise.",
+            schema_for::<sp::EraArchiveApplyRequest>(),
+            staff::write_tools::era_archive_apply_tool,
+        ),
+        declare(
+            "era_archive_undo",
+            "Reverse a prior era_archive_apply by its batch_key. One-shot: \
+             fails if already undone or never applied.",
+            schema_for::<sp::EraArchiveUndoRequest>(),
+            staff::write_tools::era_archive_undo_tool,
+        ),
+        declare(
+            "closeout_preview",
+            "Every inbox item with its proposed disposition (needs you / done \
+             / keep — see module doc for the three this milestone implements) \
+             and the batch_key required to apply. Read-only.",
+            schema_for::<sp::CloseoutPreviewRequest>(),
+            staff::write_tools::closeout_preview_tool,
+        ),
+        declare(
+            "closeout_apply",
+            "Apply a close-out: archive every 'done' item closeout_preview \
+             identified, locally (see module doc). Requires the exact \
+             batch_key the matching preview returned; rejected otherwise.",
+            schema_for::<sp::CloseoutApplyRequest>(),
+            staff::write_tools::closeout_apply_tool,
+        ),
+        declare(
+            "closeout_undo",
+            "Reverse a prior closeout_apply by its batch_key. One-shot: fails \
+             if already undone or never applied.",
+            schema_for::<sp::CloseoutUndoRequest>(),
+            staff::write_tools::closeout_undo_tool,
         ),
     ]
 }

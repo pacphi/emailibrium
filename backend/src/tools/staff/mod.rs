@@ -23,6 +23,7 @@ pub mod params;
 pub mod review;
 pub mod scan;
 pub mod snapshot;
+pub mod write_tools;
 
 #[cfg(test)]
 mod tests {

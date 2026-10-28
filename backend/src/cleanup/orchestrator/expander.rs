@@ -73,6 +73,7 @@ impl PredicateExpander {
                     ArchiveStrategy::OlderThan30d => 30,
                     ArchiveStrategy::OlderThan90d => 90,
                     ArchiveStrategy::OlderThan1y => 365,
+                    ArchiveStrategy::OlderThan5y => 1825,
                     ArchiveStrategy::Custom => {
                         return Err(ExpandError::NotImplemented("custom archive strategy"))
                     }

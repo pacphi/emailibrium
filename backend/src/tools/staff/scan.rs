@@ -47,6 +47,69 @@ struct Row {
     is_read: Option<bool>,
 }
 
+/// A scanned message that also carries the two ids a write operation needs
+/// (the local row id, for the journal, and the provider message id, for
+/// `EmailProvider` calls) — still never `subject`/`body_text`/`body_html`,
+/// same body-free query-level guarantee as [`scan_mail`].
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Candidate {
+    pub email_id: String,
+    pub provider_message_id: String,
+    pub from_addr: String,
+    pub received_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(FromQueryResult)]
+struct CandidateRow {
+    id: String,
+    message_id: Option<String>,
+    from_addr: String,
+    received_at: chrono::NaiveDateTime,
+}
+
+/// Candidates for a write operation: every row for `account_id` received at
+/// or before `cutoff` (pass `chrono::DateTime::<chrono::Utc>::MIN_UTC` for
+/// no age filter — the whole mailbox), excluding soft-deleted/spam/trash,
+/// same as [`scan_mail`]. Does not filter by inbox status — milestone 3's
+/// era strategy applies mailbox-wide, not just to the inbox.
+pub async fn scan_mail_with_ids(
+    ctx: &Arc<ToolContext>,
+    account_id: &str,
+    cutoff: chrono::DateTime<chrono::Utc>,
+) -> Result<Vec<Candidate>, ToolError> {
+    let mut query = emails::Entity::find()
+        .select_only()
+        .column(emails::Column::Id)
+        .column(emails::Column::MessageId)
+        .column(emails::Column::FromAddr)
+        .column(emails::Column::ReceivedAt)
+        .filter(emails::Column::DeletedAt.is_null())
+        .filter(emails::Column::IsSpam.eq(0))
+        .filter(emails::Column::IsTrash.eq(0))
+        .filter(emails::Column::IsArchived.eq(false))
+        .filter(emails::Column::AccountId.eq(account_id));
+
+    if cutoff > chrono::DateTime::<chrono::Utc>::MIN_UTC {
+        query = query.filter(emails::Column::ReceivedAt.lte(cutoff.naive_utc()));
+    }
+
+    let rows: Vec<CandidateRow> = query
+        .into_model::<CandidateRow>()
+        .all(&ctx.conn())
+        .await
+        .map_err(|e| crate::tools::readonly::db_error("Scanning mail for a write candidate set", e))?;
+
+    Ok(rows
+        .into_iter()
+        .map(|r| Candidate {
+            email_id: r.id.clone(),
+            provider_message_id: r.message_id.unwrap_or(r.id),
+            from_addr: r.from_addr,
+            received_at: r.received_at.and_utc(),
+        })
+        .collect())
+}
+
 /// Classify every row matching the scope, excluding soft-deleted, spam and
 /// trash mail (none of those describe the mailbox's live shape). Set
 /// `inbox_only` to further restrict to un-archived mail — the brief's

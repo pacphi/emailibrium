@@ -320,6 +320,10 @@ pub enum ArchiveStrategy {
     OlderThan30d,
     OlderThan90d,
     OlderThan1y,
+    /// The mail-agent plan's oldest era (docs/plan/mail-agent-2026-10.md
+    /// section 8): Kind-only archive, no topic judgment — lowest risk,
+    /// first era applied. 1825 days.
+    OlderThan5y,
     Custom,
 }
 

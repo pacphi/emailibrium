@@ -49,6 +49,17 @@ pub struct ToolContext {
     /// Per-account pipeline locks, for reporting which account is mid-run and
     /// what started it. Already `Clone` (it wraps an `Arc` internally).
     pub pipeline_locks: Option<AccountLockMap>,
+    /// Live, write-capable access to a connected account's real mailbox
+    /// (milestone 3). This is a trait, not `cleanup::orchestrator::
+    /// ApplyOrchestrator` directly: `main.rs` compiles its own separate copy
+    /// of `cleanup` via its own `mod cleanup;` (distinct from this lib
+    /// crate's `pub mod cleanup { domain; repository; }`), so a type from
+    /// that module tree cannot appear in this crate's public structs — see
+    /// `mail_writer`'s module doc for the full reasoning. The binary
+    /// provides the real implementation, wrapping its own
+    /// `ApplyOrchestrator`; `None` in most test contexts, so a write tool
+    /// without one reports `NotConfigured` rather than pretending to work.
+    pub mail_writer: Option<Arc<dyn crate::tools::mail_writer::MailWriter>>,
 }
 
 impl ToolContext {
@@ -81,6 +92,7 @@ impl ToolContext {
             poll_scheduler,
             sync_progress: Some(sync_progress),
             pipeline_locks: Some(pipeline_locks),
+            mail_writer: None,
         }
     }
 
@@ -95,6 +107,7 @@ impl ToolContext {
             poll_scheduler: None,
             sync_progress: None,
             pipeline_locks: None,
+            mail_writer: None,
         }
     }
 
@@ -132,6 +145,11 @@ impl ToolContext {
         self
     }
 
+    pub fn with_mail_writer(mut self, writer: Arc<dyn crate::tools::mail_writer::MailWriter>) -> Self {
+        self.mail_writer = Some(writer);
+        self
+    }
+
     /// A SeaORM handle over the context's database (ADR-036) — the accessor
     /// every handler's persistence goes through. Cheap: wraps the pool the
     /// `Database` already holds.
@@ -151,5 +169,12 @@ impl ToolContext {
         self.oauth
             .as_ref()
             .ok_or_else(|| ToolError::NotConfigured("Account manager is not configured".into()))
+    }
+
+    /// Live mail-write capability, or `NotConfigured` naming what is missing.
+    pub fn mail_writer(&self) -> Result<&Arc<dyn crate::tools::mail_writer::MailWriter>, ToolError> {
+        self.mail_writer
+            .as_ref()
+            .ok_or_else(|| ToolError::NotConfigured("Live mail-write access is not configured".into()))
     }
 }
