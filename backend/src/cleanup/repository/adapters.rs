@@ -493,6 +493,11 @@ fn row_to_email_message(row: EmailQueryRow) -> crate::email::types::EmailMessage
         thread_id: row.thread_id,
         from: row.from_addr,
         to,
+        // Not persisted in the emails table today — cc is only populated on
+        // the direct-from-provider path (list_message_headers) that
+        // milestone 1's Kind classifier actually runs against. Out of scope
+        // here: adding a cc_addrs column and wiring ingestion to fill it.
+        cc: Vec::new(),
         subject: row.subject,
         snippet,
         body: row.body_text,
@@ -688,6 +693,7 @@ mod tests {
                 include_str!("../../../migrations/sqlite/026_rules_match_count.sql"),
                 include_str!("../../../migrations/sqlite/027_is_archived.sql"),
                 include_str!("../../../migrations/sqlite/028_imap_accounts.sql"),
+                include_str!("../../../migrations/sqlite/030_account_role.sql"),
             ],
         )
         .await

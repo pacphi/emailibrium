@@ -406,12 +406,14 @@ impl ImapProvider {
         // Extract List-Unsubscribe headers via mail-parser's built-in support.
         let list_unsubscribe = extract_header_text(&parsed, "List-Unsubscribe");
         let list_unsubscribe_post = extract_header_text(&parsed, "List-Unsubscribe-Post");
+        let cc = extract_cc(&parsed);
 
         Some(EmailMessage {
             id: uid.to_string(),
             thread_id: parsed.message_id().map(|s| s.to_string()),
             from,
             to,
+            cc,
             subject,
             snippet,
             body: body_text,
@@ -491,12 +493,14 @@ impl ImapProvider {
 
         let list_unsubscribe = extract_header_text(&parsed, "List-Unsubscribe");
         let list_unsubscribe_post = extract_header_text(&parsed, "List-Unsubscribe-Post");
+        let cc = extract_cc(&parsed);
 
         Some(EmailMessage {
             id: uid.to_string(),
             thread_id: parsed.message_id().map(|s| s.to_string()),
             from,
             to,
+            cc,
             subject,
             snippet: String::new(),
             body: None,
@@ -751,9 +755,17 @@ impl ImapProvider {
 
 /// Extract a header value as text from a parsed message.
 fn extract_header_text(msg: &mail_parser::Message<'_>, name: &str) -> Option<String> {
-    use mail_parser::HeaderName;
-
-    msg.header_values(HeaderName::Other(name.into()))
+    // `name` must be passed as-is (not wrapped in `HeaderName::Other`):
+    // mail-parser recognizes well-known headers like `List-Unsubscribe` as
+    // typed `HeaderName` variants (`HeaderName::ListUnsubscribe`, stored
+    // and matched as that variant, never as `Other`), via
+    // `HeaderName::parse` through the `From<&str>` impl `header_values`
+    // accepts. Forcing `Other` here, as a prior version of this function
+    // did, silently never matches any header mail-parser recognizes by
+    // name — found via milestone 1's golden-mailbox fixtures, which were
+    // the first test to round-trip a real `List-Unsubscribe` header
+    // through this exact path end-to-end.
+    msg.header_values(name)
         .find_map(|hv| match hv {
             mail_parser::HeaderValue::Text(t) => Some(t.to_string()),
             mail_parser::HeaderValue::Address(addr) => {
@@ -770,6 +782,18 @@ fn extract_header_text(msg: &mail_parser::Message<'_>, name: &str) -> Option<Str
             }
             _ => None,
         })
+}
+
+/// Extract Cc addresses. Milestone 1's Kind classifier reads this to
+/// sub-route GitHub notifications by the reason encoded in the cc address.
+fn extract_cc(msg: &mail_parser::Message<'_>) -> Vec<String> {
+    msg.cc()
+        .map(|addr| {
+            addr.iter()
+                .filter_map(|a| a.address.as_deref().map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 #[async_trait]

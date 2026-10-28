@@ -97,6 +97,15 @@ impl OutlookProvider {
             })
             .unwrap_or_default();
 
+        let cc: Vec<String> = msg["ccRecipients"]
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|r| r["emailAddress"]["address"].as_str().map(|s| s.to_string()))
+                    .collect()
+            })
+            .unwrap_or_default();
+
         let is_read = msg["isRead"].as_bool().unwrap_or(false);
 
         let date = msg["receivedDateTime"]
@@ -143,6 +152,7 @@ impl OutlookProvider {
             thread_id: conversation_id,
             from,
             to,
+            cc,
             subject,
             snippet,
             body,

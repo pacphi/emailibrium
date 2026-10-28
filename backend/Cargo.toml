@@ -124,6 +124,7 @@ hf-hub = { version = "0.5", optional = true }
 shellexpand = "3"
 dirs = "6"
 proptest = { version = "1", optional = true }
+psl = "2.1.245"
 
 [dev-dependencies]
 criterion = { version = "0.8", features = ["async_tokio"] }

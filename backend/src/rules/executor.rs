@@ -511,6 +511,7 @@ mod tests {
             thread_id: None,
             from: "sender@example.com".to_owned(),
             to: vec!["me@example.com".to_owned()],
+            cc: vec![],
             subject: subject.to_owned(),
             snippet: String::new(),
             body: None,
