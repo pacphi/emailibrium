@@ -36,7 +36,9 @@ pub async fn brief(ctx: Arc<ToolContext>, req: BriefRequest) -> Result<Value, To
         std::collections::HashMap::new();
 
     for m in &messages {
-        *filed_counts.entry(m.classification.kind.label()).or_insert(0) += 1;
+        *filed_counts
+            .entry(m.classification.kind.label())
+            .or_insert(0) += 1;
         if m.classification.kind == Kind::People && !m.is_read {
             needs_you.push(json!({
                 "account_id": m.account_id,

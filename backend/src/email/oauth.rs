@@ -1077,11 +1077,9 @@ mod tests {
         ))
         .await
         .unwrap();
-        conn.execute_unprepared(include_str!(
-            "../../migrations/sqlite/030_account_role.sql"
-        ))
-        .await
-        .unwrap();
+        conn.execute_unprepared(include_str!("../../migrations/sqlite/030_account_role.sql"))
+            .await
+            .unwrap();
 
         let key = crate::vectors::encryption::derive_key("test-password", TOKEN_KEY_SALT).unwrap();
         let mgr = OAuthManager {
@@ -1151,11 +1149,9 @@ mod tests {
         ))
         .await
         .unwrap();
-        conn.execute_unprepared(include_str!(
-            "../../migrations/sqlite/030_account_role.sql"
-        ))
-        .await
-        .unwrap();
+        conn.execute_unprepared(include_str!("../../migrations/sqlite/030_account_role.sql"))
+            .await
+            .unwrap();
 
         let key = crate::vectors::encryption::derive_key("test-password", TOKEN_KEY_SALT).unwrap();
         let mgr = OAuthManager {
@@ -1267,11 +1263,9 @@ mod tests {
         ))
         .await
         .unwrap();
-        conn.execute_unprepared(include_str!(
-            "../../migrations/sqlite/030_account_role.sql"
-        ))
-        .await
-        .unwrap();
+        conn.execute_unprepared(include_str!("../../migrations/sqlite/030_account_role.sql"))
+            .await
+            .unwrap();
 
         let key = crate::vectors::encryption::derive_key("test-password", TOKEN_KEY_SALT).unwrap();
         let mgr = OAuthManager {

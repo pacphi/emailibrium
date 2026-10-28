@@ -8,6 +8,7 @@
 //! - Priority-ordered evaluation against emails
 //! - SQLite-backed CRUD for rule persistence
 
+pub mod authority;
 pub mod executor;
 pub mod json_parser;
 pub mod rule_engine;

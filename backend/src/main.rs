@@ -15,8 +15,8 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Layer};
 // at all (design §1.5). These re-exports keep `crate::db::X` resolving inside
 // the binary's own modules.
 pub use emailibrium::{
-    cache, config, content, db, email, events, mcp, middleware, principal, rules, sync_lock,
-    tools, vectors,
+    cache, config, content, db, email, events, mcp, middleware, principal, rules, sync_lock, tools,
+    vectors,
 };
 
 // Binary-only: everything below depends on `AppState`.

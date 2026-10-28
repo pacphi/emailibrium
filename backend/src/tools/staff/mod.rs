@@ -22,6 +22,8 @@ pub mod identity_map;
 pub mod params;
 pub mod review;
 pub mod scan;
+pub mod screener;
+pub mod settings_checklist;
 pub mod snapshot;
 pub mod write_tools;
 

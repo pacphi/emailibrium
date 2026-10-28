@@ -26,8 +26,10 @@ pub async fn identity_map(
 ) -> Result<Value, ToolError> {
     let messages = scan_mail(&ctx, None, false).await?;
 
-    let mut by_sender: std::collections::HashMap<SenderKey, std::collections::HashMap<String, usize>> =
-        std::collections::HashMap::new();
+    let mut by_sender: std::collections::HashMap<
+        SenderKey,
+        std::collections::HashMap<String, usize>,
+    > = std::collections::HashMap::new();
 
     for m in &messages {
         let Some(key) = SenderKey::from_address(&m.from_addr) else {
@@ -47,7 +49,9 @@ pub async fn identity_map(
             let total: usize = accounts.values().sum();
             let accounts_json: Vec<Value> = accounts
                 .into_iter()
-                .map(|(account_id, count)| json!({ "account_id": account_id, "email_count": count }))
+                .map(
+                    |(account_id, count)| json!({ "account_id": account_id, "email_count": count }),
+                )
                 .collect();
             json!({
                 "sender_key": key.as_str(),

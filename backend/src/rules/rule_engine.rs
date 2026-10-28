@@ -241,6 +241,7 @@ mod tests {
             &[
                 include_str!("../../migrations/sqlite/012_rules.sql"),
                 include_str!("../../migrations/sqlite/026_rules_match_count.sql"),
+                include_str!("../../migrations/sqlite/032_rule_authority.sql"),
             ],
         )
         .await

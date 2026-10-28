@@ -78,7 +78,10 @@ mod tests {
             propose_state_new: true,
         };
         let labels = labels_for(&c);
-        assert_eq!(labels, vec!["Kind/People".to_string(), STATE_NEW.to_string()]);
+        assert_eq!(
+            labels,
+            vec!["Kind/People".to_string(), STATE_NEW.to_string()]
+        );
     }
 
     #[test]

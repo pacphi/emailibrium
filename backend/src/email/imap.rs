@@ -765,23 +765,22 @@ fn extract_header_text(msg: &mail_parser::Message<'_>, name: &str) -> Option<Str
     // name — found via milestone 1's golden-mailbox fixtures, which were
     // the first test to round-trip a real `List-Unsubscribe` header
     // through this exact path end-to-end.
-    msg.header_values(name)
-        .find_map(|hv| match hv {
-            mail_parser::HeaderValue::Text(t) => Some(t.to_string()),
-            mail_parser::HeaderValue::Address(addr) => {
-                // List-Unsubscribe may be parsed as an address list.
-                let urls: Vec<String> = addr
-                    .iter()
-                    .filter_map(|a| a.address.as_deref().map(|s| s.to_string()))
-                    .collect();
-                if urls.is_empty() {
-                    None
-                } else {
-                    Some(urls.join(", "))
-                }
+    msg.header_values(name).find_map(|hv| match hv {
+        mail_parser::HeaderValue::Text(t) => Some(t.to_string()),
+        mail_parser::HeaderValue::Address(addr) => {
+            // List-Unsubscribe may be parsed as an address list.
+            let urls: Vec<String> = addr
+                .iter()
+                .filter_map(|a| a.address.as_deref().map(|s| s.to_string()))
+                .collect();
+            if urls.is_empty() {
+                None
+            } else {
+                Some(urls.join(", "))
             }
-            _ => None,
-        })
+        }
+        _ => None,
+    })
 }
 
 /// Extract Cc addresses. Milestone 1's Kind classifier reads this to

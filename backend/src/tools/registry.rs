@@ -49,6 +49,11 @@ pub enum ToolError {
     /// rate limit clears on its own. Folded together, a throttled caller cannot
     /// tell "wait" from "stop".
     RateLimited(String),
+    /// Policy requires confirmation before this exact call runs. The payload
+    /// is a `confirmation_id` — a reference, never a redeemable secret. See
+    /// [`super::confirmation`] for why approval is a separate call the denied
+    /// caller cannot itself satisfy.
+    ConfirmationRequired(String),
 }
 
 impl std::fmt::Display for ToolError {
@@ -60,6 +65,10 @@ impl std::fmt::Display for ToolError {
             Self::NotConfigured(m) => write!(f, "{m}"),
             Self::Denied(m) => write!(f, "{m}"),
             Self::RateLimited(m) => write!(f, "{m}"),
+            Self::ConfirmationRequired(id) => write!(
+                f,
+                "confirmation required (id: {id}) — approve via POST /api/v1/tools/confirmations/{id}/approve, then retry with identical arguments"
+            ),
         }
     }
 }
@@ -77,6 +86,7 @@ impl ToolError {
             Self::NotConfigured(_) => "not_configured",
             Self::Denied(_) => "denied",
             Self::RateLimited(_) => "rate_limited",
+            Self::ConfirmationRequired(_) => "confirmation_required",
         }
     }
 
@@ -90,6 +100,7 @@ impl ToolError {
         match self {
             Self::Denied(_) => "denied",
             Self::RateLimited(_) => "rate_limited",
+            Self::ConfirmationRequired(_) => "confirmation_required",
             _ => "error",
         }
     }
@@ -190,6 +201,7 @@ pub struct ToolRegistry {
     by_name: HashMap<&'static str, usize>,
     config: ToolsConfig,
     rate_limiter: Arc<ToolRateLimiter>,
+    confirmations: Arc<super::confirmation::ConfirmationStore>,
 }
 
 impl ToolRegistry {
@@ -209,6 +221,25 @@ impl ToolRegistry {
         config: ToolsConfig,
         rate_limiter: Arc<ToolRateLimiter>,
     ) -> Self {
+        Self::with_rate_limiter_and_confirmations(
+            decls,
+            config,
+            rate_limiter,
+            Arc::new(super::confirmation::ConfirmationStore::new()),
+        )
+    }
+
+    /// Same as [`with_rate_limiter`](Self::with_rate_limiter) but with a
+    /// caller-supplied confirmation store, so the binary can share one store
+    /// between the registry and the approval endpoint
+    /// (`POST /api/v1/tools/confirmations/{id}/approve`), and tests can drive
+    /// confirmation behaviour directly.
+    pub fn with_rate_limiter_and_confirmations(
+        decls: Vec<ToolDecl>,
+        config: ToolsConfig,
+        rate_limiter: Arc<ToolRateLimiter>,
+        confirmations: Arc<super::confirmation::ConfirmationStore>,
+    ) -> Self {
         for name in config.unknown_tools(decls.iter().map(|d| d.name)) {
             tracing::warn!("config/tools.yaml lists unknown tool '{name}' — ignoring");
         }
@@ -218,6 +249,7 @@ impl ToolRegistry {
             by_name,
             config,
             rate_limiter,
+            confirmations,
         }
     }
 
@@ -228,6 +260,12 @@ impl ToolRegistry {
 
     pub fn rate_limiter(&self) -> &Arc<ToolRateLimiter> {
         &self.rate_limiter
+    }
+
+    /// The shared confirmation store, so the binary can wire the separate
+    /// approval endpoint to the exact same store `dispatch` checks.
+    pub fn confirmations(&self) -> &Arc<super::confirmation::ConfirmationStore> {
+        &self.confirmations
     }
 
     /// Declarations for tools enabled in this build, in declaration order.
@@ -324,6 +362,12 @@ impl ToolRegistry {
         self.rate_limiter
             .check(decl.name, policy.rate_limit_per_minute)
             .map_err(ToolError::RateLimited)?;
+
+        if policy.requires_confirmation {
+            self.confirmations
+                .check_and_consume(decl.name, args)
+                .map_err(ToolError::ConfirmationRequired)?;
+        }
 
         (decl.handler)(ctx, args.clone()).await
     }

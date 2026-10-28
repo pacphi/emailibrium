@@ -63,7 +63,10 @@ async fn set_archived_locally(
     archived: bool,
 ) -> Result<(), ToolError> {
     emails::Entity::update_many()
-        .col_expr(emails::Column::IsArchived, sea_orm::sea_query::Expr::value(archived))
+        .col_expr(
+            emails::Column::IsArchived,
+            sea_orm::sea_query::Expr::value(archived),
+        )
         .filter(emails::Column::Id.eq(email_id))
         .exec(&ctx.conn())
         .await
@@ -82,10 +85,12 @@ async fn archive_for_real(
     ctx.mail_writer()?
         .archive(account_id, &candidate.provider_message_id)
         .await
-        .map_err(|e| ToolError::Database(format!(
-            "archiving {} on the real mailbox: {e}",
-            candidate.provider_message_id
-        )))?;
+        .map_err(|e| {
+            ToolError::Database(format!(
+                "archiving {} on the real mailbox: {e}",
+                candidate.provider_message_id
+            ))
+        })?;
     set_archived_locally(ctx, &candidate.email_id, true).await
 }
 
@@ -99,10 +104,12 @@ async fn unarchive_for_real(
     ctx.mail_writer()?
         .unarchive(account_id, &item.provider_message_id)
         .await
-        .map_err(|e| ToolError::Database(format!(
-            "unarchiving {} on the real mailbox: {e}",
-            item.provider_message_id
-        )))?;
+        .map_err(|e| {
+            ToolError::Database(format!(
+                "unarchiving {} on the real mailbox: {e}",
+                item.provider_message_id
+            ))
+        })?;
     set_archived_locally(ctx, &item.email_id, false).await
 }
 
@@ -360,10 +367,9 @@ async fn closeout_candidates(
     // row set deterministically for a given account at a given instant.
     let mut out = Vec::new();
     for scanned in inbox {
-        if let Some(c) = with_ids
-            .iter()
-            .find(|c| c.from_addr == scanned.from_addr && c.received_at.naive_utc() == scanned.received_at)
-        {
+        if let Some(c) = with_ids.iter().find(|c| {
+            c.from_addr == scanned.from_addr && c.received_at.naive_utc() == scanned.received_at
+        }) {
             let disposition = disposition_for(scanned.classification.kind, scanned.is_read);
             out.push((c.clone(), disposition));
         }

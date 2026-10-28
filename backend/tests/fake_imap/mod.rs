@@ -40,7 +40,14 @@ impl FixtureMessage {
     /// Build a minimal, realistic RFC822 message from header fields. Bodies
     /// are intentionally short — this fixture is about protocol conformance,
     /// not volume.
-    pub fn new(uid: u32, from: &str, to: &str, subject: &str, date_rfc2822: &str, body: &str) -> Self {
+    pub fn new(
+        uid: u32,
+        from: &str,
+        to: &str,
+        subject: &str,
+        date_rfc2822: &str,
+        body: &str,
+    ) -> Self {
         let raw = format!(
             "From: {from}\r\nTo: {to}\r\nSubject: {subject}\r\nDate: {date_rfc2822}\r\nMessage-ID: <fixture-{uid}@fake-imap.test>\r\n\r\n{body}\r\n"
         );
@@ -111,7 +118,10 @@ impl FakeImapServer {
     /// side-effect fix: a `PEEK` fetch must leave this `false`.
     #[allow(dead_code)] // see with_header's comment: per-binary usage varies
     pub fn is_seen(&self, uid: u32) -> bool {
-        self.seen.lock().expect("seen mutex poisoned").contains(&uid)
+        self.seen
+            .lock()
+            .expect("seen mutex poisoned")
+            .contains(&uid)
     }
 }
 

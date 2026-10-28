@@ -145,7 +145,10 @@ impl ToolContext {
         self
     }
 
-    pub fn with_mail_writer(mut self, writer: Arc<dyn crate::tools::mail_writer::MailWriter>) -> Self {
+    pub fn with_mail_writer(
+        mut self,
+        writer: Arc<dyn crate::tools::mail_writer::MailWriter>,
+    ) -> Self {
         self.mail_writer = Some(writer);
         self
     }
@@ -172,9 +175,11 @@ impl ToolContext {
     }
 
     /// Live mail-write capability, or `NotConfigured` naming what is missing.
-    pub fn mail_writer(&self) -> Result<&Arc<dyn crate::tools::mail_writer::MailWriter>, ToolError> {
-        self.mail_writer
-            .as_ref()
-            .ok_or_else(|| ToolError::NotConfigured("Live mail-write access is not configured".into()))
+    pub fn mail_writer(
+        &self,
+    ) -> Result<&Arc<dyn crate::tools::mail_writer::MailWriter>, ToolError> {
+        self.mail_writer.as_ref().ok_or_else(|| {
+            ToolError::NotConfigured("Live mail-write access is not configured".into())
+        })
     }
 }

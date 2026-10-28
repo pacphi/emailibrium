@@ -1057,6 +1057,7 @@ mod tests {
                 include_str!("../../migrations/sqlite/021_thread_key.sql"),
                 include_str!("../../migrations/sqlite/026_rules_match_count.sql"),
                 include_str!("../../migrations/sqlite/027_is_archived.sql"),
+                include_str!("../../migrations/sqlite/032_rule_authority.sql"),
             ],
         )
         .await
@@ -1077,6 +1078,9 @@ mod tests {
             updated_at: Set(Some(Utc::now())),
             match_count: Set(match_count),
             last_run_at: Set(None),
+            authority_level: Set(Some("suggest".to_owned())),
+            clean_streak: Set(Some(0)),
+            graduated_at: Set(None),
         }
         .insert(conn)
         .await

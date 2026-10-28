@@ -338,9 +338,8 @@ fn embedded_ipv4(v6: std::net::Ipv6Addr) -> Option<std::net::Ipv4Addr> {
     }
 
     let s = v6.segments();
-    let last_two_as_v4 = |s: &[u16; 8]| {
-        Ipv4Addr::new((s[6] >> 8) as u8, s[6] as u8, (s[7] >> 8) as u8, s[7] as u8)
-    };
+    let last_two_as_v4 =
+        |s: &[u16; 8]| Ipv4Addr::new((s[6] >> 8) as u8, s[6] as u8, (s[7] >> 8) as u8, s[7] as u8);
 
     // NAT64 well-known prefix: 64:ff9b::/96 — last 32 bits are the IPv4.
     if s[0] == 0x0064 && s[1] == 0xff9b && s[2] == 0 && s[3] == 0 && s[4] == 0 && s[5] == 0 {
@@ -1010,19 +1009,19 @@ mod tests {
     #[test]
     fn disallowed_targets_cover_loopback_private_link_local_cgnat_and_v6_equivalents() {
         let disallowed: &[&str] = &[
-            "127.0.0.1",     // loopback v4
-            "10.0.0.1",      // RFC 1918 private
-            "172.16.0.1",    // RFC 1918 private
-            "192.168.1.1",   // RFC 1918 private
-            "169.254.1.1",   // link-local v4
-            "100.64.0.1",    // CGNAT, not covered by Ipv4Addr::is_private()
-            "0.0.0.0",       // unspecified
-            "255.255.255.255", // broadcast
-            "224.0.0.1",     // multicast v4
-            "::1",           // loopback v6
-            "fc00::1",       // unique-local v6
-            "fe80::1",       // link-local v6
-            "ff02::1",       // multicast v6
+            "127.0.0.1",        // loopback v4
+            "10.0.0.1",         // RFC 1918 private
+            "172.16.0.1",       // RFC 1918 private
+            "192.168.1.1",      // RFC 1918 private
+            "169.254.1.1",      // link-local v4
+            "100.64.0.1",       // CGNAT, not covered by Ipv4Addr::is_private()
+            "0.0.0.0",          // unspecified
+            "255.255.255.255",  // broadcast
+            "224.0.0.1",        // multicast v4
+            "::1",              // loopback v6
+            "fc00::1",          // unique-local v6
+            "fe80::1",          // link-local v6
+            "ff02::1",          // multicast v6
             "::ffff:127.0.0.1", // IPv4-mapped IPv6 loopback — must unwrap, not bypass
             "::ffff:10.0.0.1",  // IPv4-mapped IPv6 private — must unwrap, not bypass
         ];
@@ -1038,23 +1037,23 @@ mod tests {
     #[test]
     fn disallowed_targets_cover_the_round_2_ipv6_encodings_and_ipv4_ranges() {
         let disallowed: &[&str] = &[
-            "64:ff9b::7f00:1",   // NAT64 /96, encodes 127.0.0.1
-            "64:ff9b::a00:1",    // NAT64 /96, encodes 10.0.0.1
-            "2002:c0a8:101::",   // 6to4, encodes 192.168.1.1
-            "2002:a00:1::",      // 6to4, encodes 10.0.0.1
-            "::127.0.0.1",       // deprecated IPv4-compatible, loopback
-            "::10.0.0.1",        // deprecated IPv4-compatible, private
-            "64:ff9b:1::7f00:1", // RFC 8215 local-use NAT64 — rejected outright, not decoded
-            "0.0.0.0",           // already covered via is_unspecified, kept for 0.0.0.0/8 overlap
-            "0.1.2.3",           // 0.0.0.0/8, "this network"
-            "192.0.0.1",         // 192.0.0.0/24, IETF protocol assignment
-            "192.0.0.8",         // NAT64 discovery address, inside 192.0.0.0/24
-            "198.18.0.1",        // 198.18.0.0/15, benchmarking
-            "198.19.255.254",    // still inside 198.18.0.0/15
-            "240.0.0.1",         // 240.0.0.0/4, reserved
-            "255.0.0.1",         // still inside 240.0.0.0/4
-            "fec0::1",           // deprecated IPv6 site-local, fec0::/10
-            "feff:ffff::1",      // still inside fec0::/10
+            "64:ff9b::7f00:1",     // NAT64 /96, encodes 127.0.0.1
+            "64:ff9b::a00:1",      // NAT64 /96, encodes 10.0.0.1
+            "2002:c0a8:101::",     // 6to4, encodes 192.168.1.1
+            "2002:a00:1::",        // 6to4, encodes 10.0.0.1
+            "::127.0.0.1",         // deprecated IPv4-compatible, loopback
+            "::10.0.0.1",          // deprecated IPv4-compatible, private
+            "64:ff9b:1::7f00:1",   // RFC 8215 local-use NAT64 — rejected outright, not decoded
+            "0.0.0.0",             // already covered via is_unspecified, kept for 0.0.0.0/8 overlap
+            "0.1.2.3",             // 0.0.0.0/8, "this network"
+            "192.0.0.1",           // 192.0.0.0/24, IETF protocol assignment
+            "192.0.0.8",           // NAT64 discovery address, inside 192.0.0.0/24
+            "198.18.0.1",          // 198.18.0.0/15, benchmarking
+            "198.19.255.254",      // still inside 198.18.0.0/15
+            "240.0.0.1",           // 240.0.0.0/4, reserved
+            "255.0.0.1",           // still inside 240.0.0.0/4
+            "fec0::1",             // deprecated IPv6 site-local, fec0::/10
+            "feff:ffff::1",        // still inside fec0::/10
             "2001:0:4136:e378::1", // Teredo, 2001:0000::/32 — rejected outright
         ];
         for ip_str in disallowed {
@@ -1071,7 +1070,9 @@ mod tests {
         // fec0::/10 is fec0:: through feff:ffff:...:ffff. fe80::1 (link-local,
         // already covered) and a plain global address must not be caught by
         // the site-local check specifically.
-        assert!(!is_deprecated_site_local_v6("2001:4860:4860::8888".parse().unwrap()));
+        assert!(!is_deprecated_site_local_v6(
+            "2001:4860:4860::8888".parse().unwrap()
+        ));
         // 2001:1::1 is outside Teredo's 2001:0000::/32 (note the second
         // segment must be zero) — a global 2001:: address must not be
         // rejected just for sharing Teredo's top 16 bits.
@@ -1324,11 +1325,17 @@ mod tests {
             .timeout(Duration::from_secs(5))
             .send()
             .await
-            .expect("no_proxy client must reach the target directly, overriding the configured proxy");
+            .expect(
+                "no_proxy client must reach the target directly, overriding the configured proxy",
+            );
 
         assert_eq!(resp.status(), reqwest::StatusCode::OK);
         assert_eq!(resp.text().await.unwrap(), "direct-ok");
-        assert_eq!(target_hits.load(Ordering::SeqCst), 1, "target must receive exactly the no_proxy client's request");
+        assert_eq!(
+            target_hits.load(Ordering::SeqCst),
+            1,
+            "target must receive exactly the no_proxy client's request"
+        );
         assert_eq!(
             proxy_hits.load(Ordering::SeqCst),
             hits_after_control,

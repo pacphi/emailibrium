@@ -66,6 +66,8 @@ tags:
     description: Vector store backup trigger, stats, and restore (ADR-003, S1-04)
   - name: unsubscribe
     description: Bulk unsubscribe, undo, and preview (R-04)
+  - name: tools
+    description: MCP tool-call confirmation-gate approval (ADR-037, milestone 4)
 
 paths:
   # ---------------------------------------------------------------------------
@@ -1400,6 +1402,55 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/CleanupErrorBody" }
+
+  # ---------------------------------------------------------------------------
+  # Tools (MCP tool dispatch -- confirmation-gate approval)
+  # ---------------------------------------------------------------------------
+  /tools/confirmations/{id}/approve:
+    post:
+      tags: [tools]
+      summary: Approve a pending tool-call confirmation
+      description: |
+        The separate call that approves a `requires_confirmation` MCP tool
+        invocation the dispatcher denied and issued a confirmation id for.
+        Single-use and bound to the exact tool-name-and-arguments fingerprint
+        recorded when the id was issued; the denied caller cannot satisfy
+        this itself, since the id is opaque and was never echoed back to it
+        as a redeemable secret.
+
+        Reaching this endpoint still only requires this engine's one shared
+        local credential (bearer or session cookie) -- it adds friction and
+        visibility between the proposing caller and the approval, not
+        cryptographic separation of a human principal from an agent
+        principal. See `backend/src/tools/confirmation.rs`'s module doc.
+      operationId: approveToolConfirmation
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: The opaque confirmation id issued when the tool call was denied
+      responses:
+        "200":
+          description: Approved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  confirmationId: { type: string }
+                  status: { type: string, enum: [approved] }
+        "404":
+          description: No pending confirmation with this id (already used or never existed)
+          content:
+            text/plain:
+              schema: { type: string }
+        "410":
+          description: Confirmation expired -- the caller must request a fresh one
+          content:
+            text/plain:
+              schema: { type: string }
 
   # ---------------------------------------------------------------------------
   # Consent (AI consent + GDPR, ADR-017)

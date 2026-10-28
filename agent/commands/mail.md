@@ -10,7 +10,7 @@ milestone: nothing here files, archives, or applies anything.
 
 ## Usage
 
-```
+```text
 /mail doctor [account]
 /mail snapshot <account>
 /mail brief [account]

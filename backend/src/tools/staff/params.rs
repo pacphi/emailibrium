@@ -37,6 +37,22 @@ pub struct ReviewRequest {
 #[derive(Debug, Default, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct IdentityMapRequest {}
 
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct ScreenerRequest {
+    #[schemars(
+        description = "Restrict the screener to this account UUID. Omit to merge every connected account."
+    )]
+    pub account_id: Option<String>,
+}
+
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct SettingsChecklistRequest {
+    #[schemars(
+        description = "Restrict the checklist to this account UUID. Omit to merge every connected account."
+    )]
+    pub account_id: Option<String>,
+}
+
 #[derive(Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct EraArchivePreviewRequest {
     #[schemars(description = "The account UUID to preview the oldest era (>5 years) for.")]

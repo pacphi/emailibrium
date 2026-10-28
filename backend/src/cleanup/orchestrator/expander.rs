@@ -376,6 +376,7 @@ mod tests {
                 include_str!("../../../migrations/sqlite/018_unsubscribe_headers.sql"),
                 include_str!("../../../migrations/sqlite/021_thread_key.sql"),
                 include_str!("../../../migrations/sqlite/026_rules_match_count.sql"),
+                include_str!("../../../migrations/sqlite/032_rule_authority.sql"),
                 include_str!("../../../migrations/sqlite/027_is_archived.sql"),
             ],
         )

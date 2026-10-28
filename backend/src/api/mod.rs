@@ -14,6 +14,7 @@ mod interactions;
 mod learning;
 pub mod provider_helpers;
 mod rules;
+mod tool_confirmations;
 mod unsubscribe;
 mod vectors;
 mod wipe;
@@ -40,4 +41,5 @@ pub fn routes() -> Router<AppState> {
         .nest("/unsubscribe", unsubscribe::routes())
         .nest("/cleanup", crate::cleanup::routes())
         .nest("/wipe", wipe::routes())
+        .nest("/tools", tool_confirmations::routes())
 }
