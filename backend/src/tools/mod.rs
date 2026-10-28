@@ -10,6 +10,7 @@
 //! registration line.
 
 pub mod audit;
+pub mod confirmation;
 pub mod config;
 pub mod context;
 pub mod mail_writer;
@@ -18,6 +19,7 @@ pub mod readonly;
 pub mod registry;
 pub mod staff;
 
+pub use confirmation::ConfirmationStore;
 pub use context::ToolContext;
 pub use registry::{declare, CallSource, ToolDecl, ToolError, ToolRegistry};
 

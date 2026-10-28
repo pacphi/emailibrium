@@ -118,13 +118,22 @@ fn tool_error_to_mcp(error: ToolError, uri: &str) -> ErrorData {
     // `kind` mirrors what the tool surface attaches, so a client sees the same
     // discriminator whichever surface it came through. Display prints only the
     // message, so without this the variant is lost once rendered.
-    let data = Some(serde_json::json!({ "uri": uri, "kind": error.kind() }));
+    let data = match &error {
+        ToolError::ConfirmationRequired(id) => {
+            serde_json::json!({ "uri": uri, "kind": error.kind(), "confirmation_id": id })
+        }
+        _ => serde_json::json!({ "uri": uri, "kind": error.kind() }),
+    };
+    let data = Some(data);
     let message = error.to_string();
     match error {
         ToolError::NotFound(_) => ErrorData::resource_not_found(message, data),
         ToolError::Invalid(_) => ErrorData::invalid_params(message, data),
         ToolError::Denied(_) => ErrorData::invalid_request(message, data),
         ToolError::RateLimited(_) => ErrorData::new(super::server::RATE_LIMITED, message, data),
+        ToolError::ConfirmationRequired(_) => {
+            ErrorData::new(super::server::CONFIRMATION_REQUIRED, message, data)
+        }
         ToolError::Database(_) | ToolError::NotConfigured(_) => {
             ErrorData::internal_error(message, data)
         }

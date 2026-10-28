@@ -646,6 +646,76 @@ async fn rate_limits_are_shared_across_surfaces_and_sessions() {
 }
 
 #[tokio::test]
+async fn confirmation_required_tool_cannot_be_self_approved_by_the_denied_caller() {
+    // Milestone 4: requires_confirmation is now enforced in dispatch itself,
+    // not just declared and ignored (the milestone-3 finding). get_email is
+    // an ordinary read tool, forced into requires_confirmation here purely
+    // to prove the gate mechanism in isolation from write_tools.rs's own
+    // separate batch-key gate.
+    let yaml = "version: \"1.0\"\ndefaults:\n  rate_limit_per_minute: 20\ntools:\n  get_email:\n    enabled: true\n    requires_confirmation: true\n";
+    let (_cfg_dir, cfg) = config_from_yaml(yaml);
+    let env = Env::new(cfg, None).await;
+    let s = env.open_session().await;
+    let args = json!({"email_id": "email-1"});
+
+    let first = env.call_tool(&s, "get_email", args.clone()).await;
+    assert_eq!(err_code(&first), -32002, "{first}");
+    assert_eq!(err_kind(&first), "confirmation_required");
+    let id = err(&first)["data"]["confirmation_id"]
+        .as_str()
+        .expect("confirmation_id in error data")
+        .to_string();
+
+    // The denied caller retrying the exact same call, with nothing else
+    // done, is denied again — the id it received grants nothing by itself.
+    let retried = env.call_tool(&s, "get_email", args.clone()).await;
+    assert_eq!(err_code(&retried), -32002, "{retried}");
+    let retried_id = err(&retried)["data"]["confirmation_id"]
+        .as_str()
+        .expect("confirmation_id in error data");
+    assert_eq!(retried_id, id, "same pending confirmation, not a new one");
+
+    // The thing a self-contained token WOULD let the caller do: echo the id
+    // straight back as if it were a credential. It is not one — there is no
+    // field a tool call accepts that redeems a confirmation; only a
+    // separate call to the approval endpoint can.
+    let tried_as_arg = env
+        .call_tool(
+            &s,
+            "get_email",
+            json!({"email_id": "email-1", "confirmation_id": id}),
+        )
+        .await;
+    assert_eq!(
+        err_code(&tried_as_arg),
+        -32002,
+        "handing the id back as an argument must not satisfy the gate: {tried_as_arg}"
+    );
+
+    // Only the separate, out-of-band approval path (the human/operator
+    // endpoint, POST /api/v1/tools/confirmations/{id}/approve in the
+    // binary — simulated here by calling the same store directly, since
+    // that endpoint lives in main.rs and isn't reachable from this
+    // lib-crate integration test) can turn this into a success.
+    env.registry
+        .confirmations()
+        .approve(&id)
+        .expect("approval endpoint call succeeds");
+
+    let approved = env.call_tool(&s, "get_email", args.clone()).await;
+    ok(&approved);
+
+    // Single-use: a second identical call after the approval was spent is
+    // denied again, with a fresh id — the spent approval cannot be replayed.
+    let after_use = env.call_tool(&s, "get_email", args).await;
+    assert_eq!(err_code(&after_use), -32002, "{after_use}");
+    let fresh_id = err(&after_use)["data"]["confirmation_id"]
+        .as_str()
+        .expect("confirmation_id in error data");
+    assert_ne!(fresh_id, id, "a spent confirmation is not reusable");
+}
+
+#[tokio::test]
 async fn disabled_tool_policy_reaches_resource_reads() {
     // The Denied path IS observable via resources/read: the resource layer
     // dispatches through the registry, which applies tools.yaml policy.

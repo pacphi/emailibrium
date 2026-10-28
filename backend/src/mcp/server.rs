@@ -122,6 +122,10 @@ async fn dispatch_call(
 /// and MCP defines nothing for this case, so a client that needs to tell "back
 /// off and retry" from "your request was wrong" needs a code of our own.
 pub(crate) const RATE_LIMITED: rmcp::model::ErrorCode = rmcp::model::ErrorCode(-32001);
+/// Distinct from [`RATE_LIMITED`] for the same reason it exists: a client
+/// that sees this code knows to seek approval and retry with identical
+/// arguments, not back off and retry blindly.
+pub(crate) const CONFIRMATION_REQUIRED: rmcp::model::ErrorCode = rmcp::model::ErrorCode(-32002);
 
 /// Map a failed tool call onto a JSON-RPC error.
 ///
@@ -134,7 +138,17 @@ pub(crate) const RATE_LIMITED: rmcp::model::ErrorCode = rmcp::model::ErrorCode(-
 ///
 /// The code carries the variant, since `Display` prints only the message.
 fn failure(error: ToolError) -> rmcp::ErrorData {
-    let data = Some(serde_json::json!({ "kind": error.kind() }));
+    // `confirmation_id` is structured data, not something a client should
+    // have to parse out of the human-readable message — it's the one field
+    // a caller actually needs to act on (request approval, then retry with
+    // identical arguments).
+    let data = match &error {
+        ToolError::ConfirmationRequired(id) => {
+            serde_json::json!({ "kind": error.kind(), "confirmation_id": id })
+        }
+        _ => serde_json::json!({ "kind": error.kind() }),
+    };
+    let data = Some(data);
     let message = error.to_string();
 
     match error {
@@ -142,6 +156,9 @@ fn failure(error: ToolError) -> rmcp::ErrorData {
         ToolError::NotFound(_) => rmcp::ErrorData::resource_not_found(message, data),
         ToolError::Denied(_) => rmcp::ErrorData::invalid_request(message, data),
         ToolError::RateLimited(_) => rmcp::ErrorData::new(RATE_LIMITED, message, data),
+        ToolError::ConfirmationRequired(_) => {
+            rmcp::ErrorData::new(CONFIRMATION_REQUIRED, message, data)
+        }
         // The caller-facing message is already generic — `db_error` logs the
         // underlying failure and returns "{operation} failed" — so nothing
         // here leaks backing-store detail.
