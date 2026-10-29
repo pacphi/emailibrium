@@ -284,7 +284,7 @@ impl tokio::io::AsyncWrite for ImapStream {
     }
 }
 
-type ImapSession = async_imap::Session<ImapStream>;
+pub type ImapSession = async_imap::Session<ImapStream>;
 
 /// SASL XOAUTH2 (<https://developers.google.com/gmail/imap/xoauth2-protocol>,
 /// the same mechanism Outlook/Microsoft 365 IMAP expects). There's no real
@@ -450,6 +450,16 @@ impl ImapProvider {
         };
 
         Ok(session)
+    }
+
+    /// Open an authenticated session with this provider's connection
+    /// settings (TLS mode, pinned address, password or XOAUTH2). Test-only:
+    /// the live conformance harness uses it to create its scratch
+    /// mailboxes, append a synthetic message, read state back and clean up.
+    #[cfg(any(test, feature = "test-vectors"))]
+    pub async fn open_session_for_tests(&self) -> Result<ImapSession, ProviderError> {
+        self.validate_config()?;
+        self.connect().await
     }
 
     /// Connect, SELECT the configured mailbox, and return (session, exists_count).

@@ -34,7 +34,7 @@ use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
 
 /// One fixture message: an IMAP UID plus its full raw RFC822 text (headers
@@ -56,6 +56,7 @@ impl FixtureMessage {
     /// Build a minimal, realistic RFC822 message from header fields. Bodies
     /// are intentionally short — this fixture is about protocol conformance,
     /// not volume.
+    #[allow(dead_code)] // see with_header's comment: per-binary usage varies
     pub fn new(
         uid: u32,
         from: &str,
@@ -396,16 +397,94 @@ async fn serve_connection(
                     .write_all(format!("{tag} OK CREATE completed\r\n").as_bytes())
                     .await?;
             }
+            "LIST" => {
+                // `LIST "" "<pattern>"`: `*` lists every mailbox; anything
+                // else matches one name exactly (all this fixture needs).
+                let pattern = rest
+                    .rsplit_once(' ')
+                    .map(|(_, p)| p.trim().trim_matches('"').to_string())
+                    .unwrap_or_default();
+                let names: Vec<String> = {
+                    let guard = mailboxes.lock().expect("mailboxes mutex poisoned");
+                    let mut names: Vec<String> = guard
+                        .keys()
+                        .filter(|n| pattern == "*" || **n == pattern)
+                        .cloned()
+                        .collect();
+                    names.sort();
+                    names
+                };
+                for name in names {
+                    writer
+                        .write_all(format!("* LIST () \"/\" \"{name}\"\r\n").as_bytes())
+                        .await?;
+                }
+                writer
+                    .write_all(format!("{tag} OK LIST completed\r\n").as_bytes())
+                    .await?;
+            }
+            "DELETE" => {
+                let name = rest.trim().trim_matches('"').to_string();
+                let existed = mailboxes
+                    .lock()
+                    .expect("mailboxes mutex poisoned")
+                    .remove(&name)
+                    .is_some();
+                let reply = if existed {
+                    format!("{tag} OK DELETE completed\r\n")
+                } else {
+                    format!("{tag} NO [NONEXISTENT] no such mailbox\r\n")
+                };
+                writer.write_all(reply.as_bytes()).await?;
+            }
+            "APPEND" => {
+                // `APPEND <mailbox> [flags] [date] {<n>}`: send a continuation,
+                // read exactly <n> bytes of literal, then the trailing CRLF.
+                let (name, size) = match rest.rsplit_once(" {") {
+                    Some((name, size)) => (
+                        name.trim().trim_matches('"').to_string(),
+                        size.trim_end_matches('}').parse::<usize>().unwrap_or(0),
+                    ),
+                    None => (String::new(), 0),
+                };
+                writer.write_all(b"+ Ready for literal data\r\n").await?;
+                let mut literal = vec![0u8; size];
+                reader.read_exact(&mut literal).await?;
+                let mut crlf = String::new();
+                reader.read_line(&mut crlf).await?;
+                let reply = {
+                    let mut guard = mailboxes.lock().expect("mailboxes mutex poisoned");
+                    match guard.get_mut(&name) {
+                        Some(mb) => {
+                            let uid = mb.next_uid.max(1);
+                            mb.next_uid = uid + 1;
+                            mb.messages.push(FixtureMessage {
+                                uid,
+                                raw: String::from_utf8_lossy(&literal).into_owned(),
+                                deleted: false,
+                                keywords: BTreeSet::new(),
+                            });
+                            format!("{tag} OK [APPENDUID 1 {uid}] APPEND completed\r\n")
+                        }
+                        None => format!("{tag} NO [TRYCREATE] no such mailbox\r\n"),
+                    }
+                };
+                writer.write_all(reply.as_bytes()).await?;
+            }
             "SELECT" | "EXAMINE" => {
                 let name = rest.trim().trim_matches('"').to_string();
-                let exists = {
-                    let mut guard = mailboxes.lock().expect("mailboxes mutex poisoned");
-                    // Real servers require the mailbox to already exist;
-                    // `connect_and_select`'s configured INBOX is always
-                    // seeded, and every other mailbox this fixture serves
-                    // is explicitly `CREATE`d first by the client code
-                    // under test, matching that requirement.
-                    guard.entry(name.clone()).or_default().messages.len()
+                // Like a real server, a mailbox that doesn't exist can't be
+                // selected (and is never created as a side effect).
+                let exists = mailboxes
+                    .lock()
+                    .expect("mailboxes mutex poisoned")
+                    .get(&name)
+                    .map(|mb| mb.messages.len());
+                let Some(exists) = exists else {
+                    writer
+                        .write_all(format!("{tag} NO [NONEXISTENT] no such mailbox\r\n").as_bytes())
+                        .await?;
+                    continue;
                 };
                 current_mailbox = Some(name);
                 writer
@@ -655,7 +734,15 @@ async fn handle_uid_fetch(
             seen.lock().expect("seen mutex poisoned").insert(m.uid);
             true
         };
-        let flags = if now_seen { "\\Seen" } else { "" };
+        let mut flag_list: Vec<String> = Vec::new();
+        if now_seen {
+            flag_list.push("\\Seen".to_string());
+        }
+        if m.deleted {
+            flag_list.push("\\Deleted".to_string());
+        }
+        flag_list.extend(m.keywords.iter().cloned());
+        let flags = flag_list.join(" ");
 
         writer
             .write_all(
