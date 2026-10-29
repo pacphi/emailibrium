@@ -440,9 +440,10 @@ async fn serve_connection(
     Ok(())
 }
 
-/// `UID SEARCH <criteria>`. Two shapes are understood: `HEADER Message-ID
+/// `UID SEARCH <criteria>`. Three shapes are understood: `HEADER Message-ID
 /// "<id>"` (milestone 6's Proton dedupe path — matches against the
-/// currently-selected mailbox's messages) and everything else, which keeps
+/// currently-selected mailbox's messages), `DELETED` (messages marked
+/// `\Deleted`, checked before a plain-EXPUNGE move), and everything else, which keeps
 /// milestone 0's behavior of matching every seeded message (the only
 /// criterion the real client's plain `ALL`-style search ever sent before
 /// this milestone).
@@ -468,6 +469,15 @@ async fn handle_uid_search(
                 mb.messages
                     .iter()
                     .filter(|m| m.message_id().as_deref() == Some(wanted))
+                    .map(|m| m.uid)
+                    .collect()
+            })
+            .unwrap_or_default()
+        } else if upper.trim() == "DELETED" {
+            mb.map(|mb| {
+                mb.messages
+                    .iter()
+                    .filter(|m| m.deleted)
                     .map(|m| m.uid)
                     .collect()
             })

@@ -466,9 +466,15 @@ impl ImapProvider {
     /// Move one message (by UID) out of the currently selected mailbox into
     /// `target`, touching no other message. Uses `UID MOVE` (RFC 6851) when
     /// the server has it, else `UID COPY` + `\Deleted` + `UID EXPUNGE`
-    /// (UIDPLUS, RFC 4315). A server with neither is refused before anything
-    /// is copied: a plain `EXPUNGE` would also permanently erase every other
-    /// message in the mailbox that the user had marked `\Deleted`.
+    /// (UIDPLUS, RFC 4315).
+    ///
+    /// A server with neither (iCloud is reported to lack MOVE, and sources
+    /// disagree on UIDPLUS) falls back to a plain `EXPUNGE`, which erases
+    /// every `\Deleted` message in the mailbox. That is only done when a
+    /// `UID SEARCH DELETED` shows no other message is marked: checked before
+    /// copying (refuse with nothing changed) and again just before the
+    /// expunge (unflag ours and refuse). A message another client flags in
+    /// the instant between the last check and the expunge is still lost.
     async fn move_uid(
         session: &mut ImapSession,
         uid: &str,
@@ -484,12 +490,34 @@ impl ImapProvider {
                 ProviderError::RequestFailed(format!("UID MOVE to '{target}' failed: {e}"))
             });
         }
-
         if !caps.has_str("UIDPLUS") {
-            return Err(ProviderError::RequestFailed(format!(
-                "server supports neither MOVE nor UIDPLUS; refusing to move UID {uid} \
-                 because a plain EXPUNGE would also erase other messages marked \\Deleted"
-            )));
+            let ours: u32 = uid.parse().map_err(|_| {
+                ProviderError::RequestFailed(format!(
+                    "server supports neither MOVE nor UIDPLUS; can only move a single UID, got '{uid}'"
+                ))
+            })?;
+            Self::ensure_only_deleted(session, None, uid).await?;
+
+            session.uid_copy(uid, target).await.map_err(|e| {
+                ProviderError::RequestFailed(format!("UID COPY to '{target}' failed: {e}"))
+            })?;
+            Self::store_deleted(session, uid, "+FLAGS").await?;
+
+            if let Err(e) = Self::ensure_only_deleted(session, Some(ours), uid).await {
+                Self::store_deleted(session, uid, "-FLAGS").await?;
+                return Err(ProviderError::RequestFailed(format!(
+                    "{e}; UID {uid} was already copied to '{target}' and left in place"
+                )));
+            }
+
+            session
+                .expunge()
+                .await
+                .map_err(|e| ProviderError::RequestFailed(format!("EXPUNGE failed: {e}")))?
+                .try_collect::<Vec<u32>>()
+                .await
+                .map_err(|e| ProviderError::RequestFailed(format!("EXPUNGE stream failed: {e}")))?;
+            return Ok(());
         }
 
         session.uid_copy(uid, target).await.map_err(|e| {
@@ -525,13 +553,7 @@ impl ImapProvider {
         session: &mut ImapSession,
         uid: &str,
     ) -> Result<(), ProviderError> {
-        session
-            .uid_store(uid, "+FLAGS (\\Deleted)")
-            .await
-            .map_err(|e| ProviderError::RequestFailed(format!("STORE \\Deleted failed: {e}")))?
-            .try_collect::<Vec<async_imap::types::Fetch>>()
-            .await
-            .map_err(|e| ProviderError::RequestFailed(format!("STORE stream failed: {e}")))?;
+        Self::store_deleted(session, uid, "+FLAGS").await?;
 
         session
             .uid_expunge(uid)
@@ -541,6 +563,45 @@ impl ImapProvider {
             .await
             .map_err(|e| ProviderError::RequestFailed(format!("UID EXPUNGE stream failed: {e}")))?;
 
+        Ok(())
+    }
+
+    /// Refuse unless the set of `\Deleted` messages in the selected mailbox
+    /// is exactly `expected` (none, or only our own UID) — the precondition
+    /// for a plain `EXPUNGE` to erase nothing else.
+    async fn ensure_only_deleted(
+        session: &mut ImapSession,
+        expected: Option<u32>,
+        uid: &str,
+    ) -> Result<(), ProviderError> {
+        let deleted = session
+            .uid_search("DELETED")
+            .await
+            .map_err(|e| ProviderError::RequestFailed(format!("UID SEARCH DELETED failed: {e}")))?;
+        let others = deleted.iter().filter(|d| Some(**d) != expected).count();
+        if others > 0 {
+            return Err(ProviderError::RequestFailed(format!(
+                "server supports neither MOVE nor UIDPLUS and {others} other message(s) in \
+                 this mailbox are marked \\Deleted; refusing to move UID {uid} because a \
+                 plain EXPUNGE would erase them"
+            )));
+        }
+        Ok(())
+    }
+
+    /// `UID STORE <uid> {+FLAGS|-FLAGS} (\Deleted)`.
+    async fn store_deleted(
+        session: &mut ImapSession,
+        uid: &str,
+        op: &str,
+    ) -> Result<(), ProviderError> {
+        session
+            .uid_store(uid, format!("{op} (\\Deleted)"))
+            .await
+            .map_err(|e| ProviderError::RequestFailed(format!("STORE \\Deleted failed: {e}")))?
+            .try_collect::<Vec<async_imap::types::Fetch>>()
+            .await
+            .map_err(|e| ProviderError::RequestFailed(format!("STORE stream failed: {e}")))?;
         Ok(())
     }
 
