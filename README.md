@@ -113,6 +113,10 @@ just setup-secrets    # generate dev secrets (first time only)
 just docker-up-dev    # start with hot-reload
 ```
 
+Opening the frontend shows **Connect to your engine** — paste the contents of
+`secrets/dev/jwt_secret` into **Local access token** to unlock it. See
+[Local engine access](docs/security/local-engine-access.md) for details.
+
 **Prerequisites:** Rust 1.97+, Node.js 26 (LTS)+, pnpm 11.5+ — or just Docker. See [Setup Guide](docs/setup-guide.md) for details.
 
 > **⏱️ Want value in 15 minutes with no cloud setup?** Connect a personal Gmail (or Yahoo,

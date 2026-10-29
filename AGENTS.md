@@ -1,3 +1,47 @@
+# emailibrium
+
+Vector-native, local-first email intelligence: semantic search, clustering, classification, and inbox cleanup over 10k+ emails with no cloud processing. Rust backend + React SPA.
+
+## Layout
+
+| Path                   | What                                                                                                                   | Stack                                                                 |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| `backend/`             | Axum REST + SSE API and the intelligence layer                                                                         | Rust 1.97 (edition 2021), SQLx/SQLite, Moka, Redis (optional)         |
+| `backend/src/vectors/` | 48 vector intelligence modules: embedding, HNSW search, SONA learning, clustering, RAG, encryption                     | —                                                                     |
+| `backend/src/mcp/`     | MCP server exposing email tools                                                                                        | —                                                                     |
+| `backend/migrations/`  | Numbered SQLite migrations — **append the next number, never edit an applied one**                                     | —                                                                     |
+| `frontend/`            | pnpm + Turborepo monorepo (app in `apps/web/`)                                                                         | React 19, TS ^6.0.3, Vite 8, TanStack Router/Query, Zustand, Tailwind |
+| `ruvector/`            | **Git submodule** (ruvnet/ruvector) — the vector engine. Treat as vendored: don't edit; backend depends on it via path | Rust workspace                                                        |
+| `docs/`                | `architecture.md`, `ADRs/`, `DDDs/`, evaluation, setup/oauth guides                                                    | —                                                                     |
+| `config/`, `secrets/`  | Runtime config + dev secrets (never commit secrets)                                                                    | —                                                                     |
+
+## Build & Test — justfile-driven, not npm
+
+The root `package.json` only wires Husky; **do not run `npm build`/`npm test`**. Use `just`:
+
+```bash
+just ci          # format-check + lint + typecheck + test (run before committing)
+just test        # backend (cargo) + frontend (Vitest)
+just build       # build everything
+just dev         # full stack: backend :8080, frontend :3000
+just lint        # cargo clippy + eslint + docs (markdownlint, yamllint)
+just audit       # cargo-audit + pnpm audit
+just --list        # all targets
+```
+
+Backend-only: `cd backend && cargo test` / `cargo clippy`. Frontend-only: `cd frontend && pnpm test` / `pnpm lint` / `pnpm typecheck`.
+
+Backend Cargo features: `vectors` (default), `builtin-llm` (llama-cpp, opt-in), `proptest`.
+
+## Conventions
+
+- **Decisions are ADR/DDD-gated.** Before changing architecture, vector storage, learning, or AI providers, check `docs/ADRs/` and `docs/DDDs/` — e.g. ADR-003 fixes RuVector as the primary vector store. Record new decisions as an ADR.
+- **Privacy is a hard guarantee, not a setting.** Embeddings/models run and stay local; cloud AI is strictly opt-in. Don't add code paths that send email content off-machine by default.
+- Encryption at rest is AES-256-GCM + Argon2id — keep crypto changes within `backend/src/vectors/encryption.rs` and consent-gated.
+- For code navigation, impact analysis, and safe refactors, use the GitNexus guidance below.
+
+<!-- managed by ruflo-setup-aqe — aqe init skips regeneration when this sentinel is present -->
+
 <!-- gitnexus:start -->
 
 # GitNexus — Code Intelligence
@@ -99,3 +143,15 @@ aspirational, not present. `gitnexus` itself is a real CLI (available on `PATH` 
 gitnexus`); run `npx gitnexus --help` for its command reference directly.
 
 <!-- gitnexus:end -->
+
+## Project-local tool usage
+
+- Use the active host's supported tools and project configuration; do not infer
+  runtime health, provider identity, or authorization from an instruction file.
+- Discover AQE/Ruflo tools when needed and use bounded commands. Preserve project
+  state, databases, patterns, and evidence; deletion needs explicit approval and backup.
+- Report actual checks and their limitations; do not invent tests, coverage or results.
+- Keep credentials out of source. Respect configured providers and spending limits.
+- Commits, pushes, publishing and destructive cleanup require explicit user approval.
+- Keep shared instructions in this file and CLAUDE.md as exactly `@AGENTS.md`.
+  Do not regenerate machine-wide guidance or depend on user-level instruction files.

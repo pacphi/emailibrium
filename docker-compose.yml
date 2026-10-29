@@ -258,7 +258,12 @@ services:
 
   # ─── Qdrant Vector DB (optional, enable with STORE_BACKEND=qdrant) ─
   qdrant:
-    image: qdrant/qdrant:v1.13.6
+    # Pinned by multi-arch index digest: tags can be re-pushed, digests can't.
+    # Upgrading from v1.13.x: single-node Qdrant can't skip minor versions
+    # (https://qdrant.tech/documentation/guides/upgrades/), so an existing
+    # qdrant_data volume won't migrate. Remove it and re-index; the vectors
+    # are derived from the mail store.
+    image: qdrant/qdrant:v1.20.0@sha256:9bfc89f9914fc14876a88c05270685921a55b8877b254a98bcc1cc2f0a424cd2
     container_name: emailibrium-qdrant
     profiles:
       - qdrant # Only starts when: docker compose --profile qdrant up
