@@ -2,6 +2,7 @@
 
 - **Status**: Accepted
 - **Date**: 2026-03-25
+- **Updated**: 2026-10-29 — IMAP is now built: single-message moves that never erase other mail, and a label strategy per IMAP provider (mail-agent milestone 6). See section 8.
 - **Extends**: DDD-005 (Account Management Domain)
 
 ## Context
@@ -10,7 +11,7 @@ Email providers have fundamentally different folder/label semantics:
 
 - **Gmail** uses labels (multiple per message, additive). System labels: `INBOX`, `SENT`, `TRASH`, `SPAM`, `STARRED`, `DRAFT`. Custom labels are user-created and can be nested.
 - **Outlook** uses folders (exclusive -- a message lives in one folder) plus categories (additive, similar to labels). System folders: `Inbox`, `Drafts`, `Sent Items`, `Deleted Items`, `Archive`, `Junk Email`.
-- **IMAP** uses mailbox folders (exclusive). Standard folders: `INBOX`, `Sent`, `Trash`, `Drafts`.
+- **IMAP** uses mailbox folders (exclusive). Standard folders: `INBOX`, `Sent`, `Trash`, `Drafts`. Many servers also keep custom keywords on a message (additive, like labels) — whether a mailbox keeps them is announced per mailbox in `PERMANENTFLAGS` (RFC 3501 section 7.1). Proton Mail Bridge shows Proton labels as folders under `Labels/`; Outlook over IMAP keeps no custom keywords.
 - **POP3** has no server-side folder concept. Messages are downloaded and deleted from the server; organization is entirely local.
 
 Without a provider-aware abstraction layer, every UI component and API handler would need provider-specific branching logic. This violates the open/closed principle and makes adding new providers disproportionately expensive.
@@ -94,6 +95,29 @@ The frontend dynamically loads available folders and labels from `GET /api/v1/em
 
 The frontend does not need to know which provider the account uses. The `kind` field on each `FolderOrLabel` determines whether the move operation sends `MoveKind::Folder` or `MoveKind::Label` in the request body.
 
+### 8. IMAP Implementation (added 2026-10-29)
+
+`ImapProvider` (`backend/src/email/imap.rs`) implements the trait over IMAP for app-password providers (Gmail, Google Workspace, iCloud, Fastmail, Yahoo, Zoho), Proton Mail Bridge, and Outlook with OAuth (XOAUTH2).
+
+**Moving one message** (`archive_message`, `unarchive_message`, `move_message` with `MoveKind::Folder`, and every folder-based label) goes through one helper that touches no other message:
+
+1. `UID MOVE` when the server advertises `MOVE` (RFC 6851).
+2. Otherwise `UID COPY`, flag `\Deleted`, then `UID EXPUNGE` of that one UID when the server advertises `UIDPLUS` (RFC 4315).
+3. Otherwise (iCloud is reported to lack `MOVE`) a plain `EXPUNGE`, but only when `UID SEARCH DELETED` shows no other message is marked — checked before copying and again just before the expunge. A plain `EXPUNGE` erases every `\Deleted` message in the mailbox, including ones another mail client flagged.
+
+**Labels** follow a `ProviderProfile` stored per account (`connected_accounts.imap_auth_profile`):
+
+| Profile | Apply a label | Remove a label | Kind/Topic | State |
+| --- | --- | --- | --- | --- |
+| `Generic`, mailbox keeps keywords | `STORE +FLAGS` keyword | `STORE -FLAGS` | keyword | keyword |
+| `Generic`, mailbox refuses keywords | move into a folder named after the label | refused for Kind/Topic (undo is a move back) | folder | not written (ledger only) |
+| `ProtonBridge` | `COPY` into `Labels/<label>` (message stays where it is) | delete that copy (`UID EXPUNGE`) | `Labels/` copy | `Labels/` copy |
+| `OutlookImap` | move into a folder named after the label | refused for Kind/Topic (undo is a move back) | folder | not written (ledger only) |
+
+A `Generic` mailbox keeps keywords when its `PERMANENTFLAGS` contains `\*`, names the keyword, or is not sent at all (RFC 3501 section 7.1). Every keyword is checked against the RFC 3501 `atom` rule before any `STORE` is sent, so label text can't split into two keywords or inject command text; a label that fails the check is rejected and nothing is written.
+
+A provider-adapter conformance suite (`backend/tests/provider_conformance.rs`) applies the same labels on every profile against an in-process fake IMAP server and checks that undo restores the same mailbox state, and that archive → unarchive does too under each move strategy.
+
 ## Consequences
 
 ### Positive
@@ -106,7 +130,10 @@ The frontend does not need to know which provider the account uses. The `kind` f
 ### Negative
 
 - Folder semantics are not perfectly represented: Gmail's "move to folder" is internally a label add/remove, which means a Gmail message could appear in multiple "folders" if manipulated outside Emailibrium
-- IMAP and POP3 implementations are not yet built; trait default methods return `NotSupported`
+- POP3 is not built; its trait default methods return `NotSupported`
+- A Kind/Topic label that became a folder (Outlook, or a mailbox that refuses keywords) has no undo path in production code yet: `remove_labels` refuses it and `move_message` only moves out of the account's configured mailbox, so moving the message back out of the label folder needs a provider built for that folder
+- Gmail over IMAP uses the `Generic` profile (keywords), not Gmail labels via `X-GM-LABELS`
+- On a server with neither `MOVE` nor `UIDPLUS`, a message another client flags as `\Deleted` in the instant between the last check and the plain `EXPUNGE` is lost
 - Best-effort sync means local state can temporarily diverge from provider state if retries fail repeatedly
 
 ### Neutral

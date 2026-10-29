@@ -244,6 +244,35 @@ impl FakeImapServer {
             .expect("permanent_flags mutex poisoned") = Some(flags.to_string());
     }
 
+    /// Every non-empty mailbox's messages as (Message-ID, keywords), sorted —
+    /// what a label/move/undo round trip must restore. UIDs are left out on
+    /// purpose: a message moved away and back gets a new UID, as on a real
+    /// server. Empty mailboxes are left out too: a folder created by a label
+    /// stays behind (empty) after undo, as on a real server.
+    #[allow(dead_code)] // see with_header's comment: per-binary usage varies
+    pub fn snapshot(&self) -> std::collections::BTreeMap<String, Vec<(String, Vec<String>)>> {
+        self.mailboxes
+            .lock()
+            .expect("mailboxes mutex poisoned")
+            .iter()
+            .filter(|(_, mb)| !mb.messages.is_empty())
+            .map(|(name, mb)| {
+                let mut msgs: Vec<(String, Vec<String>)> = mb
+                    .messages
+                    .iter()
+                    .map(|m| {
+                        (
+                            m.message_id().unwrap_or_default(),
+                            m.keywords.iter().cloned().collect(),
+                        )
+                    })
+                    .collect();
+                msgs.sort();
+                (name.clone(), msgs)
+            })
+            .collect()
+    }
+
     /// The custom keywords currently set on a message, sorted.
     #[allow(dead_code)] // see with_header's comment: per-binary usage varies
     pub fn keywords(&self, mailbox: &str, uid: u32) -> Vec<String> {
