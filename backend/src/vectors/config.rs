@@ -883,9 +883,15 @@ pub struct OAuthConfig {
     /// Gmail OAuth settings.
     #[serde(default)]
     pub gmail: GmailOAuthConfig,
-    /// Outlook/Microsoft OAuth settings.
+    /// Outlook/Microsoft OAuth settings (confidential client, authorization-code grant).
     #[serde(default)]
     pub outlook: OutlookOAuthConfig,
+    /// Outlook/Microsoft device-code settings (public client, no Azure
+    /// registration of your own required — milestone 6, beta). A separate
+    /// config from `outlook` because a public client has no client secret
+    /// and uses a different grant entirely.
+    #[serde(default)]
+    pub outlook_device_code: OutlookDeviceCodeConfig,
     /// OAuth callback base URL (used to construct redirect URIs).
     #[serde(default = "default_oauth_redirect_base")]
     pub redirect_base_url: String,
@@ -899,6 +905,7 @@ impl Default for OAuthConfig {
         Self {
             gmail: GmailOAuthConfig::default(),
             outlook: OutlookOAuthConfig::default(),
+            outlook_device_code: OutlookDeviceCodeConfig::default(),
             redirect_base_url: default_oauth_redirect_base(),
             frontend_url: default_oauth_frontend_url(),
         }
@@ -981,6 +988,69 @@ impl OutlookOAuthConfig {
             self.tenant
         )
     }
+}
+
+/// Outlook/Microsoft 365 device-code flow configuration (milestone 6, beta):
+/// a public desktop-client ID (the Thunderbird pattern) so IMAP works
+/// without the user ever registering an Azure app, since basic auth ended
+/// for all Outlook accounts 16 Sep 2024. Microsoft can restrict a shared
+/// public client without notice (docs/plan/mail-agent-2026-10.md's named
+/// risk), which is exactly why the client ID is configurable rather than
+/// hardcoded: a business can register its own and point this at it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OutlookDeviceCodeConfig {
+    /// Env var holding the public client's Application (client) ID. No
+    /// client secret: a public client doesn't have one.
+    #[serde(default = "default_outlook_device_code_client_id_env")]
+    pub client_id_env: String,
+    /// Tenant ID: "common" for both personal and work/school accounts, or a
+    /// specific tenant UUID for a business's own Entra registration.
+    #[serde(default = "default_microsoft_tenant")]
+    pub tenant: String,
+    /// OAuth scopes requested. `offline_access` is required to get back a
+    /// refresh token — without it, the account would need re-authentication
+    /// every access-token lifetime (~1 hour).
+    #[serde(default = "default_outlook_device_code_scopes")]
+    pub scopes: Vec<String>,
+}
+
+impl Default for OutlookDeviceCodeConfig {
+    fn default() -> Self {
+        Self {
+            client_id_env: default_outlook_device_code_client_id_env(),
+            tenant: default_microsoft_tenant(),
+            scopes: default_outlook_device_code_scopes(),
+        }
+    }
+}
+
+impl OutlookDeviceCodeConfig {
+    /// Microsoft's device authorization endpoint for the configured tenant.
+    pub fn device_code_url(&self) -> String {
+        format!(
+            "https://login.microsoftonline.com/{}/oauth2/v2.0/devicecode",
+            self.tenant
+        )
+    }
+
+    /// Microsoft's token endpoint for the configured tenant (also used to
+    /// poll the device-code grant and later to refresh).
+    pub fn token_url(&self) -> String {
+        format!(
+            "https://login.microsoftonline.com/{}/oauth2/v2.0/token",
+            self.tenant
+        )
+    }
+}
+
+fn default_outlook_device_code_client_id_env() -> String {
+    "EMAILIBRIUM_OUTLOOK_DEVICE_CODE_CLIENT_ID".to_string()
+}
+fn default_outlook_device_code_scopes() -> Vec<String> {
+    vec![
+        "https://outlook.office.com/IMAP.AccessAsUser.All".to_string(),
+        "offline_access".to_string(),
+    ]
 }
 
 fn default_oauth_redirect_base() -> String {

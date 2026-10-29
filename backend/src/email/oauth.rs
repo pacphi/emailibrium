@@ -22,6 +22,36 @@ use super::types::{AccountStatus, ConnectedAccount, OAuthTokens, ProviderConfig,
 use crate::db::entities::{connected_accounts as accounts, sync_state};
 use crate::db::Database;
 
+/// What Microsoft's `/devicecode` endpoint returns to start the flow
+/// (milestone 6): the code the user types at `verification_uri`, and how
+/// the caller should poll (`interval` seconds apart, stop after `expires_in`).
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeviceCodeStart {
+    pub device_code: String,
+    pub user_code: String,
+    pub verification_uri: String,
+    pub expires_in: u64,
+    pub interval: u64,
+}
+
+/// One poll result from `OAuthManager::poll_outlook_device_code`.
+#[derive(Debug)]
+pub enum DeviceCodePoll {
+    /// User hasn't completed the verification step yet — poll again after
+    /// `interval` seconds.
+    Pending,
+    /// Server asked for a slower polling cadence — the caller should widen
+    /// its interval before polling again (RFC 8628 §3.5).
+    SlowDown,
+    /// The device code expired before the user completed verification.
+    Expired,
+    /// The user explicitly declined consent.
+    Declined,
+    /// Success — tokens are ready to store.
+    Done(OAuthTokens),
+}
+
 /// Fixed salt for token encryption key derivation (separate from vector encryption).
 const TOKEN_KEY_SALT: &[u8] = b"emailibrium-token-encryption-v1";
 const NONCE_SIZE: usize = 12;
@@ -298,6 +328,111 @@ impl OAuthManager {
             expires_at,
             email: None,
         })
+    }
+
+    /// Start Microsoft's device-code flow (milestone 6, Outlook beta):
+    /// POSTs to `{tenant}/oauth2/v2.0/devicecode` and returns the code the
+    /// user enters, the verification URL, and the polling cadence.
+    pub async fn start_outlook_device_code(
+        &self,
+        config: &crate::vectors::config::OutlookDeviceCodeConfig,
+        client_id: &str,
+    ) -> Result<DeviceCodeStart, OAuthError> {
+        let scope = config.scopes.join(" ");
+        let resp = self
+            .http
+            .post(config.device_code_url())
+            .form(&[("client_id", client_id), ("scope", &scope)])
+            .send()
+            .await
+            .map_err(|e| OAuthError::TokenExchangeFailed(e.to_string()))?;
+
+        if !resp.status().is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(OAuthError::TokenExchangeFailed(format!(
+                "Device code endpoint returned error: {body}"
+            )));
+        }
+
+        let body: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| OAuthError::TokenExchangeFailed(e.to_string()))?;
+
+        Ok(DeviceCodeStart {
+            device_code: body["device_code"]
+                .as_str()
+                .ok_or_else(|| OAuthError::TokenExchangeFailed("Missing device_code".into()))?
+                .to_string(),
+            user_code: body["user_code"]
+                .as_str()
+                .ok_or_else(|| OAuthError::TokenExchangeFailed("Missing user_code".into()))?
+                .to_string(),
+            verification_uri: body["verification_uri"]
+                .as_str()
+                .or_else(|| body["verification_url"].as_str())
+                .ok_or_else(|| OAuthError::TokenExchangeFailed("Missing verification_uri".into()))?
+                .to_string(),
+            expires_in: body["expires_in"].as_u64().unwrap_or(900),
+            interval: body["interval"].as_u64().unwrap_or(5),
+        })
+    }
+
+    /// Poll the token endpoint once for a device-code grant. The caller is
+    /// responsible for the polling loop itself (honoring `interval` and
+    /// `expires_in` from `start_outlook_device_code`) — this makes exactly
+    /// one request so a caller driving it from repeated HTTP requests (an
+    /// SPA polling an API route) doesn't need a background task.
+    pub async fn poll_outlook_device_code(
+        &self,
+        config: &crate::vectors::config::OutlookDeviceCodeConfig,
+        client_id: &str,
+        device_code: &str,
+    ) -> Result<DeviceCodePoll, OAuthError> {
+        let resp = self
+            .http
+            .post(config.token_url())
+            .form(&[
+                ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
+                ("client_id", client_id),
+                ("device_code", device_code),
+            ])
+            .send()
+            .await
+            .map_err(|e| OAuthError::TokenExchangeFailed(e.to_string()))?;
+
+        let status = resp.status();
+        let body: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| OAuthError::TokenExchangeFailed(e.to_string()))?;
+
+        if status.is_success() {
+            let access_token = body["access_token"]
+                .as_str()
+                .ok_or_else(|| OAuthError::TokenExchangeFailed("Missing access_token".into()))?
+                .to_string();
+            let refresh_token = body["refresh_token"].as_str().map(|s| s.to_string());
+            let expires_in = body["expires_in"].as_i64().unwrap_or(3600);
+            return Ok(DeviceCodePoll::Done(OAuthTokens {
+                access_token,
+                refresh_token,
+                expires_at: Some(Utc::now() + Duration::seconds(expires_in)),
+                email: None,
+            }));
+        }
+
+        // Microsoft reports "still waiting" as an HTTP error with a named
+        // `error` field, not as a distinct success/pending status code.
+        match body["error"].as_str() {
+            Some("authorization_pending") => Ok(DeviceCodePoll::Pending),
+            Some("slow_down") => Ok(DeviceCodePoll::SlowDown),
+            Some("expired_token") => Ok(DeviceCodePoll::Expired),
+            Some("authorization_declined") => Ok(DeviceCodePoll::Declined),
+            _ => Err(OAuthError::TokenExchangeFailed(format!(
+                "Device code poll returned error: {body}"
+            ))),
+        }
     }
 
     /// Look up an existing account ID by email address, if one exists.

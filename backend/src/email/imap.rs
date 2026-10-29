@@ -808,11 +808,46 @@ impl ImapProvider {
                 ProviderError::ParseError(format!("could not parse headers for UID {uid}"))
             })?;
 
-        parsed.message_id().map(|s| s.to_string()).ok_or_else(|| {
+        let message_id = parsed.message_id().map(|s| s.to_string()).ok_or_else(|| {
             ProviderError::ConfigError(format!(
                 "message UID {uid} has no Message-ID header; Proton cross-mailbox dedupe needs one"
             ))
-        })
+        })?;
+
+        Self::validate_message_id_for_imap_search(&message_id)?;
+        Ok(message_id)
+    }
+
+    /// Reject a `Message-ID` before it's interpolated into a raw IMAP
+    /// `SEARCH` command string. A crafted header value containing `"`,
+    /// `\`, CR, LF, or other control characters could otherwise break out
+    /// of the quoted search term and inject additional search criteria —
+    /// RFC 5322 message IDs are `<id-left@id-right>` built from `dot-atom`
+    /// (a restricted, printable-ASCII, no-quote/no-backslash charset), so
+    /// this is a correctness check, not a lossy escaping hack.
+    fn validate_message_id_for_imap_search(message_id: &str) -> Result<(), ProviderError> {
+        let reject = || {
+            ProviderError::ConfigError(
+                "Message-ID contains characters not valid in RFC 5322 (rejected before use in \
+                 an IMAP SEARCH command)"
+                    .to_string(),
+            )
+        };
+
+        if !message_id.starts_with('<') || !message_id.ends_with('>') {
+            return Err(reject());
+        }
+        let inner = &message_id[1..message_id.len() - 1];
+        if inner.matches('@').count() != 1 {
+            return Err(reject());
+        }
+        let is_safe_char = |c: char| {
+            c.is_ascii_graphic() && c != '"' && c != '\\' && c != '(' && c != ')' && c != '{'
+        };
+        if inner.is_empty() || !inner.chars().all(is_safe_char) {
+            return Err(reject());
+        }
+        Ok(())
     }
 
     /// Proton Bridge: ensure `Labels/<name>` exists and non-destructively
@@ -863,10 +898,20 @@ impl ImapProvider {
             .await
             .map_err(|e| ProviderError::RequestFailed(format!("UID SEARCH failed: {e}")))?;
 
-        let Some(target_uid) = found.into_iter().next() else {
-            // Already not in this label — treat as success (idempotent).
-            let _ = session.logout().await;
-            return Ok(());
+        let target_uid = match found.len() {
+            0 => {
+                // Already not in this label — treat as success (idempotent).
+                let _ = session.logout().await;
+                return Ok(());
+            }
+            1 => *found.iter().next().expect("len checked above"),
+            n => {
+                let _ = session.logout().await;
+                return Err(ProviderError::RequestFailed(format!(
+                    "{n} messages in '{target}' share Message-ID {message_id}; refusing to \
+                     expunge an ambiguous match"
+                )));
+            }
         };
 
         session
@@ -1782,6 +1827,43 @@ mod tests {
         assert_eq!(
             response,
             "user=chris@example.com\x01auth=Bearer ya29.fake-token\x01\x01"
+        );
+    }
+
+    #[test]
+    fn validate_message_id_accepts_a_well_formed_rfc5322_id() {
+        assert!(
+            ImapProvider::validate_message_id_for_imap_search("<abc123.def@mail.example.com>")
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn validate_message_id_rejects_an_embedded_quote() {
+        // `"` would let a crafted Message-ID break out of the quoted SEARCH
+        // term and inject additional IMAP search criteria.
+        let crafted = "<x\" OR 1=1 FOO BAR@evil.example>";
+        assert!(ImapProvider::validate_message_id_for_imap_search(crafted).is_err());
+    }
+
+    #[test]
+    fn validate_message_id_rejects_embedded_crlf() {
+        let crafted = "<x\r\nDELETE INBOX@evil.example>";
+        assert!(ImapProvider::validate_message_id_for_imap_search(crafted).is_err());
+    }
+
+    #[test]
+    fn validate_message_id_rejects_a_backslash() {
+        let crafted = "<x\\y@evil.example>";
+        assert!(ImapProvider::validate_message_id_for_imap_search(crafted).is_err());
+    }
+
+    #[test]
+    fn validate_message_id_rejects_missing_angle_brackets_or_at_sign() {
+        assert!(ImapProvider::validate_message_id_for_imap_search("abc@example.com>").is_err());
+        assert!(ImapProvider::validate_message_id_for_imap_search("<no-at-sign>").is_err());
+        assert!(
+            ImapProvider::validate_message_id_for_imap_search("<two@at@signs.example>").is_err()
         );
     }
 
