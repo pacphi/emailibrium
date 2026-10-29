@@ -353,8 +353,15 @@ async fn serve_connection(
                             .await?;
                     }
                     "FETCH" => {
-                        handle_uid_fetch(&tag, subrest, &current_mailbox, mailboxes, seen, &mut writer)
-                            .await?;
+                        handle_uid_fetch(
+                            &tag,
+                            subrest,
+                            &current_mailbox,
+                            mailboxes,
+                            seen,
+                            &mut writer,
+                        )
+                        .await?;
                     }
                     "COPY" => {
                         handle_uid_copy(&tag, subrest, &current_mailbox, mailboxes, &mut writer)
@@ -407,29 +414,30 @@ async fn handle_uid_search(
     mailboxes: &Mailboxes,
     writer: &mut (impl AsyncWriteExt + Unpin),
 ) -> std::io::Result<()> {
-    let guard = mailboxes.lock().expect("mailboxes mutex poisoned");
-    let mb = current_mailbox.as_ref().and_then(|n| guard.get(n));
+    // Scoped so the std MutexGuard is gone before the first `.await`.
+    let uids: Vec<u32> = {
+        let guard = mailboxes.lock().expect("mailboxes mutex poisoned");
+        let mb = current_mailbox.as_ref().and_then(|n| guard.get(n));
 
-    let upper = criteria.to_ascii_uppercase();
-    let uids: Vec<u32> = if upper.starts_with("HEADER MESSAGE-ID") {
-        let wanted = criteria
-            .splitn(2, '"')
-            .nth(1)
-            .map(|s| s.trim_end_matches('"'))
-            .unwrap_or("");
-        mb.map(|mb| {
-            mb.messages
-                .iter()
-                .filter(|m| m.message_id().as_deref() == Some(wanted))
-                .map(|m| m.uid)
-                .collect()
-        })
-        .unwrap_or_default()
-    } else {
-        mb.map(|mb| mb.messages.iter().map(|m| m.uid).collect())
+        let upper = criteria.to_ascii_uppercase();
+        if upper.starts_with("HEADER MESSAGE-ID") {
+            let wanted = criteria
+                .split_once('"')
+                .map(|(_, s)| s.trim_end_matches('"'))
+                .unwrap_or("");
+            mb.map(|mb| {
+                mb.messages
+                    .iter()
+                    .filter(|m| m.message_id().as_deref() == Some(wanted))
+                    .map(|m| m.uid)
+                    .collect()
+            })
             .unwrap_or_default()
+        } else {
+            mb.map(|mb| mb.messages.iter().map(|m| m.uid).collect())
+                .unwrap_or_default()
+        }
     };
-    drop(guard);
 
     let body = uids
         .iter()
@@ -551,46 +559,34 @@ async fn handle_uid_copy(
     let uid: u32 = parts.next().unwrap_or("").parse().unwrap_or(0);
     let target = parts.next().unwrap_or("").trim().trim_matches('"');
 
-    let mut guard = mailboxes.lock().expect("mailboxes mutex poisoned");
-    let Some(source_name) = current_mailbox.clone() else {
-        drop(guard);
-        writer
-            .write_all(format!("{tag} NO no mailbox selected\r\n").as_bytes())
-            .await?;
-        return Ok(());
+    // Scoped so the std MutexGuard is gone before the `.await` below.
+    let response = {
+        let mut guard = mailboxes.lock().expect("mailboxes mutex poisoned");
+        let found = current_mailbox.as_ref().map(|source_name| {
+            guard
+                .get(source_name)
+                .and_then(|mb| mb.messages.iter().find(|m| m.uid == uid).cloned())
+        });
+        match found {
+            None => format!("{tag} NO no mailbox selected\r\n"),
+            Some(None) => format!("{tag} NO [NONEXISTENT] UID {uid} not found\r\n"),
+            Some(Some(found)) => match guard.get_mut(target) {
+                None => format!("{tag} NO [TRYCREATE] mailbox '{target}' does not exist\r\n"),
+                Some(target_mb) => {
+                    let new_uid = target_mb.next_uid;
+                    target_mb.next_uid += 1;
+                    target_mb.messages.push(FixtureMessage {
+                        uid: new_uid,
+                        raw: found.raw,
+                        deleted: false,
+                    });
+                    format!("{tag} OK [COPYUID 1 {uid} {new_uid}] COPY completed\r\n")
+                }
+            },
+        }
     };
 
-    let Some(found) = guard
-        .get(&source_name)
-        .and_then(|mb| mb.messages.iter().find(|m| m.uid == uid).cloned())
-    else {
-        drop(guard);
-        writer
-            .write_all(format!("{tag} NO [NONEXISTENT] UID {uid} not found\r\n").as_bytes())
-            .await?;
-        return Ok(());
-    };
-
-    let Some(target_mb) = guard.get_mut(target) else {
-        drop(guard);
-        writer
-            .write_all(format!("{tag} NO [TRYCREATE] mailbox '{target}' does not exist\r\n").as_bytes())
-            .await?;
-        return Ok(());
-    };
-
-    let new_uid = target_mb.next_uid;
-    target_mb.next_uid += 1;
-    target_mb.messages.push(FixtureMessage {
-        uid: new_uid,
-        raw: found.raw,
-        deleted: false,
-    });
-    drop(guard);
-
-    writer
-        .write_all(format!("{tag} OK [COPYUID 1 {uid} {new_uid}] COPY completed\r\n").as_bytes())
-        .await?;
+    writer.write_all(response.as_bytes()).await?;
     Ok(())
 }
 
