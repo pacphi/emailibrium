@@ -127,7 +127,9 @@ agentdb.rvf*
 *.rvf
 *.rvf.lock
 *.rvf.manifest.json
-# Launchers onboarding points at this machine's installs (D6, D11): per machine, never shared
+# Launchers onboarding points at this machine's installs (D6, D11): per machine, never shared.
+# Each clone keeps its own .mcp.json; docs/setup-guide.md shows the entries to add.
+.mcp.json
 .mcp.json.*
 # Leftover tool locks
 .beads.gate.lock
