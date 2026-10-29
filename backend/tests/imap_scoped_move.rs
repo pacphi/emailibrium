@@ -139,3 +139,23 @@ async fn server_without_move_or_uidplus_is_refused_before_copying() {
         "nothing copied before refusing"
     );
 }
+
+/// iCloud-shaped server (neither MOVE nor UIDPLUS) with no other message
+/// marked `\Deleted`: the guarded plain-EXPUNGE fallback moves the message
+/// and leaves every other message in place.
+#[tokio::test]
+async fn server_without_move_or_uidplus_moves_when_nothing_else_is_deleted() {
+    const BYSTANDER: u32 = 3;
+    let mut seed = HashMap::new();
+    seed.insert("INBOX".to_string(), vec![msg(TO_MOVE), msg(BYSTANDER)]);
+    seed.insert("Archive".to_string(), Vec::new());
+    let server = FakeImapServer::spawn_with_mailboxes_and_capabilities(seed, &[]).await;
+
+    provider(server.addr.port())
+        .archive_message("unused", &TO_MOVE.to_string())
+        .await
+        .expect("guarded fallback should archive when nothing else is \\Deleted");
+
+    assert_eq!(server.mailbox_uids("INBOX"), vec![BYSTANDER]);
+    assert_eq!(server.mailbox_uids("Archive").len(), 1);
+}
