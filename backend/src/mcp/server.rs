@@ -16,9 +16,9 @@ use rmcp::handler::server::router::prompt::PromptRouter;
 use rmcp::handler::server::router::tool::{ToolRoute, ToolRouter};
 use rmcp::handler::server::tool::ToolCallContext;
 use rmcp::model::{
-    CallToolResult, Content, GetPromptRequestParams, GetPromptResult, JsonObject,
-    ListPromptsResult, ListResourceTemplatesResult, ListResourcesResult, PaginatedRequestParams,
-    ReadResourceRequestParams, ReadResourceResult, ServerCapabilities, ServerInfo, Tool,
+    CallToolResponse, CallToolResult, ContentBlock, JsonObject, ListResourceTemplatesResult,
+    ListResourcesResult, PaginatedRequestParams, ReadResourceRequestParams, ReadResourceResponse,
+    ServerCapabilities, ServerConfig, Tool,
 };
 use rmcp::service::RequestContext;
 use rmcp::{prompt_handler, tool_handler, RoleServer, ServerHandler};
@@ -98,7 +98,7 @@ fn build_tool_router(registry: &Arc<ToolRegistry>) -> ToolRouter<EmailibriumMcpS
 async fn dispatch_call(
     tcc: ToolCallContext<'_, EmailibriumMcpServer>,
     name: &'static str,
-) -> Result<CallToolResult, rmcp::ErrorData> {
+) -> Result<CallToolResponse, rmcp::ErrorData> {
     let server = tcc.service;
     let args = tcc
         .arguments
@@ -109,9 +109,9 @@ async fn dispatch_call(
         .dispatch(server.ctx.clone(), name, args, CallSource::Mcp)
         .await
     {
-        Ok(value) => Ok(CallToolResult::success(vec![Content::text(
-            value.to_string(),
-        )])),
+        Ok(value) => {
+            Ok(CallToolResult::success(vec![ContentBlock::text(value.to_string())]).into())
+        }
         Err(e) => Err(failure(e)),
     }
 }
@@ -169,8 +169,8 @@ fn failure(error: ToolError) -> rmcp::ErrorData {
 }
 
 fn boxed<'a>(
-    fut: impl std::future::Future<Output = Result<CallToolResult, rmcp::ErrorData>> + Send + 'a,
-) -> BoxFuture<'a, Result<CallToolResult, rmcp::ErrorData>> {
+    fut: impl std::future::Future<Output = Result<CallToolResponse, rmcp::ErrorData>> + Send + 'a,
+) -> BoxFuture<'a, Result<CallToolResponse, rmcp::ErrorData>> {
     Box::pin(fut)
 }
 
@@ -193,8 +193,8 @@ fn input_schema(schema: &serde_json::Value) -> Arc<JsonObject> {
 #[tool_handler(router = self.tool_router)]
 #[prompt_handler(router = self.prompt_router)]
 impl ServerHandler for EmailibriumMcpServer {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(
             ServerCapabilities::builder()
                 .enable_tools()
                 .enable_prompts()
@@ -230,8 +230,10 @@ impl ServerHandler for EmailibriumMcpServer {
         &self,
         request: ReadResourceRequestParams,
         _context: RequestContext<RoleServer>,
-    ) -> Result<ReadResourceResult, rmcp::ErrorData> {
-        resources::read_resource(&self.ctx, &self.registry, &request.uri).await
+    ) -> Result<ReadResourceResponse, rmcp::ErrorData> {
+        resources::read_resource(&self.ctx, &self.registry, &request.uri)
+            .await
+            .map(Into::into)
     }
 }
 
