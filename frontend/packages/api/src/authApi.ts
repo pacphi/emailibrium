@@ -1,4 +1,4 @@
-import type { EmailAccount, ImapConfig } from '@emailibrium/types';
+import type { DeviceCodePoll, DeviceCodeStart, EmailAccount, ImapConfig } from '@emailibrium/types';
 import { api } from './client.js';
 
 export async function connectGmail(): Promise<{ authUrl: string }> {
@@ -7,6 +7,18 @@ export async function connectGmail(): Promise<{ authUrl: string }> {
 
 export async function connectOutlook(): Promise<{ authUrl: string }> {
   return api.post('auth/outlook/connect').json<{ authUrl: string }>();
+}
+
+/** Start an Outlook sign-in with a code typed at Microsoft's device login page. */
+export async function startOutlookDeviceCode(email: string): Promise<DeviceCodeStart> {
+  return api.post('auth/outlook/device-code', { json: { email } }).json<DeviceCodeStart>();
+}
+
+/** Poll an Outlook device-code sign-in once. */
+export async function pollOutlookDeviceCode(flowId: string): Promise<DeviceCodePoll> {
+  return api
+    .post(`auth/outlook/device-code/${encodeURIComponent(flowId)}/poll`)
+    .json<DeviceCodePoll>();
 }
 
 export async function connectImap(config: ImapConfig): Promise<EmailAccount> {

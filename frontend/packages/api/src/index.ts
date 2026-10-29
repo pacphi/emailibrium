@@ -38,6 +38,8 @@ export { getHealth, getStats } from './vectorsApi.js';
 export {
   connectGmail,
   connectOutlook,
+  startOutlookDeviceCode,
+  pollOutlookDeviceCode,
   connectImap,
   getAccounts,
   disconnectAccount,

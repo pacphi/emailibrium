@@ -29,6 +29,8 @@ vi.mock('../client.js', () => ({
 import {
   connectGmail,
   connectOutlook,
+  startOutlookDeviceCode,
+  pollOutlookDeviceCode,
   connectImap,
   getAccounts,
   disconnectAccount,
@@ -66,6 +68,37 @@ describe('authApi', () => {
 
       expect(mockPost).toHaveBeenCalledWith('auth/outlook/connect');
       expect(result.authUrl).toBeDefined();
+    });
+  });
+
+  describe('startOutlookDeviceCode', () => {
+    it('calls POST auth/outlook/device-code with the email', async () => {
+      const started = {
+        flowId: 'flow-1',
+        userCode: 'ABCD-EFGH',
+        verificationUri: 'https://microsoft.com/devicelogin',
+        expiresIn: 900,
+        interval: 5,
+      };
+      jsonFn.mockResolvedValueOnce(started);
+
+      const result = await startOutlookDeviceCode('chris@outlook.com');
+
+      expect(mockPost).toHaveBeenCalledWith('auth/outlook/device-code', {
+        json: { email: 'chris@outlook.com' },
+      });
+      expect(result).toEqual(started);
+    });
+  });
+
+  describe('pollOutlookDeviceCode', () => {
+    it('calls POST auth/outlook/device-code/:flowId/poll, encoding the id', async () => {
+      jsonFn.mockResolvedValueOnce({ status: 'pending', interval: 5 });
+
+      const result = await pollOutlookDeviceCode('a/b');
+
+      expect(mockPost).toHaveBeenCalledWith('auth/outlook/device-code/a%2Fb/poll');
+      expect(result).toEqual({ status: 'pending', interval: 5 });
     });
   });
 

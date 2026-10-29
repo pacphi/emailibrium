@@ -1,6 +1,6 @@
-import { useState, useEffect } from 'react';
-import type { EmailAccount } from '@emailibrium/types';
-import { getAccounts } from '@emailibrium/api';
+import { useState, useEffect, useRef } from 'react';
+import type { DeviceCodeStart, EmailAccount } from '@emailibrium/types';
+import { getAccounts, pollOutlookDeviceCode, startOutlookDeviceCode } from '@emailibrium/api';
 
 interface OutlookConnectProps {
   onBack: () => void;
@@ -14,11 +14,27 @@ const SCOPES = [
   { label: 'offline_access', description: 'Keep access while you are away' },
 ];
 
+type CodePhase =
+  | { kind: 'enter-email' }
+  | { kind: 'starting' }
+  | { kind: 'waiting'; flow: DeviceCodeStart; interval: number }
+  | { kind: 'ended'; message: string };
+
+function errorMessage(err: unknown, fallback: string): string {
+  return err instanceof Error && err.message ? err.message : fallback;
+}
+
 export function OutlookConnect({ onBack, onConnected }: OutlookConnectProps) {
   const [isRedirecting, setIsRedirecting] = useState(false);
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [email, setEmail] = useState('');
+  const [phase, setPhase] = useState<CodePhase>({ kind: 'enter-email' });
+  const [copied, setCopied] = useState(false);
+  const onConnectedRef = useRef(onConnected);
+  onConnectedRef.current = onConnected;
 
-  // After OAuth redirect returns, the URL will contain a success query param.
-  // Poll for the newly connected account so we can pass it upstream.
+  // After the Advanced OAuth redirect returns, the URL carries a success
+  // query param; fetch the newly connected account and pass it upstream.
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     if (params.get('provider') === 'outlook' && params.get('status') === 'connected') {
@@ -31,7 +47,71 @@ export function OutlookConnect({ onBack, onConnected }: OutlookConnectProps) {
     }
   }, [onConnected]);
 
-  function handleConnect() {
+  // Poll the code sign-in no faster than the server's interval.
+  const flowId = phase.kind === 'waiting' ? phase.flow.flowId : null;
+  const interval = phase.kind === 'waiting' ? phase.interval : 0;
+  useEffect(() => {
+    if (!flowId) return;
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      try {
+        const result = await pollOutlookDeviceCode(flowId);
+        if (cancelled) return;
+        switch (result.status) {
+          case 'connected':
+            if (result.account) onConnectedRef.current(result.account);
+            break;
+          case 'expired':
+            setPhase({ kind: 'ended', message: 'The code expired before sign-in finished.' });
+            break;
+          case 'declined':
+            setPhase({ kind: 'ended', message: 'Sign-in was declined at Microsoft.' });
+            break;
+          default:
+            setPhase((p) =>
+              p.kind === 'waiting' ? { ...p, interval: result.interval ?? p.interval } : p,
+            );
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setPhase({ kind: 'ended', message: errorMessage(err, 'Sign-in failed.') });
+        }
+      }
+    }, interval * 1000);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+    // Re-arm after every poll: `phase` changes identity on each update.
+  }, [flowId, interval, phase]);
+
+  async function handleGetCode(event: React.FormEvent) {
+    event.preventDefault();
+    const address = email.trim();
+    if (!/^[^\s@]+@[^\s@]+$/.test(address)) {
+      setPhase({ kind: 'ended', message: 'Enter a valid email address.' });
+      return;
+    }
+    setPhase({ kind: 'starting' });
+    setCopied(false);
+    try {
+      const flow = await startOutlookDeviceCode(address);
+      setPhase({ kind: 'waiting', flow, interval: flow.interval });
+    } catch (err) {
+      setPhase({ kind: 'ended', message: errorMessage(err, 'Could not start sign-in.') });
+    }
+  }
+
+  async function handleCopy(code: string) {
+    try {
+      await navigator.clipboard.writeText(code);
+      setCopied(true);
+    } catch {
+      setCopied(false);
+    }
+  }
+
+  function handleRedirect() {
     setIsRedirecting(true);
     window.location.href = '/api/v1/auth/outlook/connect';
   }
@@ -61,87 +141,133 @@ export function OutlookConnect({ onBack, onConnected }: OutlookConnectProps) {
             fill="#0078D4"
           />
         </svg>
-        <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100">Connect Outlook</h3>
+        <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
+          Connect Outlook <span className="text-xs font-medium text-indigo-600">Beta</span>
+        </h3>
         <p className="text-sm text-gray-500 dark:text-gray-400">
-          Sign in with your Microsoft account to connect Outlook.
+          Sign in at Microsoft with a one-time code. No Azure app registration needed.
         </p>
       </div>
 
-      <div className="rounded-lg border border-gray-200 bg-gray-50 p-4 dark:bg-gray-800 dark:border-gray-700">
-        <p className="text-xs font-medium text-gray-700 dark:text-gray-300 mb-3">
-          We will request the following permissions:
-        </p>
-        <ul className="space-y-2">
-          {SCOPES.map((scope) => (
-            <li key={scope.label} className="flex items-start gap-2 text-sm">
-              <svg
-                viewBox="0 0 20 20"
-                fill="currentColor"
-                className="w-4 h-4 mt-0.5 text-green-500 shrink-0"
-                aria-hidden="true"
+      {(phase.kind === 'enter-email' || phase.kind === 'starting' || phase.kind === 'ended') && (
+        <form onSubmit={handleGetCode} className="space-y-3" noValidate>
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+            Outlook or Microsoft 365 address
+            <input
+              type="email"
+              autoComplete="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="you@outlook.com"
+              className="mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm
+                dark:bg-gray-800 dark:border-gray-600 dark:text-gray-100"
+            />
+          </label>
+          {phase.kind === 'ended' && (
+            <p role="alert" className="text-sm text-red-600 dark:text-red-400">
+              {phase.message}
+            </p>
+          )}
+          <button
+            type="submit"
+            disabled={phase.kind === 'starting'}
+            className="w-full px-4 py-3 rounded-lg bg-[#0078D4] text-white font-medium shadow-sm
+              hover:bg-[#106EBE] disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
+          >
+            {phase.kind === 'starting'
+              ? 'Getting a code...'
+              : phase.kind === 'ended'
+                ? 'Get a new code'
+                : 'Get sign-in code'}
+          </button>
+          <p className="text-xs text-gray-500 dark:text-gray-400">
+            IMAP must be turned on for this mailbox in Outlook settings.
+          </p>
+        </form>
+      )}
+
+      {phase.kind === 'waiting' && (
+        <div className="space-y-4">
+          <ol className="list-decimal list-inside space-y-1 text-sm text-gray-700 dark:text-gray-300">
+            <li>
+              Open{' '}
+              <a
+                href={phase.flow.verificationUri}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="font-medium text-[#0078D4] underline"
               >
-                <path
-                  fillRule="evenodd"
-                  d="M16.704 4.153a.75.75 0 01.143 1.052l-8 10.5a.75.75 0 01-1.127.075l-4.5-4.5a.75.75 0 011.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 011.05-.143z"
-                  clipRule="evenodd"
-                />
-              </svg>
-              <span className="text-gray-600 dark:text-gray-300">
-                <span className="font-medium">{scope.label}</span> &mdash; {scope.description}
-              </span>
+                {phase.flow.verificationUri}
+              </a>
             </li>
-          ))}
-        </ul>
-      </div>
-
-      <button
-        type="button"
-        onClick={handleConnect}
-        disabled={isRedirecting}
-        className="w-full flex items-center justify-center gap-2 px-4 py-3 rounded-lg bg-[#0078D4]
-          text-white font-medium shadow-sm hover:bg-[#106EBE] disabled:opacity-60
-          disabled:cursor-not-allowed transition-colors"
-      >
-        {isRedirecting ? (
-          <>
-            <svg
-              className="animate-spin h-5 w-5 text-white"
-              viewBox="0 0 24 24"
-              fill="none"
-              aria-hidden="true"
+            <li>Type this code:</li>
+          </ol>
+          <div className="flex items-center justify-center gap-3">
+            <code
+              aria-label="Sign-in code"
+              className="text-3xl font-mono font-semibold tracking-widest text-gray-900 dark:text-gray-100"
             >
-              <circle
-                className="opacity-25"
-                cx="12"
-                cy="12"
-                r="10"
-                stroke="currentColor"
-                strokeWidth="4"
-              />
-              <path
-                className="opacity-75"
-                fill="currentColor"
-                d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
-              />
-            </svg>
-            Redirecting to Microsoft...
-          </>
-        ) : (
-          <>
-            <svg viewBox="0 0 23 23" className="w-5 h-5" aria-hidden="true">
-              <rect x="1" y="1" width="10" height="10" fill="#F25022" />
-              <rect x="12" y="1" width="10" height="10" fill="#7FBA00" />
-              <rect x="1" y="12" width="10" height="10" fill="#00A4EF" />
-              <rect x="12" y="12" width="10" height="10" fill="#FFB900" />
-            </svg>
-            Sign in with Microsoft
-          </>
-        )}
-      </button>
+              {phase.flow.userCode}
+            </code>
+            <button
+              type="button"
+              onClick={() => handleCopy(phase.flow.userCode)}
+              className="rounded-md border border-gray-300 px-2 py-1 text-xs text-gray-600 hover:bg-gray-50
+                dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-700"
+            >
+              {copied ? 'Copied' : 'Copy'}
+            </button>
+          </div>
+          <p className="text-sm text-gray-700 dark:text-gray-300">
+            3. Sign in as <span className="font-medium">{email.trim()}</span>. Microsoft&apos;s
+            consent screen shows the name of the sign-in app emailibrium uses.
+          </p>
+          <p
+            role="status"
+            aria-live="polite"
+            className="text-sm text-center text-gray-500 dark:text-gray-400"
+          >
+            Waiting for you to finish signing in... (code expires in{' '}
+            {Math.round(phase.flow.expiresIn / 60)} min)
+          </p>
+        </div>
+      )}
 
-      <p className="text-xs text-center text-gray-400 dark:text-gray-500">
-        Your credentials are handled securely via OAuth 2.0. We never see your password.
-      </p>
+      <div className="border-t border-gray-200 pt-4 dark:border-gray-700">
+        <button
+          type="button"
+          aria-expanded={showAdvanced}
+          onClick={() => setShowAdvanced((v) => !v)}
+          className="text-xs text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
+        >
+          Advanced: use your own Azure app registration
+        </button>
+        {showAdvanced && (
+          <div className="mt-3 space-y-3">
+            <div className="rounded-lg border border-gray-200 bg-gray-50 p-4 dark:bg-gray-800 dark:border-gray-700">
+              <p className="text-xs font-medium text-gray-700 dark:text-gray-300 mb-3">
+                We will request the following permissions:
+              </p>
+              <ul className="space-y-2">
+                {SCOPES.map((scope) => (
+                  <li key={scope.label} className="text-sm text-gray-600 dark:text-gray-300">
+                    <span className="font-medium">{scope.label}</span> &mdash; {scope.description}
+                  </li>
+                ))}
+              </ul>
+            </div>
+            <button
+              type="button"
+              onClick={handleRedirect}
+              disabled={isRedirecting}
+              className="w-full px-4 py-2 rounded-lg border border-[#0078D4] text-[#0078D4] text-sm font-medium
+                hover:bg-blue-50 disabled:opacity-60 disabled:cursor-not-allowed dark:hover:bg-gray-800"
+            >
+              {isRedirecting ? 'Redirecting to Microsoft...' : 'Sign in with Microsoft (redirect)'}
+            </button>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

@@ -24,7 +24,7 @@ const PROVIDERS: ProviderOption[] = [
   {
     id: 'outlook',
     name: 'Outlook',
-    description: 'Connect your Microsoft account via OAuth',
+    description: 'Sign in at Microsoft with a one-time code (beta)',
     icon: (
       <svg viewBox="0 0 24 24" className="w-8 h-8" aria-hidden="true">
         {/* Outlook envelope body */}

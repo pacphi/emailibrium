@@ -43,6 +43,9 @@ export type {
   EmailAccount,
   OAuthCallbackParams,
   ImapConfig,
+  DeviceCodeStart,
+  DeviceCodeStatus,
+  DeviceCodePoll,
 } from './auth.js';
 
 export type { Rule, RuleCondition, RuleAction, RuleSuggestion } from './rules.js';

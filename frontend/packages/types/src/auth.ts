@@ -30,3 +30,26 @@ export interface ImapConfig {
   smtpPort: number;
   encryption: 'ssl' | 'tls' | 'none';
 }
+
+/** Returned when an Outlook device-code sign-in starts. */
+export interface DeviceCodeStart {
+  flowId: string;
+  /** The code the user types at `verificationUri`. */
+  userCode: string;
+  verificationUri: string;
+  /** Seconds until the code expires. */
+  expiresIn: number;
+  /** Seconds to wait between polls. */
+  interval: number;
+}
+
+export type DeviceCodeStatus = 'pending' | 'slow_down' | 'expired' | 'declined' | 'connected';
+
+/** One poll of an Outlook device-code sign-in. */
+export interface DeviceCodePoll {
+  status: DeviceCodeStatus;
+  /** Seconds to wait before polling again (pending, slow_down). */
+  interval?: number;
+  /** The connected account (connected). */
+  account?: EmailAccount;
+}
