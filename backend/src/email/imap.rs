@@ -496,6 +496,35 @@ impl ImapProvider {
             ProviderError::RequestFailed(format!("UID COPY to '{target}' failed: {e}"))
         })?;
 
+        Self::flag_and_expunge_uid(session, uid).await
+    }
+
+    /// Permanently remove one message (by UID) from the selected mailbox with
+    /// `UID EXPUNGE` (UIDPLUS, RFC 4315), leaving every other `\Deleted`
+    /// message alone. A server without UIDPLUS is refused before anything is
+    /// flagged, for the same reason as `move_uid`.
+    async fn delete_uid(session: &mut ImapSession, uid: &str) -> Result<(), ProviderError> {
+        let caps = session
+            .capabilities()
+            .await
+            .map_err(|e| ProviderError::RequestFailed(format!("CAPABILITY failed: {e}")))?;
+
+        if !caps.has_str("UIDPLUS") {
+            return Err(ProviderError::RequestFailed(format!(
+                "server does not support UIDPLUS; refusing to delete UID {uid} because a \
+                 plain EXPUNGE would also erase other messages marked \\Deleted"
+            )));
+        }
+
+        Self::flag_and_expunge_uid(session, uid).await
+    }
+
+    /// `\Deleted` + `UID EXPUNGE` on one UID. Callers must have confirmed
+    /// UIDPLUS first.
+    async fn flag_and_expunge_uid(
+        session: &mut ImapSession,
+        uid: &str,
+    ) -> Result<(), ProviderError> {
         session
             .uid_store(uid, "+FLAGS (\\Deleted)")
             .await
@@ -860,11 +889,16 @@ impl ImapProvider {
                 ProviderError::ParseError(format!("could not parse headers for UID {uid}"))
             })?;
 
-        let message_id = parsed.message_id().map(|s| s.to_string()).ok_or_else(|| {
-            ProviderError::ConfigError(format!(
+        // mail-parser returns the id without its angle brackets; the SEARCH
+        // term (and the validator) use the header's on-the-wire `<...>` form.
+        let message_id = parsed
+            .message_id()
+            .map(|s| format!("<{s}>"))
+            .ok_or_else(|| {
+                ProviderError::ConfigError(format!(
                 "message UID {uid} has no Message-ID header; Proton cross-mailbox dedupe needs one"
             ))
-        })?;
+            })?;
 
         Self::validate_message_id_for_imap_search(&message_id)?;
         Ok(message_id)
@@ -929,9 +963,9 @@ impl ImapProvider {
 
     /// Proton Bridge: remove a message from `Labels/<name>` only — find it
     /// by `Message-ID` (its UID there differs from the source mailbox's),
-    /// then `STORE \Deleted` + `EXPUNGE` scoped to that mailbox alone. The
-    /// source mailbox and every other label the message carries are
-    /// untouched.
+    /// then `STORE \Deleted` + `UID EXPUNGE` of that one UID (`delete_uid`).
+    /// The source mailbox, every other label the message carries, and any
+    /// other `\Deleted` message in the label mailbox are untouched.
     async fn proton_remove_label(&self, id: &str, label: &str) -> Result<(), ProviderError> {
         let target = format!("Labels/{label}");
 
@@ -966,21 +1000,7 @@ impl ImapProvider {
             }
         };
 
-        session
-            .uid_store(target_uid.to_string(), "+FLAGS (\\Deleted)")
-            .await
-            .map_err(|e| ProviderError::RequestFailed(format!("STORE \\Deleted failed: {e}")))?
-            .try_collect::<Vec<async_imap::types::Fetch>>()
-            .await
-            .map_err(|e| ProviderError::RequestFailed(format!("STORE stream failed: {e}")))?;
-
-        session
-            .expunge()
-            .await
-            .map_err(|e| ProviderError::RequestFailed(format!("EXPUNGE failed: {e}")))?
-            .try_collect::<Vec<u32>>()
-            .await
-            .map_err(|e| ProviderError::RequestFailed(format!("EXPUNGE stream failed: {e}")))?;
+        Self::delete_uid(&mut session, &target_uid.to_string()).await?;
 
         let _ = session.logout().await;
         Ok(())
@@ -988,7 +1008,7 @@ impl ImapProvider {
 
     /// Outlook IMAP has no custom keyword flags, so `Kind/`/`Topic/` labels
     /// are redirected to a real, exclusive folder named after the label
-    /// (creating it if needed) via the same copy+delete+expunge move
+    /// (creating it if needed) via the same `move_uid` move
     /// `move_message`'s `MoveKind::Folder` path uses.
     async fn outlook_move_to_label_folder(
         &self,
@@ -998,26 +1018,7 @@ impl ImapProvider {
         self.create_label("", label).await?;
 
         let (mut session, _) = self.connect_and_select().await?;
-
-        session.uid_copy(id, label).await.map_err(|e| {
-            ProviderError::RequestFailed(format!("UID COPY to '{label}' failed: {e}"))
-        })?;
-
-        session
-            .uid_store(id, "+FLAGS (\\Deleted)")
-            .await
-            .map_err(|e| ProviderError::RequestFailed(format!("STORE \\Deleted failed: {e}")))?
-            .try_collect::<Vec<async_imap::types::Fetch>>()
-            .await
-            .map_err(|e| ProviderError::RequestFailed(format!("STORE stream failed: {e}")))?;
-
-        session
-            .expunge()
-            .await
-            .map_err(|e| ProviderError::RequestFailed(format!("EXPUNGE failed: {e}")))?
-            .try_collect::<Vec<u32>>()
-            .await
-            .map_err(|e| ProviderError::RequestFailed(format!("EXPUNGE stream failed: {e}")))?;
+        Self::move_uid(&mut session, id, label).await?;
 
         let _ = session.logout().await;
         Ok(())

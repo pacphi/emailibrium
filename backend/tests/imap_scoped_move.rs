@@ -12,7 +12,9 @@ mod fake_imap;
 
 use std::collections::HashMap;
 
-use emailibrium::email::imap::{ImapConfig, ImapEncryption, ImapProvider};
+use emailibrium::email::imap::{
+    ImapAuth, ImapConfig, ImapEncryption, ImapProvider, ProviderProfile,
+};
 use emailibrium::email::provider::{EmailProvider, MoveKind};
 
 use fake_imap::{FakeImapServer, FixtureMessage};
@@ -44,12 +46,17 @@ async fn spawn(capabilities: &[&str]) -> FakeImapServer {
 }
 
 fn provider(port: u16) -> ImapProvider {
+    provider_with_profile(port, ProviderProfile::Generic)
+}
+
+fn provider_with_profile(port: u16, profile: ProviderProfile) -> ImapProvider {
     ImapProvider::new(ImapConfig {
         host: "127.0.0.1".to_string(),
         port,
         encryption: ImapEncryption::Plaintext,
         username: "chris@example.com".to_string(),
-        password: "fixture-app-password".to_string(),
+        auth: ImapAuth::Password("fixture-app-password".to_string()),
+        profile,
         mailbox: "INBOX".to_string(),
         archive_folder: "Archive".to_string(),
         smtp_host: None,
@@ -137,5 +144,68 @@ async fn server_without_move_or_uidplus_is_refused_before_copying() {
     assert!(
         server.mailbox_uids("Archive").is_empty(),
         "nothing copied before refusing"
+    );
+}
+
+#[tokio::test]
+async fn outlook_label_folder_redirect_leaves_other_deleted_messages() {
+    let server = spawn(&["MOVE"]).await;
+
+    provider_with_profile(server.addr.port(), ProviderProfile::OutlookImap)
+        .label_message(
+            "unused",
+            &TO_MOVE.to_string(),
+            &["Kind/Newsletters".to_string()],
+        )
+        .await
+        .expect("Outlook Kind label should redirect to a folder");
+
+    assert_eq!(server.mailbox_uids("INBOX"), vec![ALREADY_DELETED]);
+    assert_eq!(server.mailbox_uids("Kind/Newsletters").len(), 1);
+}
+
+/// INBOX holds the labelled message; `Labels/Work` holds its Proton copy plus
+/// an unrelated message already marked `\Deleted`.
+async fn spawn_proton(capabilities: &[&str]) -> FakeImapServer {
+    let mut seed = HashMap::new();
+    seed.insert("INBOX".to_string(), vec![msg(TO_MOVE)]);
+    seed.insert(
+        "Labels/Work".to_string(),
+        vec![msg(TO_MOVE), msg(ALREADY_DELETED).marked_deleted()],
+    );
+    FakeImapServer::spawn_with_mailboxes_and_capabilities(seed, capabilities).await
+}
+
+#[tokio::test]
+async fn proton_label_removal_leaves_other_deleted_messages() {
+    let server = spawn_proton(&["UIDPLUS"]).await;
+
+    provider_with_profile(server.addr.port(), ProviderProfile::ProtonBridge)
+        .remove_labels("unused", &TO_MOVE.to_string(), &["Work".to_string()])
+        .await
+        .expect("Proton label removal should succeed");
+
+    assert_eq!(server.mailbox_uids("Labels/Work"), vec![ALREADY_DELETED]);
+    assert_eq!(
+        server.mailbox_uids("INBOX"),
+        vec![TO_MOVE],
+        "source untouched"
+    );
+}
+
+#[tokio::test]
+async fn proton_label_removal_without_uidplus_is_refused_before_flagging() {
+    let server = spawn_proton(&[]).await;
+
+    let err = provider_with_profile(server.addr.port(), ProviderProfile::ProtonBridge)
+        .remove_labels("unused", &TO_MOVE.to_string(), &["Work".to_string()])
+        .await
+        .expect_err("a server without UIDPLUS must be refused");
+    assert!(err.to_string().contains("UIDPLUS"), "{err}");
+
+    assert_eq!(
+        server.mailbox_uids("Labels/Work"),
+        vec![TO_MOVE, ALREADY_DELETED],
+        "nothing removed"
     );
 }
