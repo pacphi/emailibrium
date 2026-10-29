@@ -53,6 +53,13 @@ overrides:
   # nanoid < 3.3.18 (3.x line, pulled in transitively via postcss): custom
   # generators can loop indefinitely when size is zero (GHSA-2v37-7h3g-55p8)
   "nanoid@<3.3.18": "3.3.18"
+  # simple-git (via node-llama-cpp, which still asks for ^3.36.0): command
+  # execution through unsafe-operation guard bypasses (GHSA-x6jw-m9v5-85vh,
+  # GHSA-g4wm-2vf7-vfgr, GHSA-858h-whjf-mvg5) and @simple-git/argv-parser < 2.0.1
+  # (GHSA-v5rq-49vh-5v5c). No 3.x fix exists; 4.0.2 brings argv-parser 2.0.1.
+  # node-llama-cpp uses only `import { simpleGit }` and full option names, which
+  # 4.x keeps. Drop this pin once node-llama-cpp depends on simple-git ^4.
+  "simple-git@<4.0.2": "4.0.2"
 peerDependencyRules:
   allowedVersions:
     "eslint-plugin-react>eslint": "10"
