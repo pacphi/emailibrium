@@ -28,6 +28,7 @@
 //! Gmail IMAP accounts use `email::gmail` (the REST/OAuth provider), not
 //! `ImapProvider`'s generic path this fixture serves.
 
+use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::net::SocketAddr;
@@ -46,6 +47,9 @@ pub struct FixtureMessage {
     /// removing the message. Not part of the original milestone-0 fixture
     /// shape, so it defaults to `false` via `new()`/`with_header()`.
     deleted: bool,
+    /// Custom IMAP keywords set by `UID STORE +FLAGS (<keyword> ...)` and
+    /// cleared by `-FLAGS`; carried over by COPY/MOVE as a real server does.
+    keywords: BTreeSet<String>,
 }
 
 impl FixtureMessage {
@@ -67,6 +71,7 @@ impl FixtureMessage {
             uid,
             raw,
             deleted: false,
+            keywords: BTreeSet::new(),
         }
     }
 
@@ -134,6 +139,8 @@ pub struct FakeImapServer {
     seen: Arc<Mutex<HashSet<u32>>>,
     #[allow(dead_code)] // see with_header's comment: per-binary usage varies
     mailboxes: Mailboxes,
+    #[allow(dead_code)] // see with_header's comment: per-binary usage varies
+    permanent_flags: Arc<Mutex<Option<String>>>,
 }
 
 impl FakeImapServer {
@@ -187,10 +194,12 @@ impl FakeImapServer {
         let mailboxes: Mailboxes = Arc::new(Mutex::new(map));
         let seen: Arc<Mutex<HashSet<u32>>> = Arc::new(Mutex::new(HashSet::new()));
         let capabilities: Arc<str> = capabilities.into();
+        let permanent_flags: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
 
         {
             let mailboxes = Arc::clone(&mailboxes);
             let seen = Arc::clone(&seen);
+            let permanent_flags = Arc::clone(&permanent_flags);
             tokio::spawn(async move {
                 loop {
                     let (stream, _peer) = match listener.accept().await {
@@ -200,8 +209,16 @@ impl FakeImapServer {
                     let mailboxes = Arc::clone(&mailboxes);
                     let seen = Arc::clone(&seen);
                     let capabilities = Arc::clone(&capabilities);
+                    let permanent_flags = Arc::clone(&permanent_flags);
                     tokio::spawn(async move {
-                        let _ = serve_connection(stream, &mailboxes, &seen, &capabilities).await;
+                        let _ = serve_connection(
+                            stream,
+                            &mailboxes,
+                            &seen,
+                            &capabilities,
+                            &permanent_flags,
+                        )
+                        .await;
                     });
                 }
             });
@@ -211,7 +228,32 @@ impl FakeImapServer {
             addr,
             seen,
             mailboxes,
+            permanent_flags,
         }
+    }
+
+    /// Make every later `SELECT` announce `* OK [PERMANENTFLAGS (<flags>)]`,
+    /// e.g. `\Seen \Deleted \*` (keywords accepted) or `\Seen \Deleted`
+    /// (none). Unset, no `PERMANENTFLAGS` is sent, which RFC 3501 §7.1 says
+    /// means every flag is permanent.
+    #[allow(dead_code)] // see with_header's comment: per-binary usage varies
+    pub fn set_permanent_flags(&self, flags: &str) {
+        *self
+            .permanent_flags
+            .lock()
+            .expect("permanent_flags mutex poisoned") = Some(flags.to_string());
+    }
+
+    /// The custom keywords currently set on a message, sorted.
+    #[allow(dead_code)] // see with_header's comment: per-binary usage varies
+    pub fn keywords(&self, mailbox: &str, uid: u32) -> Vec<String> {
+        self.mailboxes
+            .lock()
+            .expect("mailboxes mutex poisoned")
+            .get(mailbox)
+            .and_then(|mb| mb.messages.iter().find(|m| m.uid == uid))
+            .map(|m| m.keywords.iter().cloned().collect())
+            .unwrap_or_default()
     }
 
     /// Whether the fake server's persisted state currently has `\Seen` set
@@ -265,6 +307,7 @@ async fn serve_connection(
     mailboxes: &Mailboxes,
     seen: &Arc<Mutex<HashSet<u32>>>,
     capabilities: &str,
+    permanent_flags: &Mutex<Option<String>>,
 ) -> std::io::Result<()> {
     let (reader, mut writer) = stream.into_split();
     let mut reader = BufReader::new(reader);
@@ -343,6 +386,17 @@ async fn serve_connection(
                 writer
                     .write_all(b"* FLAGS (\\Answered \\Flagged \\Deleted \\Seen \\Draft)\r\n")
                     .await?;
+                let permanent = permanent_flags
+                    .lock()
+                    .expect("permanent_flags mutex poisoned")
+                    .clone();
+                if let Some(flags) = permanent {
+                    writer
+                        .write_all(
+                            format!("* OK [PERMANENTFLAGS ({flags})] Limited\r\n").as_bytes(),
+                        )
+                        .await?;
+                }
                 writer
                     .write_all(b"* OK [UIDVALIDITY 1] UIDs valid\r\n")
                     .await?;
@@ -628,6 +682,7 @@ async fn handle_uid_copy(
                         uid: new_uid,
                         raw: found.raw,
                         deleted: false,
+                        keywords: found.keywords,
                     });
                     format!("{tag} OK [COPYUID 1 {uid} {new_uid}] COPY completed\r\n")
                 }
@@ -639,11 +694,11 @@ async fn handle_uid_copy(
     Ok(())
 }
 
-/// `UID STORE <uid> +FLAGS (\Deleted)` / `-FLAGS (...)`. Only `\Deleted` is
-/// tracked (the only flag this fixture's adapters under test actually set
-/// via STORE) — any other flag name is accepted and silently ignored,
-/// matching the "never reject something we don't model" ethos of the rest
-/// of this fixture.
+/// `UID STORE <uid> +FLAGS (...)` / `-FLAGS (...)`. `\Deleted` and custom
+/// keywords (any token not starting with `\`) are tracked; other system
+/// flags are accepted and silently ignored, matching the "never reject
+/// something we don't model" ethos of the rest of this fixture. Like a real
+/// server, it does not check `PERMANENTFLAGS` — that is the client's job.
 async fn handle_uid_store(
     tag: &str,
     subrest: &str,
@@ -657,6 +712,17 @@ async fn handle_uid_store(
     let upper = rest.to_ascii_uppercase();
     let sets_deleted = upper.starts_with('+') && upper.contains("\\DELETED");
     let clears_deleted = upper.starts_with('-') && upper.contains("\\DELETED");
+    let adding = rest.starts_with('+');
+    let removing = rest.starts_with('-');
+    let keywords: Vec<String> = rest
+        .split_once('(')
+        .and_then(|(_, list)| list.split_once(')'))
+        .map(|(list, _)| list.split_whitespace())
+        .into_iter()
+        .flatten()
+        .filter(|t| !t.starts_with('\\'))
+        .map(str::to_string)
+        .collect();
 
     if let Some(name) = current_mailbox {
         let mut guard = mailboxes.lock().expect("mailboxes mutex poisoned");
@@ -666,6 +732,13 @@ async fn handle_uid_store(
                     m.deleted = true;
                 } else if clears_deleted {
                     m.deleted = false;
+                }
+                for k in &keywords {
+                    if adding {
+                        m.keywords.insert(k.clone());
+                    } else if removing {
+                        m.keywords.remove(k);
+                    }
                 }
             }
         }
@@ -714,6 +787,7 @@ async fn handle_uid_move(
                             uid: new_uid,
                             raw: found.raw,
                             deleted: false,
+                            keywords: found.keywords,
                         });
                         format!("{tag} OK [COPYUID 1 {uid} {new_uid}] MOVE completed\r\n")
                     }

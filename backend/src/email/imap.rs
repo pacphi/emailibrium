@@ -924,6 +924,125 @@ impl ImapProvider {
         }
     }
 
+    /// Reject a label that is not a valid IMAP keyword before it is
+    /// interpolated into a raw `STORE` command. RFC 3501 §9: a keyword is an
+    /// `atom` — printable ASCII except `( ) { SP CTL % * " \ ]`. A space would
+    /// split one label into two keywords; `)` or CR/LF would end the flag
+    /// list and inject further command text.
+    fn validate_keyword(label: &str) -> Result<(), ProviderError> {
+        let is_atom_char = |c: char| {
+            c.is_ascii_graphic() && !matches!(c, '(' | ')' | '{' | '%' | '*' | '"' | '\\' | ']')
+        };
+        if label.is_empty() || !label.chars().all(is_atom_char) {
+            return Err(ProviderError::ConfigError(format!(
+                "label '{label}' is not a valid IMAP keyword (printable ASCII only, no spaces \
+                 or any of ( ) {{ % * \" \\ ])"
+            )));
+        }
+        Ok(())
+    }
+
+    /// Whether the selected mailbox will keep these labels as keywords.
+    /// RFC 3501 §7.1: `\*` in `PERMANENTFLAGS` means new keywords can be
+    /// created; a keyword listed by name is also permanent; and when the
+    /// server sends no `PERMANENTFLAGS` at all, every flag is permanent.
+    /// `async-imap` reports that last case as an empty list.
+    fn keywords_accepted(permanent: &[async_imap::types::Flag<'_>], labels: &[String]) -> bool {
+        use async_imap::types::Flag;
+        permanent.is_empty()
+            || permanent.iter().any(|f| matches!(f, Flag::MayCreate))
+            || labels.iter().all(|label| {
+                permanent
+                    .iter()
+                    .any(|f| matches!(f, Flag::Custom(c) if c == label))
+            })
+    }
+
+    /// `Generic` profile: IMAP keywords when the mailbox accepts them,
+    /// otherwise the folder strategy `OutlookImap` uses (`label_via_folders` /
+    /// `unlabel_via_folders`). Every label is validated before any `STORE`,
+    /// so a bad label never leaves the others half-applied.
+    async fn generic_labels(
+        &self,
+        id: &str,
+        labels: &[String],
+        op: &str,
+    ) -> Result<(), ProviderError> {
+        let mut session = self.connect().await?;
+        let mailbox = session
+            .select(&self.config.mailbox)
+            .await
+            .map_err(|e| ProviderError::RequestFailed(format!("SELECT failed: {e}")))?;
+
+        if !Self::keywords_accepted(&mailbox.permanent_flags, labels) {
+            let _ = session.logout().await;
+            debug!("server does not accept custom keywords; routing labels through folders");
+            return if op == "+FLAGS" {
+                self.label_via_folders(id, labels).await
+            } else {
+                Self::unlabel_via_folders(labels)
+            };
+        }
+
+        for label in labels {
+            if let Err(e) = Self::validate_keyword(label) {
+                let _ = session.logout().await;
+                return Err(e);
+            }
+        }
+
+        session
+            .uid_store(id, format!("{op} ({})", labels.join(" ")))
+            .await
+            .map_err(|e| ProviderError::RequestFailed(format!("STORE failed: {e}")))?
+            .try_collect::<Vec<_>>()
+            .await
+            .map_err(|e| ProviderError::RequestFailed(format!("STORE stream failed: {e}")))?;
+
+        let _ = session.logout().await;
+        Ok(())
+    }
+
+    /// Labels on a server without custom keywords (Outlook, or any server
+    /// whose `PERMANENTFLAGS` lacks `\*`): `Kind/`/`Topic/` become a real
+    /// folder the message is moved into; `State/` stays in the ledger only.
+    async fn label_via_folders(&self, id: &str, labels: &[String]) -> Result<(), ProviderError> {
+        for label in labels {
+            match Self::namespace_of(label) {
+                LabelNamespace::Kind | LabelNamespace::Topic => {
+                    self.outlook_move_to_label_folder(id, label).await?;
+                }
+                LabelNamespace::State => {
+                    debug!(
+                        label = %label,
+                        "server has no custom keywords; State is ledger-only, not written to the provider"
+                    );
+                }
+                LabelNamespace::Other => {
+                    return Err(ProviderError::ConfigError(format!(
+                        "this server has no custom keywords: it supports Kind/Topic (as folders) \
+                         and State (ledger-only), not the generic keyword label '{label}'"
+                    )));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Counterpart of `label_via_folders`: `State/` removal is a no-op (never
+    /// written); Kind/Topic undo goes through `move_message`.
+    fn unlabel_via_folders(labels: &[String]) -> Result<(), ProviderError> {
+        for label in labels {
+            if Self::namespace_of(label) != LabelNamespace::State {
+                return Err(ProviderError::ConfigError(format!(
+                    "this server has no custom keywords: removing '{label}' isn't supported — \
+                     Kind/Topic undo goes through move_message, not remove_labels"
+                )));
+            }
+        }
+        Ok(())
+    }
+
     /// Fetch the RFC 822 `Message-ID` of a message in the currently-selected
     /// mailbox, by UID. Used to re-find a Proton `COPY`'d message in a
     /// `Labels/*` mailbox, where it has a different UID.
@@ -1432,11 +1551,11 @@ impl EmailProvider for ImapProvider {
         Ok(())
     }
 
-    /// Apply labels to a message. `Generic` (every pre-milestone-6 provider:
-    /// Gmail/Workspace/iCloud/Fastmail/Yahoo app-password) is unchanged —
-    /// additive IMAP keyword flags. `ProtonBridge` and `OutlookImap` route
-    /// per-label through the provider-specific strategy described on
-    /// `ProviderProfile`.
+    /// Apply labels to a message. `Generic` (Gmail/Workspace/iCloud/Fastmail/
+    /// Yahoo app-password) writes IMAP keywords when the mailbox accepts them
+    /// and falls back to folders when it doesn't (`generic_labels`).
+    /// `ProtonBridge` and `OutlookImap` route per-label through the
+    /// provider-specific strategy described on `ProviderProfile`.
     async fn label_message(
         &self,
         _access_token: &str,
@@ -1445,44 +1564,21 @@ impl EmailProvider for ImapProvider {
     ) -> Result<(), ProviderError> {
         self.validate_config()?;
         match self.config.profile {
-            ProviderProfile::Generic => {
-                let keywords = labels.join(" ");
-                self.store_flags(id, "+FLAGS", &keywords).await
-            }
+            ProviderProfile::Generic => self.generic_labels(id, labels, "+FLAGS").await,
             ProviderProfile::ProtonBridge => {
                 for label in labels {
                     self.proton_add_label(id, label).await?;
                 }
                 Ok(())
             }
-            ProviderProfile::OutlookImap => {
-                for label in labels {
-                    match Self::namespace_of(label) {
-                        LabelNamespace::Kind | LabelNamespace::Topic => {
-                            self.outlook_move_to_label_folder(id, label).await?;
-                        }
-                        LabelNamespace::State => {
-                            debug!(
-                                label = %label,
-                                "Outlook IMAP has no custom keywords; State is ledger-only, not written to the provider"
-                            );
-                        }
-                        LabelNamespace::Other => {
-                            return Err(ProviderError::ConfigError(format!(
-                                "Outlook IMAP supports Kind/Topic (as folders) and State (ledger-only), \
-                                 not the generic keyword label '{label}'"
-                            )));
-                        }
-                    }
-                }
-                Ok(())
-            }
+            ProviderProfile::OutlookImap => self.label_via_folders(id, labels).await,
         }
     }
 
     /// Remove labels from a message. See `label_message` for the
-    /// per-profile strategy; `State/` removal on Outlook is a no-op for the
-    /// same reason State is never applied there.
+    /// per-profile strategy; on a server without custom keywords (Outlook,
+    /// or a `Generic` server whose mailbox refuses them) `State/` removal is
+    /// a no-op for the same reason State is never applied there.
     async fn remove_labels(
         &self,
         _access_token: &str,
@@ -1491,30 +1587,14 @@ impl EmailProvider for ImapProvider {
     ) -> Result<(), ProviderError> {
         self.validate_config()?;
         match self.config.profile {
-            ProviderProfile::Generic => {
-                let keywords = labels.join(" ");
-                self.store_flags(id, "-FLAGS", &keywords).await
-            }
+            ProviderProfile::Generic => self.generic_labels(id, labels, "-FLAGS").await,
             ProviderProfile::ProtonBridge => {
                 for label in labels {
                     self.proton_remove_label(id, label).await?;
                 }
                 Ok(())
             }
-            ProviderProfile::OutlookImap => {
-                for label in labels {
-                    match Self::namespace_of(label) {
-                        LabelNamespace::State => {}
-                        _ => {
-                            return Err(ProviderError::ConfigError(format!(
-                                "Outlook IMAP: removing '{label}' isn't supported — Kind/Topic \
-                                 undo goes through move_message, not remove_labels"
-                            )));
-                        }
-                    }
-                }
-                Ok(())
-            }
+            ProviderProfile::OutlookImap => Self::unlabel_via_folders(labels),
         }
     }
 
@@ -1676,6 +1756,7 @@ impl EmailProvider for ImapProvider {
                 let _ = session.logout().await;
             }
             MoveKind::Label => {
+                Self::validate_keyword(target_id)?;
                 self.store_flags(message_id, "+FLAGS", target_id).await?;
             }
         }
@@ -1836,6 +1917,62 @@ mod tests {
             ProviderProfile::from_stored_str("something-unexpected"),
             ProviderProfile::Generic
         );
+    }
+
+    #[test]
+    fn validate_keyword_accepts_namespace_labels() {
+        for ok in [
+            "Kind/Newsletters",
+            "Topic/Billing_2026",
+            "State/ReadLater",
+            "$Label1",
+        ] {
+            assert!(ImapProvider::validate_keyword(ok).is_ok(), "{ok}");
+        }
+    }
+
+    #[test]
+    fn validate_keyword_rejects_non_atoms() {
+        for bad in [
+            "",
+            "Topic/Read Later",
+            "Bad)Label",
+            "x\r\nA1 DELETE INBOX",
+            "a(b",
+            "a{3}",
+            "100%",
+            "a*",
+            "say\"hi",
+            "back\\slash",
+            "a]b",
+            "Topic/Café",
+        ] {
+            assert!(ImapProvider::validate_keyword(bad).is_err(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn keywords_accepted_follows_rfc_3501_permanentflags() {
+        use async_imap::types::Flag;
+        let labels = vec!["Kind/Newsletters".to_string()];
+
+        // No PERMANENTFLAGS response: every flag is permanent.
+        assert!(ImapProvider::keywords_accepted(&[], &labels));
+        // `\*` present: new keywords may be created.
+        assert!(ImapProvider::keywords_accepted(
+            &[Flag::Seen, Flag::Deleted, Flag::MayCreate],
+            &labels
+        ));
+        // Only system flags: custom keywords are not kept.
+        assert!(!ImapProvider::keywords_accepted(
+            &[Flag::Seen, Flag::Deleted],
+            &labels
+        ));
+        // The keyword itself is listed by name.
+        assert!(ImapProvider::keywords_accepted(
+            &[Flag::Seen, Flag::Custom("Kind/Newsletters".into())],
+            &labels
+        ));
     }
 
     #[test]
