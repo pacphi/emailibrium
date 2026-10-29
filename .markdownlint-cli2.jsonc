@@ -21,5 +21,9 @@
     // pass without altering its content). CI never sees it; without this ignore,
     // `just lint` is red locally and green in CI for the same commit.
     "docs/Connect Multiple Gmails*",
+    // Exactly `@AGENTS.md` (an import, see AGENTS.md "Project-local tool usage"),
+    // so MD041 can't pass without breaking the import. The content lives in AGENTS.md,
+    // which is linted.
+    "CLAUDE.md",
   ],
 }
