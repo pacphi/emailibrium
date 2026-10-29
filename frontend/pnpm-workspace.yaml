@@ -39,7 +39,11 @@ overrides:
   "esbuild@<0.28.1": "0.28.1"
   # undici < 7.28.0: ProxyAgent silently drops requestTls over SOCKS5, defeating
   # CA pinning (GHSA-vxpw-j846-p89q, GHSA-hm92-r4w5-c3mj, GHSA-vmh5-mc38-953g, + 4 more)
-  "undici@<7.28.0": "7.28.0"
+  # < 7.30.1: TLS validation bypass via dropped Agent tls options (GHSA-2m5v-pch6-74hx),
+  # cross-origin redirect cache poisoning (GHSA-4w7w-5xrc-9h26), EventSource memory DoS
+  # (GHSA-4qv8-2p9j-2685) and 16 more fixed in 7.29.x; floors the whole 7.x line,
+  # supersedes the 7.28.0 pin above. The tree itself resolves undici 8.12.3 (patched).
+  "undici@>=7.0.0 <7.30.1": "7.30.1"
   # postcss <= 8.5.17: path traversal via sourceMappingURL leads to arbitrary
   # .map file disclosure (GHSA-r28c-9q8g-f849)
   # <= 8.5.22: incomplete fix — attacker-controlled sourceMappingURL still reads
