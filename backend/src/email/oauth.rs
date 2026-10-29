@@ -54,8 +54,11 @@ type SyncStateRow = (
 );
 
 /// Row tuple for the IMAP config query: (imap_host, imap_port, imap_encryption,
-/// smtp_host, smtp_port, encrypted_access_token, email_address). `imap_port`/
-/// `smtp_port` are i32, not i64, matching the actual INTEGER/INT4 columns.
+/// smtp_host, smtp_port, encrypted_access_token, email_address,
+/// encrypted_refresh_token, imap_auth_profile). `imap_port`/`smtp_port` are
+/// i32, not i64, matching the actual INTEGER/INT4 columns. A non-NULL
+/// `encrypted_refresh_token` means this account authenticates with an OAuth
+/// bearer token (milestone 6's Outlook device-code path), not a password.
 type ImapConfigRow = (
     Option<String>,
     Option<i32>,
@@ -64,6 +67,8 @@ type ImapConfigRow = (
     Option<i32>,
     Option<Vec<u8>>,
     String,
+    Option<Vec<u8>>,
+    Option<String>,
 );
 
 /// Errors specific to the OAuth subsystem.
@@ -411,6 +416,7 @@ impl OAuthManager {
         encryption: super::imap::ImapEncryption,
         smtp_host: &str,
         smtp_port: u16,
+        profile: super::imap::ProviderProfile,
     ) -> Result<(), OAuthError> {
         let enc_password = self.encrypt_token(password)?;
         let imap_port = imap_port as i32;
@@ -433,6 +439,7 @@ impl OAuthManager {
             imap_encryption: Set(Some(encryption.as_str().to_owned())),
             smtp_host: Set(Some(smtp_host.to_owned())),
             smtp_port: Set(Some(smtp_port)),
+            imap_auth_profile: Set(Some(profile.as_str().to_owned())),
             ..Default::default()
         })
         .on_conflict(
@@ -448,6 +455,75 @@ impl OAuthManager {
                     accounts::Column::ImapEncryption,
                     accounts::Column::SmtpHost,
                     accounts::Column::SmtpPort,
+                    accounts::Column::ImapAuthProfile,
+                ])
+                .value(
+                    accounts::Column::UpdatedAt,
+                    Expr::value(crate::db::now_text()),
+                )
+                .to_owned(),
+        )
+        .exec_without_returning(&self.conn)
+        .await?;
+
+        self.ensure_sync_state(id).await
+    }
+
+    /// Save (or update) an Outlook device-code IMAP account: unlike
+    /// `save_imap_account`, the credential is an OAuth access+refresh token
+    /// pair (milestone 6), not a password — `encrypted_refresh_token` being
+    /// non-NULL is what `load_imap_config` uses to tell the two apart.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn save_imap_oauth_account(
+        &self,
+        id: &str,
+        email: &str,
+        tokens: &OAuthTokens,
+        imap_host: &str,
+        imap_port: u16,
+        encryption: super::imap::ImapEncryption,
+        profile: super::imap::ProviderProfile,
+    ) -> Result<(), OAuthError> {
+        let enc_access = self.encrypt_token(&tokens.access_token)?;
+        let enc_refresh = tokens
+            .refresh_token
+            .as_deref()
+            .map(|rt| self.encrypt_token(rt))
+            .transpose()?
+            .ok_or_else(|| {
+                OAuthError::ValidationError(
+                    "device-code flow returned no refresh token".to_string(),
+                )
+            })?;
+        let expires_at = tokens.expires_at.map(|dt| dt.to_rfc3339());
+        let imap_port = imap_port as i32;
+
+        accounts::Entity::insert(accounts::ActiveModel {
+            id: Set(id.to_owned()),
+            provider: Set("imap".to_owned()),
+            email_address: Set(email.to_owned()),
+            encrypted_access_token: Set(Some(enc_access)),
+            encrypted_refresh_token: Set(Some(enc_refresh)),
+            token_expires_at: Set(expires_at),
+            status: Set("connected".to_owned()),
+            imap_host: Set(Some(imap_host.to_owned())),
+            imap_port: Set(Some(imap_port)),
+            imap_encryption: Set(Some(encryption.as_str().to_owned())),
+            imap_auth_profile: Set(Some(profile.as_str().to_owned())),
+            ..Default::default()
+        })
+        .on_conflict(
+            OnConflict::column(accounts::Column::EmailAddress)
+                .update_columns([
+                    accounts::Column::Provider,
+                    accounts::Column::EncryptedAccessToken,
+                    accounts::Column::EncryptedRefreshToken,
+                    accounts::Column::TokenExpiresAt,
+                    accounts::Column::Status,
+                    accounts::Column::ImapHost,
+                    accounts::Column::ImapPort,
+                    accounts::Column::ImapEncryption,
+                    accounts::Column::ImapAuthProfile,
                 ])
                 .value(
                     accounts::Column::UpdatedAt,
@@ -477,6 +553,8 @@ impl OAuthManager {
             .column(accounts::Column::SmtpPort)
             .column(accounts::Column::EncryptedAccessToken)
             .column(accounts::Column::EmailAddress)
+            .column(accounts::Column::EncryptedRefreshToken)
+            .column(accounts::Column::ImapAuthProfile)
             .filter(accounts::Column::Id.eq(account_id))
             .into_tuple()
             .one(&self.conn)
@@ -486,23 +564,41 @@ impl OAuthManager {
         let host = row.0.ok_or_else(|| {
             OAuthError::ValidationError(format!("Account {account_id} is not an IMAP account"))
         })?;
-        let enc_password = row.5.ok_or_else(|| {
+        let enc_credential = row.5.ok_or_else(|| {
             OAuthError::ValidationError(format!("IMAP account {account_id} has no stored password"))
         })?;
-        let password = self.decrypt_token(&enc_password)?;
+        let credential = self.decrypt_token(&enc_credential)?;
         let email_address = row.6;
         let encryption = row
             .2
             .as_deref()
             .map(super::imap::ImapEncryption::from_stored_str)
             .unwrap_or(super::imap::ImapEncryption::Ssl);
+        let profile = row
+            .8
+            .as_deref()
+            .map(super::imap::ProviderProfile::from_stored_str)
+            .unwrap_or_default();
+
+        // A stored refresh token means this account authenticates with
+        // XOAUTH2 (milestone 6's Outlook device-code path), not a password.
+        // NOTE: this does not proactively refresh an expired access token —
+        // that only happens today via the device-code poll/refresh route;
+        // a background refresh-on-load is a known, undone gap, not silently
+        // assumed to work.
+        let auth = if row.7.is_some() {
+            super::imap::ImapAuth::OAuthBearer(credential)
+        } else {
+            super::imap::ImapAuth::Password(credential)
+        };
 
         Ok(super::imap::ImapConfig {
             host,
             port: row.1.unwrap_or(993) as u16,
             encryption,
             username: email_address,
-            password,
+            auth,
+            profile,
             mailbox: "INBOX".to_string(),
             archive_folder: "Archive".to_string(),
             smtp_host: row.3,
@@ -1080,6 +1176,11 @@ mod tests {
         conn.execute_unprepared(include_str!("../../migrations/sqlite/030_account_role.sql"))
             .await
             .unwrap();
+        conn.execute_unprepared(include_str!(
+            "../../migrations/sqlite/034_imap_auth_profile.sql"
+        ))
+        .await
+        .unwrap();
 
         let key = crate::vectors::encryption::derive_key("test-password", TOKEN_KEY_SALT).unwrap();
         let mgr = OAuthManager {
@@ -1098,6 +1199,7 @@ mod tests {
             crate::email::imap::ImapEncryption::StartTls,
             "smtp.gmail.com",
             465,
+            crate::email::imap::ProviderProfile::Generic,
         )
         .await
         .unwrap();
@@ -1116,7 +1218,9 @@ mod tests {
         // Encryption mode round-trips through the DB (StartTls -> "starttls").
         assert_eq!(cfg.encryption, crate::email::imap::ImapEncryption::StartTls);
         assert_eq!(cfg.username, "user@gmail.com");
-        assert_eq!(cfg.password, "app-password-1234");
+        assert!(
+            matches!(&cfg.auth, crate::email::imap::ImapAuth::Password(p) if p == "app-password-1234")
+        );
         assert_eq!(cfg.smtp_host.as_deref(), Some("smtp.gmail.com"));
         assert_eq!(cfg.smtp_port, 465);
 
@@ -1152,6 +1256,11 @@ mod tests {
         conn.execute_unprepared(include_str!("../../migrations/sqlite/030_account_role.sql"))
             .await
             .unwrap();
+        conn.execute_unprepared(include_str!(
+            "../../migrations/sqlite/034_imap_auth_profile.sql"
+        ))
+        .await
+        .unwrap();
 
         let key = crate::vectors::encryption::derive_key("test-password", TOKEN_KEY_SALT).unwrap();
         let mgr = OAuthManager {
@@ -1171,6 +1280,7 @@ mod tests {
                 crate::email::imap::ImapEncryption::Ssl,
                 "smtp.example.com",
                 465,
+                crate::email::imap::ProviderProfile::Generic,
             )
             .await
             .unwrap();
@@ -1266,6 +1376,11 @@ mod tests {
         conn.execute_unprepared(include_str!("../../migrations/sqlite/030_account_role.sql"))
             .await
             .unwrap();
+        conn.execute_unprepared(include_str!(
+            "../../migrations/sqlite/034_imap_auth_profile.sql"
+        ))
+        .await
+        .unwrap();
 
         let key = crate::vectors::encryption::derive_key("test-password", TOKEN_KEY_SALT).unwrap();
         let mgr = OAuthManager {
@@ -1284,6 +1399,7 @@ mod tests {
             crate::email::imap::ImapEncryption::Ssl,
             "smtp.example.com",
             465,
+            crate::email::imap::ProviderProfile::Generic,
         )
         .await
         .unwrap();

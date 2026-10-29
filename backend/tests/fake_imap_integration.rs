@@ -11,7 +11,9 @@
 #[path = "fake_imap/mod.rs"]
 mod fake_imap;
 
-use emailibrium::email::imap::{ImapConfig, ImapEncryption, ImapProvider};
+use emailibrium::email::imap::{
+    ImapAuth, ImapConfig, ImapEncryption, ImapProvider, ProviderProfile,
+};
 use emailibrium::email::provider::EmailProvider;
 use emailibrium::email::types::ListParams;
 
@@ -57,7 +59,8 @@ fn fixture_config(port: u16) -> ImapConfig {
         port,
         encryption: ImapEncryption::Plaintext,
         username: "chris@cpventuresgroup.com".to_string(),
-        password: "fixture-app-password".to_string(),
+        auth: ImapAuth::Password("fixture-app-password".to_string()),
+        profile: ProviderProfile::Generic,
         mailbox: "INBOX".to_string(),
         archive_folder: "Archive".to_string(),
         smtp_host: None,

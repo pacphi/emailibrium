@@ -64,6 +64,7 @@ mod tests {
                 include_str!("../../../migrations/sqlite/030_account_role.sql"),
                 include_str!("../../../migrations/sqlite/032_rule_authority.sql"),
                 include_str!("../../../migrations/sqlite/033_saved_reports.sql"),
+                include_str!("../../../migrations/sqlite/034_imap_auth_profile.sql"),
             ],
         )
         .await

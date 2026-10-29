@@ -72,6 +72,100 @@ fn default_encryption() -> ImapEncryption {
     ImapEncryption::Ssl
 }
 
+/// How this account authenticates to the IMAP (and paired SMTP) server.
+///
+/// `Password` covers every app-password provider (Gmail/Workspace, iCloud,
+/// Fastmail, Yahoo) and Proton Bridge's own Bridge-generated password.
+/// `OAuthBearer` is Outlook/Microsoft 365's device-code path (milestone 6):
+/// basic auth ended for all Outlook accounts 16 Sep 2024, so XOAUTH2 with a
+/// bearer access token is the only way in.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ImapAuth {
+    Password(String),
+    OAuthBearer(String),
+}
+
+impl ImapAuth {
+    fn is_empty(&self) -> bool {
+        match self {
+            Self::Password(p) => p.is_empty(),
+            Self::OAuthBearer(t) => t.is_empty(),
+        }
+    }
+}
+
+/// Provider-specific quirks that change how Kind/Topic/State labels
+/// (`cleanup::domain::label_namespace`) get applied over IMAP — see
+/// docs/plan/mail-agent-2026-10.md row 6 and ADR-040.
+///
+/// `Generic` (the default) is every provider this repo already supported
+/// before milestone 6 (Gmail/Workspace/iCloud/Fastmail/Yahoo app-password):
+/// labels are additive IMAP keyword flags, unchanged by this milestone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderProfile {
+    #[default]
+    Generic,
+    /// Proton Mail Bridge: labels are real mailboxes under `Labels/`, and
+    /// "applying a label" is a non-destructive `COPY` (a message keeps every
+    /// label it's ever had unless explicitly removed) — never a keyword flag.
+    ProtonBridge,
+    /// Outlook/Microsoft 365 over IMAP: no custom keyword flags at all.
+    /// `Kind/`/`Topic/` labels are redirected to a real folder; `State/`
+    /// labels are ledger-only (never written to the provider).
+    OutlookImap,
+}
+
+impl ProviderProfile {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Generic => "generic",
+            Self::ProtonBridge => "proton_bridge",
+            Self::OutlookImap => "outlook_imap",
+        }
+    }
+
+    pub fn from_stored_str(s: &str) -> Self {
+        match s {
+            "proton_bridge" => Self::ProtonBridge,
+            "outlook_imap" => Self::OutlookImap,
+            _ => Self::Generic,
+        }
+    }
+}
+
+/// Which label namespace (`cleanup::domain::label_namespace`) a label string
+/// belongs to — drives folder-vs-keyword-vs-ledger routing per `ProviderProfile`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LabelNamespace {
+    Kind,
+    Topic,
+    State,
+    Other,
+}
+
+/// Guess a provider's profile from the host/port a user (or onboarding's
+/// provider-detection table) supplied — a pure, overridable default, not an
+/// irrevocable classification: an account's stored `imap_auth_profile` wins
+/// once set.
+pub fn detect_provider_profile(host: &str, port: u16) -> ProviderProfile {
+    let host_lower = host.to_ascii_lowercase();
+    if host_lower.contains("protonmail") || host_lower.contains("proton.me") {
+        return ProviderProfile::ProtonBridge;
+    }
+    if matches!(host_lower.as_str(), "127.0.0.1" | "localhost" | "::1")
+        && matches!(port, 1143 | 1025)
+    {
+        return ProviderProfile::ProtonBridge;
+    }
+    if host_lower.contains("outlook.office365.com") || host_lower.contains("imap-mail.outlook.com")
+    {
+        return ProviderProfile::OutlookImap;
+    }
+    ProviderProfile::Generic
+}
+
 /// Configuration for connecting to an IMAP server.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImapConfig {
@@ -84,8 +178,12 @@ pub struct ImapConfig {
     pub encryption: ImapEncryption,
     /// Username (typically the email address).
     pub username: String,
-    /// Password or app-specific password.
-    pub password: String,
+    /// Password, app-specific password, or (Outlook) an OAuth bearer token.
+    pub auth: ImapAuth,
+    /// Provider quirks for label application (milestone 6). Defaults to
+    /// `Generic`, i.e. every pre-milestone-6 behavior is unchanged.
+    #[serde(default)]
+    pub profile: ProviderProfile,
     /// Mailbox to sync from (default: "INBOX").
     #[serde(default = "default_mailbox")]
     pub mailbox: String,
@@ -188,6 +286,23 @@ impl tokio::io::AsyncWrite for ImapStream {
 
 type ImapSession = async_imap::Session<ImapStream>;
 
+/// SASL XOAUTH2 (<https://developers.google.com/gmail/imap/xoauth2-protocol>,
+/// the same mechanism Outlook/Microsoft 365 IMAP expects). There's no real
+/// challenge/response: the server sends an empty initial challenge and the
+/// client's one reply carries the full credential.
+struct XOAuth2Authenticator {
+    user: String,
+    token: String,
+}
+
+impl async_imap::Authenticator for XOAuth2Authenticator {
+    type Response = String;
+
+    fn process(&mut self, _challenge: &[u8]) -> Self::Response {
+        format!("user={}\x01auth=Bearer {}\x01\x01", self.user, self.token)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // IMAP Provider
 // ---------------------------------------------------------------------------
@@ -214,9 +329,9 @@ impl ImapProvider {
                 "IMAP username is required".to_string(),
             ));
         }
-        if self.config.password.is_empty() {
+        if self.config.auth.is_empty() {
             return Err(ProviderError::ConfigError(
-                "IMAP password is required".to_string(),
+                "IMAP password or OAuth token is required".to_string(),
             ));
         }
         Ok(())
@@ -313,10 +428,26 @@ impl ImapProvider {
             }
         };
 
-        let session = client
-            .login(&self.config.username, &self.config.password)
-            .await
-            .map_err(|(e, _client)| ProviderError::OAuthError(format!("IMAP login failed: {e}")))?;
+        let session = match &self.config.auth {
+            ImapAuth::Password(password) => client
+                .login(&self.config.username, password)
+                .await
+                .map_err(|(e, _client)| {
+                    ProviderError::OAuthError(format!("IMAP login failed: {e}"))
+                })?,
+            ImapAuth::OAuthBearer(token) => client
+                .authenticate(
+                    "XOAUTH2",
+                    XOAuth2Authenticator {
+                        user: self.config.username.clone(),
+                        token: token.clone(),
+                    },
+                )
+                .await
+                .map_err(|(e, _client)| {
+                    ProviderError::OAuthError(format!("IMAP XOAUTH2 authentication failed: {e}"))
+                })?,
+        };
 
         Ok(session)
     }
@@ -637,6 +768,164 @@ impl ImapProvider {
         Ok(())
     }
 
+    /// Which `Kind/`/`Topic/`/`State/` namespace (or none) a label string
+    /// belongs to (`cleanup::domain::label_namespace`'s constants/prefixes).
+    fn namespace_of(label: &str) -> LabelNamespace {
+        if label.starts_with("Kind/") {
+            LabelNamespace::Kind
+        } else if label.starts_with("Topic/") {
+            LabelNamespace::Topic
+        } else if label.starts_with("State/") {
+            LabelNamespace::State
+        } else {
+            LabelNamespace::Other
+        }
+    }
+
+    /// Fetch the RFC 822 `Message-ID` of a message in the currently-selected
+    /// mailbox, by UID. Used to re-find a Proton `COPY`'d message in a
+    /// `Labels/*` mailbox, where it has a different UID.
+    async fn fetch_message_id(
+        session: &mut ImapSession,
+        uid: &str,
+    ) -> Result<String, ProviderError> {
+        let fetches = session
+            .uid_fetch(uid, "BODY.PEEK[HEADER.FIELDS (MESSAGE-ID)]")
+            .await
+            .map_err(|e| ProviderError::RequestFailed(format!("UID FETCH failed: {e}")))?
+            .try_collect::<Vec<async_imap::types::Fetch>>()
+            .await
+            .map_err(|e| ProviderError::RequestFailed(format!("FETCH stream failed: {e}")))?;
+
+        let header_bytes = fetches
+            .first()
+            .and_then(|f| f.header())
+            .ok_or_else(|| ProviderError::NotFound(format!("Message UID {uid} not found")))?;
+
+        let parsed = mail_parser::MessageParser::default()
+            .parse(header_bytes)
+            .ok_or_else(|| {
+                ProviderError::ParseError(format!("could not parse headers for UID {uid}"))
+            })?;
+
+        parsed.message_id().map(|s| s.to_string()).ok_or_else(|| {
+            ProviderError::ConfigError(format!(
+                "message UID {uid} has no Message-ID header; Proton cross-mailbox dedupe needs one"
+            ))
+        })
+    }
+
+    /// Proton Bridge: ensure `Labels/<name>` exists and non-destructively
+    /// `COPY` the message into it (a message keeps every label it's ever
+    /// had, unlike the exclusive-folder `move_message` path).
+    async fn proton_add_label(&self, id: &str, label: &str) -> Result<(), ProviderError> {
+        let target = format!("Labels/{label}");
+        let (mut session, _) = self.connect_and_select().await?;
+
+        if let Err(e) = session.create(&target).await {
+            let msg = e.to_string();
+            if !msg.contains("ALREADYEXISTS") && !msg.contains("already exists") {
+                let _ = session.logout().await;
+                return Err(ProviderError::RequestFailed(format!(
+                    "CREATE '{target}' failed: {e}"
+                )));
+            }
+        }
+
+        session.uid_copy(id, &target).await.map_err(|e| {
+            ProviderError::RequestFailed(format!("UID COPY to '{target}' failed: {e}"))
+        })?;
+
+        let _ = session.logout().await;
+        Ok(())
+    }
+
+    /// Proton Bridge: remove a message from `Labels/<name>` only — find it
+    /// by `Message-ID` (its UID there differs from the source mailbox's),
+    /// then `STORE \Deleted` + `EXPUNGE` scoped to that mailbox alone. The
+    /// source mailbox and every other label the message carries are
+    /// untouched.
+    async fn proton_remove_label(&self, id: &str, label: &str) -> Result<(), ProviderError> {
+        let target = format!("Labels/{label}");
+
+        let (mut source_session, _) = self.connect_and_select().await?;
+        let message_id = Self::fetch_message_id(&mut source_session, id).await?;
+        let _ = source_session.logout().await;
+
+        let mut session = self.connect().await?;
+        session
+            .select(&target)
+            .await
+            .map_err(|e| ProviderError::RequestFailed(format!("SELECT '{target}' failed: {e}")))?;
+
+        let found: std::collections::HashSet<u32> = session
+            .uid_search(format!("HEADER Message-ID \"{message_id}\""))
+            .await
+            .map_err(|e| ProviderError::RequestFailed(format!("UID SEARCH failed: {e}")))?;
+
+        let Some(target_uid) = found.into_iter().next() else {
+            // Already not in this label — treat as success (idempotent).
+            let _ = session.logout().await;
+            return Ok(());
+        };
+
+        session
+            .uid_store(target_uid.to_string(), "+FLAGS (\\Deleted)")
+            .await
+            .map_err(|e| ProviderError::RequestFailed(format!("STORE \\Deleted failed: {e}")))?
+            .try_collect::<Vec<async_imap::types::Fetch>>()
+            .await
+            .map_err(|e| ProviderError::RequestFailed(format!("STORE stream failed: {e}")))?;
+
+        session
+            .expunge()
+            .await
+            .map_err(|e| ProviderError::RequestFailed(format!("EXPUNGE failed: {e}")))?
+            .try_collect::<Vec<u32>>()
+            .await
+            .map_err(|e| ProviderError::RequestFailed(format!("EXPUNGE stream failed: {e}")))?;
+
+        let _ = session.logout().await;
+        Ok(())
+    }
+
+    /// Outlook IMAP has no custom keyword flags, so `Kind/`/`Topic/` labels
+    /// are redirected to a real, exclusive folder named after the label
+    /// (creating it if needed) via the same copy+delete+expunge move
+    /// `move_message`'s `MoveKind::Folder` path uses.
+    async fn outlook_move_to_label_folder(
+        &self,
+        id: &str,
+        label: &str,
+    ) -> Result<(), ProviderError> {
+        self.create_label("", label).await?;
+
+        let (mut session, _) = self.connect_and_select().await?;
+
+        session.uid_copy(id, label).await.map_err(|e| {
+            ProviderError::RequestFailed(format!("UID COPY to '{label}' failed: {e}"))
+        })?;
+
+        session
+            .uid_store(id, "+FLAGS (\\Deleted)")
+            .await
+            .map_err(|e| ProviderError::RequestFailed(format!("STORE \\Deleted failed: {e}")))?
+            .try_collect::<Vec<async_imap::types::Fetch>>()
+            .await
+            .map_err(|e| ProviderError::RequestFailed(format!("STORE stream failed: {e}")))?;
+
+        session
+            .expunge()
+            .await
+            .map_err(|e| ProviderError::RequestFailed(format!("EXPUNGE failed: {e}")))?
+            .try_collect::<Vec<u32>>()
+            .await
+            .map_err(|e| ProviderError::RequestFailed(format!("EXPUNGE stream failed: {e}")))?;
+
+        let _ = session.logout().await;
+        Ok(())
+    }
+
     /// Send an email via SMTP using the configured SMTP server.
     #[allow(clippy::too_many_arguments)]
     async fn smtp_send(
@@ -716,7 +1005,19 @@ impl ImapProvider {
         }
         .map_err(|e| ProviderError::RequestFailed(format!("Failed to build message: {e}")))?;
 
-        let creds = Credentials::new(self.config.username.clone(), self.config.password.clone());
+        // XOAUTH2 submission isn't implemented — milestone 6's Outlook work is
+        // IMAP-only (read + label), and the chief-of-staff tool surface never
+        // sends mail anyway (AGENTS.md). Fail clearly rather than sending an
+        // empty password.
+        let password = match &self.config.auth {
+            ImapAuth::Password(p) => p.clone(),
+            ImapAuth::OAuthBearer(_) => {
+                return Err(ProviderError::ConfigError(
+                    "SMTP over OAuth (XOAUTH2) is not implemented for this account".to_string(),
+                ))
+            }
+        };
+        let creds = Credentials::new(self.config.username.clone(), password);
 
         // Choose the SMTP transport security to match the account's mode:
         // - Ssl       -> implicit TLS (typically port 465)
@@ -1000,7 +1301,11 @@ impl EmailProvider for ImapProvider {
         Ok(())
     }
 
-    /// Apply IMAP keywords (custom flags) to a message.
+    /// Apply labels to a message. `Generic` (every pre-milestone-6 provider:
+    /// Gmail/Workspace/iCloud/Fastmail/Yahoo app-password) is unchanged —
+    /// additive IMAP keyword flags. `ProtonBridge` and `OutlookImap` route
+    /// per-label through the provider-specific strategy described on
+    /// `ProviderProfile`.
     async fn label_message(
         &self,
         _access_token: &str,
@@ -1008,11 +1313,45 @@ impl EmailProvider for ImapProvider {
         labels: &[String],
     ) -> Result<(), ProviderError> {
         self.validate_config()?;
-        let keywords = labels.join(" ");
-        self.store_flags(id, "+FLAGS", &keywords).await
+        match self.config.profile {
+            ProviderProfile::Generic => {
+                let keywords = labels.join(" ");
+                self.store_flags(id, "+FLAGS", &keywords).await
+            }
+            ProviderProfile::ProtonBridge => {
+                for label in labels {
+                    self.proton_add_label(id, label).await?;
+                }
+                Ok(())
+            }
+            ProviderProfile::OutlookImap => {
+                for label in labels {
+                    match Self::namespace_of(label) {
+                        LabelNamespace::Kind | LabelNamespace::Topic => {
+                            self.outlook_move_to_label_folder(id, label).await?;
+                        }
+                        LabelNamespace::State => {
+                            debug!(
+                                label = %label,
+                                "Outlook IMAP has no custom keywords; State is ledger-only, not written to the provider"
+                            );
+                        }
+                        LabelNamespace::Other => {
+                            return Err(ProviderError::ConfigError(format!(
+                                "Outlook IMAP supports Kind/Topic (as folders) and State (ledger-only), \
+                                 not the generic keyword label '{label}'"
+                            )));
+                        }
+                    }
+                }
+                Ok(())
+            }
+        }
     }
 
-    /// Remove IMAP keywords from a message.
+    /// Remove labels from a message. See `label_message` for the
+    /// per-profile strategy; `State/` removal on Outlook is a no-op for the
+    /// same reason State is never applied there.
     async fn remove_labels(
         &self,
         _access_token: &str,
@@ -1020,27 +1359,59 @@ impl EmailProvider for ImapProvider {
         labels: &[String],
     ) -> Result<(), ProviderError> {
         self.validate_config()?;
-        let keywords = labels.join(" ");
-        self.store_flags(id, "-FLAGS", &keywords).await
+        match self.config.profile {
+            ProviderProfile::Generic => {
+                let keywords = labels.join(" ");
+                self.store_flags(id, "-FLAGS", &keywords).await
+            }
+            ProviderProfile::ProtonBridge => {
+                for label in labels {
+                    self.proton_remove_label(id, label).await?;
+                }
+                Ok(())
+            }
+            ProviderProfile::OutlookImap => {
+                for label in labels {
+                    match Self::namespace_of(label) {
+                        LabelNamespace::State => {}
+                        _ => {
+                            return Err(ProviderError::ConfigError(format!(
+                                "Outlook IMAP: removing '{label}' isn't supported — Kind/Topic \
+                                 undo goes through move_message, not remove_labels"
+                            )));
+                        }
+                    }
+                }
+                Ok(())
+            }
+        }
     }
 
-    /// Create a label by creating an IMAP folder (mailbox).
+    /// Create a label. `Generic`/`OutlookImap` create an IMAP folder
+    /// (mailbox) named `name`, unchanged from pre-milestone-6 behavior.
+    /// `ProtonBridge` creates the `Labels/<name>` mailbox instead, since
+    /// that's the mailbox `proton_add_label`/`proton_remove_label` target.
     async fn create_label(&self, _access_token: &str, name: &str) -> Result<String, ProviderError> {
         self.validate_config()?;
 
+        let mailbox_name = match self.config.profile {
+            ProviderProfile::ProtonBridge => format!("Labels/{name}"),
+            ProviderProfile::Generic | ProviderProfile::OutlookImap => name.to_string(),
+        };
+
         let mut session = self.connect().await?;
 
-        match session.create(name).await {
+        match session.create(&mailbox_name).await {
             Ok(()) => {}
             Err(e) => {
                 let msg = e.to_string();
                 if !msg.contains("ALREADYEXISTS") && !msg.contains("already exists") {
                     let _ = session.logout().await;
                     return Err(ProviderError::RequestFailed(format!(
-                        "CREATE '{name}' failed: {e}"
+                        "CREATE '{mailbox_name}' failed: {e}"
                     )));
                 }
-                debug!(folder = %name, "Folder already exists, treating as success");
+                debug!(folder = %mailbox_name, "Folder already exists, treating as success");
             }
         }
 
@@ -1329,6 +1700,100 @@ mod tests {
     use super::*;
 
     #[test]
+    fn detect_provider_profile_recognizes_proton_bridge_by_host() {
+        assert_eq!(
+            detect_provider_profile("127.0.0.1", 1143),
+            ProviderProfile::ProtonBridge
+        );
+        assert_eq!(
+            detect_provider_profile("mail.protonmail.ch", 993),
+            ProviderProfile::ProtonBridge
+        );
+    }
+
+    #[test]
+    fn detect_provider_profile_recognizes_outlook_by_host() {
+        assert_eq!(
+            detect_provider_profile("outlook.office365.com", 993),
+            ProviderProfile::OutlookImap
+        );
+    }
+
+    #[test]
+    fn detect_provider_profile_defaults_to_generic() {
+        assert_eq!(
+            detect_provider_profile("imap.fastmail.com", 993),
+            ProviderProfile::Generic
+        );
+        assert_eq!(
+            detect_provider_profile("imap.mail.me.com", 993),
+            ProviderProfile::Generic
+        );
+        // A loopback host on a non-Bridge port is NOT assumed to be Proton.
+        assert_eq!(
+            detect_provider_profile("127.0.0.1", 993),
+            ProviderProfile::Generic
+        );
+    }
+
+    #[test]
+    fn provider_profile_round_trips_through_its_stored_string() {
+        for p in [
+            ProviderProfile::Generic,
+            ProviderProfile::ProtonBridge,
+            ProviderProfile::OutlookImap,
+        ] {
+            assert_eq!(ProviderProfile::from_stored_str(p.as_str()), p);
+        }
+        // An unrecognized/legacy value fails closed to Generic, not an error.
+        assert_eq!(
+            ProviderProfile::from_stored_str("something-unexpected"),
+            ProviderProfile::Generic
+        );
+    }
+
+    #[test]
+    fn namespace_of_classifies_kind_topic_state_and_everything_else() {
+        assert_eq!(
+            ImapProvider::namespace_of("Kind/People"),
+            LabelNamespace::Kind
+        );
+        assert_eq!(
+            ImapProvider::namespace_of("Topic/Acme"),
+            LabelNamespace::Topic
+        );
+        assert_eq!(
+            ImapProvider::namespace_of("State/New"),
+            LabelNamespace::State
+        );
+        assert_eq!(
+            ImapProvider::namespace_of("Emailibrium/Work"),
+            LabelNamespace::Other
+        );
+    }
+
+    #[test]
+    fn xoauth2_authenticator_encodes_the_sasl_initial_response() {
+        let mut auth = XOAuth2Authenticator {
+            user: "chris@example.com".to_string(),
+            token: "ya29.fake-token".to_string(),
+        };
+        let response = async_imap::Authenticator::process(&mut auth, b"");
+        assert_eq!(
+            response,
+            "user=chris@example.com\x01auth=Bearer ya29.fake-token\x01\x01"
+        );
+    }
+
+    #[test]
+    fn imap_auth_is_empty_checks_the_active_variant() {
+        assert!(ImapAuth::Password(String::new()).is_empty());
+        assert!(!ImapAuth::Password("x".to_string()).is_empty());
+        assert!(ImapAuth::OAuthBearer(String::new()).is_empty());
+        assert!(!ImapAuth::OAuthBearer("token".to_string()).is_empty());
+    }
+
+    #[test]
     fn encryption_from_request_str_maps_ui_vocabulary() {
         assert_eq!(ImapEncryption::from_request_str("ssl"), ImapEncryption::Ssl);
         assert_eq!(
@@ -1372,7 +1837,8 @@ mod tests {
             port: 993,
             encryption: ImapEncryption::Ssl,
             username: "user@example.com".to_string(),
-            password: "secret".to_string(),
+            auth: ImapAuth::Password("secret".to_string()),
+            profile: ProviderProfile::Generic,
             mailbox: "INBOX".to_string(),
             archive_folder: "Archive".to_string(),
             smtp_host: None,
@@ -1388,7 +1854,8 @@ mod tests {
             port: 993,
             encryption: ImapEncryption::Ssl,
             username: "test@test.com".to_string(),
-            password: "pass".to_string(),
+            auth: ImapAuth::Password("pass".to_string()),
+            profile: ProviderProfile::Generic,
             mailbox: default_mailbox(),
             archive_folder: default_archive_folder(),
             smtp_host: None,
@@ -1406,7 +1873,8 @@ mod tests {
             port: 993,
             encryption: ImapEncryption::Ssl,
             username: "user@test.com".to_string(),
-            password: "pass".to_string(),
+            auth: ImapAuth::Password("pass".to_string()),
+            profile: ProviderProfile::Generic,
             mailbox: "INBOX".to_string(),
             archive_folder: "Archive".to_string(),
             smtp_host: None,
@@ -1430,7 +1898,7 @@ mod tests {
     #[test]
     fn test_validate_config_empty_password() {
         let mut config = test_config();
-        config.password = "".to_string();
+        config.auth = ImapAuth::Password(String::new());
         let provider = ImapProvider::new(config);
         assert!(provider.validate_config().is_err());
     }
@@ -1472,7 +1940,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_message_fails_with_bad_config() {
         let mut config = test_config();
-        config.password = "".to_string();
+        config.auth = ImapAuth::Password(String::new());
         let provider = ImapProvider::new(config);
         let result = provider.get_message("token", "1").await;
         assert!(result.is_err());

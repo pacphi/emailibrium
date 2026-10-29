@@ -695,6 +695,7 @@ mod tests {
                 include_str!("../../../migrations/sqlite/027_is_archived.sql"),
                 include_str!("../../../migrations/sqlite/028_imap_accounts.sql"),
                 include_str!("../../../migrations/sqlite/030_account_role.sql"),
+                include_str!("../../../migrations/sqlite/034_imap_auth_profile.sql"),
             ],
         )
         .await

@@ -129,7 +129,8 @@ fn imap_config_from_request(req: &ImapConnectRequest) -> crate::email::imap::Ima
         port: req.imap_port,
         encryption: crate::email::imap::ImapEncryption::from_request_str(&req.encryption),
         username: req.email.clone(),
-        password: req.password.clone(),
+        auth: crate::email::imap::ImapAuth::Password(req.password.clone()),
+        profile: crate::email::imap::detect_provider_profile(&req.imap_server, req.imap_port),
         mailbox: "INBOX".to_string(),
         archive_folder: "Archive".to_string(),
         smtp_host: Some(req.smtp_server.clone()),
@@ -310,6 +311,7 @@ async fn connect_imap(
             crate::email::imap::ImapEncryption::from_request_str(&req.encryption),
             &req.smtp_server,
             req.smtp_port,
+            crate::email::imap::detect_provider_profile(&req.imap_server, req.imap_port),
         )
         .await
         .map_err(|e| {

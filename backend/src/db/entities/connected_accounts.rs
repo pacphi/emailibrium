@@ -1,4 +1,4 @@
-//! `connected_accounts` — linked mailbox accounts (migrations 004, 013, 028, 030).
+//! `connected_accounts` — linked mailbox accounts (migrations 004, 013, 028, 030, 034).
 //!
 //! All temporal columns here are TEXT by design (ADR-035 §2.5): the DDL default is
 //! `to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS')` and downstream code
@@ -38,6 +38,10 @@ pub struct Model {
     pub role: Option<String>,
     /// TEXT timestamp (§2.5 class) — see the module doc.
     pub role_declared_at: Option<String>,
+    /// `ProviderProfile::as_str()` value (migration 034): `None`/unset means
+    /// `Generic`. Drives folder-vs-keyword-vs-ledger label strategy in
+    /// `email::imap::ImapProvider`.
+    pub imap_auth_profile: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

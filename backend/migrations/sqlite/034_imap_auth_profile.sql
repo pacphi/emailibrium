@@ -1,0 +1,16 @@
+-- Migration 034: IMAP provider auth/label profile (milestone 6, providers).
+--
+-- Fastmail/iCloud (generic app-password IMAP), Proton (Bridge on loopback,
+-- `Labels/` mailboxes with copy-not-move semantics) and Outlook (device-code
+-- OAuth + XOAUTH2, no custom IMAP keywords) each need the adapter to behave
+-- differently when applying a Kind/Topic/State label
+-- (`email::imap::ProviderProfile`, docs/plan/mail-agent-2026-10.md row 6).
+--
+-- Nullable, defaulting to NULL = 'generic' in Rust (`ProviderProfile::Generic`)
+-- rather than a DB default, matching how `role`/`imap_encryption` on this
+-- table are also unconstrained, application-interpreted TEXT columns.
+-- Whether the stored credential is a password or an OAuth bearer/refresh
+-- pair is NOT a separate column: it is inferred from whether
+-- `encrypted_refresh_token` is set, reusing the two columns migration 013
+-- already added for the OAuth providers rather than adding a third.
+ALTER TABLE connected_accounts ADD COLUMN imap_auth_profile TEXT;

@@ -12,7 +12,9 @@
 mod fake_imap;
 
 use emailibrium::cleanup::domain::kind::{classify, ClassificationContext, Kind};
-use emailibrium::email::imap::{ImapConfig, ImapEncryption, ImapProvider};
+use emailibrium::email::imap::{
+    ImapAuth, ImapConfig, ImapEncryption, ImapProvider, ProviderProfile,
+};
 use emailibrium::email::types::ListParams;
 
 use fake_imap::{FakeImapServer, FixtureMessage};
@@ -23,7 +25,8 @@ fn fixture_config(port: u16, username: &str) -> ImapConfig {
         port,
         encryption: ImapEncryption::Plaintext,
         username: username.to_string(),
-        password: "fixture-app-password".to_string(),
+        auth: ImapAuth::Password("fixture-app-password".to_string()),
+        profile: ProviderProfile::Generic,
         mailbox: "INBOX".to_string(),
         archive_folder: "Archive".to_string(),
         smtp_host: None,

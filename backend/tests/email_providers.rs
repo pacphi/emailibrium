@@ -4,7 +4,9 @@
 //! and batch fetching concurrency limits.
 
 use emailibrium::email::delta::{parse_gmail_history, parse_outlook_delta};
-use emailibrium::email::imap::{ImapConfig, ImapEncryption, ImapProvider};
+use emailibrium::email::imap::{
+    ImapAuth, ImapConfig, ImapEncryption, ImapProvider, ProviderProfile,
+};
 use emailibrium::email::provider::{EmailProvider, ProviderError};
 use emailibrium::email::sync::{ProviderSync, ProviderSyncService};
 use emailibrium::email::types::{
@@ -144,7 +146,8 @@ async fn imap_authenticate_validates_config() {
         port: 993,
         encryption: ImapEncryption::Ssl,
         username: "user@test.com".into(),
-        password: "password".into(),
+        auth: ImapAuth::Password("password".into()),
+        profile: ProviderProfile::Generic,
         mailbox: "INBOX".into(),
         archive_folder: "Archive".into(),
         smtp_host: None,
@@ -164,7 +167,8 @@ async fn imap_authenticate_rejects_empty_host() {
         port: 993,
         encryption: ImapEncryption::Ssl,
         username: "user@test.com".into(),
-        password: "password".into(),
+        auth: ImapAuth::Password("password".into()),
+        profile: ProviderProfile::Generic,
         mailbox: "INBOX".into(),
         archive_folder: "Archive".into(),
         smtp_host: None,
@@ -184,7 +188,8 @@ async fn imap_list_messages_returns_empty() {
         port: 993,
         encryption: ImapEncryption::Ssl,
         username: "user@test.com".into(),
-        password: "password".into(),
+        auth: ImapAuth::Password("password".into()),
+        profile: ProviderProfile::Generic,
         mailbox: "INBOX".into(),
         archive_folder: "Archive".into(),
         smtp_host: None,
@@ -215,7 +220,8 @@ async fn imap_create_label_returns_folder_name() {
         port: 993,
         encryption: ImapEncryption::Ssl,
         username: "user@test.com".into(),
-        password: "password".into(),
+        auth: ImapAuth::Password("password".into()),
+        profile: ProviderProfile::Generic,
         mailbox: "INBOX".into(),
         archive_folder: "Archive".into(),
         smtp_host: None,
