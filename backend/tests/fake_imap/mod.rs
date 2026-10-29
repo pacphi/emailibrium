@@ -6,7 +6,8 @@
 //! command shapes emailibrium's real `ImapProvider` (built on `async-imap`)
 //! sends: `LOGIN`, `AUTHENTICATE XOAUTH2`, `SELECT`/`EXAMINE`, `CREATE`,
 //! `UID SEARCH` (including `HEADER Message-ID "<id>"`), `UID FETCH`,
-//! `UID COPY`, `UID STORE`, `EXPUNGE`, `LOGOUT`. It never validates
+//! `UID COPY`, `UID STORE`, `UID MOVE`, `EXPUNGE`, `UID EXPUNGE`, `LOGOUT`.
+//! It never validates
 //! credentials (LOGIN or XOAUTH2) — the point is to exercise the real
 //! client code against a real (if tiny) wire-protocol server, not to test
 //! auth failure paths (those are covered by the config-validation unit
@@ -87,6 +88,15 @@ impl FixtureMessage {
         self
     }
 
+    /// Pre-mark this message `\Deleted` (flagged but not yet expunged), the
+    /// state another mail client can leave a message in. A move must never
+    /// expunge it as a side effect.
+    #[allow(dead_code)] // see with_header's comment: per-binary usage varies
+    pub fn marked_deleted(mut self) -> Self {
+        self.deleted = true;
+        self
+    }
+
     /// Extract the raw value of the `Message-ID` header (angle brackets
     /// included), used by `HEADER Message-ID "<id>"` search matching.
     fn message_id(&self) -> Option<String> {
@@ -131,11 +141,12 @@ impl FakeImapServer {
     /// with `messages` to any number of incoming connections in the
     /// background. Returns once the listener is bound; the serving loop
     /// runs on spawned tasks.
+    #[allow(dead_code)] // see with_header's comment: per-binary usage varies
     pub async fn spawn(messages: Vec<FixtureMessage>) -> Self {
         let next_uid = messages.iter().map(|m| m.uid).max().unwrap_or(0) + 1;
         let mut map = HashMap::new();
         map.insert("INBOX".to_string(), Mailbox { messages, next_uid });
-        Self::spawn_from_map(map).await
+        Self::spawn_with(map, "IMAP4rev1".to_string()).await
     }
 
     /// Like `spawn`, but seeding an arbitrary set of named mailboxes up
@@ -145,21 +156,37 @@ impl FakeImapServer {
     /// exercising `CREATE` in the same assertion).
     #[allow(dead_code)] // see with_header's comment: per-binary usage varies
     pub async fn spawn_with_mailboxes(seed: HashMap<String, Vec<FixtureMessage>>) -> Self {
+        Self::spawn_with_mailboxes_and_capabilities(seed, &[]).await
+    }
+
+    /// Like `spawn_with_mailboxes`, additionally advertising `extra`
+    /// capabilities (e.g. `MOVE`, `UIDPLUS`) after `IMAP4rev1`, so a test can
+    /// pin which move strategy the client picks.
+    #[allow(dead_code)] // see with_header's comment: per-binary usage varies
+    pub async fn spawn_with_mailboxes_and_capabilities(
+        seed: HashMap<String, Vec<FixtureMessage>>,
+        extra: &[&str],
+    ) -> Self {
         let mut map = HashMap::new();
         for (name, messages) in seed {
             let next_uid = messages.iter().map(|m| m.uid).max().unwrap_or(0) + 1;
             map.insert(name, Mailbox { messages, next_uid });
         }
-        Self::spawn_from_map(map).await
+        let capabilities = std::iter::once("IMAP4rev1")
+            .chain(extra.iter().copied())
+            .collect::<Vec<_>>()
+            .join(" ");
+        Self::spawn_with(map, capabilities).await
     }
 
-    async fn spawn_from_map(map: HashMap<String, Mailbox>) -> Self {
+    async fn spawn_with(map: HashMap<String, Mailbox>, capabilities: String) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind fake IMAP listener");
         let addr = listener.local_addr().expect("fake IMAP local_addr");
         let mailboxes: Mailboxes = Arc::new(Mutex::new(map));
         let seen: Arc<Mutex<HashSet<u32>>> = Arc::new(Mutex::new(HashSet::new()));
+        let capabilities: Arc<str> = capabilities.into();
 
         {
             let mailboxes = Arc::clone(&mailboxes);
@@ -172,8 +199,9 @@ impl FakeImapServer {
                     };
                     let mailboxes = Arc::clone(&mailboxes);
                     let seen = Arc::clone(&seen);
+                    let capabilities = Arc::clone(&capabilities);
                     tokio::spawn(async move {
-                        let _ = serve_connection(stream, &mailboxes, &seen).await;
+                        let _ = serve_connection(stream, &mailboxes, &seen, &capabilities).await;
                     });
                 }
             });
@@ -236,6 +264,7 @@ async fn serve_connection(
     stream: tokio::net::TcpStream,
     mailboxes: &Mailboxes,
     seen: &Arc<Mutex<HashSet<u32>>>,
+    capabilities: &str,
 ) -> std::io::Result<()> {
     let (reader, mut writer) = stream.into_split();
     let mut reader = BufReader::new(reader);
@@ -371,6 +400,14 @@ async fn serve_connection(
                         handle_uid_store(&tag, subrest, &current_mailbox, mailboxes, &mut writer)
                             .await?;
                     }
+                    "MOVE" => {
+                        handle_uid_move(&tag, subrest, &current_mailbox, mailboxes, &mut writer)
+                            .await?;
+                    }
+                    "EXPUNGE" => {
+                        handle_uid_expunge(&tag, subrest, &current_mailbox, mailboxes, &mut writer)
+                            .await?;
+                    }
                     _ => {
                         writer
                             .write_all(format!("{tag} BAD unknown UID subcommand\r\n").as_bytes())
@@ -379,7 +416,9 @@ async fn serve_connection(
                 }
             }
             "CAPABILITY" => {
-                writer.write_all(b"* CAPABILITY IMAP4rev1\r\n").await?;
+                writer
+                    .write_all(format!("* CAPABILITY {capabilities}\r\n").as_bytes())
+                    .await?;
                 writer
                     .write_all(format!("{tag} OK CAPABILITY completed\r\n").as_bytes())
                     .await?;
@@ -624,6 +663,85 @@ async fn handle_uid_store(
 
     writer
         .write_all(format!("{tag} OK UID STORE completed\r\n").as_bytes())
+        .await?;
+    Ok(())
+}
+
+/// `UID MOVE <uid> <mailbox>` (RFC 6851): moves exactly the named message
+/// from the selected mailbox to the target, leaving every other message —
+/// including ones already marked `\Deleted` — where it is.
+async fn handle_uid_move(
+    tag: &str,
+    subrest: &str,
+    current_mailbox: &Option<String>,
+    mailboxes: &Mailboxes,
+    writer: &mut (impl AsyncWriteExt + Unpin),
+) -> std::io::Result<()> {
+    let mut parts = subrest.splitn(2, ' ');
+    let uid: u32 = parts.next().unwrap_or("").parse().unwrap_or(0);
+    let target = parts.next().unwrap_or("").trim().trim_matches('"');
+
+    // Scoped so the std MutexGuard is gone before the `.await` below.
+    let response = {
+        let mut guard = mailboxes.lock().expect("mailboxes mutex poisoned");
+        match current_mailbox {
+            None => format!("{tag} NO no mailbox selected\r\n"),
+            Some(_) if !guard.contains_key(target) => {
+                format!("{tag} NO [TRYCREATE] mailbox '{target}' does not exist\r\n")
+            }
+            Some(source_name) => {
+                let taken = guard.get_mut(source_name).and_then(|mb| {
+                    let pos = mb.messages.iter().position(|m| m.uid == uid)?;
+                    Some(mb.messages.remove(pos))
+                });
+                match taken {
+                    None => format!("{tag} NO [NONEXISTENT] UID {uid} not found\r\n"),
+                    Some(found) => {
+                        let target_mb = guard.get_mut(target).expect("target checked above");
+                        let new_uid = target_mb.next_uid;
+                        target_mb.next_uid += 1;
+                        target_mb.messages.push(FixtureMessage {
+                            uid: new_uid,
+                            raw: found.raw,
+                            deleted: false,
+                        });
+                        format!("{tag} OK [COPYUID 1 {uid} {new_uid}] MOVE completed\r\n")
+                    }
+                }
+            }
+        }
+    };
+
+    writer.write_all(response.as_bytes()).await?;
+    Ok(())
+}
+
+/// `UID EXPUNGE <uid-set>` (UIDPLUS, RFC 4315): removes only the named
+/// messages, and only if they are marked `\Deleted`. Plain `EXPUNGE` keeps
+/// removing every `\Deleted` message in the mailbox, as a real server does.
+async fn handle_uid_expunge(
+    tag: &str,
+    subrest: &str,
+    current_mailbox: &Option<String>,
+    mailboxes: &Mailboxes,
+    writer: &mut (impl AsyncWriteExt + Unpin),
+) -> std::io::Result<()> {
+    let wanted: HashSet<u32> = subrest
+        .trim()
+        .split(',')
+        .filter_map(|s| s.parse().ok())
+        .collect();
+
+    if let Some(name) = current_mailbox {
+        let mut guard = mailboxes.lock().expect("mailboxes mutex poisoned");
+        if let Some(mb) = guard.get_mut(name) {
+            mb.messages
+                .retain(|m| !(m.deleted && wanted.contains(&m.uid)));
+        }
+    }
+
+    writer
+        .write_all(format!("{tag} OK UID EXPUNGE completed\r\n").as_bytes())
         .await?;
     Ok(())
 }

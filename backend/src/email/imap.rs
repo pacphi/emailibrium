@@ -463,6 +463,58 @@ impl ImapProvider {
         Ok((session, mailbox.exists))
     }
 
+    /// Move one message (by UID) out of the currently selected mailbox into
+    /// `target`, touching no other message. Uses `UID MOVE` (RFC 6851) when
+    /// the server has it, else `UID COPY` + `\Deleted` + `UID EXPUNGE`
+    /// (UIDPLUS, RFC 4315). A server with neither is refused before anything
+    /// is copied: a plain `EXPUNGE` would also permanently erase every other
+    /// message in the mailbox that the user had marked `\Deleted`.
+    async fn move_uid(
+        session: &mut ImapSession,
+        uid: &str,
+        target: &str,
+    ) -> Result<(), ProviderError> {
+        let caps = session
+            .capabilities()
+            .await
+            .map_err(|e| ProviderError::RequestFailed(format!("CAPABILITY failed: {e}")))?;
+
+        if caps.has_str("MOVE") {
+            return session.uid_mv(uid, target).await.map_err(|e| {
+                ProviderError::RequestFailed(format!("UID MOVE to '{target}' failed: {e}"))
+            });
+        }
+
+        if !caps.has_str("UIDPLUS") {
+            return Err(ProviderError::RequestFailed(format!(
+                "server supports neither MOVE nor UIDPLUS; refusing to move UID {uid} \
+                 because a plain EXPUNGE would also erase other messages marked \\Deleted"
+            )));
+        }
+
+        session.uid_copy(uid, target).await.map_err(|e| {
+            ProviderError::RequestFailed(format!("UID COPY to '{target}' failed: {e}"))
+        })?;
+
+        session
+            .uid_store(uid, "+FLAGS (\\Deleted)")
+            .await
+            .map_err(|e| ProviderError::RequestFailed(format!("STORE \\Deleted failed: {e}")))?
+            .try_collect::<Vec<async_imap::types::Fetch>>()
+            .await
+            .map_err(|e| ProviderError::RequestFailed(format!("STORE stream failed: {e}")))?;
+
+        session
+            .uid_expunge(uid)
+            .await
+            .map_err(|e| ProviderError::RequestFailed(format!("UID EXPUNGE failed: {e}")))?
+            .try_collect::<Vec<u32>>()
+            .await
+            .map_err(|e| ProviderError::RequestFailed(format!("UID EXPUNGE stream failed: {e}")))?;
+
+        Ok(())
+    }
+
     /// Parse an `async_imap::types::Fetch` result into our domain `EmailMessage`.
     fn parse_fetched(fetch: &async_imap::types::Fetch) -> Option<EmailMessage> {
         let uid = fetch.uid?;
@@ -1307,40 +1359,12 @@ impl EmailProvider for ImapProvider {
         Ok(msg)
     }
 
-    /// Archive a message by copying it to the archive folder and expunging.
+    /// Archive a message by moving it to the archive folder.
     async fn archive_message(&self, _access_token: &str, id: &str) -> Result<(), ProviderError> {
         self.validate_config()?;
 
         let (mut session, _) = self.connect_and_select().await?;
-
-        // Copy to archive folder.
-        session
-            .uid_copy(id, &self.config.archive_folder)
-            .await
-            .map_err(|e| {
-                ProviderError::RequestFailed(format!(
-                    "UID COPY to '{}' failed: {e}",
-                    self.config.archive_folder
-                ))
-            })?;
-
-        // Mark as deleted in current mailbox.
-        session
-            .uid_store(id, "+FLAGS (\\Deleted)")
-            .await
-            .map_err(|e| ProviderError::RequestFailed(format!("STORE \\Deleted failed: {e}")))?
-            .try_collect::<Vec<async_imap::types::Fetch>>()
-            .await
-            .map_err(|e| ProviderError::RequestFailed(format!("STORE stream failed: {e}")))?;
-
-        // Expunge to permanently remove from current mailbox.
-        session
-            .expunge()
-            .await
-            .map_err(|e| ProviderError::RequestFailed(format!("EXPUNGE failed: {e}")))?
-            .try_collect::<Vec<u32>>()
-            .await
-            .map_err(|e| ProviderError::RequestFailed(format!("EXPUNGE stream failed: {e}")))?;
+        Self::move_uid(&mut session, id, &self.config.archive_folder).await?;
 
         let _ = session.logout().await;
         Ok(())
@@ -1513,32 +1537,13 @@ impl EmailProvider for ImapProvider {
 
         let mut session = self.connect().await?;
 
-        // SELECT the archive folder, copy back to INBOX, delete from archive.
+        // SELECT the archive folder, then move the message back to INBOX.
         session
             .select(&self.config.archive_folder)
             .await
             .map_err(|e| ProviderError::RequestFailed(format!("SELECT Archive failed: {e}")))?;
 
-        session
-            .uid_copy(id, "INBOX")
-            .await
-            .map_err(|e| ProviderError::RequestFailed(format!("UID COPY to INBOX failed: {e}")))?;
-
-        session
-            .uid_store(id, "+FLAGS (\\Deleted)")
-            .await
-            .map_err(|e| ProviderError::RequestFailed(format!("STORE \\Deleted failed: {e}")))?
-            .try_collect::<Vec<async_imap::types::Fetch>>()
-            .await
-            .map_err(|e| ProviderError::RequestFailed(format!("STORE stream failed: {e}")))?;
-
-        session
-            .expunge()
-            .await
-            .map_err(|e| ProviderError::RequestFailed(format!("EXPUNGE failed: {e}")))?
-            .try_collect::<Vec<u32>>()
-            .await
-            .map_err(|e| ProviderError::RequestFailed(format!("EXPUNGE stream failed: {e}")))?;
+        Self::move_uid(&mut session, id, "INBOX").await?;
 
         let _ = session.logout().await;
         Ok(())
@@ -1605,33 +1610,7 @@ impl EmailProvider for ImapProvider {
         match kind {
             MoveKind::Folder => {
                 let (mut session, _) = self.connect_and_select().await?;
-
-                session.uid_copy(message_id, target_id).await.map_err(|e| {
-                    ProviderError::RequestFailed(format!("UID COPY to '{target_id}' failed: {e}"))
-                })?;
-
-                session
-                    .uid_store(message_id, "+FLAGS (\\Deleted)")
-                    .await
-                    .map_err(|e| {
-                        ProviderError::RequestFailed(format!("STORE \\Deleted failed: {e}"))
-                    })?
-                    .try_collect::<Vec<async_imap::types::Fetch>>()
-                    .await
-                    .map_err(|e| {
-                        ProviderError::RequestFailed(format!("STORE stream failed: {e}"))
-                    })?;
-
-                session
-                    .expunge()
-                    .await
-                    .map_err(|e| ProviderError::RequestFailed(format!("EXPUNGE failed: {e}")))?
-                    .try_collect::<Vec<u32>>()
-                    .await
-                    .map_err(|e| {
-                        ProviderError::RequestFailed(format!("EXPUNGE stream failed: {e}"))
-                    })?;
-
+                Self::move_uid(&mut session, message_id, target_id).await?;
                 let _ = session.logout().await;
             }
             MoveKind::Label => {
