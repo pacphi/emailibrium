@@ -99,7 +99,12 @@ type ImapConfigRow = (
     String,
     Option<Vec<u8>>,
     Option<String>,
+    Option<String>,
 );
+
+/// Refresh an XOAUTH2 access token this long before it expires, so a sync
+/// that starts just before expiry doesn't fail mid-session.
+const REFRESH_MARGIN_SECS: i64 = 300;
 
 /// Errors specific to the OAuth subsystem.
 #[derive(Debug, thiserror::Error)]
@@ -143,6 +148,9 @@ pub struct OAuthManager {
     encryption_key: Option<Zeroizing<[u8; 32]>>,
     http: reqwest::Client,
     pending_states: Mutex<HashMap<String, Instant>>,
+    /// Public-client settings used to refresh Outlook-over-IMAP (device-code)
+    /// accounts. `None` leaves their stored access token as is.
+    outlook_device_code: Option<crate::vectors::config::OutlookDeviceCodeConfig>,
 }
 
 impl OAuthManager {
@@ -164,7 +172,18 @@ impl OAuthManager {
             encryption_key,
             http: reqwest::Client::new(),
             pending_states: Mutex::new(HashMap::new()),
+            outlook_device_code: None,
         }
+    }
+
+    /// Enable refresh-on-load for Outlook-over-IMAP accounts connected with
+    /// the device-code public client (`load_imap_config`).
+    pub fn with_outlook_device_code(
+        mut self,
+        config: crate::vectors::config::OutlookDeviceCodeConfig,
+    ) -> Self {
+        self.outlook_device_code = Some(config);
+        self
     }
 
     /// Check whether an OAuth callback state is pending and unexpired.
@@ -690,6 +709,7 @@ impl OAuthManager {
             .column(accounts::Column::EmailAddress)
             .column(accounts::Column::EncryptedRefreshToken)
             .column(accounts::Column::ImapAuthProfile)
+            .column(accounts::Column::TokenExpiresAt)
             .filter(accounts::Column::Id.eq(account_id))
             .into_tuple()
             .one(&self.conn)
@@ -717,14 +737,28 @@ impl OAuthManager {
 
         // A stored refresh token means this account authenticates with
         // XOAUTH2 (milestone 6's Outlook device-code path), not a password.
-        // NOTE: this does not proactively refresh an expired access token —
-        // that only happens today via the device-code poll/refresh route;
-        // a background refresh-on-load is a known, undone gap, not silently
-        // assumed to work.
-        let auth = if row.7.is_some() {
-            super::imap::ImapAuth::OAuthBearer(credential)
-        } else {
-            super::imap::ImapAuth::Password(credential)
+        // Its access token lasts about an hour, so it is refreshed here when
+        // within REFRESH_MARGIN_SECS of expiry (or of unknown expiry).
+        let auth = match &row.7 {
+            Some(enc_refresh) => {
+                let expiring = row
+                    .9
+                    .as_deref()
+                    .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
+                    .is_none_or(|t| {
+                        t.with_timezone(&Utc) <= Utc::now() + Duration::seconds(REFRESH_MARGIN_SECS)
+                    });
+                let token = match (&self.outlook_device_code, expiring) {
+                    (Some(config), true) => {
+                        let refresh = self.decrypt_token(enc_refresh)?;
+                        self.refresh_public_client(account_id, config, &refresh)
+                            .await?
+                    }
+                    _ => credential,
+                };
+                super::imap::ImapAuth::OAuthBearer(token)
+            }
+            None => super::imap::ImapAuth::Password(credential),
         };
 
         Ok(super::imap::ImapConfig {
@@ -740,6 +774,65 @@ impl OAuthManager {
             smtp_port: row.4.unwrap_or(587) as u16,
             pinned_addr: None,
         })
+    }
+
+    /// Refresh an Outlook-over-IMAP access token with the device-code public
+    /// client and store the result. Microsoft's refresh grant for a native
+    /// (public) client takes `client_id`, `grant_type=refresh_token` and the
+    /// `refresh_token`, with no `client_secret`; a new refresh token, when
+    /// returned, replaces the old one.
+    async fn refresh_public_client(
+        &self,
+        account_id: &str,
+        config: &crate::vectors::config::OutlookDeviceCodeConfig,
+        refresh_token: &str,
+    ) -> Result<String, OAuthError> {
+        let client_id = std::env::var(&config.client_id_env).map_err(|_| {
+            OAuthError::RefreshFailed(format!(
+                "Outlook device-code client ID not configured (env var {})",
+                config.client_id_env
+            ))
+        })?;
+        let scope = config.scopes.join(" ");
+        let resp = self
+            .http
+            .post(config.token_url())
+            .form(&[
+                ("client_id", client_id.as_str()),
+                ("grant_type", "refresh_token"),
+                ("refresh_token", refresh_token),
+                ("scope", scope.as_str()),
+            ])
+            .send()
+            .await
+            .map_err(|e| OAuthError::RefreshFailed(e.to_string()))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            tracing::warn!(account_id = %account_id, %status, "Outlook token refresh failed");
+            return Err(OAuthError::RefreshFailed(format!(
+                "token endpoint returned {status}; the account must be reconnected"
+            )));
+        }
+
+        let body: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| OAuthError::RefreshFailed(e.to_string()))?;
+        let access_token = body["access_token"]
+            .as_str()
+            .ok_or_else(|| OAuthError::RefreshFailed("Missing access_token".into()))?
+            .to_string();
+        let expires_in = body["expires_in"].as_i64().unwrap_or(3600);
+        let tokens = OAuthTokens {
+            access_token: access_token.clone(),
+            refresh_token: body["refresh_token"].as_str().map(|s| s.to_string()),
+            expires_at: Some(Utc::now() + Duration::seconds(expires_in)),
+            email: None,
+        };
+        self.update_tokens(account_id, &tokens).await?;
+        tracing::info!(account_id = %account_id, "Outlook access token refreshed");
+        Ok(access_token)
     }
 
     /// Update tokens for an existing account (e.g., after refresh).
@@ -1195,6 +1288,7 @@ mod tests {
             encryption_key: None,
             http: reqwest::Client::new(),
             pending_states: Mutex::new(HashMap::new()),
+            outlook_device_code: None,
         };
         let legacy = base64::engine::general_purpose::STANDARD.encode("synthetic-secret-token");
         let error = mgr.decrypt_token(legacy.as_bytes()).unwrap_err();
@@ -1213,6 +1307,7 @@ mod tests {
             encryption_key: None,
             http: reqwest::Client::new(),
             pending_states: Mutex::new(HashMap::new()),
+            outlook_device_code: None,
         };
         let tokens = OAuthTokens {
             access_token: "synthetic-secret-token".into(),
@@ -1278,6 +1373,7 @@ mod tests {
             encryption_key: Some(key),
             http: reqwest::Client::new(),
             pending_states: Mutex::new(HashMap::new()),
+            outlook_device_code: None,
         };
 
         let token = "ya29.a0AfH6SMBx_secrettoken123";
@@ -1323,6 +1419,7 @@ mod tests {
             encryption_key: Some(key),
             http: reqwest::Client::new(),
             pending_states: Mutex::new(HashMap::new()),
+            outlook_device_code: None,
         };
 
         mgr.save_imap_account(
@@ -1403,6 +1500,7 @@ mod tests {
             encryption_key: Some(key),
             http: reqwest::Client::new(),
             pending_states: Mutex::new(HashMap::new()),
+            outlook_device_code: None,
         };
 
         for (id, email) in [("acct-a", "a@example.com"), ("acct-b", "b@example.com")] {
@@ -1523,6 +1621,7 @@ mod tests {
             encryption_key: Some(key),
             http: reqwest::Client::new(),
             pending_states: Mutex::new(HashMap::new()),
+            outlook_device_code: None,
         };
 
         mgr.save_imap_account(
@@ -1553,6 +1652,7 @@ mod tests {
             encryption_key: None,
             http: reqwest::Client::new(),
             pending_states: Mutex::new(HashMap::new()),
+            outlook_device_code: None,
         };
 
         let config = ProviderConfig {

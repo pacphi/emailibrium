@@ -278,6 +278,13 @@ OAuth client credentials are loaded from environment variables (never from confi
 | `oauth.outlook.client_secret_env` | String        | `EMAILIBRIUM_MICROSOFT_CLIENT_SECRET`                    | --                                    | Env var holding the Microsoft Client Secret                                                                                                           |
 | `oauth.outlook.tenant`            | String        | `common`                                                 | `EMAILIBRIUM_OAUTH_OUTLOOK_TENANT`    | Microsoft tenant ID (`common` for multi-tenant)                                                                                                       |
 | `oauth.outlook.scopes`            | Vec\<String\> | `[Mail.ReadWrite, Mail.Send, offline_access, User.Read]` | --                                    | OAuth scopes requested from Microsoft                                                                                                                 |
+| `oauth.outlook_device_code.client_id_env` | String | `EMAILIBRIUM_OUTLOOK_DEVICE_CODE_CLIENT_ID` | -- | Env var holding the public client ID for Outlook device-code sign-in (no client secret; a business can point this at its own Entra registration) |
+| `oauth.outlook_device_code.tenant` | String | `common` | -- | Microsoft tenant for device-code sign-in (`common` covers personal and work/school accounts) |
+| `oauth.outlook_device_code.scopes` | Vec\<String\> | `[https://outlook.office.com/IMAP.AccessAsUser.All, offline_access]` | -- | Scopes requested; `offline_access` returns the refresh token used to renew the access token before it expires |
+| `oauth.outlook_device_code.authority` | String | `https://login.microsoftonline.com` | -- | Microsoft identity platform host for the device-code and token endpoints (sovereign clouds use their own) |
+| `oauth.outlook_device_code.imap_host` | String | `outlook.office365.com` | -- | IMAP server the signed-in account is verified against before it is saved |
+| `oauth.outlook_device_code.imap_port` | u16 | `993` | -- | Port for `imap_host` |
+| `oauth.outlook_device_code.imap_encryption` | String | `ssl` | -- | Transport security for `imap_host`: `ssl` (implicit TLS), `tls` (STARTTLS) or `none` |
 | `oauth.frontend_url`              | String        | `http://localhost:3000`                                  | `EMAILIBRIUM_OAUTH_FRONTEND_URL`      | Frontend origin the backend redirects to after an OAuth connect/deny/success -- override this in production if the frontend isn't on `localhost:3000` |
 
 ### Redis (`redis.*`)

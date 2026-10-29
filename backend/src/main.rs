@@ -56,6 +56,9 @@ pub struct AppState {
     pub tool_calling_provider: Option<Arc<dyn vectors::tool_calling::ToolCallingProvider>>,
     /// Pending tool-call confirmations awaiting user approval (ADR-028).
     pub pending_confirmations: Arc<Mutex<HashMap<String, api::ai::PendingConfirmation>>>,
+    /// Outlook device-code sign-ins in progress (milestone 6). The device
+    /// code itself stays here, never in a response.
+    pub device_flows: Arc<email::device_flow::DeviceFlowRegistry>,
     /// Cleanup planning repository (ADR-030 / DDD-008 addendum).
     pub cleanup_plan_repo: Arc<cleanup::repository::SeaOrmCleanupPlanRepo>,
     /// Cleanup apply orchestrator (Phase C, ADR-030 §C / DDD-008 addendum).
@@ -540,10 +543,13 @@ async fn main() -> anyhow::Result<()> {
         std::env::var(encryption_env).ok(),
         std::env::var("OAUTH_ENCRYPTION_KEY").ok(),
     );
-    let oauth_manager = Arc::new(email::oauth::OAuthManager::new(
-        (*db).clone(),
-        oauth_key.as_ref().map(|secret| secret.as_str()),
-    ));
+    let oauth_manager = Arc::new(
+        email::oauth::OAuthManager::new(
+            (*db).clone(),
+            oauth_key.as_ref().map(|secret| secret.as_str()),
+        )
+        .with_outlook_device_code(config.oauth.outlook_device_code.clone()),
+    );
     drop(oauth_key);
 
     // Initialize domain event bus (Audit Item #20)
@@ -710,6 +716,7 @@ async fn main() -> anyhow::Result<()> {
         pipeline_locks: sync_lock::AccountLockMap::default(),
         tool_calling_provider,
         pending_confirmations: Arc::new(Mutex::new(HashMap::new())),
+        device_flows: Arc::new(email::device_flow::DeviceFlowRegistry::default()),
         cleanup_plan_repo,
         apply_orchestrator,
         cleanup_audit_writer,

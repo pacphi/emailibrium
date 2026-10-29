@@ -835,6 +835,96 @@ paths:
             application/json:
               schema: { type: string }
 
+  /auth/outlook/device-code:
+    post:
+      tags: [auth]
+      summary: Start Outlook device-code sign-in (beta)
+      description: |
+        Starts Microsoft's device authorization grant with a public client, so no
+        Azure app registration of your own is needed. Returns the code the user
+        types at `verificationUri` and a `flowId` to poll. The device code itself
+        stays on the server.
+      operationId: startOutlookDeviceCode
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: { type: string, description: The Outlook or Microsoft 365 address to connect }
+      responses:
+        "200":
+          description: Sign-in started
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  flowId: { type: string }
+                  userCode: { type: string }
+                  verificationUri: { type: string }
+                  expiresIn: { type: integer, description: Seconds until the code expires }
+                  interval: { type: integer, description: Seconds to wait between polls }
+        "400":
+          description: Missing or invalid email address
+          content:
+            application/json:
+              schema: { type: string }
+        "502":
+          description: Microsoft's device-code endpoint returned an error
+          content:
+            application/json:
+              schema: { type: string }
+        "503":
+          description: The public client ID env var is not set
+          content:
+            application/json:
+              schema: { type: string }
+
+  /auth/outlook/device-code/{flow_id}/poll:
+    post:
+      tags: [auth]
+      summary: Poll an Outlook device-code sign-in
+      description: |
+        Polls Microsoft once, no faster than the flow's interval. On success the
+        access token is verified with an XOAUTH2 IMAP login and the account is
+        connected; access tokens are refreshed automatically before each later
+        connection.
+      operationId: pollOutlookDeviceCode
+      parameters:
+        - { name: flow_id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Current state of the sign-in
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status:
+                    type: string
+                    enum: [pending, slow_down, expired, declined, connected]
+                  interval: { type: integer, description: Seconds to wait before polling again (pending, slow_down) }
+                  account: { $ref: "#/components/schemas/AccountResponse" }
+        "400":
+          description: Signed in, but the IMAP login for that address failed
+          content:
+            application/json:
+              schema: { type: string }
+        "404":
+          description: Unknown flow id (finished or expired)
+          content:
+            application/json:
+              schema: { type: string }
+        "502":
+          description: Microsoft's token endpoint returned an unexpected error
+          content:
+            application/json:
+              schema: { type: string }
+
   /auth/imap/test:
     post:
       tags: [auth]

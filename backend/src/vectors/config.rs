@@ -1012,6 +1012,21 @@ pub struct OutlookDeviceCodeConfig {
     /// every access-token lifetime (~1 hour).
     #[serde(default = "default_outlook_device_code_scopes")]
     pub scopes: Vec<String>,
+    /// Microsoft identity platform host the device-code and token endpoints
+    /// live under. Sovereign clouds use their own (e.g.
+    /// `https://login.microsoftonline.us`).
+    #[serde(default = "default_microsoft_authority")]
+    pub authority: String,
+    /// IMAP endpoint the signed-in account is verified against before it is
+    /// saved (Microsoft's documented Outlook/Microsoft 365 IMAP settings).
+    #[serde(default = "default_outlook_imap_host")]
+    pub imap_host: String,
+    #[serde(default = "default_outlook_imap_port")]
+    pub imap_port: u16,
+    /// Transport security for `imap_host`: "ssl" (implicit TLS), "tls"
+    /// (STARTTLS) or "none" — the same vocabulary as IMAP onboarding.
+    #[serde(default = "default_outlook_imap_encryption")]
+    pub imap_encryption: String,
 }
 
 impl Default for OutlookDeviceCodeConfig {
@@ -1020,6 +1035,10 @@ impl Default for OutlookDeviceCodeConfig {
             client_id_env: default_outlook_device_code_client_id_env(),
             tenant: default_microsoft_tenant(),
             scopes: default_outlook_device_code_scopes(),
+            authority: default_microsoft_authority(),
+            imap_host: default_outlook_imap_host(),
+            imap_port: default_outlook_imap_port(),
+            imap_encryption: default_outlook_imap_encryption(),
         }
     }
 }
@@ -1027,22 +1046,28 @@ impl Default for OutlookDeviceCodeConfig {
 impl OutlookDeviceCodeConfig {
     /// Microsoft's device authorization endpoint for the configured tenant.
     pub fn device_code_url(&self) -> String {
-        format!(
-            "https://login.microsoftonline.com/{}/oauth2/v2.0/devicecode",
-            self.tenant
-        )
+        format!("{}/{}/oauth2/v2.0/devicecode", self.authority, self.tenant)
     }
 
     /// Microsoft's token endpoint for the configured tenant (also used to
     /// poll the device-code grant and later to refresh).
     pub fn token_url(&self) -> String {
-        format!(
-            "https://login.microsoftonline.com/{}/oauth2/v2.0/token",
-            self.tenant
-        )
+        format!("{}/{}/oauth2/v2.0/token", self.authority, self.tenant)
     }
 }
 
+fn default_microsoft_authority() -> String {
+    "https://login.microsoftonline.com".to_string()
+}
+fn default_outlook_imap_host() -> String {
+    "outlook.office365.com".to_string()
+}
+fn default_outlook_imap_port() -> u16 {
+    993
+}
+fn default_outlook_imap_encryption() -> String {
+    "ssl".to_string()
+}
 fn default_outlook_device_code_client_id_env() -> String {
     "EMAILIBRIUM_OUTLOOK_DEVICE_CODE_CLIENT_ID".to_string()
 }

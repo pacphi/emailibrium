@@ -2,6 +2,8 @@
 //!
 //! - POST   /api/v1/auth/gmail/connect    -- initiate Gmail OAuth flow (redirect)
 //! - POST   /api/v1/auth/outlook/connect  -- initiate Outlook OAuth flow (redirect)
+//! - POST   /api/v1/auth/outlook/device-code -- start Outlook device-code sign-in
+//! - POST   /api/v1/auth/outlook/device-code/:flow_id/poll -- poll it; connects on success
 //! - POST   /api/v1/auth/imap/test        -- validate IMAP credentials (no persist)
 //! - POST   /api/v1/auth/imap/connect     -- connect an account via IMAP + app password
 //! - GET    /api/v1/auth/callback         -- OAuth callback handler
@@ -33,6 +35,11 @@ pub fn routes() -> Router<AppState> {
         .route(
             "/outlook/connect",
             post(connect_outlook).get(connect_outlook),
+        )
+        .route("/outlook/device-code", post(start_outlook_device_code))
+        .route(
+            "/outlook/device-code/{flow_id}/poll",
+            post(poll_outlook_device_code),
         )
         .route("/imap/test", post(test_imap_connection))
         .route("/imap/connect", post(connect_imap))
@@ -350,6 +357,142 @@ async fn connect_imap(
         sync_depth: "30d".to_string(),
         sync_frequency: 5,
     }))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DeviceCodeStartRequest {
+    pub email: String,
+}
+
+/// Poll result. `status` is `pending`, `slow_down`, `expired`, `declined` or
+/// `connected`; `interval` is set while pending, `account` once connected.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeviceCodePollResponse {
+    pub status: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub interval: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub account: Option<AccountResponse>,
+}
+
+fn device_flow_error(e: crate::email::device_flow::DeviceFlowError) -> (StatusCode, String) {
+    use crate::email::device_flow::DeviceFlowError;
+    let status = match &e {
+        DeviceFlowError::UnknownFlow => StatusCode::NOT_FOUND,
+        DeviceFlowError::NotConfigured(_) => StatusCode::SERVICE_UNAVAILABLE,
+        DeviceFlowError::ImapLogin { .. } => StatusCode::BAD_REQUEST,
+        DeviceFlowError::Microsoft(_) => StatusCode::BAD_GATEWAY,
+    };
+    tracing::warn!(error = %e, "Outlook device-code sign-in failed");
+    (status, e.to_string())
+}
+
+/// POST /api/v1/auth/outlook/device-code
+///
+/// Starts Outlook sign-in with Microsoft's device authorization grant and a
+/// public client (no Azure registration of your own). Returns the code the
+/// user types at `verificationUri` and a `flowId` to poll; the device code
+/// itself stays on the server.
+async fn start_outlook_device_code(
+    State(state): State<AppState>,
+    Json(req): Json<DeviceCodeStartRequest>,
+) -> Result<Json<crate::email::device_flow::DeviceFlowStarted>, (StatusCode, String)> {
+    if req.email.trim().is_empty() || !req.email.contains('@') {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "A valid email address is required".to_string(),
+        ));
+    }
+    state
+        .device_flows
+        .start(
+            &state.oauth_manager,
+            &state.vector_service.config.oauth.outlook_device_code,
+            req.email.trim(),
+        )
+        .await
+        .map(Json)
+        .map_err(device_flow_error)
+}
+
+/// POST /api/v1/auth/outlook/device-code/:flow_id/poll
+///
+/// Polls the sign-in once (throttled to Microsoft's interval). On success the
+/// token is verified with an IMAP login and the account is connected.
+async fn poll_outlook_device_code(
+    State(state): State<AppState>,
+    Path(flow_id): Path<String>,
+) -> Result<Json<DeviceCodePollResponse>, (StatusCode, String)> {
+    use crate::email::device_flow::DeviceFlowStatus;
+    let status = state
+        .device_flows
+        .poll(
+            &state.oauth_manager,
+            &state.vector_service.config.oauth.outlook_device_code,
+            &flow_id,
+        )
+        .await
+        .map_err(device_flow_error)?;
+
+    let response = match status {
+        DeviceFlowStatus::Pending { interval } => DeviceCodePollResponse {
+            status: "pending",
+            interval: Some(interval),
+            account: None,
+        },
+        DeviceFlowStatus::SlowDown { interval } => DeviceCodePollResponse {
+            status: "slow_down",
+            interval: Some(interval),
+            account: None,
+        },
+        DeviceFlowStatus::Expired => DeviceCodePollResponse {
+            status: "expired",
+            interval: None,
+            account: None,
+        },
+        DeviceFlowStatus::Declined => DeviceCodePollResponse {
+            status: "declined",
+            interval: None,
+            account: None,
+        },
+        DeviceFlowStatus::Connected { account_id, email } => {
+            tracing::info!(
+                "Account connected: {} (outlook device code) as {}",
+                email,
+                account_id
+            );
+            state
+                .event_bus
+                .emit(
+                    &account_id,
+                    crate::events::DomainEvent::AccountConnected {
+                        account_id: account_id.clone(),
+                        provider: ProviderKind::Imap.as_str().to_string(),
+                        email_address: email.clone(),
+                    },
+                )
+                .await;
+            DeviceCodePollResponse {
+                status: "connected",
+                interval: None,
+                account: Some(AccountResponse {
+                    id: account_id,
+                    provider: ProviderKind::Imap.as_str().to_string(),
+                    email_address: email,
+                    is_active: true,
+                    status: "connected".to_string(),
+                    email_count: 0,
+                    last_sync_at: None,
+                    archive_strategy: "delayed".to_string(),
+                    label_prefix: "EM/".to_string(),
+                    sync_depth: "30d".to_string(),
+                    sync_frequency: 5,
+                }),
+            }
+        }
+    };
+    Ok(Json(response))
 }
 
 /// GET /api/v1/auth/callback

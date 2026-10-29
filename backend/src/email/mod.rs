@@ -20,6 +20,7 @@ pub mod archive;
 pub mod checkpoint;
 pub mod conflict_resolution;
 pub mod delta;
+pub mod device_flow;
 pub mod gmail;
 pub mod health;
 pub mod imap;
