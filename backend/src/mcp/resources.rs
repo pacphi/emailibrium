@@ -4,7 +4,7 @@
 //! package the multi-step workflows those views support. Both are surfaced
 //! through the `ServerHandler` implementation in [`super::server`].
 //!
-//! `rmcp` 1.7 ships no resource router and no `#[resource]` macro, so resources
+//! `rmcp` (through 3.7) ships no resource router and no `#[resource]` macro, so resources
 //! are plain `ServerHandler` trait methods. The URI parsing and the two listings
 //! therefore live here as free functions that `server.rs` delegates to. Prompts
 //! do have a router, built by the `#[prompt_router]` block at the bottom.
@@ -14,8 +14,8 @@ use std::time::Instant;
 
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{
-    AnnotateAble, ListResourceTemplatesResult, ListResourcesResult, PromptMessage,
-    PromptMessageRole, RawResource, RawResourceTemplate, ReadResourceResult, ResourceContents,
+    ListResourceTemplatesResult, ListResourcesResult, PromptMessage, ReadResourceResult, Resource,
+    ResourceContents, ResourceTemplate, Role,
 };
 use rmcp::{prompt, prompt_router, schemars, ErrorData};
 
@@ -146,7 +146,7 @@ fn tool_error_to_mcp(error: ToolError, uri: &str) -> ErrorData {
 /// instead, per the MCP split between `resources/list` and
 /// `resources/templates/list`.
 pub fn resources() -> ListResourcesResult {
-    ListResourcesResult::with_all_items(vec![RawResource::new(
+    ListResourcesResult::with_all_items(vec![Resource::new(
         INSIGHTS_SUMMARY_URI,
         "mailbox-insights",
     )
@@ -155,30 +155,27 @@ pub fn resources() -> ListResourcesResult {
         "Aggregate mailbox statistics: email counts per category, the ten most frequent \
          senders, and daily volume over the last 7 days.",
     )
-    .with_mime_type(RESOURCE_MIME_TYPE)
-    .no_annotation()])
+    .with_mime_type(RESOURCE_MIME_TYPE)])
 }
 
 /// URI templates for the resources that take an identifier, so a client can
 /// discover their shape rather than having to know it in advance.
 pub fn resource_templates() -> ListResourceTemplatesResult {
     ListResourceTemplatesResult::with_all_items(vec![
-        RawResourceTemplate::new(EMAIL_URI_TEMPLATE, "email")
+        ResourceTemplate::new(EMAIL_URI_TEMPLATE, "email")
             .with_title("Email")
             .with_description(
                 "A single email by ID: sender, subject, date, category, and full body text. \
                  IDs come from the search_emails and list_recent_emails tools.",
             )
-            .with_mime_type(RESOURCE_MIME_TYPE)
-            .no_annotation(),
-        RawResourceTemplate::new(THREAD_URI_TEMPLATE, "thread")
+            .with_mime_type(RESOURCE_MIME_TYPE),
+        ResourceTemplate::new(THREAD_URI_TEMPLATE, "thread")
             .with_title("Conversation thread")
             .with_description(
                 "Every email sharing a thread key, oldest first. Thread keys come from the \
                  get_email_thread tool.",
             )
-            .with_mime_type(RESOURCE_MIME_TYPE)
-            .no_annotation(),
+            .with_mime_type(RESOURCE_MIME_TYPE),
     ])
 }
 
@@ -358,7 +355,7 @@ impl EmailibriumMcpServer {
         let limit = validate_limit(args.limit.unwrap_or(DEFAULT_TRIAGE_LIMIT), MAX_TRIAGE_LIMIT);
 
         vec![PromptMessage::new_text(
-            PromptMessageRole::User,
+            Role::User,
             format!(
                 "Review my most recent email and tell me what actually needs my attention.\n\
                  \n\
@@ -396,7 +393,7 @@ impl EmailibriumMcpServer {
     )]
     async fn weekly_report(&self) -> Vec<PromptMessage> {
         vec![PromptMessage::new_text(
-            PromptMessageRole::User,
+            Role::User,
             "Summarize the last week of my email activity.\n\
              \n\
              Gather the numbers first:\n\
@@ -512,9 +509,9 @@ mod tests {
     fn every_advertised_uri_is_readable() {
         for resource in resources().resources {
             assert!(
-                parse_resource_uri(&resource.raw.uri).is_ok(),
+                parse_resource_uri(&resource.uri).is_ok(),
                 "advertised resource {} does not parse",
-                resource.raw.uri
+                resource.uri
             );
         }
     }
@@ -522,10 +519,7 @@ mod tests {
     #[test]
     fn templates_are_advertised_for_both_parameterized_resources() {
         let templates = resource_templates().resource_templates;
-        let uris: Vec<&str> = templates
-            .iter()
-            .map(|t| t.raw.uri_template.as_str())
-            .collect();
+        let uris: Vec<&str> = templates.iter().map(|t| t.uri_template.as_str()).collect();
         assert_eq!(uris, vec![EMAIL_URI_TEMPLATE, THREAD_URI_TEMPLATE]);
     }
 
