@@ -34,7 +34,7 @@ overrides:
   # the prior 7.5.16 pin which itself patched GHSA-vmf3-w455-68vh
   "tar@<7.5.21": "7.5.21"
   # @babel/core <= 7.29.0: arbitrary file read via sourceMappingURL comment (GHSA-4x5r-pxfx-6jf8)
-  "@babel/core@<7.29.6": "7.29.7"
+  "@babel/core@<7.29.6": "7.29.13"
   # esbuild < 0.28.1: dev-server arbitrary file read + missing binary integrity check / RCE (GHSA-g7r4-m6w7-qqqr, GHSA-gv7w-rqvm-qjhr)
   "esbuild@<0.28.1": "0.28.1"
   # undici < 7.28.0: ProxyAgent silently drops requestTls over SOCKS5, defeating
