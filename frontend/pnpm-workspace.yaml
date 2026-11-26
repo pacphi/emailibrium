@@ -26,7 +26,7 @@ overrides:
   # mitigation (GHSA-rgw5-rvv9-x895), supersedes the 5.0.8 pin above
   # < 5.0.10 / 5.0.11 / 5.0.12: further DoS fixes (GHSA-6j4f-fj2g-mc7p,
   # GHSA-qhr7-859c-m2p7, GHSA-q2hr-2g5m-vwhr), supersedes the 5.0.9 pin above
-  "brace-expansion@>=4.0.0 <5.0.12": "5.0.12"
+  "brace-expansion@>=4.0.0 <5.0.12": "5.1.0"
   # ws < 8.21.0: memory-exhaustion DoS from tiny fragments (GHSA-96hv-2xvq-fx4p)
   "ws@>=8.0.0 <8.21.0": "8.21.0"
   "lodash@>=4.0.0 <=4.17.23": "4.18.1"
